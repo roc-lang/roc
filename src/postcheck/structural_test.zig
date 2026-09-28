@@ -444,7 +444,7 @@ test "Monotype draft local identity stays graph-native" {
     const identity = sourceSliceBetween(
         lower_source,
         "fn sameLocalIdentity(self: *BodyContext",
-        "fn stmtDependsOnFreeLocal",
+        "fn constrainTypeToMono(",
     );
     try expectContains(identity, "lhs_data.ty.toGraphNode(self.graph)");
     try expectContains(identity, "rhs_data.ty.toGraphNode(self.graph)");
@@ -1176,11 +1176,11 @@ test "Monotype materialized success continuations use one root-pattern guard fra
     const lower_source = @embedFile("monotype/lower.zig");
     const root = sourceSliceBetween(
         lower_source,
-        "fn lowerMaterializedPatternThen(",
-        "fn lowerMaterializedPatternThenInner(",
+        "fn enterMaterialize(",
+        "fn currentMaterializeFrame(",
     );
-    try expectContains(root, ".root_pattern = pattern_id");
-    try expectContains(root, ".root_node = try value_cell.toGraphNode(self.graph)");
+    try expectContains(root, ".root_pattern = request.pattern");
+    try expectContains(root, ".root_node = try request.value_cell.toGraphNode(self.graph)");
     try expectNotContains(root, "publishes_runtime_result");
 
     const continuation = sourceSliceBetween(
@@ -1197,12 +1197,12 @@ test "Monotype materialized success continuations use one root-pattern guard fra
 
     const pending = sourceSliceBetween(
         lower_source,
-        "fn applyPendingMaterializedPatterns(",
-        "fn lowerWrappedMaterializedPatternThen(",
+        "fn runMaterialize(",
+        "fn pushMaterializeFrame(",
     );
-    try expectContains(pending, "self.lowerMaterializedPatternThenInner(");
-    try expectContains(pending, "miss,\n                null,");
-    try expectNotContains(pending, "self.lowerMaterializedPatternThen(");
+    try expectContains(pending, ".plan => |plan| .{");
+    try expectContains(pending, ".success_guard = null,\n                        .mode = .inner,");
+    try expectNotContains(pending, ".then_root");
 
     const addresses = sourceSliceBetween(
         lower_source,
@@ -1233,9 +1233,9 @@ test "Monotype materialized list patterns retain graph element provenance" {
     try expectContains(materialized, "const elem_node = try self.graph.listElementNode(value_node)");
     try expectContains(materialized, "self.addExprWithTypeCell(elem_cell");
     try expectContains(materialized, "self.lowerPatternPlanPlaceholderAtNode(pattern_id, elem_node");
-    try expectContains(materialized, "self.applyPendingMaterializedPatterns(");
+    try expectContains(materialized, "self.appendPendingMaterializeSteps(");
     try expectContains(materialized, "sequence_index == rest_index");
-    try expectContains(materialized, "self.preRegisterPatternBindersAtNode(pattern_id, value_node)");
+    try expectContains(materialized, "self.preRegisterPatternBindersAtNode(request.pattern, value_node)");
     try expectContains(materialized, "self.relateRecordRestNodeToSource(value_node, rest_node)");
     try expectContains(materialized, "fn recordRestNodeForPattern(");
     try expectNotContains(materialized, "activeTypeFromCell");
@@ -1251,9 +1251,9 @@ test "Monotype recursive materialization predicate stays paired with graph shell
         "fn patternNeedsExplicitBinding(",
         "const CheckedPatternRefutabilityAdapter",
     );
-    try expectContains(predicate, ".as => |as| try self.patternNeedsExplicitBinding(as.pattern)");
+    try expectContains(predicate, ".as => |as| try children.append(self.allocator, as.pattern)");
     try expectContains(predicate, ".applied_tag => |tag|");
-    try expectContains(predicate, ".nominal => |nominal| try self.patternNeedsExplicitBinding(nominal.backing_pattern)");
+    try expectContains(predicate, ".nominal => |nominal| try children.append(self.allocator, nominal.backing_pattern)");
     try expectContains(predicate, ".tuple => |items|");
     try expectContains(predicate, "patternRequiresOwnMaterialization");
     try expectContains(predicate, "recordDestructsHaveOptionalField");
@@ -1277,7 +1277,7 @@ test "Monotype recursive materialization predicate stays paired with graph shell
     try expectContains(shell, "std.AutoHashMap(PatternNodeVisit, void)");
     try expectContains(shell, "const key: PatternNodeVisit");
     try expectContains(shell, "active.contains(key)");
-    try expectContains(shell, "defer _ = active.remove(key)");
+    try expectContains(shell, "try active.put(key, {})");
     try expectContains(shell, "backing.node == representation_node");
     try expectContains(shell, "constructorRepresentationNode(node)");
     try expectContains(shell, "lowerPatternPlanPlaceholderAtNode");
@@ -1294,9 +1294,9 @@ test "Monotype recursive materialization predicate stays paired with graph shell
         "fn savePatternBinders(",
     );
     try expectContains(guards, "std.AutoHashMap(PatternNodeVisit, void)");
-    try expectContains(guards, "const key: PatternNodeVisit");
+    try expectContains(guards, ".visit => |key|");
     try expectContains(guards, "active.contains(key)");
-    try expectContains(guards, "defer _ = active.remove(key)");
+    try expectContains(guards, ".exit => |key| _ = active.remove(key)");
     try expectContains(guards, "backing.node == node");
     try expectContains(guards, "if (list.patterns.len != 0)");
 }

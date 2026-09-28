@@ -5425,6 +5425,9 @@ pub const CheckedTypeStore = struct {
         pub const deserialize = Serde.deserialize;
     };
 
+    /// Clone `source` with every formal replaced by its actual. Each cloned
+    /// root is an explicit frame whose children are cloned in order, so the
+    /// depth of the cloned type never becomes native call depth.
     fn cloneCheckedTypeRootSubstituting(
         self: *CheckedTypeStore,
         allocator: Allocator,
@@ -5437,10 +5440,102 @@ pub const CheckedTypeStore = struct {
         if (formals.len != actuals.len) {
             checkedArtifactInvariant("checked type substitution arity mismatch", .{});
         }
-        for (formals, actuals) |formal, actual| {
-            if (source == formal) return actual;
+        const Frame = struct {
+            target: CheckedTypeId,
+            snapshot: CheckedTypePayloadBuild,
+            children_start: usize,
+            next: usize,
+            results_start: usize,
+        };
+        var frames: std.ArrayListUnmanaged(Frame) = .empty;
+        defer {
+            for (frames.items) |*frame| deinitCheckedTypePayloadBuild(allocator, &frame.snapshot);
+            frames.deinit(allocator);
         }
-        if (active.get(source)) |existing| return existing;
+        var children: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
+        defer children.deinit(allocator);
+        var results: std.ArrayListUnmanaged(u32) = .empty;
+        defer results.deinit(allocator);
+
+        var pending_source: ?CheckedTypeId = source;
+        while (true) {
+            if (pending_source) |next_source| {
+                pending_source = null;
+                switch (try self.enterSubstitutingClone(allocator, names, next_source, formals, actuals, active)) {
+                    .done => |id| {
+                        if (frames.items.len == 0) return id;
+                        try results.append(allocator, @intFromEnum(id));
+                    },
+                    .clone => |clone| {
+                        const children_start = children.items.len;
+                        try appendCheckedTypeBuildChildren(allocator, &children, clone.snapshot);
+                        try frames.append(allocator, .{
+                            .target = clone.target,
+                            .snapshot = clone.snapshot,
+                            .children_start = children_start,
+                            .next = children_start,
+                            .results_start = results.items.len,
+                        });
+                    },
+                }
+                continue;
+            }
+
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next < children.items.len) {
+                pending_source = children.items[frame.next];
+                frame.next += 1;
+                continue;
+            }
+
+            var cloned = CheckedTypeProjectResults{ .items = results.items[frame.results_start..] };
+            const cloned_payload = try cloneCheckedTypeBuildPayload(allocator, frame.snapshot, &cloned);
+            std.debug.assert(cloned.next == cloned.items.len);
+            try self.fillSyntheticTypeRoot(allocator, frame.target, cloned_payload);
+
+            var finished = frames.pop().?;
+            deinitCheckedTypePayloadBuild(allocator, &finished.snapshot);
+            children.shrinkRetainingCapacity(finished.children_start);
+            results.shrinkRetainingCapacity(finished.results_start);
+            if (frames.items.len == 0) return finished.target;
+            try results.append(allocator, @intFromEnum(finished.target));
+        }
+    }
+
+    fn cloneCheckedTypeIdSliceSubstituting(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+        ids: []const CheckedTypeId,
+        formals: []const CheckedTypeId,
+        actuals: []const CheckedTypeId,
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
+    ) Allocator.Error![]const CheckedTypeId {
+        if (ids.len == 0) return &.{};
+        // Cloning appends to the store's pools, which `ids` may alias.
+        const out = try allocator.dupe(CheckedTypeId, ids);
+        errdefer allocator.free(out);
+        for (out) |*id| {
+            id.* = try self.cloneCheckedTypeRootSubstituting(allocator, names, id.*, formals, actuals, active);
+        }
+        return out;
+    }
+
+    /// A source that needs no new root answers at once; otherwise reserve its
+    /// target root and snapshot its payload for the frame that clones it.
+    fn enterSubstitutingClone(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+        source: CheckedTypeId,
+        formals: []const CheckedTypeId,
+        actuals: []const CheckedTypeId,
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
+    ) Allocator.Error!union(enum) { done: CheckedTypeId, clone: struct { target: CheckedTypeId, snapshot: CheckedTypePayloadBuild } } {
+        for (formals, actuals) |formal, actual| {
+            if (source == formal) return .{ .done = actual };
+        }
+        if (active.get(source)) |existing| return .{ .done = existing };
 
         const source_index: usize = @intFromEnum(source);
         if (source_index >= self.payloads.items.len or source_index >= self.roots.items.len) {
@@ -5454,11 +5549,11 @@ pub const CheckedTypeStore = struct {
         // A closed root cannot contain any formal. Reusing it is both the
         // semantic result and the DAG-preserving representation; hashing and
         // cloning it would manufacture an equal tree for no substitution.
-        if (!self.rootContainsIdentityVariables(source)) return source;
+        if (!self.rootContainsIdentityVariables(source)) return .{ .done = source };
 
         const key_info = try substitutedCheckedTypeKeyInfo(allocator, names, self, source, formals, actuals);
         if (!key_info.contains_identity_variables) {
-            if (self.rootForKey(key_info.key)) |existing| return existing;
+            if (self.rootForKey(key_info.key)) |existing| return .{ .done = existing };
         }
 
         const target = try self.reserveSyntheticTypeRoot(
@@ -5467,12 +5562,13 @@ pub const CheckedTypeStore = struct {
             key_info.contains_identity_variables,
         );
         try active.put(source, target);
-        errdefer _ = active.remove(source);
 
-        // Snapshot the source into owned build memory: recursion below appends to
-        // the store's pools, which can reallocate slices that alias them.
+        // Snapshot the source into owned build memory: cloning its children
+        // appends to the store's pools, which can reallocate slices that
+        // alias them.
         var snapshot = try self.snapshotStoredPayload(allocator, self.payloads.items[source_index]);
-        defer deinitCheckedTypePayloadBuild(allocator, &snapshot);
+        errdefer deinitCheckedTypePayloadBuild(allocator, &snapshot);
+        if (snapshot == .pending) checkedArtifactInvariant("checked type substitution reached pending payload", .{});
         if (snapshot == .flex or snapshot == .rigid) {
             try self.identity_origins.put(allocator, target, source);
         }
@@ -5483,16 +5579,7 @@ pub const CheckedTypeStore = struct {
                 self.payloads.items.len,
             });
         }
-        const cloned_payload = try self.cloneCheckedTypePayloadSubstituting(
-            allocator,
-            names,
-            snapshot,
-            formals,
-            actuals,
-            active,
-        );
-        try self.fillSyntheticTypeRoot(allocator, target, cloned_payload);
-        return target;
+        return .{ .clone = .{ .target = target, .snapshot = snapshot } };
     }
 
     /// Deep-copy the immediate slices of a stored payload into owned build-form
@@ -5557,178 +5644,6 @@ pub const CheckedTypeStore = struct {
         };
     }
 
-    fn cloneCheckedTypePayloadSubstituting(
-        self: *CheckedTypeStore,
-        allocator: Allocator,
-        names: *const canonical.CanonicalNameStore,
-        build_payload: CheckedTypePayloadBuild,
-        formals: []const CheckedTypeId,
-        actuals: []const CheckedTypeId,
-        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
-    ) Allocator.Error!CheckedTypePayloadBuild {
-        return switch (build_payload) {
-            .pending => checkedArtifactInvariant("checked type substitution reached pending payload", .{}),
-            .err => .err,
-            .empty_record => .empty_record,
-            .empty_tag_union => .empty_tag_union,
-            .flex => |flex| .{ .flex = .{
-                .name = if (flex.name) |name| try allocator.dupe(u8, name) else null,
-                .constraints = try self.cloneCheckedStaticDispatchConstraintsSubstituting(allocator, names, flex.constraints, formals, actuals, active),
-                .numeric_default_phase = flex.numeric_default_phase,
-                .row_default = flex.row_default,
-            } },
-            .rigid => |rigid| .{ .rigid = .{
-                .name = if (rigid.name) |name| try allocator.dupe(u8, name) else null,
-                .constraints = try self.cloneCheckedStaticDispatchConstraintsSubstituting(allocator, names, rigid.constraints, formals, actuals, active),
-                .numeric_default_phase = rigid.numeric_default_phase,
-                .row_default = rigid.row_default,
-            } },
-            .alias => |alias| .{ .alias = .{
-                .name = alias.name,
-                .origin_module = alias.origin_module,
-                .owner_module = alias.owner_module,
-                .source_decl = alias.source_decl,
-                .builtin_origin = alias.builtin_origin,
-                .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, alias.backing, formals, actuals, active),
-                .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, alias.args, formals, actuals, active),
-            } },
-            .record => |record| .{ .record = .{
-                .fields = try self.cloneCheckedRecordFieldsSubstituting(allocator, names, record.fields, formals, actuals, active),
-                .ext = try self.cloneCheckedTypeRootSubstituting(allocator, names, record.ext, formals, actuals, active),
-            } },
-            .tuple => |elems| .{
-                .tuple = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, elems, formals, actuals, active),
-            },
-            .nominal => |nominal| .{ .nominal = .{
-                .name = nominal.name,
-                .origin_module = nominal.origin_module,
-                .owner_module = nominal.owner_module,
-                .source_decl = nominal.source_decl,
-                .builtin = nominal.builtin,
-                .is_opaque = nominal.is_opaque,
-                .representation = nominal.representation,
-                .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.args, formals, actuals, active),
-                .padding_field_types = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, nominal.padding_field_types, formals, actuals, active),
-                .declared_fields = try allocator.dupe(CheckedDeclaredField, nominal.declared_fields),
-            } },
-            .function => |function| try self.cloneCheckedFunctionTypeSubstituting(allocator, names, function, formals, actuals, active),
-            .tag_union => |tag_union| .{ .tag_union = .{
-                .tags = try self.cloneCheckedTagsSubstituting(allocator, names, tag_union.tags, formals, actuals, active),
-                .ext = try self.cloneCheckedTypeRootSubstituting(allocator, names, tag_union.ext, formals, actuals, active),
-            } },
-        };
-    }
-
-    fn cloneCheckedTypeIdSliceSubstituting(
-        self: *CheckedTypeStore,
-        allocator: Allocator,
-        names: *const canonical.CanonicalNameStore,
-        ids: []const CheckedTypeId,
-        formals: []const CheckedTypeId,
-        actuals: []const CheckedTypeId,
-        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
-    ) Allocator.Error![]const CheckedTypeId {
-        if (ids.len == 0) return &.{};
-        const out = try allocator.alloc(CheckedTypeId, ids.len);
-        errdefer allocator.free(out);
-        for (ids, 0..) |id, i| {
-            out[i] = try self.cloneCheckedTypeRootSubstituting(allocator, names, id, formals, actuals, active);
-        }
-        return out;
-    }
-
-    fn cloneCheckedRecordFieldsSubstituting(
-        self: *CheckedTypeStore,
-        allocator: Allocator,
-        names: *const canonical.CanonicalNameStore,
-        fields: []const CheckedRecordField,
-        formals: []const CheckedTypeId,
-        actuals: []const CheckedTypeId,
-        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
-    ) Allocator.Error![]const CheckedRecordField {
-        if (fields.len == 0) return &.{};
-        const out = try allocator.alloc(CheckedRecordField, fields.len);
-        errdefer allocator.free(out);
-        for (fields, 0..) |field, i| {
-            out[i] = .{
-                .name = field.name,
-                .ty = try self.cloneCheckedTypeRootSubstituting(allocator, names, field.ty, formals, actuals, active),
-                .kind = if (field.kind.undeterminedVariable()) |variable|
-                    .undetermined(try self.cloneCheckedTypeRootSubstituting(allocator, names, variable, formals, actuals, active))
-                else
-                    field.kind,
-            };
-        }
-        return out;
-    }
-
-    fn cloneCheckedTagsSubstituting(
-        self: *CheckedTypeStore,
-        allocator: Allocator,
-        names: *const canonical.CanonicalNameStore,
-        tags: []const CheckedTagBuild,
-        formals: []const CheckedTypeId,
-        actuals: []const CheckedTypeId,
-        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
-    ) Allocator.Error![]const CheckedTagBuild {
-        if (tags.len == 0) return &.{};
-        const out = try allocator.alloc(CheckedTagBuild, tags.len);
-        for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
-        errdefer {
-            for (out) |tag| allocator.free(tag.args);
-            allocator.free(out);
-        }
-        for (tags, 0..) |tag, i| {
-            out[i] = .{
-                .name = tag.name,
-                .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, tag.args, formals, actuals, active),
-            };
-        }
-        return out;
-    }
-
-    fn cloneCheckedStaticDispatchConstraintsSubstituting(
-        self: *CheckedTypeStore,
-        allocator: Allocator,
-        names: *const canonical.CanonicalNameStore,
-        constraints: []const CheckedStaticDispatchConstraint,
-        formals: []const CheckedTypeId,
-        actuals: []const CheckedTypeId,
-        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
-    ) Allocator.Error![]const CheckedStaticDispatchConstraint {
-        if (constraints.len == 0) return &.{};
-        const out = try allocator.alloc(CheckedStaticDispatchConstraint, constraints.len);
-        errdefer allocator.free(out);
-        for (constraints, 0..) |constraint, i| {
-            out[i] = .{
-                .fn_name = constraint.fn_name,
-                .fn_ty = try self.cloneCheckedTypeRootSubstituting(allocator, names, constraint.fn_ty, formals, actuals, active),
-                .origin = constraint.origin,
-            };
-        }
-        return out;
-    }
-
-    fn cloneCheckedFunctionTypeSubstituting(
-        self: *CheckedTypeStore,
-        allocator: Allocator,
-        names: *const canonical.CanonicalNameStore,
-        function: CheckedFunctionType,
-        formals: []const CheckedTypeId,
-        actuals: []const CheckedTypeId,
-        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
-    ) Allocator.Error!CheckedTypePayloadBuild {
-        const args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, function.args, formals, actuals, active);
-        errdefer allocator.free(args);
-        const ret = try self.cloneCheckedTypeRootSubstituting(allocator, names, function.ret, formals, actuals, active);
-
-        return .{ .function = .{
-            .kind = finalizedFunctionKind(function.kind),
-            .args = args,
-            .ret = ret,
-        } };
-    }
-
     fn checkedTypeSliceContainsIdentityVariables(
         self: *const CheckedTypeStore,
         allocator: Allocator,
@@ -5759,6 +5674,155 @@ pub const CheckedTypeStore = struct {
         );
     }
 };
+
+/// The child type ids of a build payload, in the order a clone relates them.
+fn appendCheckedTypeBuildChildren(
+    allocator: Allocator,
+    children: *std.ArrayListUnmanaged(CheckedTypeId),
+    payload: CheckedTypePayloadBuild,
+) Allocator.Error!void {
+    switch (payload) {
+        .pending, .err, .empty_record, .empty_tag_union => {},
+        .flex, .rigid => |variable| for (variable.constraints) |constraint| try children.append(allocator, constraint.fn_ty),
+        .alias => |alias| {
+            try children.append(allocator, alias.backing);
+            try children.appendSlice(allocator, alias.args);
+        },
+        .record => |record| {
+            for (record.fields) |field| {
+                try children.append(allocator, field.ty);
+                if (field.kind.undeterminedVariable()) |variable| try children.append(allocator, variable);
+            }
+            try children.append(allocator, record.ext);
+        },
+        .tuple => |elems| try children.appendSlice(allocator, elems),
+        .nominal => |nominal| {
+            try children.appendSlice(allocator, nominal.args);
+            try children.appendSlice(allocator, nominal.padding_field_types);
+        },
+        .function => |function| {
+            try children.appendSlice(allocator, function.args);
+            try children.append(allocator, function.ret);
+        },
+        .tag_union => |tag_union| {
+            for (tag_union.tags) |tag| try children.appendSlice(allocator, tag.args);
+            try children.append(allocator, tag_union.ext);
+        },
+    }
+}
+
+/// Rebuild a snapshot payload over its cloned children, read in the order
+/// `appendCheckedTypeBuildChildren` listed them.
+fn cloneCheckedTypeBuildPayload(
+    allocator: Allocator,
+    payload: CheckedTypePayloadBuild,
+    cloned: *CheckedTypeProjectResults,
+) Allocator.Error!CheckedTypePayloadBuild {
+    return switch (payload) {
+        .pending => unreachable,
+        .err => .err,
+        .empty_record => .empty_record,
+        .empty_tag_union => .empty_tag_union,
+        .flex => |flex| .{ .flex = try cloneCheckedTypeBuildVariable(allocator, flex, cloned) },
+        .rigid => |rigid| .{ .rigid = try cloneCheckedTypeBuildVariable(allocator, rigid, cloned) },
+        .alias => |alias| blk: {
+            const backing = cloned.typeId();
+            break :blk .{ .alias = .{
+                .name = alias.name,
+                .origin_module = alias.origin_module,
+                .owner_module = alias.owner_module,
+                .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
+                .backing = backing,
+                .args = try cloned.typeIds(allocator, alias.args.len),
+            } };
+        },
+        .record => |record| blk: {
+            const fields: []const CheckedRecordField = if (record.fields.len == 0) &.{} else fields_blk: {
+                const out = try allocator.alloc(CheckedRecordField, record.fields.len);
+                for (record.fields, out) |field, *slot| {
+                    const ty = cloned.typeId();
+                    slot.* = .{
+                        .name = field.name,
+                        .ty = ty,
+                        .kind = if (field.kind.undeterminedVariable() != null)
+                            .undetermined(cloned.typeId())
+                        else
+                            field.kind,
+                    };
+                }
+                break :fields_blk out;
+            };
+            break :blk .{ .record = .{ .fields = fields, .ext = cloned.typeId() } };
+        },
+        .tuple => |elems| .{ .tuple = try cloned.typeIds(allocator, elems.len) },
+        .nominal => |nominal| blk: {
+            const args = try cloned.typeIds(allocator, nominal.args.len);
+            errdefer if (args.len != 0) allocator.free(args);
+            const padding_field_types = try cloned.typeIds(allocator, nominal.padding_field_types.len);
+            errdefer if (padding_field_types.len != 0) allocator.free(padding_field_types);
+            break :blk .{ .nominal = .{
+                .name = nominal.name,
+                .origin_module = nominal.origin_module,
+                .owner_module = nominal.owner_module,
+                .source_decl = nominal.source_decl,
+                .builtin = nominal.builtin,
+                .is_opaque = nominal.is_opaque,
+                .representation = nominal.representation,
+                .args = args,
+                .padding_field_types = padding_field_types,
+                .declared_fields = try allocator.dupe(CheckedDeclaredField, nominal.declared_fields),
+            } };
+        },
+        .function => |function| blk: {
+            const args = try cloned.typeIds(allocator, function.args.len);
+            break :blk .{ .function = .{
+                .kind = finalizedFunctionKind(function.kind),
+                .args = args,
+                .ret = cloned.typeId(),
+            } };
+        },
+        .tag_union => |tag_union| blk: {
+            const tags: []const CheckedTagBuild = if (tag_union.tags.len == 0) &.{} else tags_blk: {
+                const out = try allocator.alloc(CheckedTagBuild, tag_union.tags.len);
+                for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
+                errdefer deinitCheckedTagsBuild(allocator, out);
+                for (tag_union.tags, out) |tag, *slot| {
+                    slot.name = tag.name;
+                    slot.args = try cloned.typeIds(allocator, tag.args.len);
+                }
+                break :tags_blk out;
+            };
+            break :blk .{ .tag_union = .{ .tags = tags, .ext = cloned.typeId() } };
+        },
+    };
+}
+
+fn cloneCheckedTypeBuildVariable(
+    allocator: Allocator,
+    variable: CheckedTypeVariable,
+    cloned: *CheckedTypeProjectResults,
+) Allocator.Error!CheckedTypeVariable {
+    const name = if (variable.name) |name_text| try allocator.dupe(u8, name_text) else null;
+    errdefer if (name) |owned| allocator.free(owned);
+    const constraints: []const CheckedStaticDispatchConstraint = if (variable.constraints.len == 0) &.{} else blk: {
+        const out = try allocator.alloc(CheckedStaticDispatchConstraint, variable.constraints.len);
+        for (variable.constraints, out) |constraint, *slot| {
+            slot.* = .{
+                .fn_name = constraint.fn_name,
+                .fn_ty = cloned.typeId(),
+                .origin = constraint.origin,
+            };
+        }
+        break :blk out;
+    };
+    return .{
+        .name = name,
+        .constraints = constraints,
+        .numeric_default_phase = variable.numeric_default_phase,
+        .row_default = variable.row_default,
+    };
+}
 
 const CheckedTypeIdentityScan = struct {
     store: *const CheckedTypeStore,
@@ -6106,6 +6170,10 @@ fn declarationFormalRoot(formals: []const DeclarationFormal, name: Ident.Idx) ?C
     return null;
 }
 
+/// Build the checked type a type declaration's annotation denotes, with each
+/// formal replaced by its root. Each composite annotation is an explicit
+/// frame whose ops (child annotations and label interning) run in source
+/// order, so annotation depth never becomes native call depth.
 fn appendCheckedTypeRootFromDeclarationAnno(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -6117,286 +6185,445 @@ fn appendCheckedTypeRootFromDeclarationAnno(
     declaration_formals: []const DeclarationFormal,
     anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error!CheckedTypeId {
-    const module_env = module.moduleEnvConst();
-    const anno = module_env.store.getTypeAnno(anno_idx);
-    return switch (anno) {
-        .tag_union => |tag_union| blk: {
-            const tags = try checkedTagsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                tag_union.tags,
-            );
-            var tags_owned = true;
-            errdefer if (tags_owned) deinitCheckedTagsBuild(allocator, tags);
-            const ext = if (tag_union.ext) |ext_anno|
-                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, ext_anno)
-            else
-                try appendExplicitCheckedTypePayload(allocator, names, store, .empty_tag_union);
-            // The payload owns `tags` from here and releases it on failure.
-            tags_owned = false;
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .tag_union = .{
-                .tags = tags,
-                .ext = ext,
-            } });
-        },
-        .record => |record| blk: {
-            const fields = try checkedRecordFieldsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                record.fields,
-            );
-            var fields_owned = true;
-            errdefer if (fields_owned) allocator.free(fields);
-            const ext = if (record.ext) |ext_anno|
-                try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, ext_anno)
-            else
-                try appendExplicitCheckedTypePayload(allocator, names, store, .empty_record);
-            // The payload owns `fields` from here and releases it on failure.
-            fields_owned = false;
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .record = .{
-                .fields = fields,
-                .ext = ext,
-            } });
-        },
-        .tuple => |tuple| blk: {
-            const elems = try checkedTypeIdsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                tuple.elems,
-            );
-            // The payload owns `elems` and releases it on failure.
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .tuple = elems });
-        },
-        .@"fn" => |func| blk: {
-            const args = try checkedTypeIdsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                func.args,
-            );
-            var args_owned = true;
-            errdefer if (args_owned) allocator.free(args);
-            const ret = try appendCheckedTypeRootFromDeclarationAnno(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                func.ret,
-            );
-            // The payload owns `args` from here and releases it on failure.
-            args_owned = false;
-            break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .function = .{
-                .kind = if (func.effectful) .effectful else .pure,
-                .args = args,
-                .ret = ret,
-            } });
-        },
-        .parens => |parens| try appendCheckedTypeRootFromDeclarationAnno(
-            allocator,
-            module,
-            names,
-            imports,
-            store,
-            active,
-            local_type_declarations,
-            declaration_formals,
-            parens.anno,
-        ),
-        .lookup => |lookup| switch (lookup.base) {
-            .local => |local| blk: {
-                const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
-                const result = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    imports,
-                    store,
-                    active,
-                    ModuleEnv.varFrom(finalized),
-                );
-                break :blk result;
+    var walk = DeclarationAnnoWalk{
+        .allocator = allocator,
+        .module = module,
+        .names = names,
+        .imports = imports,
+        .store = store,
+        .active = active,
+        .local_type_declarations = local_type_declarations,
+    };
+    defer walk.deinit();
+    return try walk.run(declaration_formals, anno_idx);
+}
+
+const DeclarationAnnoWalk = struct {
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *CheckedSourceTypeRoots,
+    local_type_declarations: *const LocalTypeDeclarationIndex,
+    frames: std.ArrayListUnmanaged(Frame) = .empty,
+    ops: std.ArrayListUnmanaged(Op) = .empty,
+    results: std.ArrayListUnmanaged(u32) = .empty,
+
+    const Op = union(enum) {
+        /// An annotation walked under the frame's formals.
+        child: CIR.TypeAnno.Idx,
+        field_name: Ident.Idx,
+        tag_name: Ident.Idx,
+        /// This module's canonical identity, for a defaulted field's kind.
+        default_module,
+        /// The closed row an annotation without an extension ends in.
+        empty_record,
+        empty_tag_union,
+    };
+
+    /// A composite annotation whose ops occupy `ops[ops_start..]` and their
+    /// results `results[results_start..]`.
+    const Frame = struct {
+        anno: CIR.TypeAnno.Idx,
+        formals: []const DeclarationFormal,
+        ops_start: usize,
+        next: usize,
+        results_start: usize,
+        /// Set once an application of a local alias has its arguments: the
+        /// alias body then walks under these formals, which the frame owns.
+        alias_body: ?AliasBody = null,
+    };
+
+    const AliasBody = struct {
+        formals: []DeclarationFormal,
+        alias: CheckedAliasType,
+    };
+
+    fn deinit(self: *DeclarationAnnoWalk) void {
+        for (self.frames.items) |frame| {
+            if (frame.alias_body) |body| if (body.formals.len != 0) self.allocator.free(body.formals);
+        }
+        self.frames.deinit(self.allocator);
+        self.ops.deinit(self.allocator);
+        self.results.deinit(self.allocator);
+    }
+
+    fn run(self: *DeclarationAnnoWalk, root_formals: []const DeclarationFormal, root: CIR.TypeAnno.Idx) Allocator.Error!CheckedTypeId {
+        if (try self.enter(root_formals, root)) |id| return id;
+        while (true) {
+            const index = self.frames.items.len - 1;
+            const frame = self.frames.items[index];
+            if (frame.next < self.ops.items.len) {
+                const op = self.ops.items[frame.next];
+                self.frames.items[index].next += 1;
+                const result: u32 = switch (op) {
+                    .child => |child| if (try self.enter(self.childFormals(frame), child)) |id| @intFromEnum(id) else continue,
+                    .field_name => |name| @intFromEnum(try self.names.internRecordFieldIdent(self.module.identStoreConst(), name)),
+                    .tag_name => |name| @intFromEnum(try self.names.internTagIdent(self.module.identStoreConst(), name)),
+                    .default_module => @intFromEnum(try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(self.module.moduleEnvConst().selfModuleIdentity()))),
+                    .empty_record => @intFromEnum(try appendExplicitCheckedTypePayload(self.allocator, self.names, self.store, .empty_record)),
+                    .empty_tag_union => @intFromEnum(try appendExplicitCheckedTypePayload(self.allocator, self.names, self.store, .empty_tag_union)),
+                };
+                try self.results.append(self.allocator, result);
+                continue;
+            }
+
+            const id = (try self.finish(index)) orelse continue;
+            const finished = self.frames.pop().?;
+            if (finished.alias_body) |body| if (body.formals.len != 0) self.allocator.free(body.formals);
+            self.ops.shrinkRetainingCapacity(finished.ops_start);
+            self.results.shrinkRetainingCapacity(finished.results_start);
+            if (self.frames.items.len == 0) return id;
+            try self.results.append(self.allocator, @intFromEnum(id));
+        }
+    }
+
+    /// Child annotations walk under the frame's formals, except an alias body,
+    /// which walks under the alias's own.
+    fn childFormals(_: *const DeclarationAnnoWalk, frame: Frame) []const DeclarationFormal {
+        if (frame.alias_body) |body| return body.formals;
+        return frame.formals;
+    }
+
+    /// The root a leaf annotation denotes, or null after pushing the frame
+    /// that builds a composite one.
+    fn enter(self: *DeclarationAnnoWalk, formals: []const DeclarationFormal, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!?CheckedTypeId {
+        const gpa = self.allocator;
+        const module_env = self.module.moduleEnvConst();
+        var current = anno_idx;
+        const anno = while (true) {
+            const anno = module_env.store.getTypeAnno(current);
+            switch (anno) {
+                .parens => |parens| current = parens.anno,
+                else => break anno,
+            }
+        };
+        const ops_start = self.ops.items.len;
+        switch (anno) {
+            .parens => unreachable,
+            .tag_union => |tag_union| {
+                for (module_env.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
+                    const tag = switch (module_env.store.getTypeAnno(tag_anno_idx)) {
+                        .tag => |tag| tag,
+                        .apply,
+                        .rigid_var,
+                        .rigid_var_lookup,
+                        .underscore,
+                        .lookup,
+                        .tag_union,
+                        .tuple,
+                        .record,
+                        .@"fn",
+                        .parens,
+                        .malformed,
+                        => checkedArtifactInvariant("nominal declaration tag union contained a non-tag annotation", .{}),
+                    };
+                    try self.ops.append(gpa, .{ .tag_name = tag.name });
+                    for (module_env.store.sliceTypeAnnos(tag.args)) |arg| try self.ops.append(gpa, .{ .child = arg });
+                }
+                try self.ops.append(gpa, if (tag_union.ext) |ext| .{ .child = ext } else .empty_tag_union);
+            },
+            .record => |record| {
+                // Unnamed (`_` / `_name`) fields are layout padding, not real fields; they
+                // stay in the canonical record annotation (declared order) but are excluded
+                // from the backing row here so they are never name-resolved or unified.
+                for (module_env.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    const field = module_env.store.getAnnoRecordField(field_idx);
+                    if (field.is_unnamed) continue;
+                    try self.ops.append(gpa, .{ .field_name = field.name });
+                    try self.ops.append(gpa, .{ .child = field.ty });
+                    if (!field.is_optional and field.default_value != null) try self.ops.append(gpa, .default_module);
+                }
+                try self.ops.append(gpa, if (record.ext) |ext| .{ .child = ext } else .empty_record);
+            },
+            .tuple => |tuple| for (module_env.store.sliceTypeAnnos(tuple.elems)) |elem| try self.ops.append(gpa, .{ .child = elem }),
+            .@"fn" => |func| {
+                for (module_env.store.sliceTypeAnnos(func.args)) |arg| try self.ops.append(gpa, .{ .child = arg });
+                try self.ops.append(gpa, .{ .child = func.ret });
+            },
+            .apply => |apply| for (module_env.store.sliceTypeAnnos(apply.args)) |arg| try self.ops.append(gpa, .{ .child = arg }),
+            .lookup => |lookup| return switch (lookup.base) {
+                .local => |local| try self.appendRoot(ModuleEnv.varFrom(self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx))),
+                .builtin,
+                .external,
+                .external_identity,
+                .pending,
+                => try self.appendRoot(ModuleEnv.varFrom(current)),
+            },
+            .rigid_var => |rigid| return declarationFormalRoot(formals, rigid.name) orelse
+                try self.appendRoot(ModuleEnv.varFrom(current)),
+            .underscore => return try self.appendRoot(ModuleEnv.varFrom(current)),
+            .rigid_var_lookup => |lookup| {
+                switch (module_env.store.getTypeAnno(lookup.ref)) {
+                    .rigid_var => |rigid| if (declarationFormalRoot(formals, rigid.name)) |formal| return formal,
+                    .apply,
+                    .rigid_var_lookup,
+                    .underscore,
+                    .lookup,
+                    .tag_union,
+                    .tag,
+                    .tuple,
+                    .record,
+                    .@"fn",
+                    .parens,
+                    .malformed,
+                    => {},
+                }
+                return try self.appendRoot(ModuleEnv.varFrom(lookup.ref));
+            },
+            .tag,
+            .malformed,
+            => return try self.appendRoot(ModuleEnv.varFrom(current)),
+        }
+        try self.frames.append(gpa, .{
+            .anno = current,
+            .formals = formals,
+            .ops_start = ops_start,
+            .next = ops_start,
+            .results_start = self.results.items.len,
+        });
+        return null;
+    }
+
+    fn appendRoot(self: *DeclarationAnnoWalk, var_: Var) Allocator.Error!CheckedTypeId {
+        return try appendCheckedTypeRoot(self.allocator, self.module, self.names, self.imports, self.store, self.active, var_);
+    }
+
+    /// Build the frame's root from its op results; null when an alias
+    /// application must first walk its alias body.
+    fn finish(self: *DeclarationAnnoWalk, index: usize) Allocator.Error!?CheckedTypeId {
+        const gpa = self.allocator;
+        const frame = self.frames.items[index];
+        const module_env = self.module.moduleEnvConst();
+        var results = CheckedTypeProjectResults{ .items = self.results.items[frame.results_start..] };
+        switch (module_env.store.getTypeAnno(frame.anno)) {
+            .tag_union => |tag_union| {
+                const tag_annos = module_env.store.sliceTypeAnnos(tag_union.tags);
+                const tags: []const CheckedTagBuild = if (tag_annos.len == 0) &.{} else blk: {
+                    const out = try gpa.alloc(CheckedTagBuild, tag_annos.len);
+                    for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
+                    errdefer deinitCheckedTagsBuild(gpa, out);
+                    for (tag_annos, out) |tag_anno_idx, *slot| {
+                        const tag = module_env.store.getTypeAnno(tag_anno_idx).tag;
+                        slot.name = @enumFromInt(results.take());
+                        slot.args = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(tag.args).len);
+                    }
+                    break :blk out;
+                };
+                // The payload owns `tags` and releases it on failure.
+                return try appendExplicitCheckedTypePayload(gpa, self.names, self.store, .{ .tag_union = .{
+                    .tags = tags,
+                    .ext = results.typeId(),
+                } });
+            },
+            .record => |record| {
+                var named_count: usize = 0;
+                for (module_env.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    if (!module_env.store.getAnnoRecordField(field_idx).is_unnamed) named_count += 1;
+                }
+                const fields: []const CheckedRecordField = if (named_count == 0) &.{} else blk: {
+                    const out = try gpa.alloc(CheckedRecordField, named_count);
+                    var out_index: usize = 0;
+                    for (module_env.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                        const field = module_env.store.getAnnoRecordField(field_idx);
+                        if (field.is_unnamed) continue;
+                        const name: canonical.RecordFieldLabelId = @enumFromInt(results.take());
+                        const ty = results.typeId();
+                        out[out_index] = .{
+                            .name = name,
+                            .ty = ty,
+                            // The annotation pins the kind concretely (design.md "Field
+                            // Kinds"): `?:` publishes `optional`, `??` publishes `defaulted`
+                            // with this module's canonical identity (design.md "Defaulted
+                            // Fields"), plain `:` publishes `required`. `?:` and `??` never
+                            // combine—canonicalization rejects `a ?: T ?? d` outright.
+                            .kind = if (field.is_optional)
+                                .optional
+                            else if (field.default_value) |default_expr_idx|
+                                .defaultedFromParts(@enumFromInt(results.take()), @intFromEnum(default_expr_idx))
+                            else
+                                .required,
+                        };
+                        out_index += 1;
+                    }
+                    break :blk out;
+                };
+                // The payload owns `fields` and releases it on failure.
+                return try appendExplicitCheckedTypePayload(gpa, self.names, self.store, .{ .record = .{
+                    .fields = fields,
+                    .ext = results.typeId(),
+                } });
+            },
+            .tuple => |tuple| {
+                // The payload owns `elems` and releases it on failure.
+                const elems = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(tuple.elems).len);
+                return try appendExplicitCheckedTypePayload(gpa, self.names, self.store, .{ .tuple = elems });
+            },
+            .@"fn" => |func| {
+                const args = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(func.args).len);
+                // The payload owns `args` and releases it on failure.
+                return try appendExplicitCheckedTypePayload(gpa, self.names, self.store, .{ .function = .{
+                    .kind = if (func.effectful) .effectful else .pure,
+                    .args = args,
+                    .ret = results.typeId(),
+                } });
+            },
+            .apply => |apply| return try self.finishApply(index, apply, &results),
+            .parens,
+            .lookup,
+            .rigid_var,
+            .underscore,
+            .rigid_var_lookup,
+            .tag,
+            .malformed,
+            => unreachable,
+        }
+    }
+
+    fn finishApply(
+        self: *DeclarationAnnoWalk,
+        index: usize,
+        apply: @FieldType(CIR.TypeAnno, "apply"),
+        results: *CheckedTypeProjectResults,
+    ) Allocator.Error!?CheckedTypeId {
+        const gpa = self.allocator;
+        const frame = self.frames.items[index];
+        const arg_count = self.module.moduleEnvConst().store.sliceTypeAnnos(apply.args).len;
+        if (frame.alias_body) |body| {
+            // The arguments, then the alias body walked under their formals.
+            // The payload owns `payload_args` and releases it on failure.
+            const payload_args = try results.typeIds(gpa, arg_count);
+            const backing = results.typeId();
+            var alias = body.alias;
+            alias.backing = backing;
+            alias.args = payload_args;
+            return try appendExplicitCheckedTypePayload(gpa, self.names, self.store, .{ .alias = alias });
+        }
+
+        const actual_args = try results.typeIds(gpa, arg_count);
+        defer if (actual_args.len != 0) gpa.free(actual_args);
+        switch (apply.base) {
+            .local => |local| {
+                const finalized = self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx);
+                if (actual_args.len == 0) return try self.appendRoot(ModuleEnv.varFrom(finalized));
+                switch (self.module.getStatement(finalized)) {
+                    .s_alias_decl => {
+                        const body = try self.beginAliasApplication(finalized, actual_args);
+                        self.frames.items[index].alias_body = body.alias_body;
+                        try self.ops.append(gpa, .{ .child = body.anno });
+                        return null;
+                    },
+                    .s_nominal_decl => {
+                        if (finalized != local.decl_idx) {
+                            checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
+                        }
+                        const generic_root = try self.appendRoot(ModuleEnv.varFrom(finalized));
+                        return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
+                    },
+                    .s_decl,
+                    .s_var,
+                    .s_var_uninitialized,
+                    .s_reassign,
+                    .s_crash,
+                    .s_dbg,
+                    .s_expr,
+                    .s_expect,
+                    .s_for,
+                    .s_while,
+                    .s_infinite_loop,
+                    .s_breakable_loop,
+                    .s_break,
+                    .s_return,
+                    .s_import,
+                    .s_where_alias_decl,
+                    .s_type_anno,
+                    .s_type_var_alias,
+                    .s_runtime_error,
+                    => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
+                }
             },
             .builtin,
             .external,
             .external_identity,
             .pending,
-            => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-        },
-        .apply => |apply| blk: {
-            const actual_args = try checkedTypeIdsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                apply.args,
-            );
-            var actual_args_owned = actual_args.len > 0;
-            errdefer if (actual_args_owned) allocator.free(actual_args);
-            switch (apply.base) {
-                .local => |local| {
-                    const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
-                    if (actual_args.len == 0) {
-                        break :blk try appendCheckedTypeRoot(
-                            allocator,
-                            module,
-                            names,
-                            imports,
-                            store,
-                            active,
-                            ModuleEnv.varFrom(finalized),
-                        );
-                    }
-                    switch (module.getStatement(finalized)) {
-                        .s_alias_decl => {
-                            const result = try appendInstantiatedAliasDeclarationApplication(
-                                allocator,
-                                module,
-                                names,
-                                imports,
-                                store,
-                                active,
-                                local_type_declarations,
-                                finalized,
-                                actual_args,
-                            );
-                            if (actual_args_owned) {
-                                allocator.free(actual_args);
-                                actual_args_owned = false;
-                            }
-                            break :blk result;
-                        },
-                        .s_nominal_decl => {
-                            if (finalized != local.decl_idx) {
-                                checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
-                            }
-                            const generic_root = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(finalized));
-                            const result = try appendInstantiatedNamedApplicationFromTemplate(allocator, names, store, generic_root, actual_args);
-                            if (actual_args_owned) {
-                                allocator.free(actual_args);
-                                actual_args_owned = false;
-                            }
-                            break :blk result;
-                        },
-                        .s_decl,
-                        .s_var,
-                        .s_var_uninitialized,
-                        .s_reassign,
-                        .s_crash,
-                        .s_dbg,
-                        .s_expr,
-                        .s_expect,
-                        .s_for,
-                        .s_while,
-                        .s_infinite_loop,
-                        .s_breakable_loop,
-                        .s_break,
-                        .s_return,
-                        .s_import,
-                        .s_where_alias_decl,
-                        .s_type_anno,
-                        .s_type_var_alias,
-                        .s_runtime_error,
-                        => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
-                    }
+            => {
+                const generic_root = try self.appendRoot(ModuleEnv.varFrom(self.frames.items[index].anno));
+                if (actual_args.len == 0) return generic_root;
+                return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
+            },
+        }
+    }
+
+    /// Bind an alias declaration's formals to an application's arguments and
+    /// publish its generic root; the application then walks the alias body.
+    fn beginAliasApplication(
+        self: *DeclarationAnnoWalk,
+        statement_idx: CIR.Statement.Idx,
+        actual_args: []const CheckedTypeId,
+    ) Allocator.Error!struct { alias_body: AliasBody, anno: CIR.TypeAnno.Idx } {
+        const gpa = self.allocator;
+        const alias = self.module.getStatement(statement_idx).s_alias_decl;
+        if (alias.anno == .placeholder) {
+            checkedArtifactInvariant("checked declaration template alias application resolved to an unfinalized alias declaration", .{});
+        }
+
+        const module_env = self.module.moduleEnvConst();
+        const header = module_env.store.getTypeHeader(alias.header);
+        const header_args = module_env.store.sliceTypeAnnos(header.args);
+        if (header_args.len != actual_args.len) {
+            checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
+        }
+
+        const declaration_formals: []DeclarationFormal = if (header_args.len == 0) &.{} else blk: {
+            const out = try gpa.alloc(DeclarationFormal, header_args.len);
+            for (header_args, actual_args, out) |arg_anno, actual_arg, *slot| {
+                slot.* = .{
+                    .name = switch (module_env.store.getTypeAnno(arg_anno)) {
+                        .rigid_var => |rigid| rigid.name,
+                        .apply,
+                        .rigid_var_lookup,
+                        .underscore,
+                        .lookup,
+                        .tag_union,
+                        .tag,
+                        .tuple,
+                        .record,
+                        .@"fn",
+                        .parens,
+                        .malformed,
+                        => checkedArtifactInvariant("alias declaration header argument was not a rigid type variable", .{}),
+                    },
+                    .root = actual_arg,
+                };
+            }
+            break :blk out;
+        };
+        errdefer if (declaration_formals.len != 0) gpa.free(declaration_formals);
+
+        const generic_root = try self.appendRoot(ModuleEnv.varFrom(statement_idx));
+        const generic_payload = self.store.payload(generic_root);
+        if (generic_payload != .alias) {
+            checkedArtifactInvariant("checked declaration template alias application root was not an alias", .{});
+        }
+        const generic_alias = generic_payload.alias;
+        return .{
+            .alias_body = .{
+                .formals = declaration_formals,
+                .alias = .{
+                    .name = generic_alias.name,
+                    .origin_module = generic_alias.origin_module,
+                    .owner_module = generic_alias.owner_module,
+                    .source_decl = generic_alias.source_decl,
+                    .builtin_origin = generic_alias.builtin_origin,
+                    .backing = undefined,
+                    .args = &.{},
                 },
-                .builtin,
-                .external,
-                .external_identity,
-                .pending,
-                => {
-                    const generic_root = try appendCheckedTypeRoot(
-                        allocator,
-                        module,
-                        names,
-                        imports,
-                        store,
-                        active,
-                        ModuleEnv.varFrom(anno_idx),
-                    );
-                    const result = if (actual_args.len == 0)
-                        generic_root
-                    else
-                        try appendInstantiatedNamedApplicationFromTemplate(
-                            allocator,
-                            names,
-                            store,
-                            generic_root,
-                            actual_args,
-                        );
-                    if (actual_args_owned) {
-                        allocator.free(actual_args);
-                        actual_args_owned = false;
-                    }
-                    break :blk result;
-                },
-            }
-            if (actual_args_owned) {
-                allocator.free(actual_args);
-                actual_args_owned = false;
-            }
-            break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx));
-        },
-        .rigid_var => |rigid| if (declarationFormalRoot(declaration_formals, rigid.name)) |formal|
-            formal
-        else
-            try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-        .underscore,
-        => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-        .rigid_var_lookup => |lookup| blk: {
-            const source = module_env.store.getTypeAnno(lookup.ref);
-            switch (source) {
-                .rigid_var => |rigid| if (declarationFormalRoot(declaration_formals, rigid.name)) |formal| break :blk formal,
-                .apply,
-                .rigid_var_lookup,
-                .underscore,
-                .lookup,
-                .tag_union,
-                .tag,
-                .tuple,
-                .record,
-                .@"fn",
-                .parens,
-                .malformed,
-                => {},
-            }
-            break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(lookup.ref));
-        },
-        .tag,
-        .malformed,
-        => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
-    };
-}
+            },
+            .anno = alias.anno,
+        };
+    }
+};
 
 fn appendInstantiatedNamedApplicationFromTemplate(
     allocator: Allocator,
@@ -6493,199 +6720,6 @@ fn appendInstantiatedNamedApplicationFromTemplate(
         .empty_tag_union,
         => checkedArtifactInvariant("checked declaration template application did not resolve to a named type", .{}),
     };
-}
-
-fn appendInstantiatedAliasDeclarationApplication(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    statement_idx: CIR.Statement.Idx,
-    actual_args: []const CheckedTypeId,
-) Allocator.Error!CheckedTypeId {
-    const statement = module.getStatement(statement_idx);
-    const alias = switch (statement) {
-        .s_alias_decl => |alias| alias,
-        .s_decl,
-        .s_var,
-        .s_var_uninitialized,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => checkedArtifactInvariant("checked declaration template alias application resolved to a non-alias declaration", .{}),
-    };
-    if (alias.anno == .placeholder) {
-        checkedArtifactInvariant("checked declaration template alias application resolved to an unfinalized alias declaration", .{});
-    }
-
-    const module_env = module.moduleEnvConst();
-    const header = module_env.store.getTypeHeader(alias.header);
-    const header_args = module_env.store.sliceTypeAnnos(header.args);
-    if (header_args.len != actual_args.len) {
-        checkedArtifactInvariant("checked declaration template alias application arity mismatch", .{});
-    }
-
-    const declaration_formals = if (header_args.len == 0) &.{} else blk: {
-        const out = try allocator.alloc(DeclarationFormal, header_args.len);
-        errdefer allocator.free(out);
-        for (header_args, actual_args, 0..) |arg_anno, actual_arg, i| {
-            const arg = module_env.store.getTypeAnno(arg_anno);
-            out[i] = .{
-                .name = switch (arg) {
-                    .rigid_var => |rigid| rigid.name,
-                    .apply,
-                    .rigid_var_lookup,
-                    .underscore,
-                    .lookup,
-                    .tag_union,
-                    .tag,
-                    .tuple,
-                    .record,
-                    .@"fn",
-                    .parens,
-                    .malformed,
-                    => checkedArtifactInvariant("alias declaration header argument was not a rigid type variable", .{}),
-                },
-                .root = actual_arg,
-            };
-        }
-        break :blk out;
-    };
-    defer if (declaration_formals.len != 0) allocator.free(declaration_formals);
-
-    const generic_root = try appendCheckedTypeRoot(
-        allocator,
-        module,
-        names,
-        imports,
-        store,
-        active,
-        ModuleEnv.varFrom(statement_idx),
-    );
-    const generic_payload = store.payload(generic_root);
-    if (generic_payload != .alias) {
-        checkedArtifactInvariant("checked declaration template alias application root was not an alias", .{});
-    }
-    const generic_alias = generic_payload.alias;
-    const alias_name = generic_alias.name;
-    const origin_module = generic_alias.origin_module;
-    const owner_module = generic_alias.owner_module;
-    const source_decl = generic_alias.source_decl;
-    const builtin_origin = generic_alias.builtin_origin;
-    const backing = try appendCheckedTypeRootFromDeclarationAnno(
-        allocator,
-        module,
-        names,
-        imports,
-        store,
-        active,
-        local_type_declarations,
-        declaration_formals,
-        alias.anno,
-    );
-
-    // The payload owns `payload_args` and releases it on failure.
-    const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
-
-    return try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
-        .name = alias_name,
-        .origin_module = origin_module,
-        .owner_module = owner_module,
-        .source_decl = source_decl,
-        .builtin_origin = builtin_origin,
-        .backing = backing,
-        .args = payload_args,
-    } });
-}
-
-fn checkedTypeIdsFromDeclarationAnnoSpan(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    declaration_formals: []const DeclarationFormal,
-    span: CIR.TypeAnno.Span,
-) Allocator.Error![]const CheckedTypeId {
-    const annos = module.moduleEnvConst().store.sliceTypeAnnos(span);
-    if (annos.len == 0) return &.{};
-    const out = try allocator.alloc(CheckedTypeId, annos.len);
-    errdefer allocator.free(out);
-    for (annos, 0..) |anno, i| {
-        out[i] = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, anno);
-    }
-    return out;
-}
-
-fn checkedRecordFieldsFromDeclarationAnnoSpan(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    declaration_formals: []const DeclarationFormal,
-    span: CIR.TypeAnno.RecordField.Span,
-) Allocator.Error![]const CheckedRecordField {
-    const fields = module.moduleEnvConst().store.sliceAnnoRecordFields(span);
-    if (fields.len == 0) return &.{};
-    // Unnamed (`_` / `_name`) fields are layout padding, not real fields; they
-    // stay in the canonical record annotation (declared order) but are excluded
-    // from the backing row here so they are never name-resolved or unified.
-    var named_count: usize = 0;
-    for (fields) |field_idx| {
-        const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
-        if (field.is_unnamed) continue;
-        named_count += 1;
-    }
-    if (named_count == 0) return &.{};
-    const out = try allocator.alloc(CheckedRecordField, named_count);
-    errdefer allocator.free(out);
-    var out_index: usize = 0;
-    for (fields) |field_idx| {
-        const field = module.moduleEnvConst().store.getAnnoRecordField(field_idx);
-        if (field.is_unnamed) continue;
-        out[out_index] = .{
-            .name = try names.internRecordFieldIdent(module.identStoreConst(), field.name),
-            .ty = try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, field.ty),
-            // The annotation pins the kind concretely (design.md "Field
-            // Kinds"): `?:` publishes `optional`, `??` publishes `defaulted`
-            // with this module's canonical identity (design.md "Defaulted
-            // Fields"), plain `:` publishes `required`. `?:` and `??` never
-            // combine—canonicalization rejects `a ?: T ?? d` outright.
-            .kind = if (field.is_optional)
-                .optional
-            else if (field.default_value) |default_expr_idx|
-                .defaultedFromParts(
-                    try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(module.moduleEnvConst().selfModuleIdentity())),
-                    @intFromEnum(default_expr_idx),
-                )
-            else
-                .required,
-        };
-        out_index += 1;
-    }
-    return out;
 }
 
 /// Records a nominal declaration's top-level record fields in declared order.
@@ -6801,58 +6835,6 @@ fn declaredFieldsFromDeclarationAnno(
     }
     if (padding_cursor != padding_field_types.len) {
         checkedArtifactInvariant("nominal declaration recorded padding types that were missing from declared field order", .{});
-    }
-    return out;
-}
-
-fn checkedTagsFromDeclarationAnnoSpan(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    declaration_formals: []const DeclarationFormal,
-    span: CIR.TypeAnno.Span,
-) Allocator.Error![]const CheckedTagBuild {
-    const annos = module.moduleEnvConst().store.sliceTypeAnnos(span);
-    if (annos.len == 0) return &.{};
-    const out = try allocator.alloc(CheckedTagBuild, annos.len);
-    for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
-    errdefer deinitCheckedTagsBuild(allocator, out);
-
-    for (annos, 0..) |anno_idx, i| {
-        const anno = module.moduleEnvConst().store.getTypeAnno(anno_idx);
-        const tag = switch (anno) {
-            .tag => |tag| tag,
-            .apply,
-            .rigid_var,
-            .rigid_var_lookup,
-            .underscore,
-            .lookup,
-            .tag_union,
-            .tuple,
-            .record,
-            .@"fn",
-            .parens,
-            .malformed,
-            => checkedArtifactInvariant("nominal declaration tag union contained a non-tag annotation", .{}),
-        };
-        out[i] = .{
-            .name = try names.internTagIdent(module.identStoreConst(), tag.name),
-            .args = try checkedTypeIdsFromDeclarationAnnoSpan(
-                allocator,
-                module,
-                names,
-                imports,
-                store,
-                active,
-                local_type_declarations,
-                declaration_formals,
-                tag.args,
-            ),
-        };
     }
     return out;
 }
@@ -7567,7 +7549,83 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         return source;
     }
 
+    /// One pending write of the key's byte stream. A type expands into the
+    /// writes it stands for, so nested types are written from an explicit
+    /// work list, in exactly the order a direct descent would write them.
+    const Write = union(enum) {
+        type: CheckedTypeId,
+        /// The type's payload is fully written, so it leaves the active path.
+        exit: CheckedTypeId,
+        /// A tag, written with the same length prefix as `writeTag`.
+        tag: []const u8,
+        u32: u32,
+        bytes: []const u8,
+        boolean: bool,
+        numeral: types.NumeralInfo,
+        field_kind: CheckedFieldKind,
+        /// A module id, written as its bytes.
+        owner: ModuleId,
+    };
+
     fn writeType(self: *SubstitutedCheckedTypeKeyBuilder, source: CheckedTypeId) Allocator.Error!void {
+        var pending: std.ArrayListUnmanaged(Write) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .type = source });
+        try self.drainWrites(&pending);
+    }
+
+    /// Like `writeType` over a payload, but for a build-form payload
+    /// (uncommitted, with build-form tags). Produces identical key bytes; only
+    /// `tag_union` differs.
+    fn writePayloadBuild(self: *SubstitutedCheckedTypeKeyBuilder, payload: CheckedTypePayloadBuild) Allocator.Error!void {
+        var pending: std.ArrayListUnmanaged(Write) = .empty;
+        defer pending.deinit(self.allocator);
+        switch (payload) {
+            .tag_union => |tag_union| {
+                var tags = std.ArrayList(TagForKey).empty;
+                defer tags.deinit(self.allocator);
+                for (tag_union.tags) |tag| {
+                    try tags.append(self.allocator, .{ .name = tag.name, .args = tag.args });
+                }
+                try self.appendNormalizedTagUnionWrites(&pending, tags.items, tag_union.ext);
+            },
+            inline .pending,
+            .err,
+            .flex,
+            .rigid,
+            .alias,
+            .record,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .empty_tag_union,
+            => |inner, tag| try self.appendPayloadWrites(&pending, @unionInit(CheckedTypePayload, @tagName(tag), inner)),
+        }
+        std.mem.reverse(Write, pending.items);
+        try self.drainWrites(&pending);
+    }
+
+    fn drainWrites(self: *SubstitutedCheckedTypeKeyBuilder, pending: *std.ArrayListUnmanaged(Write)) Allocator.Error!void {
+        while (pending.pop()) |write| {
+            const start = pending.items.len;
+            switch (write) {
+                .type => |source| try self.appendTypeWrites(pending, source),
+                .exit => |id| _ = self.active.remove(id),
+                .tag => |tag| self.writeBytes(tag),
+                .u32 => |value| self.writeU32(value),
+                .bytes => |bytes| self.writeBytes(bytes),
+                .boolean => |value| self.writeBool(value),
+                .numeral => |num_literal| self.hasher.update(&num_literal.keyBytes()),
+                .field_kind => |kind| try self.appendCheckedFieldKindWrites(pending, kind),
+                .owner => |owner| self.writeCheckedModuleOwner(owner),
+            }
+            std.mem.reverse(Write, pending.items[start..]);
+        }
+    }
+
+    /// The writes one type stands for, in order.
+    fn appendTypeWrites(self: *SubstitutedCheckedTypeKeyBuilder, pending: *std.ArrayListUnmanaged(Write), source: CheckedTypeId) Allocator.Error!void {
         const id = self.substitutedRoot(source);
         const raw: usize = @intFromEnum(id);
         if (raw >= self.store.payloadCount()) {
@@ -7575,8 +7633,8 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         }
 
         switch (self.store.payload(@enumFromInt(raw))) {
-            .flex => |flex| return try self.writeIdentityVariable(id, "flex", flex.name, flex.constraints),
-            .rigid => |rigid| return try self.writeIdentityVariable(id, "rigid", rigid.name, rigid.constraints),
+            .flex => |flex| return try self.appendIdentityVariableWrites(pending, id, "flex", flex.name, flex.constraints),
+            .rigid => |rigid| return try self.appendIdentityVariableWrites(pending, id, "rigid", rigid.name, rigid.constraints),
             .pending,
             .err,
             .alias,
@@ -7591,145 +7649,152 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         }
 
         if (self.active.get(id)) |slot| {
-            self.writeTag("cycle");
-            self.writeU32(slot);
+            try pending.append(self.allocator, .{ .tag = "cycle" });
+            try pending.append(self.allocator, .{ .u32 = slot });
             return;
         }
 
         const slot: u32 = @intCast(self.active.count());
         try self.active.put(id, slot);
-        try self.writePayload(self.store.payload(@enumFromInt(raw)));
-        _ = self.active.remove(id);
+        try self.appendPayloadWrites(pending, self.store.payload(@enumFromInt(raw)));
+        try pending.append(self.allocator, .{ .exit = id });
     }
 
-    fn writeIdentityVariable(
+    fn appendIdentityVariableWrites(
         self: *SubstitutedCheckedTypeKeyBuilder,
+        pending: *std.ArrayListUnmanaged(Write),
         root: CheckedTypeId,
-        comptime tag: []const u8,
+        tag: []const u8,
         name: ?[]const u8,
         constraints: []const CheckedStaticDispatchConstraint,
     ) Allocator.Error!void {
+        const gpa = self.allocator;
         if (self.identity_variables.get(root)) |slot| {
-            self.writeTag("identity_var_ref");
-            self.writeU32(slot);
+            try pending.append(gpa, .{ .tag = "identity_var_ref" });
+            try pending.append(gpa, .{ .u32 = slot });
             return;
         }
 
         const slot: u32 = @intCast(self.identity_variables.count());
         try self.identity_variables.put(root, slot);
-        self.writeTag(tag);
-        self.writeU32(@intFromEnum(root));
-        self.writeU32(slot);
-        self.writeBool(name != null);
-        if (name) |text| self.writeBytes(text);
-        try self.writeConstraints(constraints);
+        try pending.append(gpa, .{ .tag = tag });
+        try pending.append(gpa, .{ .u32 = @intFromEnum(root) });
+        try pending.append(gpa, .{ .u32 = slot });
+        try pending.append(gpa, .{ .boolean = name != null });
+        if (name) |text| try pending.append(gpa, .{ .bytes = text });
+        try pending.append(gpa, .{ .u32 = @intCast(constraints.len) });
+        for (constraints) |constraint| {
+            try pending.append(gpa, .{ .bytes = self.names.methodNameText(constraint.fn_name) });
+            try pending.append(gpa, .{ .type = constraint.fn_ty });
+            try pending.append(gpa, .{ .bytes = @tagName(constraint.origin) });
+            try pending.append(gpa, .{ .boolean = constraint.binopNegated() });
+            const maybe_num_literal = constraint.numeralInfo();
+            try pending.append(gpa, .{ .boolean = maybe_num_literal != null });
+            if (maybe_num_literal) |num_literal| try pending.append(gpa, .{ .numeral = num_literal });
+        }
     }
 
-    fn writePayload(self: *SubstitutedCheckedTypeKeyBuilder, payload: CheckedTypePayload) Allocator.Error!void {
+    fn appendPayloadWrites(
+        self: *SubstitutedCheckedTypeKeyBuilder,
+        pending: *std.ArrayListUnmanaged(Write),
+        payload: CheckedTypePayload,
+    ) Allocator.Error!void {
+        const gpa = self.allocator;
         switch (payload) {
             .pending => checkedArtifactInvariant("checked type substitution key reached pending payload", .{}),
-            .err => self.writeTag("err"),
+            .err => try pending.append(gpa, .{ .tag = "err" }),
             .flex,
             .rigid,
             => checkedArtifactInvariant("checked type substitution key reached identity payload without root identity", .{}),
             .alias => |alias| {
-                self.writeTag("alias");
-                self.writeNamedSourceIdentity(alias.origin_module, alias.name, alias.source_decl);
-                self.writeCheckedModuleOwner(alias.owner_module);
-                try self.writeType(alias.backing);
-                self.writeU32(@intCast(alias.args.len));
-                for (alias.args) |arg| try self.writeType(arg);
+                try pending.append(gpa, .{ .tag = "alias" });
+                try self.appendNamedSourceIdentityWrites(pending, alias.origin_module, alias.name, alias.source_decl);
+                try pending.append(gpa, .{ .owner = alias.owner_module });
+                try pending.append(gpa, .{ .type = alias.backing });
+                try pending.append(gpa, .{ .u32 = @intCast(alias.args.len) });
+                for (alias.args) |arg| try pending.append(gpa, .{ .type = arg });
             },
-            .record => |record| try self.writeNormalizedRecordPayload(record.fields, record.ext),
+            .record => |record| try self.appendNormalizedRecordWrites(pending, record.fields, record.ext),
             .tuple => |tuple| {
-                self.writeTag("tuple");
-                self.writeU32(@intCast(tuple.len));
-                for (tuple) |elem| try self.writeType(elem);
+                try pending.append(gpa, .{ .tag = "tuple" });
+                try pending.append(gpa, .{ .u32 = @intCast(tuple.len) });
+                for (tuple) |elem| try pending.append(gpa, .{ .type = elem });
             },
             .nominal => |nominal| {
-                self.writeTag("nominal");
-                self.writeNamedSourceIdentity(nominal.origin_module, nominal.name, nominal.source_decl);
-                self.writeCheckedModuleOwner(nominal.owner_module);
-                self.writeBool(nominal.is_opaque);
-                self.writeU32(@intCast(nominal.args.len));
-                for (nominal.args) |arg| try self.writeType(arg);
-                self.writeU32(@intCast(nominal.padding_field_types.len));
-                for (nominal.padding_field_types) |padding_type| try self.writeType(padding_type);
-                self.writeDeclaredFields(nominal.declared_fields);
+                try pending.append(gpa, .{ .tag = "nominal" });
+                try self.appendNamedSourceIdentityWrites(pending, nominal.origin_module, nominal.name, nominal.source_decl);
+                try pending.append(gpa, .{ .owner = nominal.owner_module });
+                try pending.append(gpa, .{ .boolean = nominal.is_opaque });
+                try pending.append(gpa, .{ .u32 = @intCast(nominal.args.len) });
+                for (nominal.args) |arg| try pending.append(gpa, .{ .type = arg });
+                try pending.append(gpa, .{ .u32 = @intCast(nominal.padding_field_types.len) });
+                for (nominal.padding_field_types) |padding_type| try pending.append(gpa, .{ .type = padding_type });
+                try pending.append(gpa, .{ .u32 = @intCast(nominal.declared_fields.len) });
+                for (nominal.declared_fields) |field| {
+                    switch (field) {
+                        .named => |name| {
+                            try pending.append(gpa, .{ .tag = "named" });
+                            try pending.append(gpa, .{ .bytes = self.names.recordFieldLabelText(name) });
+                        },
+                        .padding => |index| {
+                            try pending.append(gpa, .{ .tag = "padding" });
+                            try pending.append(gpa, .{ .u32 = index });
+                        },
+                    }
+                }
             },
             .function => |func| {
-                switch (finalizedFunctionKind(func.kind)) {
-                    .pure => self.writeTag("fn_pure"),
-                    .effectful => self.writeTag("fn_effectful"),
+                try pending.append(gpa, .{ .tag = switch (finalizedFunctionKind(func.kind)) {
+                    .pure => "fn_pure",
+                    .effectful => "fn_effectful",
                     .unbound => unreachable,
-                }
-                self.writeBool(try self.typeSliceContainsIdentityVariables(func.args) or
-                    try self.typeContainsIdentityVariables(func.ret));
-                self.writeU32(@intCast(func.args.len));
-                for (func.args) |arg| try self.writeType(arg);
-                try self.writeType(func.ret);
+                } });
+                try pending.append(gpa, .{ .boolean = try self.typeSliceContainsIdentityVariables(func.args) or
+                    try self.typeContainsIdentityVariables(func.ret) });
+                try pending.append(gpa, .{ .u32 = @intCast(func.args.len) });
+                for (func.args) |arg| try pending.append(gpa, .{ .type = arg });
+                try pending.append(gpa, .{ .type = func.ret });
             },
-            .empty_record => self.writeTag("empty_record"),
-            .tag_union => |tag_union| try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
-            .empty_tag_union => self.writeTag("[]"),
-        }
-    }
-
-    /// Like `writePayload`, but for a build-form payload (uncommitted, with
-    /// build-form tags). Produces identical key bytes; only `tag_union` differs.
-    fn writePayloadBuild(self: *SubstitutedCheckedTypeKeyBuilder, payload: CheckedTypePayloadBuild) Allocator.Error!void {
-        switch (payload) {
+            .empty_record => try pending.append(gpa, .{ .tag = "empty_record" }),
             .tag_union => |tag_union| {
-                var tags = std.ArrayList(TagForKey).empty;
-                defer tags.deinit(self.allocator);
-                for (tag_union.tags) |tag| {
-                    try tags.append(self.allocator, .{ .name = tag.name, .args = tag.args });
-                }
-                try self.writeNormalizedTagUnionFromHead(tags.items, tag_union.ext);
+                var head_tags = std.ArrayList(TagForKey).empty;
+                defer head_tags.deinit(gpa);
+                try self.appendTagsForKey(&head_tags, tag_union.tags);
+                try self.appendNormalizedTagUnionWrites(pending, head_tags.items, tag_union.ext);
             },
-            inline .pending,
-            .err,
-            .flex,
-            .rigid,
-            .alias,
-            .record,
-            .tuple,
-            .nominal,
-            .function,
-            .empty_record,
-            .empty_tag_union,
-            => |inner, tag| try self.writePayload(@unionInit(CheckedTypePayload, @tagName(tag), inner)),
+            .empty_tag_union => try pending.append(gpa, .{ .tag = "[]" }),
         }
     }
 
-    fn appendRecordFieldsForKey(
+    fn appendNamedSourceIdentityWrites(
         self: *SubstitutedCheckedTypeKeyBuilder,
-        fields: *std.ArrayList(RecordFieldForKey),
-        source: []const CheckedRecordField,
+        pending: *std.ArrayListUnmanaged(Write),
+        origin_module: canonical.ModuleIdentityId,
+        name: canonical.TypeNameId,
+        source_decl: ?u32,
     ) Allocator.Error!void {
-        for (source) |field| {
-            try fields.append(self.allocator, .{
-                .name = field.name,
-                .ty = self.substitutedRoot(field.ty),
-                .kind = if (field.kind.undeterminedVariable()) |variable|
-                    .undetermined(self.substitutedRoot(variable))
-                else
-                    field.kind,
-            });
+        const gpa = self.allocator;
+        try pending.append(gpa, .{ .bytes = self.names.moduleIdentityBytes(origin_module) });
+        try pending.append(gpa, .{ .boolean = source_decl != null });
+        if (source_decl) |decl| try pending.append(gpa, .{ .u32 = decl });
+        if (source_decl == null) {
+            try pending.append(gpa, .{ .bytes = self.names.typeNameText(name) });
         }
     }
 
-    fn writeNormalizedRecordPayload(
+    fn appendNormalizedRecordWrites(
         self: *SubstitutedCheckedTypeKeyBuilder,
+        pending: *std.ArrayListUnmanaged(Write),
         head: []const CheckedRecordField,
         ext: CheckedTypeId,
     ) Allocator.Error!void {
+        const gpa = self.allocator;
         var fields = std.ArrayList(RecordFieldForKey).empty;
-        defer fields.deinit(self.allocator);
+        defer fields.deinit(gpa);
         try self.appendRecordFieldsForKey(&fields, head);
 
         var tail: ?CheckedTypeId = self.substitutedRoot(ext);
-        var seen = collections.DenseMap(CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedTypeId, void).init(gpa);
         defer seen.deinit();
         while (tail) |tail_id| {
             if (self.active.contains(tail_id)) break;
@@ -7764,65 +7829,43 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
 
         if (fields.items.len > 1) {
             self.field_ranks = try self.names.recordFieldLabelTextRanks(&self.field_rank_scratch);
-            try base.TextRankCache.sortByRank(RecordFieldForKey, fields.items, &self.field_sort_scratch, self.allocator, self, recordFieldForKeyRank);
+            try base.TextRankCache.sortByRank(RecordFieldForKey, fields.items, &self.field_sort_scratch, gpa, self, recordFieldForKeyRank);
         }
         if (tail == null and fields.items.len == 0) {
-            self.writeTag("empty_record");
+            try pending.append(gpa, .{ .tag = "empty_record" });
             return;
         }
 
-        self.writeTag("record");
-        self.writeU32(@intCast(fields.items.len));
+        try pending.append(gpa, .{ .tag = "record" });
+        try pending.append(gpa, .{ .u32 = @intCast(fields.items.len) });
         for (fields.items, 0..) |field, index| {
             if (index > 0 and self.names.recordFieldLabelTextEql(fields.items[index - 1].name, field.name)) {
                 checkedArtifactInvariant("checked type substitution key row normalization found duplicate record fields", .{});
             }
-            self.writeBytes(self.names.recordFieldLabelText(field.name));
-            try self.writeCheckedFieldKind(field.kind);
-            try self.writeType(field.ty);
+            try pending.append(gpa, .{ .bytes = self.names.recordFieldLabelText(field.name) });
+            try pending.append(gpa, .{ .field_kind = field.kind });
+            try pending.append(gpa, .{ .type = field.ty });
         }
         if (tail) |tail_id| {
-            try self.writeType(tail_id);
+            try pending.append(gpa, .{ .type = tail_id });
         } else {
-            self.writeTag("empty_record");
+            try pending.append(gpa, .{ .tag = "empty_record" });
         }
     }
 
-    fn appendTagsForKey(
+    fn appendNormalizedTagUnionWrites(
         self: *SubstitutedCheckedTypeKeyBuilder,
-        tags: *std.ArrayList(TagForKey),
-        source: []const CheckedTag,
-    ) Allocator.Error!void {
-        for (source) |tag| {
-            try tags.append(self.allocator, .{
-                .name = tag.name,
-                .args = tag.argsSlice(self.store),
-            });
-        }
-    }
-
-    fn writeNormalizedTagUnionPayload(
-        self: *SubstitutedCheckedTypeKeyBuilder,
-        head: []const CheckedTag,
-        ext: CheckedTypeId,
-    ) Allocator.Error!void {
-        var head_tags = std.ArrayList(TagForKey).empty;
-        defer head_tags.deinit(self.allocator);
-        try self.appendTagsForKey(&head_tags, head);
-        try self.writeNormalizedTagUnionFromHead(head_tags.items, ext);
-    }
-
-    fn writeNormalizedTagUnionFromHead(
-        self: *SubstitutedCheckedTypeKeyBuilder,
+        pending: *std.ArrayListUnmanaged(Write),
         head: []const TagForKey,
         ext: CheckedTypeId,
     ) Allocator.Error!void {
+        const gpa = self.allocator;
         var tags = std.ArrayList(TagForKey).empty;
-        defer tags.deinit(self.allocator);
-        try tags.appendSlice(self.allocator, head);
+        defer tags.deinit(gpa);
+        try tags.appendSlice(gpa, head);
 
         var tail: ?CheckedTypeId = self.substitutedRoot(ext);
-        var seen = collections.DenseMap(CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedTypeId, void).init(gpa);
         defer seen.deinit();
         while (tail) |tail_id| {
             if (self.active.contains(tail_id)) break;
@@ -7857,27 +7900,85 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
 
         if (tags.items.len > 1) {
             self.tag_ranks = try self.names.tagLabelTextRanks(&self.tag_rank_scratch);
-            try base.TextRankCache.sortByRank(TagForKey, tags.items, &self.tag_sort_scratch, self.allocator, self, tagForKeyRank);
+            try base.TextRankCache.sortByRank(TagForKey, tags.items, &self.tag_sort_scratch, gpa, self, tagForKeyRank);
         }
         if (tail == null and tags.items.len == 0) {
-            self.writeTag("[]");
+            try pending.append(gpa, .{ .tag = "[]" });
             return;
         }
 
-        self.writeTag("tag_union");
-        self.writeU32(@intCast(tags.items.len));
+        try pending.append(gpa, .{ .tag = "tag_union" });
+        try pending.append(gpa, .{ .u32 = @intCast(tags.items.len) });
         for (tags.items, 0..) |tag, index| {
             if (index > 0 and self.names.tagLabelTextEql(tags.items[index - 1].name, tag.name)) {
                 checkedArtifactInvariant("checked type substitution key row normalization found duplicate tags", .{});
             }
-            self.writeBytes(self.names.tagLabelText(tag.name));
-            self.writeU32(@intCast(tag.args.len));
-            for (tag.args) |arg| try self.writeType(arg);
+            try pending.append(gpa, .{ .bytes = self.names.tagLabelText(tag.name) });
+            try pending.append(gpa, .{ .u32 = @intCast(tag.args.len) });
+            for (tag.args) |arg| try pending.append(gpa, .{ .type = arg });
         }
         if (tail) |tail_id| {
-            try self.writeType(tail_id);
+            try pending.append(gpa, .{ .type = tail_id });
         } else {
-            self.writeTag("[]");
+            try pending.append(gpa, .{ .tag = "[]" });
+        }
+    }
+
+    fn appendCheckedFieldKindWrites(
+        self: *SubstitutedCheckedTypeKeyBuilder,
+        pending: *std.ArrayListUnmanaged(Write),
+        kind: CheckedFieldKind,
+    ) Allocator.Error!void {
+        const gpa = self.allocator;
+        // Keep this byte-for-byte aligned with canonical_type_keys.zig's
+        // `writeFieldPresenceForKey`.
+        switch (kind.tag) {
+            .required => try pending.append(gpa, .{ .boolean = false }),
+            .optional => try pending.append(gpa, .{ .tag = "presence_optional_field" }),
+            .defaulted => {
+                const origin_module = kind.default.origin() orelse
+                    checkedArtifactInvariant("checked defaulted field kind carried no default identity", .{});
+                try pending.append(gpa, .{ .tag = "field_default" });
+                try pending.append(gpa, .{ .bytes = self.names.moduleIdentityBytes(origin_module) });
+                try pending.append(gpa, .{ .u32 = kind.default.expr_node });
+            },
+            .undetermined => {
+                const variable = kind.undeterminedVariable() orelse
+                    checkedArtifactInvariant("checked undetermined field kind carried no variable identity", .{});
+                try pending.append(gpa, .{ .tag = "presence_variable" });
+                try pending.append(gpa, .{ .type = variable });
+            },
+            .err => try pending.append(gpa, .{ .tag = "err" }),
+        }
+    }
+
+    fn appendRecordFieldsForKey(
+        self: *SubstitutedCheckedTypeKeyBuilder,
+        fields: *std.ArrayList(RecordFieldForKey),
+        source: []const CheckedRecordField,
+    ) Allocator.Error!void {
+        for (source) |field| {
+            try fields.append(self.allocator, .{
+                .name = field.name,
+                .ty = self.substitutedRoot(field.ty),
+                .kind = if (field.kind.undeterminedVariable()) |variable|
+                    .undetermined(self.substitutedRoot(variable))
+                else
+                    field.kind,
+            });
+        }
+    }
+
+    fn appendTagsForKey(
+        self: *SubstitutedCheckedTypeKeyBuilder,
+        tags: *std.ArrayList(TagForKey),
+        source: []const CheckedTag,
+    ) Allocator.Error!void {
+        for (source) |tag| {
+            try tags.append(self.allocator, .{
+                .name = tag.name,
+                .args = tag.argsSlice(self.store),
+            });
         }
     }
 
@@ -7917,47 +8018,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         return self.tag_ranks[@intFromEnum(tag.name)];
     }
 
-    fn writeConstraints(
-        self: *SubstitutedCheckedTypeKeyBuilder,
-        constraints: []const CheckedStaticDispatchConstraint,
-    ) Allocator.Error!void {
-        self.writeU32(@intCast(constraints.len));
-        for (constraints) |constraint| {
-            self.writeBytes(self.names.methodNameText(constraint.fn_name));
-            try self.writeType(constraint.fn_ty);
-            self.writeBytes(@tagName(constraint.origin));
-            self.writeBool(constraint.binopNegated());
-            const maybe_num_literal = constraint.numeralInfo();
-            self.writeBool(maybe_num_literal != null);
-            if (maybe_num_literal) |num_literal| {
-                self.hasher.update(&num_literal.keyBytes());
-            }
-        }
-    }
-
-    fn writeDeclaredFields(
-        self: *SubstitutedCheckedTypeKeyBuilder,
-        fields: []const CheckedDeclaredField,
-    ) void {
-        self.writeU32(@intCast(fields.len));
-        for (fields) |field| {
-            switch (field) {
-                .named => |name| {
-                    self.writeTag("named");
-                    self.writeBytes(self.names.recordFieldLabelText(name));
-                },
-                .padding => |index| {
-                    self.writeTag("padding");
-                    self.writeU32(index);
-                },
-            }
-        }
-    }
-
-    fn writeTag(self: *SubstitutedCheckedTypeKeyBuilder, comptime tag: []const u8) void {
-        self.hasher.updateTag(tag);
-    }
-
     fn writeBytes(self: *SubstitutedCheckedTypeKeyBuilder, bytes: []const u8) void {
         self.writeU32(@intCast(bytes.len));
         self.hasher.update(bytes);
@@ -7966,45 +8026,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     fn writeBool(self: *SubstitutedCheckedTypeKeyBuilder, value: bool) void {
         const byte: u8 = if (value) 1 else 0;
         self.hasher.update(std.mem.asBytes(&byte));
-    }
-
-    fn writeCheckedFieldKind(
-        self: *SubstitutedCheckedTypeKeyBuilder,
-        kind: CheckedFieldKind,
-    ) Allocator.Error!void {
-        // Keep this byte-for-byte aligned with canonical_type_keys.zig's
-        // `writeFieldPresenceForKey`.
-        switch (kind.tag) {
-            .required => self.writeBool(false),
-            .optional => self.writeTag("presence_optional_field"),
-            .defaulted => {
-                const origin_module = kind.default.origin() orelse
-                    checkedArtifactInvariant("checked defaulted field kind carried no default identity", .{});
-                self.writeTag("field_default");
-                self.writeBytes(self.names.moduleIdentityBytes(origin_module));
-                self.writeU32(kind.default.expr_node);
-            },
-            .undetermined => {
-                const variable = kind.undeterminedVariable() orelse
-                    checkedArtifactInvariant("checked undetermined field kind carried no variable identity", .{});
-                self.writeTag("presence_variable");
-                try self.writeType(variable);
-            },
-            .err => self.writeTag("err"),
-        }
-    }
-
-    fn writeOptionalU32(self: *SubstitutedCheckedTypeKeyBuilder, value: ?u32) void {
-        self.writeBool(value != null);
-        if (value) |v| self.writeU32(v);
-    }
-
-    fn writeNamedSourceIdentity(self: *SubstitutedCheckedTypeKeyBuilder, origin_module: canonical.ModuleIdentityId, name: canonical.TypeNameId, source_decl: ?u32) void {
-        self.writeBytes(self.names.moduleIdentityBytes(origin_module));
-        self.writeOptionalU32(source_decl);
-        if (source_decl == null) {
-            self.writeBytes(self.names.typeNameText(name));
-        }
     }
 
     fn writeCheckedModuleOwner(self: *SubstitutedCheckedTypeKeyBuilder, owner_module: ModuleId) void {
@@ -9776,14 +9797,14 @@ test "optional record fields publish through the declaration annotation path" {
     const module = modules.module(0);
     const module_env = module.moduleEnvConst();
 
-    // Find `Thing`'s alias declaration and its record annotation span.
-    const record_span = blk: {
+    // Find `Thing`'s alias declaration and its record annotation.
+    const record_anno = blk: {
         for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
             const statement = module_env.store.getStatement(statement_idx);
             if (statement != .s_alias_decl) continue;
             const anno = module_env.store.getTypeAnno(statement.s_alias_decl.anno);
             if (anno != .record) continue;
-            break :blk anno.record.fields;
+            break :blk statement.s_alias_decl.anno;
         }
         return error.TestUnexpectedResult;
     };
@@ -9800,7 +9821,7 @@ test "optional record fields publish through the declaration annotation path" {
     var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, &source_nodes);
     defer local_type_declarations.deinit();
 
-    const fields = try checkedRecordFieldsFromDeclarationAnnoSpan(
+    const record_root = try appendCheckedTypeRootFromDeclarationAnno(
         allocator,
         module,
         &names,
@@ -9809,9 +9830,9 @@ test "optional record fields publish through the declaration annotation path" {
         &active,
         &local_type_declarations,
         &.{},
-        record_span,
+        record_anno,
     );
-    defer allocator.free(fields);
+    const fields = store.payload(record_root).record.fields;
 
     try testing.expectEqual(@as(usize, 2), fields.len);
     try testing.expectEqualStrings("world", names.recordFieldLabelText(fields[0].name));
@@ -31287,21 +31308,87 @@ const ImportedTemplateClosureBuilder = struct {
         template_ref: canonical.ProcedureTemplateRef,
         template: CheckedProcedureTemplate,
     ) Allocator.Error!void {
-        if (!try self.checked_procedure_templates.append(self.allocator, template_ref)) return;
+        try self.runClosureSteps(.{ .template = .{ .ref = template_ref, .template = template } });
+    }
 
-        switch (template.body) {
-            .checked_body => |body| try self.appendCheckedBody(body),
-            .intrinsic_wrapper,
-            .entry_wrapper,
-            .unimplemented,
-            => {},
+    /// One pending closure step. A callable-eval binding's closure reaches
+    /// further templates, so steps run from an explicit continuation stack,
+    /// in exactly the order a direct descent would run them.
+    const ClosureStep = union(enum) {
+        template: struct { ref: canonical.ProcedureTemplateRef, template: CheckedProcedureTemplate },
+        direct_dependency: ResolvedValueRef,
+        callable_eval_template: CallableEvalTemplateId,
+        /// Record a callable-eval template once its entry template's closure
+        /// is complete.
+        callable_eval_template_done: CallableEvalTemplateId,
+    };
+
+    fn runClosureSteps(self: *ImportedTemplateClosureBuilder, first: ClosureStep) Allocator.Error!void {
+        var pending: std.ArrayListUnmanaged(ClosureStep) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, first);
+        while (pending.pop()) |step| {
+            const start = pending.items.len;
+            try self.runClosureStep(step, &pending);
+            std.mem.reverse(ClosureStep, pending.items[start..]);
         }
-        try self.appendCheckedTypeRoot(template.checked_fn_root);
-        try self.appendCheckedTypeScheme(template.checked_fn_scheme);
-        try self.appendNestedProcSites(template.nested_proc_sites);
-        try self.appendResolvedValueRefs(template.resolved_value_refs);
-        try self.appendStaticDispatchPlans(template.static_dispatch_plans);
-        try self.appendDirectProcedureDependencies(template.resolved_value_refs);
+    }
+
+    /// Run one step; the steps it leads to are appended in the order they run.
+    fn runClosureStep(
+        self: *ImportedTemplateClosureBuilder,
+        step: ClosureStep,
+        pending: *std.ArrayListUnmanaged(ClosureStep),
+    ) Allocator.Error!void {
+        switch (step) {
+            .template => |entry| {
+                const template = entry.template;
+                if (!try self.checked_procedure_templates.append(self.allocator, entry.ref)) return;
+
+                switch (template.body) {
+                    .checked_body => |body| try self.appendCheckedBody(body),
+                    .intrinsic_wrapper,
+                    .entry_wrapper,
+                    .unimplemented,
+                    => {},
+                }
+                try self.appendCheckedTypeRoot(template.checked_fn_root);
+                try self.appendCheckedTypeScheme(template.checked_fn_scheme);
+                try self.appendNestedProcSites(template.nested_proc_sites);
+                try self.appendResolvedValueRefs(template.resolved_value_refs);
+                try self.appendStaticDispatchPlans(template.static_dispatch_plans);
+                try self.appendDirectProcedureDependencies(template.resolved_value_refs, pending);
+            },
+            .direct_dependency => |resolved| {
+                if (try self.appendImportedTemplateClosureForResolvedRef(resolved)) return;
+                if (try self.appendPlatformRequiredRelationClosureForResolvedRef(resolved)) return;
+                if (self.callableEvalBindingForResolvedRef(resolved)) |template_id| {
+                    return try pending.append(self.allocator, .{ .callable_eval_template = template_id });
+                }
+                if (self.templateForResolvedValueRef(resolved)) |dependency_ref| {
+                    _ = try self.checked_procedure_templates.append(self.allocator, dependency_ref);
+                }
+                if (self.constRefForResolvedValueRef(resolved)) |dependency_ref| {
+                    _ = try self.const_templates.append(self.allocator, dependency_ref);
+                }
+            },
+            .callable_eval_template => |template_id| {
+                const template = self.callable_eval_template_table.get(template_id);
+                const wrapper = entryWrapperForRoot(self.entry_wrappers, template.root);
+                const entry_template = self.checked_templates.get(wrapper.template.template);
+
+                try self.appendCheckedTypeRoot(template.checked_fn_root);
+                try self.appendCheckedTypeScheme(template.source_scheme);
+                try pending.append(self.allocator, .{ .template = .{ .ref = wrapper.template, .template = entry_template } });
+                try pending.append(self.allocator, .{ .callable_eval_template_done = template_id });
+            },
+            .callable_eval_template_done => |template_id| {
+                _ = try self.callable_eval_templates.append(self.allocator, .{
+                    .artifact = self.artifact_key,
+                    .template = template_id,
+                });
+            },
+        }
     }
 
     fn appendCheckedBody(self: *ImportedTemplateClosureBuilder, body: CheckedBodyId) Allocator.Error!void {
@@ -31386,25 +31473,18 @@ const ImportedTemplateClosureBuilder = struct {
         for (closure.interface_capabilities) |value| _ = try self.interface_capabilities.append(self.allocator, value);
     }
 
+    /// Queue a direct-dependency step for each resolved ref, in order.
     fn appendDirectProcedureDependencies(
         self: *ImportedTemplateClosureBuilder,
         table: ResolvedValueRefTableRef,
+        pending: *std.ArrayListUnmanaged(ClosureStep),
     ) Allocator.Error!void {
         const end = table.start + table.len;
         if (end > self.resolved_value_refs_table.template_refs.len) checkedArtifactInvariant("checked template resolved-ref span was outside table", .{});
         for (self.resolved_value_refs_table.template_refs[table.start..end]) |ref_id| {
             const raw = @intFromEnum(ref_id);
             if (raw >= self.resolved_value_refs_table.records.len) checkedArtifactInvariant("checked template resolved-ref id was outside table", .{});
-            const resolved = self.resolved_value_refs_table.records[raw].ref;
-            if (try self.appendImportedTemplateClosureForResolvedRef(resolved)) continue;
-            if (try self.appendPlatformRequiredRelationClosureForResolvedRef(resolved)) continue;
-            if (try self.appendCallableEvalBindingClosureForResolvedRef(resolved)) continue;
-            if (self.templateForResolvedValueRef(resolved)) |dependency_ref| {
-                _ = try self.checked_procedure_templates.append(self.allocator, dependency_ref);
-            }
-            if (self.constRefForResolvedValueRef(resolved)) |dependency_ref| {
-                _ = try self.const_templates.append(self.allocator, dependency_ref);
-            }
+            try pending.append(self.allocator, .{ .direct_dependency = self.resolved_value_refs_table.records[raw].ref });
         }
     }
 
@@ -31569,9 +31649,17 @@ const ImportedTemplateClosureBuilder = struct {
                 try self.appendNestedProcSites(eval.nested_proc_sites);
                 try self.appendResolvedValueRefs(eval.resolved_value_refs);
                 try self.appendStaticDispatchPlans(eval.static_dispatch_plans);
-                try self.appendDirectProcedureDependencies(eval.resolved_value_refs);
+                var pending: std.ArrayListUnmanaged(ClosureStep) = .empty;
+                defer pending.deinit(self.allocator);
+                try self.appendDirectProcedureDependencies(eval.resolved_value_refs, &pending);
                 const entry_template = self.checked_templates.get(eval.entry_template.template);
-                try self.appendTemplate(eval.entry_template, entry_template);
+                try pending.append(self.allocator, .{ .template = .{ .ref = eval.entry_template, .template = entry_template } });
+                std.mem.reverse(ClosureStep, pending.items);
+                while (pending.pop()) |step| {
+                    const start = pending.items.len;
+                    try self.runClosureStep(step, &pending);
+                    std.mem.reverse(ClosureStep, pending.items[start..]);
+                }
             },
             .stored_const, .unimplemented => {},
             .reserved => checkedArtifactInvariant("imported template closure reached unsealed const template", .{}),
@@ -31610,10 +31698,11 @@ const ImportedTemplateClosureBuilder = struct {
         };
     }
 
-    fn appendCallableEvalBindingClosureForResolvedRef(
+    /// The callable-eval template a ref's top-level binding evaluates, if any.
+    fn callableEvalBindingForResolvedRef(
         self: *ImportedTemplateClosureBuilder,
         ref: ResolvedValueRef,
-    ) Allocator.Error!bool {
+    ) ?CallableEvalTemplateId {
         const use: ProcedureUseTemplate = switch (ref) {
             .top_level_proc,
             .promoted_top_level_proc,
@@ -31632,39 +31721,20 @@ const ImportedTemplateClosureBuilder = struct {
             .platform_required_checked_error,
             .platform_required_const,
             .platform_required_proc,
-            => return false,
+            => return null,
         };
         const top_level = switch (use.binding) {
             .top_level => |binding| binding,
-            .imported, .hosted, .platform_required => return false,
+            .imported, .hosted, .platform_required => return null,
         };
         if (!std.meta.eql(top_level.artifact.bytes, self.artifact_key.bytes)) {
             checkedArtifactInvariant("top-level callable-eval closure dependency referenced a different artifact", .{});
         }
         const binding = self.top_level_bindings.get(top_level.binding);
-        const template_id = switch (binding.body) {
-            .direct_template, .checked_error => return false,
+        return switch (binding.body) {
+            .direct_template, .checked_error => null,
             .callable_eval_template => |template| template,
         };
-        try self.appendCallableEvalBindingTemplate(template_id);
-        return true;
-    }
-
-    fn appendCallableEvalBindingTemplate(
-        self: *ImportedTemplateClosureBuilder,
-        template_id: CallableEvalTemplateId,
-    ) Allocator.Error!void {
-        const template = self.callable_eval_template_table.get(template_id);
-        const wrapper = entryWrapperForRoot(self.entry_wrappers, template.root);
-        const entry_template = self.checked_templates.get(wrapper.template.template);
-
-        try self.appendCheckedTypeRoot(template.checked_fn_root);
-        try self.appendCheckedTypeScheme(template.source_scheme);
-        try self.appendTemplate(wrapper.template, entry_template);
-        _ = try self.callable_eval_templates.append(self.allocator, .{
-            .artifact = self.artifact_key,
-            .template = template_id,
-        });
     }
 
     fn constRefForResolvedValueRef(

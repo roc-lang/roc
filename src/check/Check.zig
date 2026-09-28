@@ -10579,6 +10579,10 @@ const HoistedRootKeepOracle = struct {
     }
 };
 
+/// Whether everything a hoisted root reads stays available once the root is
+/// evaluated on its own. Every part must hold, so the root's subexpressions
+/// are checked in source order from an explicit continuation stack; binder
+/// scopes open and close as steps of that stack.
 fn hoistedRootDependenciesAreKept(
     self: *Self,
     expr: CIR.Expr.Idx,
@@ -10586,8 +10590,50 @@ fn hoistedRootDependenciesAreKept(
 ) Allocator.Error!bool {
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
-    return try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle);
+    var pending: std.ArrayListUnmanaged(HoistedKeptStep) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, .{ .expr = expr });
+    while (pending.pop()) |step| {
+        const start = pending.items.len;
+        const kept = switch (step) {
+            .expr => |child| try self.hoistedRootExprStep(child, &context, keep_oracle, &pending),
+            .statement => |statement| try self.hoistedRootStatementStep(statement, &pending),
+            // Binders introduced and consumed inside this root are transient
+            // evaluation state. They need neither separate selected roots nor
+            // representation-stable static types.
+            .bind_decl => |pattern| blk: {
+                try self.appendHoistedDependencyPatternBinders(pattern, &context, .internal);
+                break :blk true;
+            },
+            .bind_branch => |branch_idx| blk: {
+                const branch = self.cir.store.getMatchBranch(branch_idx);
+                for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
+                    const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
+                    // Branch binders are likewise local to the root evaluation; only
+                    // the selected root's result must have a storable concrete type.
+                    try self.appendHoistedDependencyPatternBinders(branch_pattern.pattern, &context, .contextual);
+                }
+                break :blk true;
+            },
+            .pop => |mark| blk: {
+                context.pop(mark);
+                break :blk true;
+            },
+        };
+        if (!kept) return false;
+        std.mem.reverse(HoistedKeptStep, pending.items[start..]);
+    }
+    return true;
 }
+
+const HoistedKeptStep = union(enum) {
+    expr: CIR.Expr.Idx,
+    statement: CIR.Statement.Idx,
+    bind_decl: CIR.Pattern.Idx,
+    bind_branch: CIR.Expr.Match.Branch.Idx,
+    /// Close the binder scope opened at this mark.
+    pop: usize,
+};
 
 /// Whether a binding a hoisted root reads stays available once the root is
 /// evaluated on its own: a top-level binding, a binding the root itself
@@ -10604,15 +10650,19 @@ fn hoistedRootBindingIsKept(
         (keep_oracle.selectedPatternIsKept(pattern) orelse false);
 }
 
-fn hoistedRootDependenciesAreKeptInternal(
+/// One expression's own check; the subexpressions it depends on go on
+/// `pending` in source order.
+fn hoistedRootExprStep(
     self: *Self,
     expr: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
+    pending: *std.ArrayListUnmanaged(HoistedKeptStep),
 ) Allocator.Error!bool {
     if (self.hoistExprInvalidated(expr)) return false;
     if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
 
+    const gpa = self.gpa;
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local => |lookup| self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
         .e_lookup_external,
@@ -10651,32 +10701,63 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_break,
         .e_run_low_level,
         => false,
-        .e_str => |str| self.hoistedRootExprSpanDependenciesAreKept(str.span, context, keep_oracle),
-        .e_list => |list| self.hoistedRootExprSpanDependenciesAreKept(list.elems, context, keep_oracle),
-        .e_tuple => |tuple| self.hoistedRootExprSpanDependenciesAreKept(tuple.elems, context, keep_oracle),
-        .e_block => |block| self.hoistedRootBlockDependenciesAreKept(block.stmts, block.final_expr, context, keep_oracle),
-        .e_match => |match| self.hoistedRootMatchDependenciesAreKept(match, context, keep_oracle),
-        .e_if => |if_expr| self.hoistedRootIfDependenciesAreKept(if_expr.branches, if_expr.final_else, context, keep_oracle),
-        .e_call => |call| (try self.hoistedRootCalleeAllowsStoredConst(call.func, context)) and
-            (try self.hoistedRootDependenciesAreKeptInternal(call.func, context, keep_oracle)) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
+        .e_str => |str| try self.pushHoistedKeptExprs(pending, str.span),
+        .e_list => |list| try self.pushHoistedKeptExprs(pending, list.elems),
+        .e_tuple => |tuple| try self.pushHoistedKeptExprs(pending, tuple.elems),
+        .e_block => |block| blk: {
+            const mark = context.mark();
+            for (self.cir.store.sliceStatements(block.stmts)) |statement| try pending.append(gpa, .{ .statement = statement });
+            try pending.append(gpa, .{ .expr = block.final_expr });
+            try pending.append(gpa, .{ .pop = mark });
+            break :blk true;
+        },
+        .e_match => |match| blk: {
+            try pending.append(gpa, .{ .expr = match.cond });
+            const mark = context.mark();
+            for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
+                const branch = self.cir.store.getMatchBranch(branch_idx);
+                try pending.append(gpa, .{ .bind_branch = branch_idx });
+                if (branch.guard) |guard| try pending.append(gpa, .{ .expr = guard });
+                try pending.append(gpa, .{ .expr = branch.value });
+                try pending.append(gpa, .{ .pop = mark });
+            }
+            break :blk true;
+        },
+        .e_if => |if_expr| blk: {
+            for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                const branch = self.cir.store.getIfBranch(branch_idx);
+                try pending.append(gpa, .{ .expr = branch.cond });
+                try pending.append(gpa, .{ .expr = branch.body });
+            }
+            try pending.append(gpa, .{ .expr = if_expr.final_else });
+            break :blk true;
+        },
+        .e_call => |call| blk: {
+            if (!try self.hoistedRootCalleeAllowsStoredConst(call.func, context)) break :blk false;
+            try pending.append(gpa, .{ .expr = call.func });
+            break :blk try self.pushHoistedKeptExprs(pending, call.args);
+        },
         // Surface method calls must have been rewritten to checked dispatch
         // calls before the settled hoistability walk can classify them.
         .e_method_call => false,
-        .e_dispatch_call => |call| (try self.staticDispatchAllowsHoistedRoot(
-            ModuleEnv.varFrom(call.receiver),
-            call.constraint_fn_var,
-        )) and
-            (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context, keep_oracle)) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
-        .e_record => |record| self.hoistedRootRecordDependenciesAreKept(record.fields, record.ext, context, keep_oracle),
-        .e_tag => |tag| self.hoistedRootExprSpanDependenciesAreKept(tag.args, context, keep_oracle),
-        .e_nominal => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context, keep_oracle),
-        .e_nominal_external => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context, keep_oracle),
-        .e_binop => |binop| (try self.hoistedRootDependenciesAreKeptInternal(binop.lhs, context, keep_oracle)) and
-            try self.hoistedRootDependenciesAreKeptInternal(binop.rhs, context, keep_oracle),
-        .e_unary_minus => |unary| self.hoistedRootDependenciesAreKeptInternal(unary.expr, context, keep_oracle),
-        .e_field_access => |field| self.hoistedRootDependenciesAreKeptInternal(field.receiver, context, keep_oracle),
+        .e_dispatch_call => |call| blk: {
+            if (!try self.staticDispatchAllowsHoistedRoot(ModuleEnv.varFrom(call.receiver), call.constraint_fn_var)) break :blk false;
+            try pending.append(gpa, .{ .expr = call.receiver });
+            break :blk try self.pushHoistedKeptExprs(pending, call.args);
+        },
+        .e_record => |record| blk: {
+            if (record.ext) |ext_expr| try pending.append(gpa, .{ .expr = ext_expr });
+            for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
+                try pending.append(gpa, .{ .expr = self.cir.store.getRecordField(field_idx).value });
+            }
+            break :blk true;
+        },
+        .e_tag => |tag| try self.pushHoistedKeptExprs(pending, tag.args),
+        .e_nominal => |nominal| try pushHoistedKeptExpr(gpa, pending, nominal.backing_expr),
+        .e_nominal_external => |nominal| try pushHoistedKeptExpr(gpa, pending, nominal.backing_expr),
+        .e_binop => |binop| try pushHoistedKeptExprPair(gpa, pending, binop.lhs, binop.rhs),
+        .e_unary_minus => |unary| try pushHoistedKeptExpr(gpa, pending, unary.expr),
+        .e_field_access => |field| try pushHoistedKeptExpr(gpa, pending, field.receiver),
         .e_interpolation => |interpolation| blk: {
             const fn_var = interpolation.constraint_fn_var orelse break :blk false;
             const dispatcher_var = interpolation.dispatcher_var orelse break :blk false;
@@ -10684,19 +10765,16 @@ fn hoistedRootDependenciesAreKeptInternal(
                 dispatcher_var,
                 fn_var,
             )) break :blk false;
-            break :blk (try self.hoistedRootDependenciesAreKeptInternal(interpolation.first, context, keep_oracle)) and
-                try self.hoistedRootExprSpanDependenciesAreKept(interpolation.parts, context, keep_oracle);
+            try pending.append(gpa, .{ .expr = interpolation.first });
+            break :blk try self.pushHoistedKeptExprs(pending, interpolation.parts);
         },
-        .e_structural_eq => |eq| (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context, keep_oracle)) and
-            try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context, keep_oracle),
-        .e_structural_hash => |h| (try self.hoistedRootDependenciesAreKeptInternal(h.value, context, keep_oracle)) and
-            try self.hoistedRootDependenciesAreKeptInternal(h.hasher, context, keep_oracle),
+        .e_structural_eq => |eq| try pushHoistedKeptExprPair(gpa, pending, eq.lhs, eq.rhs),
+        .e_structural_hash => |h| try pushHoistedKeptExprPair(gpa, pending, h.value, h.hasher),
         .e_method_eq => |eq| (try self.staticDispatchAllowsHoistedRoot(
             ModuleEnv.varFrom(eq.lhs),
             eq.constraint_fn_var,
         )) and
-            (try self.hoistedRootDependenciesAreKeptInternal(eq.lhs, context, keep_oracle)) and
-            try self.hoistedRootDependenciesAreKeptInternal(eq.rhs, context, keep_oracle),
+            try pushHoistedKeptExprPair(gpa, pending, eq.lhs, eq.rhs),
         // Like value method calls, surface type-method calls are not checked
         // dispatch plans and therefore cannot establish compile-time safety.
         .e_type_method_call => false,
@@ -10704,10 +10782,26 @@ fn hoistedRootDependenciesAreKeptInternal(
             self.typeDispatchOwnerVar(call.type_dispatch_stmt),
             call.constraint_fn_var,
         )) and
-            try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
-        .e_tuple_access => |access| self.hoistedRootDependenciesAreKeptInternal(access.tuple, context, keep_oracle),
+            try self.pushHoistedKeptExprs(pending, call.args),
+        .e_tuple_access => |access| try pushHoistedKeptExpr(gpa, pending, access.tuple),
         .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
     };
+}
+
+fn pushHoistedKeptExpr(gpa: Allocator, pending: *std.ArrayListUnmanaged(HoistedKeptStep), expr: CIR.Expr.Idx) Allocator.Error!bool {
+    try pending.append(gpa, .{ .expr = expr });
+    return true;
+}
+
+fn pushHoistedKeptExprPair(gpa: Allocator, pending: *std.ArrayListUnmanaged(HoistedKeptStep), first: CIR.Expr.Idx, second: CIR.Expr.Idx) Allocator.Error!bool {
+    try pending.append(gpa, .{ .expr = first });
+    try pending.append(gpa, .{ .expr = second });
+    return true;
+}
+
+fn pushHoistedKeptExprs(self: *Self, pending: *std.ArrayListUnmanaged(HoistedKeptStep), span: CIR.Expr.Span) Allocator.Error!bool {
+    for (self.cir.store.sliceExpr(span)) |child| try pending.append(self.gpa, .{ .expr = child });
+    return true;
 }
 
 const HoistedCallableDef = struct {
@@ -11215,50 +11309,18 @@ fn varIsBuiltinLiteralTarget(self: *Self, var_: Var) bool {
     }
 }
 
-fn hoistedRootExprSpanDependenciesAreKept(
-    self: *Self,
-    span: CIR.Expr.Span,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    for (self.cir.store.sliceExpr(span)) |child| {
-        if (!try self.hoistedRootDependenciesAreKeptInternal(child, context, keep_oracle)) return false;
-    }
-    return true;
-}
-
-fn hoistedRootBlockDependenciesAreKept(
-    self: *Self,
-    statements: CIR.Statement.Span,
-    final_expr: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    const mark = context.mark();
-    defer context.pop(mark);
-
-    for (self.cir.store.sliceStatements(statements)) |statement| {
-        if (!try self.hoistedRootStatementDependenciesAreKept(statement, context, keep_oracle)) return false;
-    }
-    return try self.hoistedRootDependenciesAreKeptInternal(final_expr, context, keep_oracle);
-}
-
-fn hoistedRootStatementDependenciesAreKept(
+fn hoistedRootStatementStep(
     self: *Self,
     statement: CIR.Statement.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
+    pending: *std.ArrayListUnmanaged(HoistedKeptStep),
 ) Allocator.Error!bool {
     return switch (self.cir.store.getStatement(statement)) {
         .s_decl => |decl| blk: {
-            if (!try self.hoistedRootDependenciesAreKeptInternal(decl.expr, context, keep_oracle)) break :blk false;
-            // Binders introduced and consumed inside this root are transient
-            // evaluation state. They need neither separate selected roots nor
-            // representation-stable static types.
-            try self.appendHoistedDependencyPatternBinders(decl.pattern, context, .internal);
+            try pending.append(self.gpa, .{ .expr = decl.expr });
+            try pending.append(self.gpa, .{ .bind_decl = decl.pattern });
             break :blk true;
         },
-        .s_expr => |expr| self.hoistedRootDependenciesAreKeptInternal(expr.expr, context, keep_oracle),
+        .s_expr => |expr| try pushHoistedKeptExpr(self.gpa, pending, expr.expr),
         .s_import,
         .s_alias_decl,
         .s_nominal_decl,
@@ -11281,31 +11343,6 @@ fn hoistedRootStatementDependenciesAreKept(
         .s_runtime_error,
         => false,
     };
-}
-
-fn hoistedRootMatchDependenciesAreKept(
-    self: *Self,
-    match: CIR.Expr.Match,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    if (!try self.hoistedRootDependenciesAreKeptInternal(match.cond, context, keep_oracle)) return false;
-    for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
-        const branch = self.cir.store.getMatchBranch(branch_idx);
-        const mark = context.mark();
-        defer context.pop(mark);
-        for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-            const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
-            // Branch binders are likewise local to the root evaluation; only
-            // the selected root's result must have a storable concrete type.
-            try self.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context, .contextual);
-        }
-        if (branch.guard) |guard| {
-            if (!try self.hoistedRootDependenciesAreKeptInternal(guard, context, keep_oracle)) return false;
-        }
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.value, context, keep_oracle)) return false;
-    }
-    return true;
 }
 
 fn hoistedRootPatternSelectedDependenciesAreKept(
@@ -11436,38 +11473,6 @@ fn pushCirSubpatterns(self: *const Self, pending: *std.ArrayList(CIR.Pattern.Idx
         => {},
     }
     std.mem.reverse(CIR.Pattern.Idx, pending.items[start..]);
-}
-
-fn hoistedRootIfDependenciesAreKept(
-    self: *Self,
-    branches: CIR.Expr.IfBranch.Span,
-    final_else: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    for (self.cir.store.sliceIfBranches(branches)) |branch_idx| {
-        const branch = self.cir.store.getIfBranch(branch_idx);
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.cond, context, keep_oracle)) return false;
-        if (!try self.hoistedRootDependenciesAreKeptInternal(branch.body, context, keep_oracle)) return false;
-    }
-    return try self.hoistedRootDependenciesAreKeptInternal(final_else, context, keep_oracle);
-}
-
-fn hoistedRootRecordDependenciesAreKept(
-    self: *Self,
-    fields: CIR.RecordField.Span,
-    ext: ?CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    if (ext) |ext_expr| {
-        if (!try self.hoistedRootDependenciesAreKeptInternal(ext_expr, context, keep_oracle)) return false;
-    }
-    for (self.cir.store.sliceRecordFields(fields)) |field_idx| {
-        const field = self.cir.store.getRecordField(field_idx);
-        if (!try self.hoistedRootDependenciesAreKeptInternal(field.value, context, keep_oracle)) return false;
-    }
-    return true;
 }
 
 /// Build the two pinnable sets for one ambiguity-judgment event into

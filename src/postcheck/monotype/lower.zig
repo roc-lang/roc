@@ -1335,64 +1335,142 @@ fn relatePublicPrivateRequestComponentAtWidth(
     }
 }
 
+/// Relate two request components at `row_width`. Matching private
+/// containers relate their children before joining; each such container is
+/// an explicit frame, so component depth never becomes native call depth.
 fn relateRequestComponentAtWidth(
     graph: *InstGraph,
-    left_node: NodeId,
-    right_node: NodeId,
+    root_left: NodeId,
+    root_right: NodeId,
     row_width: solve.RowWidthRelation,
 ) Allocator.Error!void {
-    const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
-    const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
-    if (left_root_private and right_root_private) {
-        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
-        return;
-    }
-    if (right_root_private) {
-        try relatePublicPrivateRequestComponentAtWidth(graph, left_node, right_node, row_width);
-        return;
-    }
-    if (left_root_private) {
-        try relatePublicPrivateRequestComponentAtWidth(graph, right_node, left_node, row_width);
-        return;
-    }
+    const Op = union(enum) {
+        pair: struct { left: NodeId, right: NodeId },
+        /// Named containers match only when both have a backing or neither
+        /// does; matching backings relate as a pair.
+        named_backing: struct { left: ?NodeId, right: ?NodeId },
+    };
+    const Frame = struct {
+        left: NodeId,
+        right: NodeId,
+        finish: RequestContainerJoin,
+        ops_start: usize,
+        next: usize,
+    };
+    var frames: std.ArrayListUnmanaged(Frame) = .empty;
+    defer frames.deinit(graph.allocator);
+    var ops: std.ArrayListUnmanaged(Op) = .empty;
+    defer ops.deinit(graph.allocator);
 
-    const left_private = try graph.containsGeneratedPrivate(left_node);
-    const right_private = try graph.containsGeneratedPrivate(right_node);
-    if (left_private and right_private) {
-        if (try relateMatchingRequestContainers(graph, left_node, right_node, row_width)) return;
-        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
-    } else if (right_private) {
-        try relatePublicPrivateRequestComponentAtWidth(graph, left_node, right_node, row_width);
-    } else if (left_private) {
-        try relatePublicPrivateRequestComponentAtWidth(graph, right_node, left_node, row_width);
-    } else {
-        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
+    var pending_pair: ?[2]NodeId = .{ root_left, root_right };
+    while (true) {
+        if (pending_pair) |pair| {
+            pending_pair = null;
+            const left_node = pair[0];
+            const right_node = pair[1];
+            switch (try requestComponentRelation(graph, left_node, right_node)) {
+                .unify => try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width),
+                .public_private => try relatePublicPrivateRequestComponentAtWidth(graph, left_node, right_node, row_width),
+                .private_public => try relatePublicPrivateRequestComponentAtWidth(graph, right_node, left_node, row_width),
+                .matching_containers => {
+                    if (graph.sameClass(left_node, right_node)) {
+                        // Already one component.
+                    } else {
+                        const ops_start = ops.items.len;
+                        const finish = try appendMatchingRequestContainerOps(Op, graph, &ops, left_node, right_node, row_width);
+                        if (finish) |how| {
+                            try frames.append(graph.allocator, .{ .left = left_node, .right = right_node, .finish = how, .ops_start = ops_start, .next = ops_start });
+                        } else {
+                            ops.shrinkRetainingCapacity(ops_start);
+                            try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
+                        }
+                    }
+                },
+            }
+        }
+        if (frames.items.len == 0) return;
+
+        const frame = &frames.items[frames.items.len - 1];
+        if (frame.next < ops.items.len) {
+            const op = ops.items[frame.next];
+            frame.next += 1;
+            switch (op) {
+                .pair => |pair| pending_pair = .{ pair.left, pair.right },
+                .named_backing => |backing| {
+                    const matched = if (backing.left) |left_backing| blk: {
+                        const right_backing = backing.right orelse break :blk false;
+                        pending_pair = .{ left_backing, right_backing };
+                        break :blk true;
+                    } else backing.right == null;
+                    if (!matched) {
+                        // The named pair does not match after all.
+                        const failed = frames.pop().?;
+                        ops.shrinkRetainingCapacity(failed.ops_start);
+                        try unifyRequestComponentAtWidth(graph, failed.left, failed.right, row_width);
+                    }
+                },
+            }
+            continue;
+        }
+
+        const done = frames.pop().?;
+        ops.shrinkRetainingCapacity(done.ops_start);
+        switch (done.finish) {
+            .join => try graph.joinRelatedRequestContainer(done.left, done.right),
+            .named => try graph.relateNamedInstances(done.left, done.right),
+        }
     }
 }
 
-fn relateMatchingRequestContainers(
+/// How two matching containers join once their children are related.
+const RequestContainerJoin = enum { join, named };
+
+/// How a request component pair relates.
+fn requestComponentRelation(
     graph: *InstGraph,
     left_node: NodeId,
     right_node: NodeId,
+) Allocator.Error!enum { unify, public_private, private_public, matching_containers } {
+    const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
+    const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
+    if (left_root_private and right_root_private) return .unify;
+    if (right_root_private) return .public_private;
+    if (left_root_private) return .private_public;
+
+    const left_private = try graph.containsGeneratedPrivate(left_node);
+    const right_private = try graph.containsGeneratedPrivate(right_node);
+    if (left_private and right_private) return .matching_containers;
+    if (right_private) return .public_private;
+    if (left_private) return .private_public;
+    return .unify;
+}
+
+/// List the child pairs two matching containers relate before they join,
+/// returning how they join; null when the containers do not match and the
+/// pair unifies instead.
+fn appendMatchingRequestContainerOps(
+    comptime Op: type,
+    graph: *InstGraph,
+    ops: *std.ArrayListUnmanaged(Op),
+    left_node: NodeId,
+    right_node: NodeId,
     row_width: solve.RowWidthRelation,
-) Allocator.Error!bool {
-    if (graph.sameClass(left_node, right_node)) return true;
+) Allocator.Error!?RequestContainerJoin {
+    const gpa = graph.allocator;
     const left_content = graph.content(left_node);
     const right_content = graph.content(right_node);
     switch (left_content) {
         .list => |left_elem| switch (right_content) {
             .list => |right_elem| {
-                try relateRequestComponentAtWidth(graph, left_elem, right_elem, row_width);
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
+                try ops.append(gpa, .{ .pair = .{ .left = left_elem, .right = right_elem } });
+                return .join;
             },
             .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .box => |left_elem| switch (right_content) {
             .box => |right_elem| {
-                try relateRequestComponentAtWidth(graph, left_elem, right_elem, row_width);
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
+                try ops.append(gpa, .{ .pair = .{ .left = left_elem, .right = right_elem } });
+                return .join;
             },
             .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
@@ -1402,10 +1480,9 @@ fn relateMatchingRequestContainers(
                     Common.invariant("request component relation received tuples of different arity");
                 }
                 for (left_items, right_items) |left_item, right_item| {
-                    try relateRequestComponentAtWidth(graph, left_item, right_item, row_width);
+                    try ops.append(gpa, .{ .pair = .{ .left = left_item, .right = right_item } });
                 }
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
+                return .join;
             },
             .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
@@ -1415,52 +1492,44 @@ fn relateMatchingRequestContainers(
                     Common.invariant("request component relation received functions of different arity");
                 }
                 for (left_fn.args, right_fn.args) |left_arg, right_arg| {
-                    try relateRequestComponentAtWidth(graph, left_arg, right_arg, row_width);
+                    try ops.append(gpa, .{ .pair = .{ .left = left_arg, .right = right_arg } });
                 }
-                try relateRequestComponentAtWidth(graph, left_fn.ret, right_fn.ret, row_width);
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
+                try ops.append(gpa, .{ .pair = .{ .left = left_fn.ret, .right = right_fn.ret } });
+                return .join;
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .tag_union => switch (right_content) {
             .tag_union => {
                 try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
+                return .join;
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .record => switch (right_content) {
             .record => {
                 try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
-                try graph.joinRelatedRequestContainer(left_node, right_node);
-                return true;
+                return .join;
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
         .named => |left_named| switch (right_content) {
             .named => |right_named| {
-                if (!sameNamedValueDefinition(left_named, right_named)) {
-                    return false;
-                }
+                if (!sameNamedValueDefinition(left_named, right_named)) return null;
                 for (left_named.args, right_named.args) |left_arg, right_arg| {
-                    try relateRequestComponentAtWidth(graph, left_arg, right_arg, row_width);
+                    try ops.append(gpa, .{ .pair = .{ .left = left_arg, .right = right_arg } });
                 }
-                if (left_named.backing) |left_backing| {
-                    const right_backing = right_named.backing orelse return false;
-                    try relateRequestComponentAtWidth(graph, left_backing.node, right_backing.node, row_width);
-                } else if (right_named.backing != null) {
-                    return false;
-                }
-                try graph.relateNamedInstances(left_node, right_node);
-                return true;
+                try ops.append(gpa, .{ .named_backing = .{
+                    .left = if (left_named.backing) |backing| backing.node else null,
+                    .right = if (right_named.backing) |backing| backing.node else null,
+                } });
+                return .named;
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
         },
         .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
     }
-    return false;
+    return null;
 }
 
 const DeferredConstructorPair = struct {
@@ -1499,12 +1568,55 @@ fn transparentAliasBacking(graph: *InstGraph, content: anytype) ?NodeId {
     }
 }
 
+/// One pending step of transferring type-constructor evidence.
+const DeferredConstructorStep = union(enum) {
+    at: DeferredConstructorPair,
+    argument: DeferredConstructorPair,
+    relate_named: DeferredConstructorPair,
+    field_kind: struct { checked: InstField, request: InstField },
+};
+
+/// Run the transfer from an explicit continuation stack, in exactly the
+/// order a direct descent would take its steps, so type depth never becomes
+/// native call depth.
 fn constrainDeferredTemplateTypeArgumentsAt(
     graph: *InstGraph,
     checked_node: NodeId,
     request_node: NodeId,
     seen: *std.AutoHashMap(DeferredConstructorPair, void),
 ) Allocator.Error!void {
+    var pending: std.ArrayListUnmanaged(DeferredConstructorStep) = .empty;
+    defer pending.deinit(graph.allocator);
+    try pending.append(graph.allocator, .{ .at = .{ .checked_node = checked_node, .request_node = request_node } });
+    while (pending.pop()) |step| {
+        const start = pending.items.len;
+        switch (step) {
+            .at => |pair| try deferredTemplateTypeArgumentsStep(graph, pair.checked_node, pair.request_node, seen, &pending),
+            .argument => |pair| {
+                const checked_root = graph.rootNode(pair.checked_node);
+                const request_root = graph.rootNode(pair.request_node);
+                if (checked_root == request_root) continue;
+                if (graph.content(checked_root) == .unresolved) {
+                    try relateRequestComponent(graph, checked_root, request_root);
+                    continue;
+                }
+                try pending.append(graph.allocator, .{ .at = .{ .checked_node = checked_root, .request_node = request_root } });
+            },
+            .relate_named => |pair| try graph.relateNamedInstances(pair.checked_node, pair.request_node),
+            .field_kind => |fields| graph.relateRecordFieldKind(fields.checked, fields.request),
+        }
+        std.mem.reverse(DeferredConstructorStep, pending.items[start..]);
+    }
+}
+
+fn deferredTemplateTypeArgumentsStep(
+    graph: *InstGraph,
+    checked_node: NodeId,
+    request_node: NodeId,
+    seen: *std.AutoHashMap(DeferredConstructorPair, void),
+    pending: *std.ArrayListUnmanaged(DeferredConstructorStep),
+) Allocator.Error!void {
+    const gpa = graph.allocator;
     const checked_root = graph.rootNode(checked_node);
     const request_root = graph.rootNode(request_node);
     if (checked_root == request_root) return;
@@ -1526,37 +1638,37 @@ fn constrainDeferredTemplateTypeArgumentsAt(
     // which never occur in the backing.
     if (std.meta.activeTag(checked_content) != std.meta.activeTag(request_content)) {
         if (transparentAliasBacking(graph, checked_content)) |backing| {
-            return constrainDeferredTemplateTypeArgumentsAt(graph, backing, request_root, seen);
+            return try pending.append(gpa, .{ .at = .{ .checked_node = backing, .request_node = request_root } });
         }
         if (transparentAliasBacking(graph, request_content)) |backing| {
-            return constrainDeferredTemplateTypeArgumentsAt(graph, checked_root, backing, seen);
+            return try pending.append(gpa, .{ .at = .{ .checked_node = checked_root, .request_node = backing } });
         }
     }
     switch (checked_content) {
         .unresolved => return,
         .list => |checked_elem| switch (request_content) {
-            .list => |request_elem| try constrainDeferredTemplateArgument(graph, checked_elem, request_elem, seen),
+            .list => |request_elem| try pending.append(gpa, .{ .argument = .{ .checked_node = checked_elem, .request_node = request_elem } }),
             .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .box => |checked_elem| switch (request_content) {
-            .box => |request_elem| try constrainDeferredTemplateArgument(graph, checked_elem, request_elem, seen),
+            .box => |request_elem| try pending.append(gpa, .{ .argument = .{ .checked_node = checked_elem, .request_node = request_elem } }),
             .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
                 if (!sameNamedValueDefinition(checked_named, request_named)) {
                     if (transparentAliasBacking(graph, checked_content)) |backing| {
-                        return constrainDeferredTemplateTypeArgumentsAt(graph, backing, request_root, seen);
+                        return try pending.append(gpa, .{ .at = .{ .checked_node = backing, .request_node = request_root } });
                     }
                     if (transparentAliasBacking(graph, request_content)) |backing| {
-                        return constrainDeferredTemplateTypeArgumentsAt(graph, checked_root, backing, seen);
+                        return try pending.append(gpa, .{ .at = .{ .checked_node = checked_root, .request_node = backing } });
                     }
                     return;
                 }
                 for (checked_named.args, request_named.args) |checked_arg, request_arg| {
-                    try constrainDeferredTemplateArgument(graph, checked_arg, request_arg, seen);
+                    try pending.append(gpa, .{ .argument = .{ .checked_node = checked_arg, .request_node = request_arg } });
                 }
-                try graph.relateNamedInstances(checked_root, request_root);
+                try pending.append(gpa, .{ .relate_named = .{ .checked_node = checked_root, .request_node = request_root } });
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return,
         },
@@ -1566,9 +1678,9 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                     Common.invariant("deferred procedure function traversal changed arity");
                 }
                 for (checked_fn.args, request_fn.args) |checked_arg, request_arg| {
-                    try constrainDeferredTemplateTypeArgumentsAt(graph, checked_arg, request_arg, seen);
+                    try pending.append(gpa, .{ .at = .{ .checked_node = checked_arg, .request_node = request_arg } });
                 }
-                try constrainDeferredTemplateTypeArgumentsAt(graph, checked_fn.ret, request_fn.ret, seen);
+                try pending.append(gpa, .{ .at = .{ .checked_node = checked_fn.ret, .request_node = request_fn.ret } });
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
@@ -1578,7 +1690,7 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                     Common.invariant("deferred procedure tuple traversal changed arity");
                 }
                 for (checked_items, request_items) |checked_item, request_item| {
-                    try constrainDeferredTemplateTypeArgumentsAt(graph, checked_item, request_item, seen);
+                    try pending.append(gpa, .{ .at = .{ .checked_node = checked_item, .request_node = request_item } });
                 }
             },
             .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
@@ -1588,14 +1700,12 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                 for (checked_record.fields) |checked_field| {
                     for (request_record.fields) |request_field| {
                         if (!graph.name_store.recordFieldLabelTextEql(checked_field.name, request_field.name)) continue;
-                        graph.relateRecordFieldKind(checked_field, request_field);
-                        try constrainDeferredTemplateArgument(
-                            graph,
-                            checked_field.value_ty orelse checked_field.ty,
-                            request_field.value_ty orelse request_field.ty,
-                            seen,
-                        );
-                        try constrainDeferredTemplateArgument(graph, checked_field.ty, request_field.ty, seen);
+                        try pending.append(gpa, .{ .field_kind = .{ .checked = checked_field, .request = request_field } });
+                        try pending.append(gpa, .{ .argument = .{
+                            .checked_node = checked_field.value_ty orelse checked_field.ty,
+                            .request_node = request_field.value_ty orelse request_field.ty,
+                        } });
+                        try pending.append(gpa, .{ .argument = .{ .checked_node = checked_field.ty, .request_node = request_field.ty } });
                         break;
                     }
                 }
@@ -1611,7 +1721,7 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                             Common.invariant("deferred procedure tag traversal changed payload arity");
                         }
                         for (checked_tag.payloads, request_tag.payloads) |checked_payload, request_payload| {
-                            try constrainDeferredTemplateTypeArgumentsAt(graph, checked_payload, request_payload, seen);
+                            try pending.append(gpa, .{ .at = .{ .checked_node = checked_payload, .request_node = request_payload } });
                         }
                         break;
                     }
@@ -1622,22 +1732,6 @@ fn constrainDeferredTemplateTypeArgumentsAt(
         .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
         .redirect => unreachable,
     }
-}
-
-fn constrainDeferredTemplateArgument(
-    graph: *InstGraph,
-    checked_node: NodeId,
-    request_node: NodeId,
-    seen: *std.AutoHashMap(DeferredConstructorPair, void),
-) Allocator.Error!void {
-    const checked_root = graph.rootNode(checked_node);
-    const request_root = graph.rootNode(request_node);
-    if (checked_root == request_root) return;
-    if (graph.content(checked_root) == .unresolved) {
-        try relateRequestComponent(graph, checked_root, request_root);
-        return;
-    }
-    try constrainDeferredTemplateTypeArgumentsAt(graph, checked_root, request_root, seen);
 }
 
 fn isGeneratedPrivateRootNode(graph: *InstGraph, node: NodeId) bool {
@@ -3415,11 +3509,12 @@ fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstStr) u6
 }
 
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
-    return switch (view.const_store.get(node)) {
-        .str => |str| .{ .string_backing = constStringBackingLength(view, str) },
-        .nominal => |nominal| constStaticDataStorage(view, nominal.backing),
+    var current = node;
+    while (true) switch (view.const_store.get(current)) {
+        .str => |str| return .{ .string_backing = constStringBackingLength(view, str) },
+        .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
-        .zst, .scalar, .fn_value, .list, .box, .tuple, .record, .tag, .crash => .aggregate,
+        .zst, .scalar, .fn_value, .list, .box, .tuple, .record, .tag, .crash => return .aggregate,
     };
 }
 
@@ -4481,56 +4576,39 @@ const Builder = struct {
     ) Allocator.Error!bool {
         var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
-        return try self.checkedTypeHasVariable(view, checked_ty, &seen);
-    }
-
-    fn checkedTypeHasVariable(
-        self: *Builder,
-        view: ModuleView,
-        checked_ty: checked.CheckedTypeId,
-        seen: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        if ((try seen.getOrPut(checked_ty)).found_existing) return false;
-        switch (checkedPayload(view, checked_ty)) {
-            .flex, .rigid => |variable| {
-                return variable.numeric_default_phase == null and variable.row_default == null;
-            },
-            .pending, .err, .empty_record, .empty_tag_union => return false,
-            .alias => |alias| {
-                if (try self.checkedTypeSliceHasVariable(view, alias.args, seen)) return true;
-                return try self.checkedTypeHasVariable(view, alias.backing, seen);
-            },
-            // A nominal's runtime shape follows from its declaration and its
-            // arguments, so the arguments carry every variable a use can fill.
-            .nominal => |nominal| return try self.checkedTypeSliceHasVariable(view, nominal.args, seen),
-            .record => |record| {
-                for (record.fields) |field| {
-                    if (try self.checkedTypeHasVariable(view, field.ty, seen)) return true;
-                }
-                return try self.checkedTypeHasVariable(view, record.ext, seen);
-            },
-            .tuple => |items| return try self.checkedTypeSliceHasVariable(view, items, seen),
-            .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| {
-                    if (try self.checkedTypeSliceHasVariable(view, tag.argsSlice(view.types), seen)) return true;
-                }
-                return try self.checkedTypeHasVariable(view, tag_union.ext, seen);
-            },
-            .function => |fn_ty| {
-                if (try self.checkedTypeSliceHasVariable(view, fn_ty.args, seen)) return true;
-                return try self.checkedTypeHasVariable(view, fn_ty.ret, seen);
-            },
-        }
-    }
-
-    fn checkedTypeSliceHasVariable(
-        self: *Builder,
-        view: ModuleView,
-        types: []const checked.CheckedTypeId,
-        seen: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (types) |ty| {
-            if (try self.checkedTypeHasVariable(view, ty, seen)) return true;
+        var pending: std.ArrayListUnmanaged(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, checked_ty);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(ty)).found_existing) continue;
+            const start = pending.items.len;
+            switch (checkedPayload(view, ty)) {
+                .flex, .rigid => |variable| {
+                    if (variable.numeric_default_phase == null and variable.row_default == null) return true;
+                },
+                .pending, .err, .empty_record, .empty_tag_union => {},
+                .alias => |alias| {
+                    try pending.appendSlice(self.allocator, alias.args);
+                    try pending.append(self.allocator, alias.backing);
+                },
+                // A nominal's runtime shape follows from its declaration and its
+                // arguments, so the arguments carry every variable a use can fill.
+                .nominal => |nominal| try pending.appendSlice(self.allocator, nominal.args),
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(self.allocator, field.ty);
+                    try pending.append(self.allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(view.types));
+                    try pending.append(self.allocator, tag_union.ext);
+                },
+                .function => |fn_ty| {
+                    try pending.appendSlice(self.allocator, fn_ty.args);
+                    try pending.append(self.allocator, fn_ty.ret);
+                },
+            }
+            std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
         }
         return false;
     }
@@ -4873,80 +4951,95 @@ const Builder = struct {
         try self.appendRuntimeSchemaRequestsForTypeInner(ty, &active);
     }
 
+    /// Request a runtime schema for every named type reachable from `ty`
+    /// that is backed by a record or tag union, in source order, from an
+    /// explicit work list.
     fn appendRuntimeSchemaRequestsForTypeInner(
         self: *Builder,
-        ty: Type.TypeId,
+        root: Type.TypeId,
         active: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!void {
-        if (active.contains(ty)) return;
-        try active.put(ty, {});
+        const Step = union(enum) { ty: Type.TypeId, request: Ast.RuntimeSchemaRequest };
+        var pending: std.ArrayListUnmanaged(Step) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .ty = root });
+        while (pending.pop()) |step| {
+            const ty = switch (step) {
+                .request => |request| {
+                    try self.appendRuntimeSchemaRequest(request);
+                    continue;
+                },
+                .ty => |ty| ty,
+            };
+            if (active.contains(ty)) continue;
+            try active.put(ty, {});
 
-        switch (self.program.types.get(ty)) {
-            .named => |named| {
-                const args = self.program.types.span(named.args);
-                for (0..GuardedList.borrowLen(args)) |index| {
-                    const arg = GuardedList.at(args, index);
-                    try self.appendRuntimeSchemaRequestsForTypeInner(arg, active);
-                }
-                const backing = named.backing orelse return;
-                if (backing.use == .inspectable and self.runtimeSchemaBackedByRecordOrTagUnion(backing.ty)) {
-                    try self.appendRuntimeSchemaRequest(.{ .def = named.def, .ty = ty });
-                }
-                try self.appendRuntimeSchemaRequestsForTypeInner(backing.ty, active);
-            },
-            .record => |fields| {
-                const field_span = self.program.types.fieldSpan(fields);
-                for (0..GuardedList.borrowLen(field_span)) |index| {
-                    const field = GuardedList.at(field_span, index);
-                    try self.appendRuntimeSchemaRequestsForTypeInner(field.ty, active);
-                }
-            },
-            .tuple => |items| {
-                const item_span = self.program.types.span(items);
-                for (0..GuardedList.borrowLen(item_span)) |index| {
-                    const item = GuardedList.at(item_span, index);
-                    try self.appendRuntimeSchemaRequestsForTypeInner(item, active);
-                }
-            },
-            .tag_union => |tags| {
-                const tag_span = self.program.types.tagSpan(tags);
-                for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
-                    const tag = GuardedList.at(tag_span, tag_index);
-                    const payload_span = self.program.types.span(tag.payloads);
-                    for (0..GuardedList.borrowLen(payload_span)) |payload_index| {
-                        const payload = GuardedList.at(payload_span, payload_index);
-                        try self.appendRuntimeSchemaRequestsForTypeInner(payload, active);
+            const start = pending.items.len;
+            switch (self.program.types.get(ty)) {
+                .named => |named| {
+                    const args = self.program.types.span(named.args);
+                    for (0..GuardedList.borrowLen(args)) |index| {
+                        try pending.append(self.allocator, .{ .ty = GuardedList.at(args, index) });
                     }
-                }
-            },
-            .list,
-            .box,
-            => |elem| try self.appendRuntimeSchemaRequestsForTypeInner(elem, active),
-            .func => |func| {
-                const args = self.program.types.span(func.args);
-                for (0..GuardedList.borrowLen(args)) |index| {
-                    const arg = GuardedList.at(args, index);
-                    try self.appendRuntimeSchemaRequestsForTypeInner(arg, active);
-                }
-                try self.appendRuntimeSchemaRequestsForTypeInner(func.ret, active);
-            },
-            .primitive,
-            .erased,
-            .zst,
-            => {},
+                    if (named.backing) |backing| {
+                        if (backing.use == .inspectable and self.runtimeSchemaBackedByRecordOrTagUnion(backing.ty)) {
+                            try pending.append(self.allocator, .{ .request = .{ .def = named.def, .ty = ty } });
+                        }
+                        try pending.append(self.allocator, .{ .ty = backing.ty });
+                    }
+                },
+                .record => |fields| {
+                    const field_span = self.program.types.fieldSpan(fields);
+                    for (0..GuardedList.borrowLen(field_span)) |index| {
+                        try pending.append(self.allocator, .{ .ty = GuardedList.at(field_span, index).ty });
+                    }
+                },
+                .tuple => |items| {
+                    const item_span = self.program.types.span(items);
+                    for (0..GuardedList.borrowLen(item_span)) |index| {
+                        try pending.append(self.allocator, .{ .ty = GuardedList.at(item_span, index) });
+                    }
+                },
+                .tag_union => |tags| {
+                    const tag_span = self.program.types.tagSpan(tags);
+                    for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
+                        const payload_span = self.program.types.span(GuardedList.at(tag_span, tag_index).payloads);
+                        for (0..GuardedList.borrowLen(payload_span)) |payload_index| {
+                            try pending.append(self.allocator, .{ .ty = GuardedList.at(payload_span, payload_index) });
+                        }
+                    }
+                },
+                .list,
+                .box,
+                => |elem| try pending.append(self.allocator, .{ .ty = elem }),
+                .func => |func| {
+                    const args = self.program.types.span(func.args);
+                    for (0..GuardedList.borrowLen(args)) |index| {
+                        try pending.append(self.allocator, .{ .ty = GuardedList.at(args, index) });
+                    }
+                    try pending.append(self.allocator, .{ .ty = func.ret });
+                },
+                .primitive,
+                .erased,
+                .zst,
+                => {},
+            }
+            std.mem.reverse(Step, pending.items[start..]);
         }
     }
 
     fn runtimeSchemaBackedByRecordOrTagUnion(self: *Builder, ty: Type.TypeId) bool {
-        return switch (self.program.types.get(ty)) {
+        var current = ty;
+        while (true) switch (self.program.types.get(current)) {
             .record,
             .tag_union,
-            => true,
-            .named => |named| if (named.backing) |backing|
-                backing.use == .inspectable and self.runtimeSchemaBackedByRecordOrTagUnion(backing.ty)
-            else
-                false,
-            .primitive, .tuple, .list, .box, .func, .erased, .zst => false,
+            => return true,
+            .named => |named| {
+                const backing = named.backing orelse return false;
+                if (backing.use != .inspectable) return false;
+                current = backing.ty;
+            },
+            .primitive, .tuple, .list, .box, .func, .erased, .zst => return false,
         };
     }
 
@@ -7107,7 +7200,7 @@ const Builder = struct {
                 .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
                     root_node,
                     lowered.ret,
-                    body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
+                    try body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
                 ),
             };
         };
@@ -7624,7 +7717,7 @@ const Builder = struct {
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
             lowered.ret,
-            body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
+            try body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
         );
         const completed_fn_ret = (try source_ctx.graph.functionNodes(completed_fn_node)).ret;
         const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
@@ -7757,7 +7850,7 @@ const Builder = struct {
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredRet(
             body_fn_node,
             lowered.ret,
-            body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
+            try body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
         );
         const completed_fn_ret = (try source_ctx.graph.functionNodes(completed_fn_node)).ret;
         const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
@@ -7999,82 +8092,277 @@ const Builder = struct {
         return try graph.sealNode(node);
     }
 
+    /// One step of lowering a checked type: a child type, or the part of a
+    /// record field or tag that follows its lowered type.
+    const TypeLowerOp = union(enum) {
+        child: checked.CheckedTypeId,
+        field: checked.CheckedRecordField,
+        tag: checked.CheckedTag,
+    };
+
+    /// A checked type whose children are still lowering. Its ops occupy
+    /// `ops[ops_start..]` and their results `results[results_start..]`.
+    const TypeLowerFrame = struct {
+        view: ModuleView,
+        address: CheckedTypeAddress,
+        checked_ty: checked.CheckedTypeId,
+        payload: checked.CheckedTypePayload,
+        /// Null for an alias, which shares its backing's type.
+        slot: ?Type.Store.RecursiveSlot,
+        ops_start: usize,
+        next: usize,
+        results_start: usize,
+        fields_start: usize,
+        tags_start: usize,
+    };
+
+    const TypeLowerRun = struct {
+        frames: std.ArrayListUnmanaged(TypeLowerFrame) = .empty,
+        ops: std.ArrayListUnmanaged(TypeLowerOp) = .empty,
+        results: std.ArrayListUnmanaged(Type.TypeId) = .empty,
+        fields: std.ArrayListUnmanaged(Type.Field) = .empty,
+        tags: std.ArrayListUnmanaged(Type.Tag) = .empty,
+
+        fn deinit(type_run: *TypeLowerRun, allocator: Allocator) void {
+            type_run.tags.deinit(allocator);
+            type_run.fields.deinit(allocator);
+            type_run.results.deinit(allocator);
+            type_run.ops.deinit(allocator);
+            type_run.frames.deinit(allocator);
+        }
+    };
+
+    /// Lower a checked type. Each composite type is an explicit frame whose
+    /// children lower in order, so type depth never becomes native call depth.
     fn lowerType(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
+        var type_run = TypeLowerRun{};
+        defer type_run.deinit(self.allocator);
+        errdefer for (type_run.frames.items) |frame| {
+            if (frame.slot) |slot| {
+                self.activeTypeStore().abortRecursive(slot);
+                break;
+            }
+        };
+        if (try self.enterLowerType(&type_run, view, checked_ty)) |ty| return ty;
+        while (true) {
+            const index = type_run.frames.items.len - 1;
+            const frame = type_run.frames.items[index];
+            if (frame.next < type_run.ops.items.len) {
+                const op = type_run.ops.items[frame.next];
+                type_run.frames.items[index].next += 1;
+                switch (op) {
+                    .child => |child| if (try self.enterLowerType(&type_run, frame.view, child)) |ty| {
+                        try type_run.results.append(self.allocator, ty);
+                    },
+                    .field => |field| {
+                        const value_ty = type_run.results.pop().?;
+                        try type_run.fields.append(self.allocator, .{
+                            .name = try self.recordFieldName(frame.view, field.name),
+                            .ty = switch (field.kind.tag) {
+                                .required, .defaulted => value_ty,
+                                .optional => try self.optionalSlotType(value_ty),
+                                .undetermined => Common.invariant("undetermined checked field kind reached direct record-row lowering"),
+                                .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
+                            },
+                            .value_ty = if (field.kind.tag == .optional) value_ty else null,
+                            .default = try self.monoFieldDefault(frame.view, field),
+                        });
+                    },
+                    .tag => |tag| {
+                        const arg_count = tag.argsSlice(frame.view.types).len;
+                        const payloads = type_run.results.items[type_run.results.items.len - arg_count ..];
+                        const tag_name = try self.tagName(frame.view, tag.name);
+                        const span = try self.activeTypeStore().addSpan(payloads);
+                        type_run.results.shrinkRetainingCapacity(type_run.results.items.len - arg_count);
+                        try type_run.tags.append(self.allocator, .{
+                            .name = tag_name,
+                            .checked_name = tag_name,
+                            .payloads = span,
+                        });
+                    },
+                }
+                continue;
+            }
+
+            const ty = try self.finishLowerType(&type_run, frame);
+            _ = type_run.frames.pop();
+            type_run.ops.shrinkRetainingCapacity(frame.ops_start);
+            type_run.results.shrinkRetainingCapacity(frame.results_start);
+            type_run.fields.shrinkRetainingCapacity(frame.fields_start);
+            type_run.tags.shrinkRetainingCapacity(frame.tags_start);
+            if (type_run.frames.items.len == 0) return ty;
+            try type_run.results.append(self.allocator, ty);
+        }
+    }
+
+    /// The lowered type when it needs no new root; otherwise push the frame
+    /// that lowers it.
+    fn enterLowerType(self: *Builder, type_run: *TypeLowerRun, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!?Type.TypeId {
         const address = checkedTypeAddress(view, checked_ty);
         const cache = self.activeCheckedTypeCache();
         if (cache.get(address)) |cached| return cached;
         const raw = @intFromEnum(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
+        const payload = view.types.payload(checked_ty);
         // Alias spelling belongs to checked data. Share the backing's runtime
         // identity, just as scoped instantiation does, before reserving any
         // type storage. Checking rules out alias-only cycles and phantom alias
         // arguments; recursive structure closes through the backing's memo.
-        const payload = view.types.payload(checked_ty);
-        if (payload == .alias) {
-            const backing = try self.lowerType(view, payload.alias.backing);
-            try cache.put(address, backing);
-            return backing;
-        }
-
-        const Context = struct {
-            builder: *Builder,
-            address: CheckedTypeAddress,
-            view: ModuleView,
-            checked_ty: checked.CheckedTypeId,
-            payload: checked.CheckedTypePayload,
-
-            fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
-                try context.builder.activeCheckedTypeCache().put(context.address, reserved);
-                return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.payload);
-            }
+        const slot: ?Type.Store.RecursiveSlot = if (payload == .alias) null else blk: {
+            const reserved = try self.activeTypeStore().beginRecursive();
+            try cache.put(address, reserved.ty);
+            break :blk reserved;
         };
-        return try self.activeTypeStore().addRecursive(Context{
-            .builder = self,
-            .address = address,
+        const frame: TypeLowerFrame = .{
             .view = view,
+            .address = address,
             .checked_ty = checked_ty,
             .payload = payload,
-        }, Context.fill);
+            .slot = slot,
+            .ops_start = type_run.ops.items.len,
+            .next = type_run.ops.items.len,
+            .results_start = type_run.results.items.len,
+            .fields_start = type_run.fields.items.len,
+            .tags_start = type_run.tags.items.len,
+        };
+        try type_run.frames.append(self.allocator, frame);
+        try self.appendLowerTypeOps(type_run, view, payload);
+        return null;
     }
 
-    fn lowerTypePayload(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload) Allocator.Error!Type.Content {
-        return switch (payload) {
+    fn appendLowerTypeOps(self: *Builder, type_run: *TypeLowerRun, view: ModuleView, payload: checked.CheckedTypePayload) Allocator.Error!void {
+        const gpa = self.allocator;
+        switch (payload) {
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .empty_record,
+            .empty_tag_union,
+            => {},
+            .alias => |alias| try type_run.ops.append(gpa, .{ .child = alias.backing }),
+            .record => |record| {
+                var current_fields = record.fields;
+                var current = record.ext;
+                var seen = collections.DenseMap(checked.CheckedTypeId, void).init(gpa);
+                defer seen.deinit();
+                while (true) {
+                    for (current_fields) |field| {
+                        try type_run.ops.append(gpa, .{ .child = field.ty });
+                        try type_run.ops.append(gpa, .{ .field = field });
+                    }
+                    current_fields = &.{};
+                    if (seen.contains(current)) break;
+                    try seen.put(current, {});
+                    switch (checkedPayload(view, current)) {
+                        .alias => |alias| current = alias.backing,
+                        .empty_record => break,
+                        .flex, .rigid => |variable| {
+                            if (variable.row_default == .empty_record) break;
+                            Common.invariant("open non-record checked row reached Monotype record lowering");
+                        },
+                        .record => |ext_record| {
+                            current_fields = ext_record.fields;
+                            current = ext_record.ext;
+                        },
+                        .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => Common.invariant("open or non-record checked row reached Monotype record lowering"),
+                    }
+                }
+            },
+            .tuple => |items| for (items) |item| try type_run.ops.append(gpa, .{ .child = item }),
+            .tag_union => |tag_union| {
+                var current_tags = tag_union.tags;
+                var current = tag_union.ext;
+                var seen = collections.DenseMap(checked.CheckedTypeId, void).init(gpa);
+                defer seen.deinit();
+                while (true) {
+                    for (current_tags) |tag| {
+                        for (tag.argsSlice(view.types)) |arg| try type_run.ops.append(gpa, .{ .child = arg });
+                        try type_run.ops.append(gpa, .{ .tag = tag });
+                    }
+                    current_tags = &.{};
+                    if (seen.contains(current)) break;
+                    try seen.put(current, {});
+                    switch (checkedPayload(view, current)) {
+                        .alias => |alias| current = alias.backing,
+                        .empty_tag_union => break,
+                        .flex, .rigid => |variable| {
+                            if (variable.row_default == .empty_tag_union) break;
+                            Common.invariant("open non-tag checked row reached Monotype tag-union lowering");
+                        },
+                        .tag_union => |ext_union| {
+                            current_tags = ext_union.tags;
+                            current = ext_union.ext;
+                        },
+                        .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("open or non-tag checked row reached Monotype tag-union lowering"),
+                    }
+                }
+            },
+            .function => |fn_ty| {
+                for (fn_ty.args) |arg| try type_run.ops.append(gpa, .{ .child = arg });
+                try type_run.ops.append(gpa, .{ .child = fn_ty.ret });
+            },
+            .nominal => |nominal| {
+                switch (nominal.representation) {
+                    .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                        .primitive => return,
+                        .list, .box => {
+                            if (nominal.args.len != 1) Common.invariant("checked List and Box nominals must have exactly one type argument");
+                            return try type_run.ops.append(gpa, .{ .child = nominal.args[0] });
+                        },
+                        .bool_tag_union,
+                        .try_nominal,
+                        .iterator,
+                        .parse_tag_union_spec,
+                        .fields,
+                        .field,
+                        .dict,
+                        .set,
+                        .crypto_sha256_digest,
+                        .crypto_sha256_hasher,
+                        .crypto_blake3_digest,
+                        .crypto_blake3_hasher,
+                        => {},
+                    },
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
+                }
+                for (nominal.args) |arg| try type_run.ops.append(gpa, .{ .child = arg });
+            },
+        }
+    }
+
+    /// Build the frame's type from its lowered children.
+    fn finishLowerType(self: *Builder, type_run: *TypeLowerRun, frame: TypeLowerFrame) Allocator.Error!Type.TypeId {
+        const results = type_run.results.items[frame.results_start..];
+        const slot = frame.slot orelse {
+            // An alias shares its backing's type.
+            try self.activeCheckedTypeCache().put(frame.address, results[0]);
+            return results[0];
+        };
+        const view = frame.view;
+        const content: Type.Content = switch (frame.payload) {
             .pending => Common.invariant("pending checked type reached Monotype lowering"),
             .err => Common.invariant("erroneous checked type reached Monotype lowering"),
             .flex => |variable| lowerCheckedTypeVariable(variable),
             .rigid => |variable| lowerCheckedTypeVariable(variable),
             .empty_record => .{ .record = .empty() },
             .empty_tag_union => .{ .tag_union = .empty() },
-            .record => |record| try self.lowerRecordRow(view, record.fields, record.ext),
-            .tuple => |items| blk: {
-                const lowered = try self.lowerTypeSlice(view, items);
-                defer self.allocator.free(lowered);
-                break :blk .{ .tuple = try self.activeTypeStore().addSpan(lowered) };
-            },
-            .tag_union => |tag_union| try self.lowerTagUnionRow(view, tag_union.tags, tag_union.ext),
-            .function => |fn_ty| blk: {
-                const args = try self.lowerTypeSlice(view, fn_ty.args);
-                defer self.allocator.free(args);
-                break :blk .{ .func = .{
-                    .args = try self.activeTypeStore().addSpan(args),
-                    .ret = try self.lowerType(view, fn_ty.ret),
-                } };
-            },
+            .record => .{ .record = try self.activeTypeStore().addRecordFields(self.activeNameStore(), type_run.fields.items[frame.fields_start..]) },
+            .tuple => .{ .tuple = try self.activeTypeStore().addSpan(results) },
+            .tag_union => .{ .tag_union = try self.activeTypeStore().addTagVariants(self.activeNameStore(), type_run.tags.items[frame.tags_start..]) },
+            .function => .{ .func = .{
+                .args = try self.activeTypeStore().addSpan(results[0 .. results.len - 1]),
+                .ret = results[results.len - 1],
+            } },
             .alias => Common.invariant("transparent alias reserved a Monotype wrapper"),
             .nominal => |nominal| blk: {
                 switch (nominal.representation) {
                     .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
                         .primitive => |primitive| break :blk .{ .primitive = primitive },
-                        .bool_tag_union => {},
-                        .list => {
-                            if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
-                            break :blk .{ .list = try self.lowerType(view, nominal.args[0]) };
-                        },
-                        .box => {
-                            if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
-                            break :blk .{ .box = try self.lowerType(view, nominal.args[0]) };
-                        },
+                        .list => break :blk .{ .list = results[0] },
+                        .box => break :blk .{ .box = results[0] },
+                        .bool_tag_union,
                         .try_nominal,
                         .iterator,
                         .parse_tag_union_spec,
@@ -8091,13 +8379,13 @@ const Builder = struct {
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                 }
 
-                const args = try self.lowerTypeSlice(view, nominal.args);
+                const args = try self.allocator.dupe(Type.TypeId, results);
                 defer self.allocator.free(args);
                 const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
                 const def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
                 self.noteBuiltinTryDef(nominal.builtin, self.activeNameStore(), def);
                 break :blk .{ .named = .{
-                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = checked_ty },
+                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = frame.checked_ty },
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
@@ -8113,6 +8401,8 @@ const Builder = struct {
                 } };
             },
         };
+        self.activeTypeStore().finishRecursive(slot, content);
+        return slot.ty;
     }
 
     fn lowerCheckedTypeVariable(variable: checked.CheckedTypeVariable) Type.Content {
@@ -8197,15 +8487,14 @@ const Builder = struct {
     }
 
     fn typeIsBuiltinJsonEncoding(self: *Builder, ty: Type.TypeId) bool {
-        return switch (self.activeTypeStore().get(ty)) {
-            .named => |named| blk: {
-                if (self.typeDefIsBuiltinJsonEncoding(named.def)) break :blk true;
-                if (named.kind == .alias) {
-                    if (named.backing) |backing| break :blk self.typeIsBuiltinJsonEncoding(backing.ty);
-                }
-                break :blk false;
+        var current = ty;
+        while (true) switch (self.activeTypeStore().get(current)) {
+            .named => |named| {
+                if (self.typeDefIsBuiltinJsonEncoding(named.def)) return true;
+                if (named.kind != .alias) return false;
+                current = (named.backing orelse return false).ty;
             },
-            _ => false,
+            else => return false,
         };
     }
 
@@ -8475,122 +8764,6 @@ const Builder = struct {
             .module = try self.activeNameStore().internModuleIdentity(view.names.moduleIdentityBytes(origin_module)),
             .expr_node = default.expr_node,
         };
-    }
-
-    fn lowerRecordRow(
-        self: *Builder,
-        view: ModuleView,
-        head: []const checked.CheckedRecordField,
-        ext: checked.CheckedTypeId,
-    ) Allocator.Error!Type.Content {
-        var fields = std.ArrayList(Type.Field).empty;
-        defer fields.deinit(self.allocator);
-        try self.appendRecordFields(view, &fields, head);
-
-        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-
-        var current = ext;
-        while (true) {
-            if (seen.contains(current)) break;
-            try seen.put(current, {});
-
-            const payload = checkedPayload(view, current);
-            switch (payload) {
-                .alias => |alias| current = alias.backing,
-                .empty_record => break,
-                .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_record) break;
-                    Common.invariant("open non-record checked row reached Monotype record lowering");
-                },
-                .record => |record| {
-                    try self.appendRecordFields(view, &fields, record.fields);
-                    current = record.ext;
-                },
-                .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => Common.invariant("open or non-record checked row reached Monotype record lowering"),
-            }
-        }
-
-        const type_store = self.activeTypeStore();
-        return .{ .record = try type_store.addRecordFields(self.activeNameStore(), fields.items) };
-    }
-
-    fn appendRecordFields(
-        self: *Builder,
-        view: ModuleView,
-        out: *std.ArrayList(Type.Field),
-        fields: []const checked.CheckedRecordField,
-    ) Allocator.Error!void {
-        for (fields) |field| {
-            const value_ty = try self.lowerType(view, field.ty);
-            try out.append(self.allocator, .{
-                .name = try self.recordFieldName(view, field.name),
-                .ty = switch (field.kind.tag) {
-                    .required, .defaulted => value_ty,
-                    .optional => try self.optionalSlotType(value_ty),
-                    .undetermined => Common.invariant("undetermined checked field kind reached direct record-row lowering"),
-                    .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
-                },
-                .value_ty = if (field.kind.tag == .optional) value_ty else null,
-                .default = try self.monoFieldDefault(view, field),
-            });
-        }
-    }
-
-    fn lowerTagUnionRow(
-        self: *Builder,
-        view: ModuleView,
-        head: []const checked.CheckedTag,
-        ext: checked.CheckedTypeId,
-    ) Allocator.Error!Type.Content {
-        var tags = std.ArrayList(Type.Tag).empty;
-        defer tags.deinit(self.allocator);
-        try self.appendTags(view, &tags, head);
-
-        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-
-        var current = ext;
-        while (true) {
-            if (seen.contains(current)) break;
-            try seen.put(current, {});
-
-            const payload = checkedPayload(view, current);
-            switch (payload) {
-                .alias => |alias| current = alias.backing,
-                .empty_tag_union => break,
-                .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_tag_union) break;
-                    Common.invariant("open non-tag checked row reached Monotype tag-union lowering");
-                },
-                .tag_union => |tag_union| {
-                    try self.appendTags(view, &tags, tag_union.tags);
-                    current = tag_union.ext;
-                },
-                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("open or non-tag checked row reached Monotype tag-union lowering"),
-            }
-        }
-
-        const type_store = self.activeTypeStore();
-        return .{ .tag_union = try type_store.addTagVariants(self.activeNameStore(), tags.items) };
-    }
-
-    fn appendTags(
-        self: *Builder,
-        view: ModuleView,
-        out: *std.ArrayList(Type.Tag),
-        tags: []const checked.CheckedTag,
-    ) Allocator.Error!void {
-        for (tags) |tag| {
-            const payloads = try self.lowerTypeSlice(view, tag.argsSlice(view.types));
-            defer self.allocator.free(payloads);
-            const tag_name = try self.tagName(view, tag.name);
-            try out.append(self.allocator, .{
-                .name = tag_name,
-                .checked_name = tag_name,
-                .payloads = try self.activeTypeStore().addSpan(payloads),
-            });
-        }
     }
 
     fn lowerTypeSlice(self: *Builder, view: ModuleView, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]Type.TypeId {
@@ -8913,78 +9086,105 @@ const Builder = struct {
         return self.constValueMayUseStaticDataCandidate(view, view.const_store.get(node), bare_fn);
     }
 
+    /// Whether a ConstStore node and everything it contains has a stable
+    /// static data representation, memoized per node and evaluated on
+    /// explicit stacks.
     fn constNodeHasStableStaticDataRepresentation(
         self: *Builder,
         view: ModuleView,
         node: checked.ConstNodeId,
     ) Allocator.Error!bool {
-        const address = ConstNodeAddress{ .module = view.key, .node = node };
-        if (self.static_data_eligibility.get(address)) |stable| return stable;
-
-        const stable = switch (view.const_store.get(node)) {
-            .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
-            // Static data emits an erased callable as one allocation naming
-            // its procedure through a relocation, so a capture-free function
-            // value is fully decided by the ConstStore. A capture record is
-            // not: its slots carry their own evidence, which this walk has no
-            // ConstStore node to answer for.
-            .fn_value => |fn_id| view.const_store.getFn(fn_id).captures.len == 0,
-            .zst,
-            .scalar,
-            .str,
-            .crash,
-            => true,
-            .box => |child| try self.constNodeHasStableStaticDataRepresentation(view, child),
-            .list => |list| switch (list) {
-                .packed_bytes, .empty => true,
-                .nodes => |children| blk: {
-                    for (children) |child| {
-                        if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
-                    }
-                    break :blk true;
-                },
-            },
-            .tuple,
-            .record,
-            => |children| blk: {
-                for (children) |child| {
-                    if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
-                }
-                break :blk true;
-            },
-            .tag => |tag| blk: {
-                for (tag.payloads) |child| {
-                    if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
-                }
-                break :blk true;
-            },
-            .nominal => |nominal| try self.constNodeHasStableStaticDataRepresentation(view, nominal.backing),
-        };
-        try self.static_data_eligibility.put(address, stable);
-        return stable;
+        var eligibility = StaticDataEligibility{ .builder = self, .view = view };
+        return try StaticDataEligibility.Eval.run(self.allocator, &eligibility, node);
     }
 
-    fn constValueMayUseStaticDataCandidate(self: *Builder, view: ModuleView, value: checked.ConstValue, bare_fn: BareFnCandidate) bool {
-        return switch (value) {
+    const StaticDataEligibility = struct {
+        builder: *Builder,
+        view: ModuleView,
+
+        const Eval = collections.AnyAll.Evaluation(checked.ConstNodeId, StaticDataEligibility);
+
+        pub fn enter(self: *StaticDataEligibility, items: Eval.Items, node: checked.ConstNodeId) Allocator.Error!Eval.Expansion {
+            const address = ConstNodeAddress{ .module = self.view.key, .node = node };
+            if (self.builder.static_data_eligibility.get(address)) |stable| return .{ .value = stable };
+            const leaf: ?bool = switch (self.view.const_store.get(node)) {
+                .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
+                // Static data emits an erased callable as one allocation naming
+                // its procedure through a relocation, so a capture-free function
+                // value is fully decided by the ConstStore. A capture record is
+                // not: its slots carry their own evidence, which this walk has no
+                // ConstStore node to answer for.
+                .fn_value => |fn_id| self.view.const_store.getFn(fn_id).captures.len == 0,
+                .zst,
+                .scalar,
+                .str,
+                .crash,
+                => true,
+                .box => |child| blk: {
+                    try items.add(child);
+                    break :blk null;
+                },
+                .list => |list| switch (list) {
+                    .packed_bytes, .empty => true,
+                    .nodes => |children| blk: {
+                        for (children) |child| try items.add(child);
+                        break :blk null;
+                    },
+                },
+                .tuple,
+                .record,
+                => |children| blk: {
+                    for (children) |child| try items.add(child);
+                    break :blk null;
+                },
+                .tag => |tag| blk: {
+                    for (tag.payloads) |child| try items.add(child);
+                    break :blk null;
+                },
+                .nominal => |nominal| blk: {
+                    try items.add(nominal.backing);
+                    break :blk null;
+                },
+            };
+            if (leaf) |stable| {
+                try self.builder.static_data_eligibility.put(address, stable);
+                return .{ .value = stable };
+            }
+            return .{ .group = .all };
+        }
+
+        pub fn exit(self: *StaticDataEligibility, node: checked.ConstNodeId, result: ?bool) Allocator.Error!void {
+            const stable = result orelse return;
+            try self.builder.static_data_eligibility.put(.{ .module = self.view.key, .node = node }, stable);
+        }
+    };
+
+    fn constValueMayUseStaticDataCandidate(_: *Builder, view: ModuleView, value_in: checked.ConstValue, bare_fn_in: BareFnCandidate) bool {
+        var value = value_in;
+        var bare_fn = bare_fn_in;
+        while (true) switch (value) {
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
             .crash,
-            => false,
-            .str => |str| constStringBackingLength(view, str) != 0,
-            .fn_value => bare_fn == .allow,
-            .list => |list| switch (list) {
+            => return false,
+            .str => |str| return constStringBackingLength(view, str) != 0,
+            .fn_value => return bare_fn == .allow,
+            .list => |list| return switch (list) {
                 .nodes => |items| items.len != 0,
                 .packed_bytes => |packed_list| packed_list.len != 0,
                 // Rebuilt as the `with_capacity` it was evaluated with.
                 .empty => false,
             },
-            .box => true,
+            .box => return true,
             .tuple,
             .record,
             .tag,
-            => true,
-            .nominal => |nominal| self.constValueMayUseStaticDataCandidate(view, view.const_store.get(nominal.backing), .allow),
+            => return true,
+            .nominal => |nominal| {
+                value = view.const_store.get(nominal.backing);
+                bare_fn = .allow;
+            },
         };
     }
 
@@ -9962,7 +10162,7 @@ const Builder = struct {
         const completed_fn_node = try draft.nested_ctx.completedFunctionNodeForLoweredRet(
             draft.request_fn_node,
             lowered.ret,
-            draft.nested_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
+            try draft.nested_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
         );
         const completed_fn_ret = (try draft.nested_ctx.graph.functionNodes(completed_fn_node)).ret;
         const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
@@ -12212,225 +12412,331 @@ const Builder = struct {
         order_count.* += 1;
     }
 
+    /// Whether `expr` reads `target` where it is not rebound, following
+    /// calls into function bodies. Subexpressions are searched from an
+    /// explicit continuation stack; binder scopes, function bodies, and the
+    /// active function set open and close as steps of that stack.
     fn exprDependsOnFreeLocal(
         self: *Builder,
         expr: Ast.ExprId,
         target: Ast.LocalId,
     ) Allocator.Error!bool {
-        var bound = collections.DenseMap(Ast.LocalId, void).init(self.allocator);
-        defer bound.deinit();
-        var active_fns = collections.DenseMap(Ast.FnId, void).init(self.allocator);
-        defer active_fns.deinit();
-        return try self.exprDependsOnFreeLocalInner(expr, target, &bound, &active_fns);
+        var search = AstFreeLocalSearch{
+            .builder = self,
+            .target = target,
+            .active_fns = collections.DenseMap(Ast.FnId, void).init(self.allocator),
+        };
+        defer search.deinit();
+        try search.bound_sets.append(self.allocator, collections.DenseMap(Ast.LocalId, void).init(self.allocator));
+        return try search.run(expr);
     }
 
-    /// Drop `locals` from the bound set, innermost first, undoing one
-    /// scope's worth of `bindPatLocals`.
-    fn removeBoundLocals(
-        bound: *collections.DenseMap(Ast.LocalId, void),
-        locals: []const Ast.LocalId,
-    ) void {
-        var index = locals.len;
-        while (index > 0) {
-            index -= 1;
-            _ = bound.remove(locals[index]);
-        }
-    }
-
-    fn exprDependsOnFreeLocalInner(
-        self: *Builder,
-        expr_id: Ast.ExprId,
+    const AstFreeLocalSearch = struct {
+        builder: *Builder,
         target: Ast.LocalId,
-        bound: *collections.DenseMap(Ast.LocalId, void),
-        active_fns: *collections.DenseMap(Ast.FnId, void),
-    ) Allocator.Error!bool {
-        const expr = self.program.getExpr(expr_id);
-        switch (expr.data) {
-            .local => |local| return self.localDependsOnTarget(local, target, bound),
-            .@"unreachable",
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .uninitialized,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            .def_ref,
-            => return false,
-            .fn_ref => |fn_ref| {
-                for (self.program.captureOperandSpan(fn_ref.captures)) |operand| {
-                    if (try self.exprDependsOnFreeLocalInner(operand.value, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .uninitialized_payload => |payload| return self.localDependsOnTarget(payload.condition, target, bound),
-            .list,
-            .tuple,
-            => |items| {
-                for (self.program.exprSpan(items)) |child| {
-                    if (try self.exprDependsOnFreeLocalInner(child, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .record => |fields| {
-                for (self.program.fieldExprSpan(fields)) |field| {
-                    if (try self.exprDependsOnFreeLocalInner(field.value, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .tag => |tag| {
-                for (self.program.exprSpan(tag.payloads)) |payload| {
-                    if (try self.exprDependsOnFreeLocalInner(payload, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .static_data_candidate => |candidate| return try self.exprDependsOnFreeLocalInner(candidate.runtime_expr, target, bound, active_fns),
-            .inline_expects_enabled => return false,
-            .comptime_value => |candidate| return try self.exprDependsOnFreeLocalInner(candidate.initializer, target, bound, active_fns),
-            .nominal,
-            .dbg,
-            .expect,
-            => |child| return try self.exprDependsOnFreeLocalInner(child, target, bound, active_fns),
-            .return_ => |ret| return try self.exprDependsOnFreeLocalInner(ret.value, target, bound, active_fns),
-            .expect_err => |expect_err| return try self.exprDependsOnFreeLocalInner(expect_err.msg, target, bound, active_fns),
-            .comptime_branch_taken => |taken| return try self.exprDependsOnFreeLocalInner(taken.body, target, bound, active_fns),
-            .let_ => |let_| {
-                if (try self.exprDependsOnFreeLocalInner(let_.value, target, bound, active_fns)) return true;
-                var added = std.ArrayList(Ast.LocalId).empty;
-                defer added.deinit(self.allocator);
-                try self.bindPatLocals(let_.bind, bound, &added);
-                defer removeBoundLocals(bound, added.items);
-                return try self.exprDependsOnFreeLocalInner(let_.rest, target, bound, active_fns);
-            },
-            .lambda => |lambda| {
-                var added = std.ArrayList(Ast.LocalId).empty;
-                defer added.deinit(self.allocator);
-                try self.bindTypedLocalLocals(lambda.args, bound, &added);
-                defer removeBoundLocals(bound, added.items);
-                return try self.exprDependsOnFreeLocalInner(lambda.body, target, bound, active_fns);
-            },
-            .fn_def => |fn_def| {
-                const captures = self.program.fnDefCaptureSpan(fn_def.captures);
-                if (captures.len == 0) return try self.fnDependsOnFreeLocal(fn_def.fn_id, target, bound, active_fns);
-                for (captures) |capture| {
-                    if (try self.exprDependsOnFreeLocalInner(capture.value, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .call_value => |call| {
-                if (try self.exprDependsOnFreeLocalInner(call.callee, target, bound, active_fns)) return true;
-                for (self.program.exprSpan(call.args)) |arg| {
-                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .call_proc => |call| {
-                switch (call.callee) {
-                    .func => |fn_id| if (try self.fnDependsOnFreeLocal(fn_id, target, bound, active_fns)) return true,
-                    .lifted => {},
-                }
-                for (self.program.exprSpan(call.args)) |arg| {
-                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound, active_fns)) return true;
-                }
-                for (self.program.captureOperandSpan(call.captures)) |operand| {
-                    if (try self.exprDependsOnFreeLocalInner(operand.value, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .low_level => |call| {
-                for (self.program.exprSpan(call.args)) |arg| {
-                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .field_access => |field| return try self.exprDependsOnFreeLocalInner(field.receiver, target, bound, active_fns),
-            .tuple_access => |access| return try self.exprDependsOnFreeLocalInner(access.tuple, target, bound, active_fns),
-            .structural_eq => |eq| {
-                if (try self.exprDependsOnFreeLocalInner(eq.lhs, target, bound, active_fns)) return true;
-                return try self.exprDependsOnFreeLocalInner(eq.rhs, target, bound, active_fns);
-            },
-            .structural_hash => |hash| {
-                if (try self.exprDependsOnFreeLocalInner(hash.value, target, bound, active_fns)) return true;
-                return try self.exprDependsOnFreeLocalInner(hash.hasher, target, bound, active_fns);
-            },
-            .match_ => |match| {
-                if (try self.exprDependsOnFreeLocalInner(match.scrutinee, target, bound, active_fns)) return true;
-                for (self.program.branchSpan(match.branches)) |branch| {
-                    var added = std.ArrayList(Ast.LocalId).empty;
-                    defer added.deinit(self.allocator);
-                    try self.bindPatLocals(branch.pat, bound, &added);
-                    defer removeBoundLocals(bound, added.items);
-                    for (self.program.stmtSpan(branch.bindings)) |stmt| {
-                        if (try self.stmtDependsOnFreeLocal(stmt, target, bound, active_fns, &added)) return true;
-                    }
-                    if (branch.guard) |guard| {
-                        if (try self.exprDependsOnFreeLocalInner(guard, target, bound, active_fns)) return true;
-                    }
-                    if (try self.exprDependsOnFreeLocalInner(branch.body, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
-            .if_ => |if_| {
-                for (self.program.ifBranchSpan(if_.branches)) |branch| {
-                    if (try self.exprDependsOnFreeLocalInner(branch.cond, target, bound, active_fns)) return true;
-                    if (try self.exprDependsOnFreeLocalInner(branch.body, target, bound, active_fns)) return true;
-                }
-                return try self.exprDependsOnFreeLocalInner(if_.final_else, target, bound, active_fns);
-            },
-            .if_initialized_payload => |payload| {
-                if (try self.exprDependsOnFreeLocalInner(payload.cond, target, bound, active_fns)) return true;
-                if (self.localDependsOnTarget(payload.payload, target, bound)) return true;
-                if (try self.exprDependsOnFreeLocalInner(payload.initialized, target, bound, active_fns)) return true;
-                return try self.exprDependsOnFreeLocalInner(payload.uninitialized, target, bound, active_fns);
-            },
-            .try_sequence => |sequence| {
-                if (try self.exprDependsOnFreeLocalInner(sequence.try_expr, target, bound, active_fns)) return true;
-                try bound.put(sequence.ok_local, {});
-                defer _ = bound.remove(sequence.ok_local);
-                return try self.exprDependsOnFreeLocalInner(sequence.ok_body, target, bound, active_fns);
-            },
-            .try_record_sequence => |sequence| {
-                if (try self.exprDependsOnFreeLocalInner(sequence.try_expr, target, bound, active_fns)) return true;
-                try bound.put(sequence.value_local, {});
-                try bound.put(sequence.rest_local, {});
-                defer _ = bound.remove(sequence.rest_local);
-                defer _ = bound.remove(sequence.value_local);
-                return try self.exprDependsOnFreeLocalInner(sequence.ok_body, target, bound, active_fns);
-            },
-            .block => |block| {
-                var added = std.ArrayList(Ast.LocalId).empty;
-                defer added.deinit(self.allocator);
-                defer removeBoundLocals(bound, added.items);
-                for (self.program.stmtSpan(block.statements)) |stmt| {
-                    if (try self.stmtDependsOnFreeLocal(stmt, target, bound, active_fns, &added)) return true;
-                }
-                return try self.exprDependsOnFreeLocalInner(block.final_expr, target, bound, active_fns);
-            },
-            .loop_ => |loop| {
-                for (self.program.exprSpan(loop.initial_values)) |initial| {
-                    if (try self.exprDependsOnFreeLocalInner(initial, target, bound, active_fns)) return true;
-                }
-                var added = std.ArrayList(Ast.LocalId).empty;
-                defer added.deinit(self.allocator);
-                try self.bindTypedLocalLocals(loop.params, bound, &added);
-                defer removeBoundLocals(bound, added.items);
-                return try self.exprDependsOnFreeLocalInner(loop.body, target, bound, active_fns);
-            },
-            .break_ => |maybe| if (maybe) |value|
-                return try self.exprDependsOnFreeLocalInner(value, target, bound, active_fns)
-            else
-                return false,
-            .continue_ => |continue_| {
-                for (self.program.exprSpan(continue_.values)) |value| {
-                    if (try self.exprDependsOnFreeLocalInner(value, target, bound, active_fns)) return true;
-                }
-                return false;
-            },
+        active_fns: collections.DenseMap(Ast.FnId, void),
+        /// One bound set per function body being searched; a body sees its
+        /// caller's bindings plus its own.
+        bound_sets: std.ArrayListUnmanaged(collections.DenseMap(Ast.LocalId, void)) = .empty,
+        /// Every local bound so far in the innermost body, in binding order;
+        /// a scope closes by unbinding back to its mark.
+        bound_log: std.ArrayListUnmanaged(Ast.LocalId) = .empty,
+        pending: std.ArrayListUnmanaged(Step) = .empty,
+
+        const Step = union(enum) {
+            expr: Ast.ExprId,
+            stmt: Ast.StmtId,
+            local: Ast.LocalId,
+            bind_pat: Ast.PatId,
+            bind_typed: Ast.Span(Ast.TypedLocal),
+            bind_local: Ast.LocalId,
+            /// Unbind every local bound since this mark.
+            unbind: usize,
+            fn_call: Ast.FnId,
+            /// A function body's search is done: drop its bound set and
+            /// leave the function.
+            fn_exit: struct { fn_id: Ast.FnId, log_mark: usize },
+        };
+
+        fn deinit(search: *AstFreeLocalSearch) void {
+            const gpa = search.builder.allocator;
+            search.pending.deinit(gpa);
+            search.bound_log.deinit(gpa);
+            for (search.bound_sets.items) |*set| set.deinit();
+            search.bound_sets.deinit(gpa);
+            search.active_fns.deinit();
         }
-    }
+
+        fn bound(search: *AstFreeLocalSearch) *collections.DenseMap(Ast.LocalId, void) {
+            return &search.bound_sets.items[search.bound_sets.items.len - 1];
+        }
+
+        fn run(search: *AstFreeLocalSearch, root: Ast.ExprId) Allocator.Error!bool {
+            const gpa = search.builder.allocator;
+            try search.pending.append(gpa, .{ .expr = root });
+            while (search.pending.pop()) |step| {
+                const start = search.pending.items.len;
+                switch (step) {
+                    .expr => |expr_id| if (try search.expandExpr(expr_id)) return true,
+                    .stmt => |stmt_id| try search.expandStmt(stmt_id),
+                    .local => |local| if (search.builder.localDependsOnTarget(local, search.target, search.bound())) return true,
+                    .bind_pat => |pat| try search.bindPat(pat),
+                    .bind_typed => |span| for (search.builder.program.typedLocalSpan(span)) |local| try search.bind(local.local),
+                    .bind_local => |local| try search.bind(local),
+                    .unbind => |mark| while (search.bound_log.items.len > mark) {
+                        _ = search.bound().remove(search.bound_log.pop().?);
+                    },
+                    .fn_call => |fn_id| try search.enterFn(fn_id),
+                    .fn_exit => |exit| {
+                        var set = search.bound_sets.pop().?;
+                        set.deinit();
+                        search.bound_log.shrinkRetainingCapacity(exit.log_mark);
+                        _ = search.active_fns.remove(exit.fn_id);
+                    },
+                }
+                std.mem.reverse(Step, search.pending.items[start..]);
+            }
+            return false;
+        }
+
+        fn bind(search: *AstFreeLocalSearch, local: Ast.LocalId) Allocator.Error!void {
+            try search.bound().put(local, {});
+            try search.bound_log.append(search.builder.allocator, local);
+        }
+
+        fn push(search: *AstFreeLocalSearch, step: Step) Allocator.Error!void {
+            try search.pending.append(search.builder.allocator, step);
+        }
+
+        fn pushExprs(search: *AstFreeLocalSearch, exprs: []const Ast.ExprId) Allocator.Error!void {
+            for (exprs) |expr| try search.push(.{ .expr = expr });
+        }
+
+        /// Search a called function's body under its caller's bindings plus
+        /// its arguments, unless it is already being searched.
+        fn enterFn(search: *AstFreeLocalSearch, fn_id: Ast.FnId) Allocator.Error!void {
+            if (search.active_fns.contains(fn_id)) return;
+            const program = &search.builder.program;
+            const args: Ast.Span(Ast.TypedLocal), const body: ?Ast.ExprId = found: {
+                for (program.defsView()) |def| {
+                    if (def.fn_id == null or def.fn_id.? != fn_id) continue;
+                    break :found .{ def.args, switch (def.body) {
+                        .roc => |expr| expr,
+                        .hosted => null,
+                    } };
+                }
+                for (program.nestedDefsView()) |def| {
+                    if (def.fn_id != fn_id) continue;
+                    break :found .{ def.args, def.body };
+                }
+                return;
+            };
+            const body_expr = body orelse return;
+            try search.active_fns.put(fn_id, {});
+            const log_mark = search.bound_log.items.len;
+            try search.bound_sets.append(search.builder.allocator, try search.bound().clone());
+            for (program.typedLocalSpan(args)) |local| try search.bind(local.local);
+            try search.push(.{ .expr = body_expr });
+            try search.push(.{ .fn_exit = .{ .fn_id = fn_id, .log_mark = log_mark } });
+        }
+
+        /// Bind every local a pattern introduces: an `as` local after its
+        /// subpattern's.
+        fn bindPat(search: *AstFreeLocalSearch, root: Ast.PatId) Allocator.Error!void {
+            const gpa = search.builder.allocator;
+            const program = &search.builder.program;
+            const Visit = union(enum) { pat: Ast.PatId, local: Ast.LocalId };
+            var visits: std.ArrayListUnmanaged(Visit) = .empty;
+            defer visits.deinit(gpa);
+            try visits.append(gpa, .{ .pat = root });
+            while (visits.pop()) |visit| {
+                const pat_id = switch (visit) {
+                    .local => |local| {
+                        try search.bind(local);
+                        continue;
+                    },
+                    .pat => |pat_id| pat_id,
+                };
+                const start = visits.items.len;
+                switch (program.getPat(pat_id).data) {
+                    .bind => |local| try search.bind(local),
+                    .wildcard,
+                    .int_lit,
+                    .dec_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .str_lit,
+                    => {},
+                    .as => |as| {
+                        try visits.append(gpa, .{ .pat = as.pattern });
+                        try visits.append(gpa, .{ .local = as.local });
+                    },
+                    .record => |fields| for (program.recordDestructSpan(fields)) |field| try visits.append(gpa, .{ .pat = field.pattern }),
+                    .tuple => |items| for (program.patSpan(items)) |child| try visits.append(gpa, .{ .pat = child }),
+                    .list => |list| {
+                        for (program.patSpan(list.patterns)) |child| try visits.append(gpa, .{ .pat = child });
+                        if (list.rest) |rest| if (rest.pattern) |rest_pat| try visits.append(gpa, .{ .pat = rest_pat });
+                    },
+                    .tag => |tag| for (program.patSpan(tag.payloads)) |payload| try visits.append(gpa, .{ .pat = payload }),
+                    .nominal => |backing| try visits.append(gpa, .{ .pat = backing }),
+                    .str_pattern => |str| for (program.strPatternStepSpan(str.steps)) |str_step| {
+                        if (str_step.capture) |capture| try visits.append(gpa, .{ .pat = capture });
+                    },
+                }
+                std.mem.reverse(Visit, visits.items[start..]);
+            }
+        }
+
+        fn expandStmt(search: *AstFreeLocalSearch, stmt_id: Ast.StmtId) Allocator.Error!void {
+            switch (search.builder.program.getStmt(stmt_id)) {
+                .uninitialized => |pat| try search.push(.{ .bind_pat = pat }),
+                .let_ => |let_| if (let_.recursive) {
+                    try search.push(.{ .bind_pat = let_.pat });
+                    try search.push(.{ .expr = let_.value });
+                } else {
+                    try search.push(.{ .expr = let_.value });
+                    try search.push(.{ .bind_pat = let_.pat });
+                },
+                .expr,
+                .expect,
+                .dbg,
+                => |expr| try search.push(.{ .expr = expr }),
+                .return_ => |ret| try search.push(.{ .expr = ret.value }),
+                .crash => {},
+            }
+        }
+
+        /// Queue the steps an expression's search takes; true when the
+        /// expression itself reads the target.
+        fn expandExpr(search: *AstFreeLocalSearch, expr_id: Ast.ExprId) Allocator.Error!bool {
+            const builder = search.builder;
+            const program = &builder.program;
+            const mark = search.bound_log.items.len;
+            switch (program.getExpr(expr_id).data) {
+                .local => |local| return builder.localDependsOnTarget(local, search.target, search.bound()),
+                .@"unreachable",
+                .unit,
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .bytes_lit,
+                .uninitialized,
+                .crash,
+                .comptime_exhaustiveness_failed,
+                .def_ref,
+                .inline_expects_enabled,
+                => {},
+                .fn_ref => |fn_ref| for (program.captureOperandSpan(fn_ref.captures)) |operand| try search.push(.{ .expr = operand.value }),
+                .uninitialized_payload => |payload| return builder.localDependsOnTarget(payload.condition, search.target, search.bound()),
+                .list,
+                .tuple,
+                => |items| try search.pushExprs(program.exprSpan(items)),
+                .record => |fields| for (program.fieldExprSpan(fields)) |field| try search.push(.{ .expr = field.value }),
+                .tag => |tag| try search.pushExprs(program.exprSpan(tag.payloads)),
+                .static_data_candidate => |candidate| try search.push(.{ .expr = candidate.runtime_expr }),
+                .comptime_value => |candidate| try search.push(.{ .expr = candidate.initializer }),
+                .nominal,
+                .dbg,
+                .expect,
+                => |child| try search.push(.{ .expr = child }),
+                .return_ => |ret| try search.push(.{ .expr = ret.value }),
+                .expect_err => |expect_err| try search.push(.{ .expr = expect_err.msg }),
+                .comptime_branch_taken => |taken| try search.push(.{ .expr = taken.body }),
+                .let_ => |let_| {
+                    try search.push(.{ .expr = let_.value });
+                    try search.push(.{ .bind_pat = let_.bind });
+                    try search.push(.{ .expr = let_.rest });
+                    try search.push(.{ .unbind = mark });
+                },
+                .lambda => |lambda| {
+                    try search.push(.{ .bind_typed = lambda.args });
+                    try search.push(.{ .expr = lambda.body });
+                    try search.push(.{ .unbind = mark });
+                },
+                .fn_def => |fn_def| {
+                    const captures = program.fnDefCaptureSpan(fn_def.captures);
+                    if (captures.len == 0) {
+                        try search.push(.{ .fn_call = fn_def.fn_id });
+                    } else for (captures) |capture| try search.push(.{ .expr = capture.value });
+                },
+                .call_value => |call| {
+                    try search.push(.{ .expr = call.callee });
+                    try search.pushExprs(program.exprSpan(call.args));
+                },
+                .call_proc => |call| {
+                    switch (call.callee) {
+                        .func => |fn_id| try search.push(.{ .fn_call = fn_id }),
+                        .lifted => {},
+                    }
+                    try search.pushExprs(program.exprSpan(call.args));
+                    for (program.captureOperandSpan(call.captures)) |operand| try search.push(.{ .expr = operand.value });
+                },
+                .low_level => |call| try search.pushExprs(program.exprSpan(call.args)),
+                .field_access => |field| try search.push(.{ .expr = field.receiver }),
+                .tuple_access => |access| try search.push(.{ .expr = access.tuple }),
+                .structural_eq => |eq| {
+                    try search.push(.{ .expr = eq.lhs });
+                    try search.push(.{ .expr = eq.rhs });
+                },
+                .structural_hash => |hash| {
+                    try search.push(.{ .expr = hash.value });
+                    try search.push(.{ .expr = hash.hasher });
+                },
+                .match_ => |match| {
+                    try search.push(.{ .expr = match.scrutinee });
+                    for (program.branchSpan(match.branches)) |branch| {
+                        try search.push(.{ .bind_pat = branch.pat });
+                        for (program.stmtSpan(branch.bindings)) |stmt| try search.push(.{ .stmt = stmt });
+                        if (branch.guard) |guard| try search.push(.{ .expr = guard });
+                        try search.push(.{ .expr = branch.body });
+                        try search.push(.{ .unbind = mark });
+                    }
+                },
+                .if_ => |if_| {
+                    for (program.ifBranchSpan(if_.branches)) |branch| {
+                        try search.push(.{ .expr = branch.cond });
+                        try search.push(.{ .expr = branch.body });
+                    }
+                    try search.push(.{ .expr = if_.final_else });
+                },
+                .if_initialized_payload => |payload| {
+                    try search.push(.{ .expr = payload.cond });
+                    try search.push(.{ .local = payload.payload });
+                    try search.push(.{ .expr = payload.initialized });
+                    try search.push(.{ .expr = payload.uninitialized });
+                },
+                .try_sequence => |sequence| {
+                    try search.push(.{ .expr = sequence.try_expr });
+                    try search.push(.{ .bind_local = sequence.ok_local });
+                    try search.push(.{ .expr = sequence.ok_body });
+                    try search.push(.{ .unbind = mark });
+                },
+                .try_record_sequence => |sequence| {
+                    try search.push(.{ .expr = sequence.try_expr });
+                    try search.push(.{ .bind_local = sequence.value_local });
+                    try search.push(.{ .bind_local = sequence.rest_local });
+                    try search.push(.{ .expr = sequence.ok_body });
+                    try search.push(.{ .unbind = mark });
+                },
+                .block => |block| {
+                    for (program.stmtSpan(block.statements)) |stmt| try search.push(.{ .stmt = stmt });
+                    try search.push(.{ .expr = block.final_expr });
+                    try search.push(.{ .unbind = mark });
+                },
+                .loop_ => |loop| {
+                    try search.pushExprs(program.exprSpan(loop.initial_values));
+                    try search.push(.{ .bind_typed = loop.params });
+                    try search.push(.{ .expr = loop.body });
+                    try search.push(.{ .unbind = mark });
+                },
+                .break_ => |maybe| if (maybe) |value| try search.push(.{ .expr = value }),
+                .continue_ => |continue_| try search.pushExprs(program.exprSpan(continue_.values)),
+            }
+            return false;
+        }
+    };
 
     fn localDependsOnTarget(
         self: *Builder,
@@ -12474,140 +12780,6 @@ const Builder = struct {
         const lhs_digest = self.program.types.equalityDigest(&self.program.names, lhs);
         const rhs_digest = self.program.types.equalityDigest(&self.program.names, rhs);
         return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
-    }
-
-    fn stmtDependsOnFreeLocal(
-        self: *Builder,
-        stmt_id: Ast.StmtId,
-        target: Ast.LocalId,
-        bound: *collections.DenseMap(Ast.LocalId, void),
-        active_fns: *collections.DenseMap(Ast.FnId, void),
-        added: *std.ArrayList(Ast.LocalId),
-    ) Allocator.Error!bool {
-        const stmt = self.program.getStmt(stmt_id);
-        switch (stmt) {
-            .uninitialized => |pat| {
-                try self.bindPatLocals(pat, bound, added);
-                return false;
-            },
-            .let_ => |let_| {
-                if (let_.recursive) {
-                    try self.bindPatLocals(let_.pat, bound, added);
-                    return try self.exprDependsOnFreeLocalInner(let_.value, target, bound, active_fns);
-                } else {
-                    if (try self.exprDependsOnFreeLocalInner(let_.value, target, bound, active_fns)) return true;
-                    try self.bindPatLocals(let_.pat, bound, added);
-                    return false;
-                }
-            },
-            .expr,
-            .expect,
-            .dbg,
-            => |expr| return try self.exprDependsOnFreeLocalInner(expr, target, bound, active_fns),
-            .return_ => |ret| return try self.exprDependsOnFreeLocalInner(ret.value, target, bound, active_fns),
-            .crash => return false,
-        }
-    }
-
-    fn fnDependsOnFreeLocal(
-        self: *Builder,
-        fn_id: Ast.FnId,
-        target: Ast.LocalId,
-        caller_bound: *collections.DenseMap(Ast.LocalId, void),
-        active_fns: *collections.DenseMap(Ast.FnId, void),
-    ) Allocator.Error!bool {
-        if (active_fns.contains(fn_id)) return false;
-        try active_fns.put(fn_id, {});
-        defer _ = active_fns.remove(fn_id);
-
-        for (self.program.defsView()) |def| {
-            if (def.fn_id == null or def.fn_id.? != fn_id) continue;
-            return try self.fnBodyDependsOnFreeLocal(def.args, def.body, target, caller_bound, active_fns);
-        }
-        for (self.program.nestedDefsView()) |def| {
-            if (def.fn_id != fn_id) continue;
-            return try self.fnBodyDependsOnFreeLocal(def.args, .{ .roc = def.body }, target, caller_bound, active_fns);
-        }
-        return false;
-    }
-
-    fn fnBodyDependsOnFreeLocal(
-        self: *Builder,
-        args: Ast.Span(Ast.TypedLocal),
-        body: Ast.FnBody,
-        target: Ast.LocalId,
-        caller_bound: *collections.DenseMap(Ast.LocalId, void),
-        active_fns: *collections.DenseMap(Ast.FnId, void),
-    ) Allocator.Error!bool {
-        var bound = try caller_bound.clone();
-        defer bound.deinit();
-        var added = std.ArrayList(Ast.LocalId).empty;
-        defer added.deinit(self.allocator);
-        try self.bindTypedLocalLocals(args, &bound, &added);
-        switch (body) {
-            .roc => |expr| return try self.exprDependsOnFreeLocalInner(expr, target, &bound, active_fns),
-            .hosted => return false,
-        }
-    }
-
-    fn bindTypedLocalLocals(
-        self: *Builder,
-        span: Ast.Span(Ast.TypedLocal),
-        bound: *collections.DenseMap(Ast.LocalId, void),
-        added: *std.ArrayList(Ast.LocalId),
-    ) Allocator.Error!void {
-        for (self.program.typedLocalSpan(span)) |local| {
-            try bound.put(local.local, {});
-            try added.append(self.allocator, local.local);
-        }
-    }
-
-    fn bindPatLocals(
-        self: *Builder,
-        pat_id: Ast.PatId,
-        bound: *collections.DenseMap(Ast.LocalId, void),
-        added: *std.ArrayList(Ast.LocalId),
-    ) Allocator.Error!void {
-        const pat = self.program.getPat(pat_id);
-        switch (pat.data) {
-            .bind => |local| {
-                try bound.put(local, {});
-                try added.append(self.allocator, local);
-            },
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .as => |as| {
-                try self.bindPatLocals(as.pattern, bound, added);
-                try bound.put(as.local, {});
-                try added.append(self.allocator, as.local);
-            },
-            .record => |fields| {
-                for (self.program.recordDestructSpan(fields)) |field| {
-                    try self.bindPatLocals(field.pattern, bound, added);
-                }
-            },
-            .tuple => |items| {
-                for (self.program.patSpan(items)) |child| try self.bindPatLocals(child, bound, added);
-            },
-            .list => |list| {
-                for (self.program.patSpan(list.patterns)) |child| try self.bindPatLocals(child, bound, added);
-                if (list.rest) |rest| if (rest.pattern) |rest_pat| try self.bindPatLocals(rest_pat, bound, added);
-            },
-            .tag => |tag| {
-                for (self.program.patSpan(tag.payloads)) |payload| try self.bindPatLocals(payload, bound, added);
-            },
-            .nominal => |backing| try self.bindPatLocals(backing, bound, added),
-            .str_pattern => |str| {
-                for (self.program.strPatternStepSpan(str.steps)) |step| {
-                    if (step.capture) |capture| try self.bindPatLocals(capture, bound, added);
-                }
-            },
-        }
     }
 
     fn restoreConstFnExpr(
@@ -15644,6 +15816,7 @@ fn addRuntimeDemandGuardFrame(
 }
 
 const FrozenRuntimeImpossibilityProofEvaluator = struct {
+    allocator: Allocator,
     graph: *InstGraph,
     draft: *const BodyDraftStore,
     memo: []?bool,
@@ -15659,7 +15832,7 @@ const FrozenRuntimeImpossibilityProofEvaluator = struct {
         @memset(memo, null);
         const active = try allocator.alloc(bool, draft.impossibility_proofs.items.len);
         @memset(active, false);
-        return .{ .graph = graph, .draft = draft, .memo = memo, .active = active };
+        return .{ .allocator = allocator, .graph = graph, .draft = draft, .memo = memo, .active = active };
     }
 
     fn deinit(self: *FrozenRuntimeImpossibilityProofEvaluator, allocator: Allocator) void {
@@ -15680,32 +15853,50 @@ const FrozenRuntimeImpossibilityProofEvaluator = struct {
         return if (maybe_proof) |proof| try self.holdsInner(proof) else false;
     }
 
+    /// Evaluate a proof graph node, memoizing every node it decides; the
+    /// any/all structure is evaluated on explicit stacks.
     fn holdsInner(self: *FrozenRuntimeImpossibilityProofEvaluator, proof_id: RuntimeImpossibilityProofId) Allocator.Error!bool {
+        return try Eval.run(self.allocator, self, proof_id);
+    }
+
+    const Eval = collections.AnyAll.Evaluation(RuntimeImpossibilityProofId, FrozenRuntimeImpossibilityProofEvaluator);
+
+    pub fn enter(self: *FrozenRuntimeImpossibilityProofEvaluator, items: Eval.Items, proof_id: RuntimeImpossibilityProofId) Allocator.Error!Eval.Expansion {
         const index = @intFromEnum(proof_id);
         if (index >= self.draft.impossibility_proofs.items.len) {
             Common.invariant("runtime impossibility proof referenced a missing proof node");
         }
-        if (self.memo[index]) |result| return result;
+        if (self.memo[index]) |result| return .{ .value = result };
         if (self.active[index]) Common.invariant("runtime impossibility proof graph contained a cycle");
-        self.active[index] = true;
-        defer self.active[index] = false;
-        const result = switch (self.draft.impossibility_proofs.items[index]) {
-            .node => |node| try self.graph.finalizesAsUninhabited(node),
-            .never => false,
-            .always => true,
+        const expansion: Eval.Expansion = switch (self.draft.impossibility_proofs.items[index]) {
+            .node => |node| .{ .value = try self.graph.finalizesAsUninhabited(node) },
+            .never => .{ .value = false },
+            .always => .{ .value = true },
             .pending => Common.invariant("runtime impossibility proof reservation was not filled before graph sealing"),
-            .forward => |child| try self.holdsInner(child),
+            .forward => |child| blk: {
+                try items.add(child);
+                break :blk .{ .group = .all };
+            },
             .any => |span| blk: {
-                for (self.proofSpan(span)) |child| if (try self.holdsInner(child)) break :blk true;
-                break :blk false;
+                for (self.proofSpan(span)) |child| try items.add(child);
+                break :blk .{ .group = .any };
             },
             .all => |span| blk: {
-                for (self.proofSpan(span)) |child| if (!try self.holdsInner(child)) break :blk false;
-                break :blk true;
+                for (self.proofSpan(span)) |child| try items.add(child);
+                break :blk .{ .group = .all };
             },
         };
-        self.memo[index] = result;
-        return result;
+        switch (expansion) {
+            .value => |result| self.memo[index] = result,
+            .group => self.active[index] = true,
+        }
+        return expansion;
+    }
+
+    pub fn exit(self: *FrozenRuntimeImpossibilityProofEvaluator, proof_id: RuntimeImpossibilityProofId, result: ?bool) Allocator.Error!void {
+        const index = @intFromEnum(proof_id);
+        self.active[index] = false;
+        if (result) |decided| self.memo[index] = decided;
     }
 };
 
@@ -18357,13 +18548,6 @@ const BinderRestore = struct {
     previous: ?DraftLocalId,
 };
 
-const CollectedListPattern = struct {
-    local: DraftLocalId,
-    ty: Type.TypeId,
-    patterns: []const checked.CheckedPatternId,
-    rest: ?checked.CheckedListRestPattern,
-};
-
 const ActiveReturnTarget = struct {
     lambda: checked.CheckedExprId,
     cell: DraftTypeCell,
@@ -18791,6 +18975,9 @@ const BodyContext = struct {
     /// The subsequent pattern pass must attach those exact locals to the
     /// emitted patterns instead of allocating replacements.
     reuse_pre_registered_pattern_binders: bool = false,
+    /// `patternNeedsExplicitBinding` answers, memoized per pattern: pattern
+    /// lowering asks it at every level of a pattern tree.
+    explicit_binding_memo: std.AutoHashMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
     /// Match branches have their own complete pattern engine. Other callers
     /// must route recursive materialization through the shell/plan lowering.
     allow_recursive_pattern_lowering_for_match: bool = false,
@@ -19388,9 +19575,29 @@ const BodyContext = struct {
         self: *BodyContext,
         kind: SerializationPlanKind,
         shape_ty: Type.TypeId,
-        encoding_ty: Type.TypeId,
         plan: *const ParserPrecomputedPlan,
         inputs: *SerializationPlanInputs,
+    ) Allocator.Error!void {
+        // Every shape reachable from `shape_ty`, in source order, from an
+        // explicit work list.
+        var pending: std.ArrayListUnmanaged(Type.TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, shape_ty);
+        while (pending.pop()) |next| {
+            const start = pending.items.len;
+            try self.collectSerializationPlanInputsStep(kind, next, plan, inputs, &pending);
+            std.mem.reverse(Type.TypeId, pending.items[start..]);
+        }
+    }
+
+    /// Record one shape's plan inputs; the shapes it contains go on `pending`.
+    fn collectSerializationPlanInputsStep(
+        self: *BodyContext,
+        kind: SerializationPlanKind,
+        shape_ty: Type.TypeId,
+        plan: *const ParserPrecomputedPlan,
+        inputs: *SerializationPlanInputs,
+        pending: *std.ArrayListUnmanaged(Type.TypeId),
     ) Allocator.Error!void {
         if (inputs.seen_types.contains(shape_ty)) return;
         try inputs.seen_types.put(shape_ty, {});
@@ -19398,42 +19605,42 @@ const BodyContext = struct {
         switch (kind) {
             .parser => {
                 if (self.tryNullInfo(shape_ty)) |info| {
-                    return try self.collectSerializationPlanInputs(kind, info.ok_payload_ty, encoding_ty, plan, inputs);
+                    return try pending.append(self.allocator, info.ok_payload_ty);
                 }
                 if (try self.missingTryInfo(shape_ty)) |info| {
-                    return try self.collectSerializationPlanInputs(kind, info.ok_ty, encoding_ty, plan, inputs);
+                    return try pending.append(self.allocator, info.ok_ty);
                 }
                 if (self.optionalFieldSlot(shape_ty)) |slot| {
-                    return try self.collectSerializationPlanInputs(kind, slot.payload_ty, encoding_ty, plan, inputs);
+                    return try pending.append(self.allocator, slot.payload_ty);
                 }
                 if (self.frozenCustomCodecCallForShape(.parser, shape_ty) != null or self.parseScalarMethodName(shape_ty) != null) return;
             },
             .encoder => {
                 if (self.tryNullInfo(shape_ty)) |info| {
-                    return try self.collectSerializationPlanInputs(kind, info.ok_payload_ty, encoding_ty, plan, inputs);
+                    return try pending.append(self.allocator, info.ok_payload_ty);
                 }
                 if (self.frozenCustomCodecCallForShape(.encoder, shape_ty) != null or self.encodeScalarMethodName(shape_ty) != null) return;
             },
         }
         if (self.setPayloadType(shape_ty)) |payload_ty| {
-            return try self.collectSerializationPlanInputs(kind, payload_ty, encoding_ty, plan, inputs);
+            return try pending.append(self.allocator, payload_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             var dict_buf: [2]Type.TypeId = undefined;
             for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
-                try self.collectSerializationPlanInputs(kind, dict_shape, encoding_ty, plan, inputs);
+                try pending.append(self.allocator, dict_shape);
             }
             return;
         }
 
         switch (self.shapeContent(shape_ty)) {
-            .list => |elem_ty| try self.collectSerializationPlanInputs(kind, elem_ty, encoding_ty, plan, inputs),
-            .box => |payload_ty| try self.collectSerializationPlanInputs(kind, payload_ty, encoding_ty, plan, inputs),
+            .list => |elem_ty| try pending.append(self.allocator, elem_ty),
+            .box => |payload_ty| try pending.append(self.allocator, payload_ty),
             .tuple => |span| {
                 const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(span));
                 defer self.allocator.free(item_tys);
                 for (item_tys) |item_ty| {
-                    try self.collectSerializationPlanInputs(kind, item_ty, encoding_ty, plan, inputs);
+                    try pending.append(self.allocator, item_ty);
                 }
             },
             .record, .zst => {
@@ -19454,7 +19661,7 @@ const BodyContext = struct {
                         .parser => field.ty,
                         .encoder => try self.encodeRecordFieldPayloadType(field.ty),
                     };
-                    try self.collectSerializationPlanInputs(kind, child_ty, encoding_ty, plan, inputs);
+                    try pending.append(self.allocator, child_ty);
                 }
             },
             .tag_union => |span| {
@@ -19464,7 +19671,7 @@ const BodyContext = struct {
                     const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(tag.payloads));
                     defer self.allocator.free(payload_tys);
                     for (payload_tys) |payload_ty| {
-                        try self.collectSerializationPlanInputs(kind, payload_ty, encoding_ty, plan, inputs);
+                        try pending.append(self.allocator, payload_ty);
                     }
                 }
             },
@@ -19476,13 +19683,12 @@ const BodyContext = struct {
         self: *BodyContext,
         kind: SerializationPlanKind,
         shape_ty: Type.TypeId,
-        encoding_ty: Type.TypeId,
         plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!SerializationPlanInputs {
         var inputs = SerializationPlanInputs.init(self.allocator);
         errdefer inputs.deinit(self.allocator);
         if (plan) |precomputed| {
-            try self.collectSerializationPlanInputs(kind, shape_ty, encoding_ty, precomputed, &inputs);
+            try self.collectSerializationPlanInputs(kind, shape_ty, precomputed, &inputs);
         }
         return inputs;
     }
@@ -19784,6 +19990,7 @@ const BodyContext = struct {
     }
 
     fn deinit(self: *BodyContext) void {
+        self.explicit_binding_memo.deinit(self.allocator);
         var error_rows = self.parser_error_rows.valueIterator();
         while (error_rows.next()) |row| self.allocator.free(row.*);
         self.parser_error_rows.deinit(self.allocator);
@@ -20254,29 +20461,43 @@ const BodyContext = struct {
     /// expression was an unqualified constructor promoted to a nominal type
     /// during unification.
     fn addConstructorExpr(self: *BodyContext, ty: Type.TypeId, data: BodyExprData) Allocator.Error!DraftExprId {
-        if (self.nominalConstructionLayer(ty)) |layer| {
-            const backing_expr = try self.addConstructorExpr(layer.backing, data);
-            return try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
+        var layers: std.ArrayListUnmanaged(Type.TypeId) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = ty;
+        while (self.nominalConstructionLayer(current)) |layer| {
+            try layers.append(self.allocator, layer.named);
+            current = layer.backing;
         }
-        return try self.addExpr(.{ .ty = ty, .data = data });
+        var expr = try self.addExpr(.{ .ty = current, .data = data });
+        while (layers.pop()) |named| {
+            expr = try self.addExpr(.{ .ty = named, .data = .{ .nominal = expr } });
+        }
+        return expr;
     }
 
     fn addConstructorExprAtNode(self: *BodyContext, node: NodeId, data: BodyExprData) Allocator.Error!DraftExprId {
-        const representation_node = self.constructorRepresentationNode(node);
-        return switch (self.graph.content(representation_node)) {
-            .named => blk: {
-                const named = self.graph.namedNodes(representation_node);
-                if (named.kind == .alias) Common.invariant("constructor representation retained a transparent alias node");
-                const backing = named.backing orelse
-                    Common.invariant("named constructor graph node had no explicit backing");
-                const backing_expr = try self.addConstructorExprAtNode(backing.node, data);
-                break :blk try self.addExprWithTypeCell(
-                    DraftTypeCell.fromGraphNode(representation_node),
-                    .{ .nominal = backing_expr },
-                );
-            },
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(node), data),
-        };
+        var layers: std.ArrayListUnmanaged(NodeId) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = node;
+        while (true) {
+            const representation_node = self.constructorRepresentationNode(current);
+            switch (self.graph.content(representation_node)) {
+                .named => {
+                    const named = self.graph.namedNodes(representation_node);
+                    if (named.kind == .alias) Common.invariant("constructor representation retained a transparent alias node");
+                    const backing = named.backing orelse
+                        Common.invariant("named constructor graph node had no explicit backing");
+                    try layers.append(self.allocator, representation_node);
+                    current = backing.node;
+                },
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break,
+            }
+        }
+        var expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(current), data);
+        while (layers.pop()) |representation_node| {
+            expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(representation_node), .{ .nominal = expr });
+        }
+        return expr;
     }
 
     /// Follow only producer-authored transparent alias edges to the runtime
@@ -20362,28 +20583,39 @@ const BodyContext = struct {
     /// of the witness type, matching `addConstructorExprAtNode`, whose
     /// non-named arm types a structural expression at its original (possibly
     /// alias-wrapped) node.
+    /// Rebuild `node`'s named layers, nominal and then alias, around
+    /// `structural_node`, innermost last.
     fn constructorWitnessWithStructuralNode(
         self: *BodyContext,
         node: NodeId,
         structural_node: NodeId,
     ) Allocator.Error!NodeId {
-        const representation_node = self.constructorRepresentationNode(node);
-        return switch (self.graph.content(representation_node)) {
-            .named => |raw_named| blk: {
-                const named = self.graph.namedNodes(representation_node);
-                if (named.kind == .alias) Common.invariant("constructor witness retained a transparent alias node");
-                const backing = named.backing orelse
-                    Common.invariant("named constructor witness had no explicit backing");
-                var witness = raw_named.*;
-                witness.backing = .{
-                    .node = try self.constructorWitnessWithStructuralNode(backing.node, structural_node),
-                    .use = backing.use,
-                    .authority = backing.authority,
-                };
-                break :blk try self.graph.newNode(try self.graph.namedContent(witness));
-            },
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => try self.constructorWitnessAliasLayers(node, structural_node),
-        };
+        const Layer = struct { raw: InstNode, backing: InstBacking };
+        var layers: std.ArrayListUnmanaged(Layer) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = node;
+        while (true) {
+            const representation_node = self.constructorRepresentationNode(current);
+            const raw = self.graph.content(representation_node);
+            if (raw != .named) break;
+            const named = self.graph.namedNodes(representation_node);
+            if (named.kind == .alias) Common.invariant("constructor witness retained a transparent alias node");
+            const backing = named.backing orelse
+                Common.invariant("named constructor witness had no explicit backing");
+            try layers.append(self.allocator, .{ .raw = raw, .backing = backing });
+            current = backing.node;
+        }
+        var witness_node = try self.constructorWitnessAliasLayers(current, structural_node);
+        while (layers.pop()) |layer| {
+            var witness = layer.raw.named.*;
+            witness.backing = .{
+                .node = witness_node,
+                .use = layer.backing.use,
+                .authority = layer.backing.authority,
+            };
+            witness_node = try self.graph.newNode(try self.graph.namedContent(witness));
+        }
+        return witness_node;
     }
 
     /// Wrap the structural value witness in `node`'s transparent alias
@@ -20395,32 +20627,48 @@ const BodyContext = struct {
         node: NodeId,
         structural_node: NodeId,
     ) Allocator.Error!NodeId {
-        return switch (self.graph.content(node)) {
-            .named => |raw_named| blk: {
-                const named = self.graph.namedNodes(node);
-                if (named.kind != .alias) break :blk structural_node;
-                const backing = named.backing orelse
-                    Common.invariant("transparent alias graph node had no explicit backing");
-                var witness = raw_named.*;
-                witness.backing = .{
-                    .node = try self.constructorWitnessAliasLayers(backing.node, structural_node),
-                    .use = backing.use,
-                    .authority = backing.authority,
-                };
-                break :blk try self.graph.newNode(try self.graph.namedContent(witness));
-            },
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => structural_node,
-        };
+        const Layer = struct { raw: InstNode, backing: InstBacking };
+        var layers: std.ArrayListUnmanaged(Layer) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = node;
+        while (true) {
+            const raw = self.graph.content(current);
+            if (raw != .named) break;
+            const named = self.graph.namedNodes(current);
+            if (named.kind != .alias) break;
+            const backing = named.backing orelse
+                Common.invariant("transparent alias graph node had no explicit backing");
+            try layers.append(self.allocator, .{ .raw = raw, .backing = backing });
+            current = backing.node;
+        }
+        var witness_node = structural_node;
+        while (layers.pop()) |layer| {
+            var witness = layer.raw.named.*;
+            witness.backing = .{
+                .node = witness_node,
+                .use = layer.backing.use,
+                .authority = layer.backing.authority,
+            };
+            witness_node = try self.graph.newNode(try self.graph.namedContent(witness));
+        }
+        return witness_node;
     }
 
     /// Pattern counterpart to `addConstructorExpr`, used by compiler-generated
     /// exhaustive matches whose constructor pattern has no checked source node.
     fn addConstructorPat(self: *BodyContext, ty: Type.TypeId, data: BodyPatData) Allocator.Error!DraftPatId {
-        if (self.nominalConstructionLayer(ty)) |layer| {
-            const backing_pat = try self.addConstructorPat(layer.backing, data);
-            return try self.addPat(.{ .ty = layer.named, .data = .{ .nominal = backing_pat } });
+        var layers: std.ArrayListUnmanaged(Type.TypeId) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = ty;
+        while (self.nominalConstructionLayer(current)) |layer| {
+            try layers.append(self.allocator, layer.named);
+            current = layer.backing;
         }
-        return try self.addPat(.{ .ty = ty, .data = data });
+        var pat = try self.addPat(.{ .ty = current, .data = data });
+        while (layers.pop()) |named| {
+            pat = try self.addPat(.{ .ty = named, .data = .{ .nominal = pat } });
+        }
+        return pat;
     }
 
     fn addPat(self: *BodyContext, pat: BodyPat) Allocator.Error!DraftPatId {
@@ -21769,87 +22017,80 @@ const BodyContext = struct {
         return self.draft.field_exprs.items[span.start..][0..span.len];
     }
 
-    fn exprCarriesFunctionDefinitionEvidence(self: *BodyContext, expr_id: DraftExprId) bool {
-        const expr = self.draft.exprs.items[@intFromEnum(expr_id)];
-        return switch (expr.data) {
-            .fn_def => true,
-            .list, .tuple => |items| blk: {
-                for (self.exprSpan(items)) |item| {
-                    if (self.exprCarriesFunctionDefinitionEvidence(item)) break :blk true;
-                }
-                break :blk false;
-            },
-            .record => |fields| blk: {
-                for (self.fieldExprSpan(fields)) |field| {
-                    if (self.exprCarriesFunctionDefinitionEvidence(field.value)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag => |tag| blk: {
-                for (self.exprSpan(tag.payloads)) |payload| {
-                    if (self.exprCarriesFunctionDefinitionEvidence(payload)) break :blk true;
-                }
-                break :blk false;
-            },
-            .nominal => |backing| self.exprCarriesFunctionDefinitionEvidence(backing),
-            .let_ => |let_| self.exprCarriesFunctionDefinitionEvidence(let_.value) or
-                self.exprCarriesFunctionDefinitionEvidence(let_.rest),
-            .join_point => |join_point| self.exprCarriesFunctionDefinitionEvidence(join_point.body) or
-                self.exprCarriesFunctionDefinitionEvidence(join_point.remainder),
-            .jump => |jump| blk: {
-                for (self.exprSpan(jump.loop_values)) |value| {
-                    if (self.exprCarriesFunctionDefinitionEvidence(value)) break :blk true;
-                }
-                for (self.exprSpan(jump.args)) |arg| {
-                    if (self.exprCarriesFunctionDefinitionEvidence(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .local,
-            .unit,
-            .pending_deferred,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .static_data_candidate,
-            .inline_expects_enabled,
-            .comptime_value,
-            .record_update,
-            .lambda,
-            .def_ref,
-            .fn_ref,
-            .call_value,
-            .call_proc,
-            .low_level,
-            .field_access,
-            .tuple_access,
-            .structural_eq,
-            .structural_hash,
-            .match_,
-            .if_,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .block,
-            .loop_,
-            .break_,
-            .continue_,
-            .return_,
-            .crash,
-            .comptime_branch_taken,
-            .comptime_exhaustiveness_failed,
-            .dbg,
-            .expect_err,
-            .literal_rejected,
-            .expect,
-            => false,
-        };
+    /// Whether a function definition is among the values `expr_id` can
+    /// evaluate to, searched from an explicit work list.
+    fn exprCarriesFunctionDefinitionEvidence(self: *BodyContext, root: DraftExprId) Allocator.Error!bool {
+        var pending: std.ArrayListUnmanaged(DraftExprId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |expr_id| {
+            const start = pending.items.len;
+            switch (self.draft.exprs.items[@intFromEnum(expr_id)].data) {
+                .fn_def => return true,
+                .list, .tuple => |items| try pending.appendSlice(self.allocator, self.exprSpan(items)),
+                .record => |fields| for (self.fieldExprSpan(fields)) |field| try pending.append(self.allocator, field.value),
+                .tag => |tag| try pending.appendSlice(self.allocator, self.exprSpan(tag.payloads)),
+                .nominal => |backing| try pending.append(self.allocator, backing),
+                .let_ => |let_| {
+                    try pending.append(self.allocator, let_.value);
+                    try pending.append(self.allocator, let_.rest);
+                },
+                .join_point => |join_point| {
+                    try pending.append(self.allocator, join_point.body);
+                    try pending.append(self.allocator, join_point.remainder);
+                },
+                .jump => |jump| {
+                    try pending.appendSlice(self.allocator, self.exprSpan(jump.loop_values));
+                    try pending.appendSlice(self.allocator, self.exprSpan(jump.args));
+                },
+                .local,
+                .unit,
+                .pending_deferred,
+                .@"unreachable",
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .bytes_lit,
+                .static_data_candidate,
+                .inline_expects_enabled,
+                .comptime_value,
+                .record_update,
+                .lambda,
+                .def_ref,
+                .fn_ref,
+                .call_value,
+                .call_proc,
+                .low_level,
+                .field_access,
+                .tuple_access,
+                .structural_eq,
+                .structural_hash,
+                .match_,
+                .if_,
+                .uninitialized,
+                .uninitialized_payload,
+                .if_initialized_payload,
+                .try_sequence,
+                .try_record_sequence,
+                .block,
+                .loop_,
+                .break_,
+                .continue_,
+                .return_,
+                .crash,
+                .comptime_branch_taken,
+                .comptime_exhaustiveness_failed,
+                .dbg,
+                .expect_err,
+                .literal_rejected,
+                .expect,
+                => {},
+            }
+            std.mem.reverse(DraftExprId, pending.items[start..]);
+        }
+        return false;
     }
 
     fn fnDefCaptureSpan(self: *BodyContext, span: DraftSpan(DraftFnDefCapture)) []const DraftFnDefCapture {
@@ -21887,228 +22128,282 @@ const BodyContext = struct {
         return self.draft.str_pattern_steps.items[span.start..][0..span.len];
     }
 
+    /// Whether `expr` reads `target` where it is not rebound. Subexpressions
+    /// are searched from an explicit continuation stack; binder scopes open
+    /// and close as steps of that stack.
     fn exprDependsOnFreeLocal(
         self: *BodyContext,
         expr: DraftExprId,
         target: DraftLocalId,
     ) Allocator.Error!bool {
-        var bound = collections.DenseMap(DraftLocalId, void).init(self.allocator);
-        defer bound.deinit();
-        return try self.exprDependsOnFreeLocalInner(expr, target, &bound);
+        var search = DraftFreeLocalSearch{ .ctx = self, .target = target, .bound = collections.DenseMap(DraftLocalId, void).init(self.allocator) };
+        defer search.deinit();
+        return try search.run(expr);
     }
 
-    fn exprDependsOnFreeLocalInner(
-        self: *BodyContext,
-        expr_id: DraftExprId,
+    const DraftFreeLocalSearch = struct {
+        ctx: *BodyContext,
         target: DraftLocalId,
-        bound: *collections.DenseMap(DraftLocalId, void),
-    ) Allocator.Error!bool {
-        const expr = self.draft.exprs.items[@intFromEnum(expr_id)];
-        switch (expr.data) {
-            .pending_deferred => Common.invariant("pending deferred expression reached draft free-local analysis"),
-            .local => |local| return try self.localDependsOnTarget(local, target, bound),
-            .@"unreachable",
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .uninitialized,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            .def_ref,
-            .fn_ref,
-            => return false,
-            .uninitialized_payload => |payload| return try self.localDependsOnTarget(payload.condition, target, bound),
-            .list,
-            .tuple,
-            => |items| {
-                for (self.exprSpan(items)) |child| {
-                    if (try self.exprDependsOnFreeLocalInner(child, target, bound)) return true;
-                }
-                return false;
-            },
-            .record => |fields| {
-                for (self.fieldExprSpan(fields)) |field| {
-                    if (try self.exprDependsOnFreeLocalInner(field.value, target, bound)) return true;
-                }
-                return false;
-            },
-            .record_update => |update| {
-                if (try self.exprDependsOnFreeLocalInner(update.base, target, bound)) return true;
-                for (self.fieldExprSpan(update.fields)) |field| {
-                    if (try self.exprDependsOnFreeLocalInner(field.value, target, bound)) return true;
-                }
-                return false;
-            },
-            .tag => |tag| {
-                for (self.exprSpan(tag.payloads)) |payload| {
-                    if (try self.exprDependsOnFreeLocalInner(payload, target, bound)) return true;
-                }
-                return false;
-            },
-            .static_data_candidate => |candidate| return try self.exprDependsOnFreeLocalInner(candidate.runtime_expr, target, bound),
-            .inline_expects_enabled => return false,
-            .comptime_value => |candidate| return try self.exprDependsOnFreeLocalInner(candidate.initializer, target, bound),
-            .nominal,
-            .dbg,
-            .expect,
-            => |child| return try self.exprDependsOnFreeLocalInner(child, target, bound),
-            .return_ => |ret| return try self.exprDependsOnFreeLocalInner(ret.value, target, bound),
-            .expect_err => |expect_err| return try self.exprDependsOnFreeLocalInner(expect_err.msg, target, bound),
-            .literal_rejected => |rejected| return try self.exprDependsOnFreeLocalInner(rejected.msg, target, bound),
-            .comptime_branch_taken => |taken| return try self.exprDependsOnFreeLocalInner(taken.body, target, bound),
-            .let_ => |let_| {
-                if (try self.exprDependsOnFreeLocalInner(let_.value, target, bound)) return true;
-                var added = std.ArrayList(DraftLocalId).empty;
-                defer added.deinit(self.allocator);
-                try self.bindPatLocals(let_.bind, bound, &added);
-                defer removeBoundLocals(bound, added.items);
-                return try self.exprDependsOnFreeLocalInner(let_.rest, target, bound);
-            },
-            .lambda => |lambda| {
-                var added = std.ArrayList(DraftLocalId).empty;
-                defer added.deinit(self.allocator);
-                try self.bindTypedLocalLocals(lambda.args, bound, &added);
-                defer removeBoundLocals(bound, added.items);
-                return try self.exprDependsOnFreeLocalInner(lambda.body, target, bound);
-            },
-            .fn_def => |fn_def| {
-                for (self.fnDefCaptureSpan(fn_def.captures)) |capture| {
-                    if (try self.exprDependsOnFreeLocalInner(capture.value, target, bound)) return true;
-                }
-                return false;
-            },
-            .call_value => |call| {
-                if (try self.exprDependsOnFreeLocalInner(call.callee, target, bound)) return true;
-                for (self.exprSpan(call.args)) |arg| {
-                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound)) return true;
-                }
-                return false;
-            },
-            .call_proc => |call| {
-                for (self.exprSpan(call.args)) |arg| {
-                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound)) return true;
-                }
-                for (self.exprSpan(call.captures)) |capture| {
-                    if (try self.exprDependsOnFreeLocalInner(capture, target, bound)) return true;
-                }
-                return false;
-            },
-            .low_level => |call| {
-                for (self.exprSpan(call.args)) |arg| {
-                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound)) return true;
-                }
-                return false;
-            },
-            .field_access => |field| return try self.exprDependsOnFreeLocalInner(field.receiver, target, bound),
-            .tuple_access => |access| return try self.exprDependsOnFreeLocalInner(access.tuple, target, bound),
-            .structural_eq => |eq| {
-                if (try self.exprDependsOnFreeLocalInner(eq.lhs, target, bound)) return true;
-                return try self.exprDependsOnFreeLocalInner(eq.rhs, target, bound);
-            },
-            .structural_hash => |hash| {
-                if (try self.exprDependsOnFreeLocalInner(hash.value, target, bound)) return true;
-                return try self.exprDependsOnFreeLocalInner(hash.hasher, target, bound);
-            },
-            .match_ => |match| {
-                if (try self.exprDependsOnFreeLocalInner(match.scrutinee, target, bound)) return true;
-                for (self.branchSpan(match.branches)) |branch| {
-                    var added = std.ArrayList(DraftLocalId).empty;
-                    defer added.deinit(self.allocator);
-                    try self.bindPatLocals(branch.pat, bound, &added);
-                    defer removeBoundLocals(bound, added.items);
-                    for (self.stmtSpan(branch.bindings)) |stmt| {
-                        if (try self.stmtDependsOnFreeLocal(stmt, target, bound, &added)) return true;
-                    }
-                    if (branch.guard) |guard| {
-                        if (try self.exprDependsOnFreeLocalInner(guard, target, bound)) return true;
-                    }
-                    if (try self.exprDependsOnFreeLocalInner(branch.body, target, bound)) return true;
-                }
-                return false;
-            },
-            .if_ => |if_| {
-                for (self.ifBranchSpan(if_.branches)) |branch| {
-                    if (try self.exprDependsOnFreeLocalInner(branch.cond, target, bound)) return true;
-                    if (try self.exprDependsOnFreeLocalInner(branch.body, target, bound)) return true;
-                }
-                return try self.exprDependsOnFreeLocalInner(if_.final_else, target, bound);
-            },
-            .if_initialized_payload => |payload| {
-                if (try self.exprDependsOnFreeLocalInner(payload.cond, target, bound)) return true;
-                if (try self.localDependsOnTarget(payload.payload, target, bound)) return true;
-                if (try self.exprDependsOnFreeLocalInner(payload.initialized, target, bound)) return true;
-                return try self.exprDependsOnFreeLocalInner(payload.uninitialized, target, bound);
-            },
-            .try_sequence => |sequence| {
-                if (try self.exprDependsOnFreeLocalInner(sequence.try_expr, target, bound)) return true;
-                try bound.put(sequence.ok_local, {});
-                defer _ = bound.remove(sequence.ok_local);
-                return try self.exprDependsOnFreeLocalInner(sequence.ok_body, target, bound);
-            },
-            .try_record_sequence => |sequence| {
-                if (try self.exprDependsOnFreeLocalInner(sequence.try_expr, target, bound)) return true;
-                try bound.put(sequence.value_local, {});
-                try bound.put(sequence.rest_local, {});
-                defer _ = bound.remove(sequence.rest_local);
-                defer _ = bound.remove(sequence.value_local);
-                return try self.exprDependsOnFreeLocalInner(sequence.ok_body, target, bound);
-            },
-            .block => |block| {
-                var added = std.ArrayList(DraftLocalId).empty;
-                defer added.deinit(self.allocator);
-                defer removeBoundLocals(bound, added.items);
-                for (self.stmtSpan(block.statements)) |stmt| {
-                    if (try self.stmtDependsOnFreeLocal(stmt, target, bound, &added)) return true;
-                }
-                return try self.exprDependsOnFreeLocalInner(block.final_expr, target, bound);
-            },
-            .loop_ => |loop| {
-                for (self.exprSpan(loop.initial_values)) |initial| {
-                    if (try self.exprDependsOnFreeLocalInner(initial, target, bound)) return true;
-                }
-                var added = std.ArrayList(DraftLocalId).empty;
-                defer added.deinit(self.allocator);
-                try self.bindTypedLocalLocals(loop.params, bound, &added);
-                defer removeBoundLocals(bound, added.items);
-                return try self.exprDependsOnFreeLocalInner(loop.body, target, bound);
-            },
-            .break_ => |maybe| if (maybe) |value|
-                return try self.exprDependsOnFreeLocalInner(value, target, bound)
-            else
-                return false,
-            .continue_ => |continue_| {
-                for (self.exprSpan(continue_.values)) |value| {
-                    if (try self.exprDependsOnFreeLocalInner(value, target, bound)) return true;
-                }
-                return false;
-            },
-            .join_point => |join_point| {
-                for (self.typedLocalSpan(join_point.retained)) |retained| {
-                    if (try self.localDependsOnTarget(retained.local, target, bound)) return true;
-                }
-                var added = std.ArrayList(DraftLocalId).empty;
-                defer added.deinit(self.allocator);
-                try self.bindTypedLocalLocals(join_point.params, bound, &added);
-                const body_depends = try self.exprDependsOnFreeLocalInner(join_point.body, target, bound);
-                removeBoundLocals(bound, added.items);
-                if (body_depends) return true;
-                return try self.exprDependsOnFreeLocalInner(join_point.remainder, target, bound);
-            },
-            .jump => |jump| {
-                for (self.exprSpan(jump.loop_values)) |value| {
-                    if (try self.exprDependsOnFreeLocalInner(value, target, bound)) return true;
-                }
-                for (self.exprSpan(jump.args)) |arg| {
-                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound)) return true;
-                }
-                return false;
-            },
+        bound: collections.DenseMap(DraftLocalId, void),
+        /// Every local bound so far, in binding order; a scope closes by
+        /// unbinding back to its mark.
+        bound_log: std.ArrayListUnmanaged(DraftLocalId) = .empty,
+        pending: std.ArrayListUnmanaged(Step) = .empty,
+
+        const Step = union(enum) {
+            expr: DraftExprId,
+            stmt: DraftStmtId,
+            local: DraftLocalId,
+            bind_pat: DraftPatId,
+            bind_typed: DraftSpan(DraftTypedLocal),
+            bind_local: DraftLocalId,
+            /// Unbind every local bound since this mark.
+            unbind: usize,
+        };
+
+        fn deinit(search: *DraftFreeLocalSearch) void {
+            search.pending.deinit(search.ctx.allocator);
+            search.bound_log.deinit(search.ctx.allocator);
+            search.bound.deinit();
         }
-    }
+
+        fn run(search: *DraftFreeLocalSearch, root: DraftExprId) Allocator.Error!bool {
+            const gpa = search.ctx.allocator;
+            try search.pending.append(gpa, .{ .expr = root });
+            while (search.pending.pop()) |step| {
+                const start = search.pending.items.len;
+                switch (step) {
+                    .expr => |expr_id| if (try search.expandExpr(expr_id)) return true,
+                    .stmt => |stmt_id| try search.expandStmt(stmt_id),
+                    .local => |local| if (try search.ctx.localDependsOnTarget(local, search.target, &search.bound)) return true,
+                    .bind_pat => |pat| try search.bindPat(pat),
+                    .bind_typed => |span| for (search.ctx.typedLocalSpan(span)) |local| try search.bind(local.local),
+                    .bind_local => |local| try search.bind(local),
+                    .unbind => |mark| while (search.bound_log.items.len > mark) {
+                        _ = search.bound.remove(search.bound_log.pop().?);
+                    },
+                }
+                std.mem.reverse(Step, search.pending.items[start..]);
+            }
+            return false;
+        }
+
+        fn bind(search: *DraftFreeLocalSearch, local: DraftLocalId) Allocator.Error!void {
+            try search.bound.put(local, {});
+            try search.bound_log.append(search.ctx.allocator, local);
+        }
+
+        fn push(search: *DraftFreeLocalSearch, step: Step) Allocator.Error!void {
+            try search.pending.append(search.ctx.allocator, step);
+        }
+
+        fn pushExprs(search: *DraftFreeLocalSearch, exprs: []const DraftExprId) Allocator.Error!void {
+            for (exprs) |expr| try search.push(.{ .expr = expr });
+        }
+
+        /// Bind every local a pattern introduces: an `as` local after its
+        /// subpattern's.
+        fn bindPat(search: *DraftFreeLocalSearch, root: DraftPatId) Allocator.Error!void {
+            const ctx = search.ctx;
+            const Visit = union(enum) { pat: DraftPatId, local: DraftLocalId };
+            var visits: std.ArrayListUnmanaged(Visit) = .empty;
+            defer visits.deinit(ctx.allocator);
+            try visits.append(ctx.allocator, .{ .pat = root });
+            while (visits.pop()) |visit| {
+                const pat_id = switch (visit) {
+                    .local => |local| {
+                        try search.bind(local);
+                        continue;
+                    },
+                    .pat => |pat_id| pat_id,
+                };
+                const start = visits.items.len;
+                switch (ctx.draft.pats.items[@intFromEnum(pat_id)].data) {
+                    .bind => |local| try search.bind(local),
+                    .wildcard,
+                    .int_lit,
+                    .dec_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .str_lit,
+                    => {},
+                    .as => |as| {
+                        try visits.append(ctx.allocator, .{ .pat = as.pattern });
+                        try visits.append(ctx.allocator, .{ .local = as.local });
+                    },
+                    .record => |fields| for (ctx.recordDestructSpan(fields)) |field| try visits.append(ctx.allocator, .{ .pat = field.pattern }),
+                    .tuple => |items| for (ctx.patSpan(items)) |child| try visits.append(ctx.allocator, .{ .pat = child }),
+                    .list => |list| {
+                        for (ctx.patSpan(list.patterns)) |child| try visits.append(ctx.allocator, .{ .pat = child });
+                        if (list.rest) |rest| if (rest.pattern) |rest_pat| try visits.append(ctx.allocator, .{ .pat = rest_pat });
+                    },
+                    .tag => |tag| for (ctx.patSpan(tag.payloads)) |payload| try visits.append(ctx.allocator, .{ .pat = payload }),
+                    .nominal => |backing| try visits.append(ctx.allocator, .{ .pat = backing }),
+                    .str_pattern => |str| for (ctx.strPatternStepSpan(str.steps)) |str_step| {
+                        if (str_step.capture) |capture| try visits.append(ctx.allocator, .{ .pat = capture });
+                    },
+                }
+                std.mem.reverse(Visit, visits.items[start..]);
+            }
+        }
+
+        fn expandStmt(search: *DraftFreeLocalSearch, stmt_id: DraftStmtId) Allocator.Error!void {
+            switch (search.ctx.draft.stmts.items[@intFromEnum(stmt_id)]) {
+                .uninitialized => |pat| try search.push(.{ .bind_pat = pat }),
+                .let_ => |let_| if (let_.recursive) {
+                    try search.push(.{ .bind_pat = let_.pat });
+                    try search.push(.{ .expr = let_.value });
+                } else {
+                    try search.push(.{ .expr = let_.value });
+                    try search.push(.{ .bind_pat = let_.pat });
+                },
+                .expr,
+                .expect,
+                .dbg,
+                => |expr| try search.push(.{ .expr = expr }),
+                .return_ => |ret| try search.push(.{ .expr = ret.value }),
+                .crash => {},
+            }
+        }
+
+        /// Queue the steps an expression's search takes; true when the
+        /// expression itself reads the target.
+        fn expandExpr(search: *DraftFreeLocalSearch, expr_id: DraftExprId) Allocator.Error!bool {
+            const ctx = search.ctx;
+            const mark = search.bound_log.items.len;
+            switch (ctx.draft.exprs.items[@intFromEnum(expr_id)].data) {
+                .pending_deferred => Common.invariant("pending deferred expression reached draft free-local analysis"),
+                .local => |local| return try ctx.localDependsOnTarget(local, search.target, &search.bound),
+                .@"unreachable",
+                .unit,
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .bytes_lit,
+                .uninitialized,
+                .crash,
+                .comptime_exhaustiveness_failed,
+                .def_ref,
+                .fn_ref,
+                .inline_expects_enabled,
+                => {},
+                .uninitialized_payload => |payload| return try ctx.localDependsOnTarget(payload.condition, search.target, &search.bound),
+                .list,
+                .tuple,
+                => |items| try search.pushExprs(ctx.exprSpan(items)),
+                .record => |fields| for (ctx.fieldExprSpan(fields)) |field| try search.push(.{ .expr = field.value }),
+                .record_update => |update| {
+                    try search.push(.{ .expr = update.base });
+                    for (ctx.fieldExprSpan(update.fields)) |field| try search.push(.{ .expr = field.value });
+                },
+                .tag => |tag| try search.pushExprs(ctx.exprSpan(tag.payloads)),
+                .static_data_candidate => |candidate| try search.push(.{ .expr = candidate.runtime_expr }),
+                .comptime_value => |candidate| try search.push(.{ .expr = candidate.initializer }),
+                .nominal,
+                .dbg,
+                .expect,
+                => |child| try search.push(.{ .expr = child }),
+                .return_ => |ret| try search.push(.{ .expr = ret.value }),
+                .expect_err => |expect_err| try search.push(.{ .expr = expect_err.msg }),
+                .literal_rejected => |rejected| try search.push(.{ .expr = rejected.msg }),
+                .comptime_branch_taken => |taken| try search.push(.{ .expr = taken.body }),
+                .let_ => |let_| {
+                    try search.push(.{ .expr = let_.value });
+                    try search.push(.{ .bind_pat = let_.bind });
+                    try search.push(.{ .expr = let_.rest });
+                    try search.push(.{ .unbind = mark });
+                },
+                .lambda => |lambda| {
+                    try search.push(.{ .bind_typed = lambda.args });
+                    try search.push(.{ .expr = lambda.body });
+                    try search.push(.{ .unbind = mark });
+                },
+                .fn_def => |fn_def| for (ctx.fnDefCaptureSpan(fn_def.captures)) |capture| try search.push(.{ .expr = capture.value }),
+                .call_value => |call| {
+                    try search.push(.{ .expr = call.callee });
+                    try search.pushExprs(ctx.exprSpan(call.args));
+                },
+                .call_proc => |call| {
+                    try search.pushExprs(ctx.exprSpan(call.args));
+                    try search.pushExprs(ctx.exprSpan(call.captures));
+                },
+                .low_level => |call| try search.pushExprs(ctx.exprSpan(call.args)),
+                .field_access => |field| try search.push(.{ .expr = field.receiver }),
+                .tuple_access => |access| try search.push(.{ .expr = access.tuple }),
+                .structural_eq => |eq| {
+                    try search.push(.{ .expr = eq.lhs });
+                    try search.push(.{ .expr = eq.rhs });
+                },
+                .structural_hash => |hash| {
+                    try search.push(.{ .expr = hash.value });
+                    try search.push(.{ .expr = hash.hasher });
+                },
+                .match_ => |match| {
+                    try search.push(.{ .expr = match.scrutinee });
+                    for (ctx.branchSpan(match.branches)) |branch| {
+                        try search.push(.{ .bind_pat = branch.pat });
+                        for (ctx.stmtSpan(branch.bindings)) |stmt| try search.push(.{ .stmt = stmt });
+                        if (branch.guard) |guard| try search.push(.{ .expr = guard });
+                        try search.push(.{ .expr = branch.body });
+                        try search.push(.{ .unbind = mark });
+                    }
+                },
+                .if_ => |if_| {
+                    for (ctx.ifBranchSpan(if_.branches)) |branch| {
+                        try search.push(.{ .expr = branch.cond });
+                        try search.push(.{ .expr = branch.body });
+                    }
+                    try search.push(.{ .expr = if_.final_else });
+                },
+                .if_initialized_payload => |payload| {
+                    try search.push(.{ .expr = payload.cond });
+                    try search.push(.{ .local = payload.payload });
+                    try search.push(.{ .expr = payload.initialized });
+                    try search.push(.{ .expr = payload.uninitialized });
+                },
+                .try_sequence => |sequence| {
+                    try search.push(.{ .expr = sequence.try_expr });
+                    try search.push(.{ .bind_local = sequence.ok_local });
+                    try search.push(.{ .expr = sequence.ok_body });
+                    try search.push(.{ .unbind = mark });
+                },
+                .try_record_sequence => |sequence| {
+                    try search.push(.{ .expr = sequence.try_expr });
+                    try search.push(.{ .bind_local = sequence.value_local });
+                    try search.push(.{ .bind_local = sequence.rest_local });
+                    try search.push(.{ .expr = sequence.ok_body });
+                    try search.push(.{ .unbind = mark });
+                },
+                .block => |block| {
+                    for (ctx.stmtSpan(block.statements)) |stmt| try search.push(.{ .stmt = stmt });
+                    try search.push(.{ .expr = block.final_expr });
+                    try search.push(.{ .unbind = mark });
+                },
+                .loop_ => |loop| {
+                    try search.pushExprs(ctx.exprSpan(loop.initial_values));
+                    try search.push(.{ .bind_typed = loop.params });
+                    try search.push(.{ .expr = loop.body });
+                    try search.push(.{ .unbind = mark });
+                },
+                .break_ => |maybe| if (maybe) |value| try search.push(.{ .expr = value }),
+                .continue_ => |continue_| try search.pushExprs(ctx.exprSpan(continue_.values)),
+                .join_point => |join_point| {
+                    for (ctx.typedLocalSpan(join_point.retained)) |retained| try search.push(.{ .local = retained.local });
+                    try search.push(.{ .bind_typed = join_point.params });
+                    try search.push(.{ .expr = join_point.body });
+                    try search.push(.{ .unbind = mark });
+                    try search.push(.{ .expr = join_point.remainder });
+                },
+                .jump => |jump| {
+                    try search.pushExprs(ctx.exprSpan(jump.loop_values));
+                    try search.pushExprs(ctx.exprSpan(jump.args));
+                },
+            }
+            return false;
+        }
+    };
 
     fn localDependsOnTarget(
         self: *BodyContext,
@@ -22143,106 +22438,6 @@ const BodyContext = struct {
         const lhs_node = try lhs_data.ty.toGraphNode(self.graph);
         const rhs_node = try rhs_data.ty.toGraphNode(self.graph);
         return self.graph.sameClass(lhs_node, rhs_node);
-    }
-
-    fn stmtDependsOnFreeLocal(
-        self: *BodyContext,
-        stmt_id: DraftStmtId,
-        target: DraftLocalId,
-        bound: *collections.DenseMap(DraftLocalId, void),
-        added: *std.ArrayList(DraftLocalId),
-    ) Allocator.Error!bool {
-        const stmt = self.draft.stmts.items[@intFromEnum(stmt_id)];
-        switch (stmt) {
-            .uninitialized => |pat| {
-                try self.bindPatLocals(pat, bound, added);
-                return false;
-            },
-            .let_ => |let_| {
-                if (let_.recursive) {
-                    try self.bindPatLocals(let_.pat, bound, added);
-                    return try self.exprDependsOnFreeLocalInner(let_.value, target, bound);
-                } else {
-                    if (try self.exprDependsOnFreeLocalInner(let_.value, target, bound)) return true;
-                    try self.bindPatLocals(let_.pat, bound, added);
-                    return false;
-                }
-            },
-            .expr,
-            .expect,
-            .dbg,
-            => |expr| return try self.exprDependsOnFreeLocalInner(expr, target, bound),
-            .return_ => |ret| return try self.exprDependsOnFreeLocalInner(ret.value, target, bound),
-            .crash => return false,
-        }
-    }
-
-    fn bindTypedLocalLocals(
-        self: *BodyContext,
-        span: DraftSpan(DraftTypedLocal),
-        bound: *collections.DenseMap(DraftLocalId, void),
-        added: *std.ArrayList(DraftLocalId),
-    ) Allocator.Error!void {
-        for (self.typedLocalSpan(span)) |local| {
-            try bound.put(local.local, {});
-            try added.append(self.allocator, local.local);
-        }
-    }
-
-    fn bindPatLocals(
-        self: *BodyContext,
-        pat_id: DraftPatId,
-        bound: *collections.DenseMap(DraftLocalId, void),
-        added: *std.ArrayList(DraftLocalId),
-    ) Allocator.Error!void {
-        const pat = self.draft.pats.items[@intFromEnum(pat_id)];
-        switch (pat.data) {
-            .bind => |local| {
-                try bound.put(local, {});
-                try added.append(self.allocator, local);
-            },
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .as => |as| {
-                try self.bindPatLocals(as.pattern, bound, added);
-                try bound.put(as.local, {});
-                try added.append(self.allocator, as.local);
-            },
-            .record => |fields| {
-                for (self.recordDestructSpan(fields)) |field| {
-                    try self.bindPatLocals(field.pattern, bound, added);
-                }
-            },
-            .tuple => |items| {
-                for (self.patSpan(items)) |child| try self.bindPatLocals(child, bound, added);
-            },
-            .list => |list| {
-                for (self.patSpan(list.patterns)) |child| try self.bindPatLocals(child, bound, added);
-                if (list.rest) |rest| if (rest.pattern) |rest_pat| try self.bindPatLocals(rest_pat, bound, added);
-            },
-            .tag => |tag| {
-                for (self.patSpan(tag.payloads)) |payload| try self.bindPatLocals(payload, bound, added);
-            },
-            .nominal => |backing| try self.bindPatLocals(backing, bound, added),
-            .str_pattern => |str| {
-                for (self.strPatternStepSpan(str.steps)) |step| {
-                    if (step.capture) |capture| try self.bindPatLocals(capture, bound, added);
-                }
-            },
-        }
-    }
-
-    fn removeBoundLocals(bound: *collections.DenseMap(DraftLocalId, void), locals: []const DraftLocalId) void {
-        var index = locals.len;
-        while (index > 0) {
-            index -= 1;
-            _ = bound.remove(locals[index]);
-        }
     }
 
     /// Constrain a checked type to a Monotype: instantiate the checked type
@@ -23945,7 +24140,7 @@ const BodyContext = struct {
             ret_cell
         else if (try self.resultCompletesRequest(declared_ret_node, body_ret_node) or
             try self.graph.containsGeneratedPrivate(body_ret_node) or
-            self.exprCarriesFunctionDefinitionEvidence(body))
+            try self.exprCarriesFunctionDefinitionEvidence(body))
             body_ret_cell
         else blk: {
             try relateRequestComponent(self.graph, declared_ret_node, body_ret_node);
@@ -24179,12 +24374,94 @@ const BodyContext = struct {
         return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting);
     }
 
+    /// One step of relating a matching container's children: a child pair
+    /// to relate, or a label check that must hold before the next child.
+    const ProducedValueOp = union(enum) {
+        child: struct { checked: NodeId, produced: NodeId },
+        field_name: struct { checked: names.RecordFieldNameId, produced: names.RecordFieldNameId },
+        tag: struct { checked_name: names.TagNameId, produced_name: names.TagNameId, checked_len: usize, produced_len: usize },
+    };
+
+    /// A matching container whose children are still relating.
+    const ProducedValueFrame = struct {
+        checked_node: NodeId,
+        produced_node: NodeId,
+        /// The produced container as it was matched, before its children
+        /// related.
+        produced_content: InstNode,
+        pair: ProducedValuePair,
+        ops_start: usize,
+        next: usize,
+        results_start: usize,
+    };
+
+    /// Relate a checked node to the value actually produced, returning the
+    /// witness node the value is typed at. Matching containers relate their
+    /// children as explicit frames, so type depth never becomes native call
+    /// depth; a pair already on the current path relates to the produced
+    /// node by assumption.
     fn relateCheckedNodeToProducedValueInner(
+        self: *BodyContext,
+        root_checked: NodeId,
+        root_produced: NodeId,
+        visiting: *std.AutoHashMap(ProducedValuePair, void),
+    ) Allocator.Error!NodeId {
+        var frames: std.ArrayListUnmanaged(ProducedValueFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        var ops: std.ArrayListUnmanaged(ProducedValueOp) = .empty;
+        defer ops.deinit(self.allocator);
+        var results: std.ArrayListUnmanaged(NodeId) = .empty;
+        defer results.deinit(self.allocator);
+        errdefer for (frames.items) |frame| {
+            _ = visiting.remove(frame.pair);
+        };
+
+        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, &frames, &ops, &results);
+        while (true) {
+            if (delivered) |node| {
+                if (frames.items.len == 0) return node;
+                try results.append(self.allocator, node);
+                delivered = null;
+            }
+            const frame = frames.items[frames.items.len - 1];
+            var failed = false;
+            if (frame.next < ops.items.len) {
+                const op = ops.items[frame.next];
+                frames.items[frames.items.len - 1].next += 1;
+                switch (op) {
+                    .child => |child| {
+                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, &frames, &ops, &results);
+                        continue;
+                    },
+                    .field_name => |field| failed = field.checked != field.produced,
+                    .tag => |tag| failed = tag.checked_name != tag.produced_name or tag.checked_len != tag.produced_len,
+                }
+                if (!failed) continue;
+            }
+
+            _ = frames.pop();
+            const witness = if (failed) null else try self.buildProducedValueWitness(frame, results.items[frame.results_start..]);
+            ops.shrinkRetainingCapacity(frame.ops_start);
+            results.shrinkRetainingCapacity(frame.results_start);
+            const checked_root = self.graph.rootNode(frame.checked_node);
+            const produced_root = self.graph.rootNode(frame.produced_node);
+            delivered = witness orelse try self.relateUnmatchedProducedValue(frame.checked_node, frame.produced_node, checked_root, produced_root);
+            _ = visiting.remove(frame.pair);
+        }
+    }
+
+    /// The witness a pair relates to at once, or null after pushing the frame
+    /// that relates a matching container's children.
+    fn enterProducedValue(
         self: *BodyContext,
         checked_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!NodeId {
+        frames: *std.ArrayListUnmanaged(ProducedValueFrame),
+        ops: *std.ArrayListUnmanaged(ProducedValueOp),
+        results: *std.ArrayListUnmanaged(NodeId),
+    ) Allocator.Error!?NodeId {
+        const gpa = self.allocator;
         const checked_root = self.graph.rootNode(checked_node);
         const produced_root = self.graph.rootNode(produced_node);
         if (checked_root == produced_root) return checked_node;
@@ -24192,7 +24469,10 @@ const BodyContext = struct {
         const pair = ProducedValuePair{ .request = checked_root, .produced = produced_root };
         const entry = try visiting.getOrPut(pair);
         if (entry.found_existing) return produced_node;
-        defer _ = visiting.remove(pair);
+        var pushed = false;
+        defer if (!pushed) {
+            _ = visiting.remove(pair);
+        };
 
         if (try self.producedRuntimeValueIsProvenUninhabited(produced_root)) return produced_node;
         const checked_private_root = self.isGeneratedPrivateRootNode(checked_root);
@@ -24216,9 +24496,114 @@ const BodyContext = struct {
             return checked_node;
         }
         if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
-        if (try self.relateMatchingProducedValueContainers(checked_root, produced_root, visiting)) |witness| {
-            return witness;
+
+        const ops_start = ops.items.len;
+        const matched: bool = matched: {
+            const checked_content = self.graph.content(checked_root);
+            const produced_content = self.graph.content(produced_root);
+            switch (checked_content) {
+                .named => |checked_named| switch (produced_content) {
+                    .named => |produced_named| {
+                        if (!sameNamedValueDefinition(checked_named, produced_named)) break :matched false;
+                        const checked_backing = checked_named.backing orelse break :matched false;
+                        const produced_backing = produced_named.backing orelse break :matched false;
+                        try ops.append(gpa, .{ .child = .{ .checked = checked_backing.node, .produced = produced_backing.node } });
+                        break :matched true;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
+                },
+                .list => |checked_elem| switch (produced_content) {
+                    .list => |produced_elem| {
+                        try ops.append(gpa, .{ .child = .{ .checked = checked_elem, .produced = produced_elem } });
+                        break :matched true;
+                    },
+                    .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                },
+                .box => |checked_elem| switch (produced_content) {
+                    .box => |produced_elem| {
+                        try ops.append(gpa, .{ .child = .{ .checked = checked_elem, .produced = produced_elem } });
+                        break :matched true;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                },
+                .tuple => |checked_items| switch (produced_content) {
+                    .tuple => |produced_items| {
+                        if (checked_items.len != produced_items.len) break :matched false;
+                        for (checked_items, produced_items) |checked_item, produced_item| {
+                            try ops.append(gpa, .{ .child = .{ .checked = checked_item, .produced = produced_item } });
+                        }
+                        break :matched true;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                },
+                .func => |checked_fn| switch (produced_content) {
+                    .func => |produced_fn| {
+                        if (checked_fn.args.len != produced_fn.args.len) break :matched false;
+                        return checked_node;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                },
+                .record => |checked_row| switch (produced_content) {
+                    .record => |produced_row| {
+                        if (checked_row.fields.len != produced_row.fields.len) break :matched false;
+                        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record)) break :matched false;
+                        for (checked_row.fields, produced_row.fields) |checked_field, produced_field| {
+                            try ops.append(gpa, .{ .field_name = .{ .checked = checked_field.name, .produced = produced_field.name } });
+                            try ops.append(gpa, .{ .child = .{ .checked = checked_field.ty, .produced = produced_field.ty } });
+                        }
+                        break :matched true;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                },
+                .tag_union => |checked_row| switch (produced_content) {
+                    .tag_union => |produced_row| {
+                        if (checked_row.tags.len != produced_row.tags.len) break :matched false;
+                        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) break :matched false;
+                        for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
+                            try ops.append(gpa, .{ .tag = .{
+                                .checked_name = checked_tag.name,
+                                .produced_name = produced_tag.name,
+                                .checked_len = checked_tag.payloads.len,
+                                .produced_len = produced_tag.payloads.len,
+                            } });
+                            if (checked_tag.payloads.len != produced_tag.payloads.len) break;
+                            for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
+                                try ops.append(gpa, .{ .child = .{ .checked = checked_payload, .produced = produced_payload } });
+                            }
+                        }
+                        break :matched true;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                },
+                .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
+            }
+        };
+        if (!matched) {
+            ops.shrinkRetainingCapacity(ops_start);
+            return try self.relateUnmatchedProducedValue(checked_node, produced_node, checked_root, produced_root);
         }
+        try frames.append(gpa, .{
+            .checked_node = checked_node,
+            .produced_node = produced_node,
+            .produced_content = self.graph.content(produced_root),
+            .pair = pair,
+            .ops_start = ops_start,
+            .next = ops_start,
+            .results_start = results.items.len,
+        });
+        pushed = true;
+        return null;
+    }
+
+    /// A pair whose containers do not match relates through their shared
+    /// interface when either side is generated-private, and unifies otherwise.
+    fn relateUnmatchedProducedValue(
+        self: *BodyContext,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        checked_root: NodeId,
+        produced_root: NodeId,
+    ) Allocator.Error!NodeId {
         const checked_private = try self.graph.containsGeneratedPrivate(checked_root);
         const produced_private = try self.graph.containsGeneratedPrivate(produced_root);
         if (checked_private or produced_private) {
@@ -24229,242 +24614,206 @@ const BodyContext = struct {
         return checked_node;
     }
 
+    /// Build a matched container's witness from its children's; the
+    /// produced node itself when no child's witness differs.
+    fn buildProducedValueWitness(self: *BodyContext, frame: ProducedValueFrame, children: []const NodeId) Allocator.Error!NodeId {
+        const produced_node = frame.produced_node;
+        switch (frame.produced_content) {
+            .named => |produced_named| {
+                const produced_backing = produced_named.backing.?;
+                const backing = children[0];
+                if (self.graph.sameClass(backing, produced_backing.node)) return produced_node;
+                var witness = produced_named.*;
+                witness.backing = .{
+                    .node = backing,
+                    .use = produced_backing.use,
+                    .authority = produced_backing.authority,
+                };
+                return try self.graph.newNode(try self.graph.namedContent(witness));
+            },
+            .list => |produced_elem| {
+                if (self.graph.sameClass(children[0], produced_elem)) return produced_node;
+                return try self.graph.newNode(.{ .list = children[0] });
+            },
+            .box => |produced_elem| {
+                if (self.graph.sameClass(children[0], produced_elem)) return produced_node;
+                return try self.graph.newNode(.{ .box = children[0] });
+            },
+            .tuple => |produced_items| {
+                var changed = false;
+                for (children, produced_items) |item, produced_item| {
+                    changed = changed or !self.graph.sameClass(item, produced_item);
+                }
+                if (!changed) return produced_node;
+                return try self.graph.newNode(.{ .tuple = try self.graph.arena().dupe(NodeId, children) });
+            },
+            .record => |produced_row| {
+                const fields = try self.graph.arena().alloc(InstField, produced_row.fields.len);
+                var changed = false;
+                for (produced_row.fields, children, fields) |produced_field, ty, *out| {
+                    out.* = .{
+                        .name = produced_field.name,
+                        .ty = ty,
+                        .value_ty = produced_field.value_ty,
+                        .kind = produced_field.kind,
+                        .default = produced_field.default,
+                    };
+                    changed = changed or !self.graph.sameClass(ty, produced_field.ty);
+                }
+                if (!changed) return produced_node;
+                return try self.graph.newNode(.{ .record = .{
+                    .fields = fields,
+                    .ext = self.graph.rootNode(produced_row.ext),
+                } });
+            },
+            .tag_union => |produced_row| {
+                const tags = try self.graph.arena().alloc(InstTag, produced_row.tags.len);
+                var changed = false;
+                var offset: usize = 0;
+                for (produced_row.tags, tags) |produced_tag, *out| {
+                    const payloads = try self.graph.arena().dupe(NodeId, children[offset..][0..produced_tag.payloads.len]);
+                    offset += produced_tag.payloads.len;
+                    for (payloads, produced_tag.payloads) |payload, produced_payload| {
+                        changed = changed or !self.graph.sameClass(payload, produced_payload);
+                    }
+                    out.* = .{
+                        .name = produced_tag.name,
+                        .checked_name = produced_tag.checked_name,
+                        .payloads = payloads,
+                    };
+                }
+                if (!changed) return produced_node;
+                return try self.graph.newNode(.{ .tag_union = .{
+                    .tags = tags,
+                    .ext = self.graph.rootNode(produced_row.ext),
+                } });
+            },
+            .redirect, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
+        }
+    }
+
     fn producedValueHasExplicitRepresentationEvidence(
         self: *BodyContext,
         checked_node: NodeId,
         produced_node: NodeId,
     ) Allocator.Error!bool {
-        var visiting = std.AutoHashMap(ProducedValuePair, void).init(self.allocator);
-        defer visiting.deinit();
-        return try self.producedValueHasExplicitRepresentationEvidenceInner(
-            checked_node,
-            produced_node,
-            &visiting,
-        );
+        var evidence = ProducedValueEvidence{
+            .ctx = self,
+            .visiting = std.AutoHashMap(ProducedValuePair, void).init(self.allocator),
+        };
+        defer evidence.visiting.deinit();
+        return try ProducedValueEvidence.Eval.run(self.allocator, &evidence, .{ .request = checked_node, .produced = produced_node });
     }
 
-    fn producedValueHasExplicitRepresentationEvidenceInner(
-        self: *BodyContext,
-        checked_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!bool {
-        const checked_root = self.graph.rootNode(checked_node);
-        const produced_root = self.graph.rootNode(produced_node);
-        if (checked_root == produced_root) return false;
-        if (try self.graph.containsGeneratedPrivate(checked_root)) return true;
-        if (try self.graph.containsGeneratedPrivate(produced_root)) return true;
-        if (try self.resultCompletesRequest(checked_root, produced_root)) return true;
+    /// Whether a produced value carries representation evidence its checked
+    /// node lacks: every differing child of a matching container must carry
+    /// it, and at least one must differ. Evaluated on explicit stacks; a pair
+    /// already on the current path carries none.
+    const ProducedValueEvidence = struct {
+        ctx: *BodyContext,
+        visiting: std.AutoHashMap(ProducedValuePair, void),
 
-        const pair = ProducedValuePair{ .request = checked_root, .produced = produced_root };
-        const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return false;
-        defer _ = visiting.remove(pair);
+        const Eval = collections.AnyAll.Evaluation(ProducedValuePair, ProducedValueEvidence);
 
-        const checked_content = self.graph.content(checked_root);
-        const produced_content = self.graph.content(produced_root);
-        switch (checked_content) {
-            .named => |checked_named| switch (produced_content) {
-                .named => |produced_named| {
-                    if (!sameNamedValueDefinition(checked_named, produced_named)) return false;
-                    const checked_backing = checked_named.backing orelse return false;
-                    const produced_backing = produced_named.backing orelse return false;
-                    return try self.producedValueHasExplicitRepresentationEvidenceInner(
-                        checked_backing.node,
-                        produced_backing.node,
-                        visiting,
-                    );
+        pub fn enter(self: *ProducedValueEvidence, items: Eval.Items, pair: ProducedValuePair) Allocator.Error!Eval.Expansion {
+            const graph = self.ctx.graph;
+            const checked_root = graph.rootNode(pair.request);
+            const produced_root = graph.rootNode(pair.produced);
+            if (checked_root == produced_root) return .{ .value = false };
+            if (try graph.containsGeneratedPrivate(checked_root)) return .{ .value = true };
+            if (try graph.containsGeneratedPrivate(produced_root)) return .{ .value = true };
+            if (try self.ctx.resultCompletesRequest(checked_root, produced_root)) return .{ .value = true };
+
+            const root_pair = ProducedValuePair{ .request = checked_root, .produced = produced_root };
+            if (self.visiting.contains(root_pair)) return .{ .value = false };
+
+            var children: usize = 0;
+            const checked_content = graph.content(checked_root);
+            const produced_content = graph.content(produced_root);
+            switch (checked_content) {
+                .named => |checked_named| switch (produced_content) {
+                    .named => |produced_named| {
+                        if (!sameNamedValueDefinition(checked_named, produced_named)) return .{ .value = false };
+                        const checked_backing = checked_named.backing orelse return .{ .value = false };
+                        const produced_backing = produced_named.backing orelse return .{ .value = false };
+                        try items.add(.{ .request = checked_backing.node, .produced = produced_backing.node });
+                        children += 1;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
                 },
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
-            },
-            .func => |checked_fn| switch (produced_content) {
-                .func => |produced_fn| return checked_fn.args.len == produced_fn.args.len,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return false,
-            },
-            .list => |checked_elem| switch (produced_content) {
-                .list => |produced_elem| return try self.producedValueHasExplicitRepresentationEvidenceInner(
-                    checked_elem,
-                    produced_elem,
-                    visiting,
-                ),
-                .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return false,
-            },
-            .box => |checked_elem| switch (produced_content) {
-                .box => |produced_elem| return try self.producedValueHasExplicitRepresentationEvidenceInner(
-                    checked_elem,
-                    produced_elem,
-                    visiting,
-                ),
-                .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return false,
-            },
-            .tuple => |checked_items| switch (produced_content) {
-                .tuple => |produced_items| {
-                    if (checked_items.len != produced_items.len) return false;
-                    var has_evidence = false;
-                    for (checked_items, produced_items) |checked_item, produced_item| {
-                        if (self.graph.sameClass(checked_item, produced_item)) continue;
-                        if (!try self.producedValueHasExplicitRepresentationEvidenceInner(
-                            checked_item,
-                            produced_item,
-                            visiting,
-                        )) return false;
-                        has_evidence = true;
-                    }
-                    return has_evidence;
+                .func => |checked_fn| switch (produced_content) {
+                    .func => |produced_fn| return .{ .value = checked_fn.args.len == produced_fn.args.len },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
                 },
-                .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return false,
-            },
-            .record => |checked_row| switch (produced_content) {
-                .record => |produced_row| return try self.recordValueHasExplicitRepresentationEvidence(
-                    checked_row,
-                    produced_row,
-                    visiting,
-                ),
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return false,
-            },
-            .tag_union => |checked_row| switch (produced_content) {
-                .tag_union => |produced_row| return try self.tagValueHasExplicitRepresentationEvidence(
-                    checked_row,
-                    produced_row,
-                    visiting,
-                ),
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return false,
-            },
-            .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => return false,
-        }
-    }
-
-    fn recordValueHasExplicitRepresentationEvidence(
-        self: *BodyContext,
-        checked_row: anytype,
-        produced_row: anytype,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!bool {
-        if (checked_row.fields.len != produced_row.fields.len) return false;
-        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record)) return false;
-        var has_evidence = false;
-        for (checked_row.fields, produced_row.fields) |checked_field, produced_field| {
-            if (checked_field.name != produced_field.name) return false;
-            if (self.graph.sameClass(checked_field.ty, produced_field.ty)) continue;
-            if (!try self.producedValueHasExplicitRepresentationEvidenceInner(
-                checked_field.ty,
-                produced_field.ty,
-                visiting,
-            )) return false;
-            has_evidence = true;
-        }
-        return has_evidence;
-    }
-
-    fn tagValueHasExplicitRepresentationEvidence(
-        self: *BodyContext,
-        checked_row: anytype,
-        produced_row: anytype,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!bool {
-        if (checked_row.tags.len != produced_row.tags.len) return false;
-        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) return false;
-        var has_evidence = false;
-        for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
-            if (checked_tag.name != produced_tag.name or checked_tag.payloads.len != produced_tag.payloads.len) {
-                return false;
+                .list => |checked_elem| switch (produced_content) {
+                    .list => |produced_elem| {
+                        try items.add(.{ .request = checked_elem, .produced = produced_elem });
+                        children += 1;
+                    },
+                    .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                },
+                .box => |checked_elem| switch (produced_content) {
+                    .box => |produced_elem| {
+                        try items.add(.{ .request = checked_elem, .produced = produced_elem });
+                        children += 1;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                },
+                .tuple => |checked_items| switch (produced_content) {
+                    .tuple => |produced_items| {
+                        if (checked_items.len != produced_items.len) return .{ .value = false };
+                        for (checked_items, produced_items) |checked_item, produced_item| {
+                            if (graph.sameClass(checked_item, produced_item)) continue;
+                            try items.add(.{ .request = checked_item, .produced = produced_item });
+                            children += 1;
+                        }
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                },
+                .record => |checked_row| switch (produced_content) {
+                    .record => |produced_row| {
+                        if (checked_row.fields.len != produced_row.fields.len) return .{ .value = false };
+                        if (!self.ctx.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record)) return .{ .value = false };
+                        for (checked_row.fields, produced_row.fields) |checked_field, produced_field| {
+                            if (checked_field.name != produced_field.name) return .{ .value = false };
+                            if (graph.sameClass(checked_field.ty, produced_field.ty)) continue;
+                            try items.add(.{ .request = checked_field.ty, .produced = produced_field.ty });
+                            children += 1;
+                        }
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                },
+                .tag_union => |checked_row| switch (produced_content) {
+                    .tag_union => |produced_row| {
+                        if (checked_row.tags.len != produced_row.tags.len) return .{ .value = false };
+                        if (!self.ctx.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) return .{ .value = false };
+                        for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
+                            if (checked_tag.name != produced_tag.name or checked_tag.payloads.len != produced_tag.payloads.len) {
+                                return .{ .value = false };
+                            }
+                            for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
+                                if (graph.sameClass(checked_payload, produced_payload)) continue;
+                                try items.add(.{ .request = checked_payload, .produced = produced_payload });
+                                children += 1;
+                            }
+                        }
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                },
+                .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
             }
-            for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
-                if (self.graph.sameClass(checked_payload, produced_payload)) continue;
-                if (!try self.producedValueHasExplicitRepresentationEvidenceInner(
-                    checked_payload,
-                    produced_payload,
-                    visiting,
-                )) return false;
-                has_evidence = true;
-            }
+            if (children == 0) return .{ .value = false };
+            try self.visiting.put(root_pair, {});
+            return .{ .group = .all };
         }
-        return has_evidence;
-    }
 
-    fn relateMatchingProducedValueContainers(
-        self: *BodyContext,
-        checked_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!?NodeId {
-        const checked_content = self.graph.content(checked_node);
-        const produced_content = self.graph.content(produced_node);
-        switch (checked_content) {
-            .named => |checked_named| switch (produced_content) {
-                .named => |produced_named| {
-                    if (!sameNamedValueDefinition(checked_named, produced_named)) return null;
-                    const checked_backing = checked_named.backing orelse return null;
-                    const produced_backing = produced_named.backing orelse return null;
-                    const backing = try self.relateCheckedNodeToProducedValueInner(
-                        checked_backing.node,
-                        produced_backing.node,
-                        visiting,
-                    );
-                    if (self.graph.sameClass(backing, produced_backing.node)) return produced_node;
-                    var witness = produced_named.*;
-                    witness.backing = .{
-                        .node = backing,
-                        .use = produced_backing.use,
-                        .authority = produced_backing.authority,
-                    };
-                    return try self.graph.newNode(try self.graph.namedContent(witness));
-                },
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-            },
-            .list => |checked_elem| switch (produced_content) {
-                .list => |produced_elem| {
-                    const elem = try self.relateCheckedNodeToProducedValueInner(checked_elem, produced_elem, visiting);
-                    if (self.graph.sameClass(elem, produced_elem)) return produced_node;
-                    return try self.graph.newNode(.{ .list = elem });
-                },
-                .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-            },
-            .box => |checked_elem| switch (produced_content) {
-                .box => |produced_elem| {
-                    const elem = try self.relateCheckedNodeToProducedValueInner(checked_elem, produced_elem, visiting);
-                    if (self.graph.sameClass(elem, produced_elem)) return produced_node;
-                    return try self.graph.newNode(.{ .box = elem });
-                },
-                .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-            },
-            .tuple => |checked_items| switch (produced_content) {
-                .tuple => |produced_items| {
-                    if (checked_items.len != produced_items.len) return null;
-                    const items = try self.graph.arena().alloc(NodeId, produced_items.len);
-                    var changed = false;
-                    for (checked_items, produced_items, items) |checked_item, produced_item, *out| {
-                        const item = try self.relateCheckedNodeToProducedValueInner(checked_item, produced_item, visiting);
-                        out.* = item;
-                        changed = changed or !self.graph.sameClass(item, produced_item);
-                    }
-                    if (!changed) return produced_node;
-                    return try self.graph.newNode(.{ .tuple = items });
-                },
-                .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-            },
-            .func => |checked_fn| switch (produced_content) {
-                .func => |produced_fn| {
-                    if (checked_fn.args.len != produced_fn.args.len) return null;
-                    return checked_node;
-                },
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-            },
-            .record => |checked_row| switch (produced_content) {
-                .record => |produced_row| {
-                    return try self.producedRecordValueWitness(checked_row, produced_row, produced_node, visiting);
-                },
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-            },
-            .tag_union => |checked_row| switch (produced_content) {
-                .tag_union => |produced_row| {
-                    return try self.producedTagValueWitness(checked_row, produced_row, produced_node, visiting);
-                },
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-            },
-            .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        pub fn exit(self: *ProducedValueEvidence, pair: ProducedValuePair, _: ?bool) Allocator.Error!void {
+            _ = self.visiting.remove(.{
+                .request = self.ctx.graph.rootNode(pair.request),
+                .produced = self.ctx.graph.rootNode(pair.produced),
+            });
         }
-    }
+    };
 
     fn rowExtsAreValueCompatible(self: *BodyContext, checked_ext: NodeId, produced_ext: NodeId, kind: ProducedValueRowKind) bool {
         const checked_root = self.graph.rootNode(checked_ext);
@@ -24477,74 +24826,114 @@ const BodyContext = struct {
         };
     }
 
-    fn producedRecordValueWitness(
-        self: *BodyContext,
-        checked_row: anytype,
-        produced_row: anytype,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!?NodeId {
-        if (checked_row.fields.len != produced_row.fields.len) return null;
-        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .record)) return null;
-        const fields = try self.graph.arena().alloc(InstField, produced_row.fields.len);
-        var changed = false;
-        for (checked_row.fields, produced_row.fields, fields) |checked_field, produced_field, *out| {
-            if (checked_field.name != produced_field.name) return null;
-            const ty = try self.relateCheckedNodeToProducedValueInner(checked_field.ty, produced_field.ty, visiting);
-            out.* = .{
-                .name = produced_field.name,
-                .ty = ty,
-                .value_ty = produced_field.value_ty,
-                .kind = produced_field.kind,
-                .default = produced_field.default,
-            };
-            changed = changed or !self.graph.sameClass(ty, produced_field.ty);
-        }
-        if (!changed) return produced_node;
-        return try self.graph.newNode(.{ .record = .{
-            .fields = fields,
-            .ext = self.graph.rootNode(produced_row.ext),
-        } });
-    }
+    /// How one child relation combines into its parent's.
+    const RequestCompletionOp = struct {
+        request: NodeId,
+        produced: NodeId,
+        combine: enum {
+            /// Completed or unchanged children accumulate; a mismatch decides.
+            fold,
+            /// A row extension must be unchanged.
+            unchanged_extension,
+            /// A public named backing completes the wrapper unless it mismatches.
+            backing,
+        },
+    };
 
-    fn producedTagValueWitness(
-        self: *BodyContext,
-        checked_row: anytype,
-        produced_row: anytype,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(ProducedValuePair, void),
-    ) Allocator.Error!?NodeId {
-        if (checked_row.tags.len != produced_row.tags.len) return null;
-        if (!self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union)) return null;
-        const tags = try self.graph.arena().alloc(InstTag, produced_row.tags.len);
-        var changed = false;
-        for (checked_row.tags, produced_row.tags, tags) |checked_tag, produced_tag, *out| {
-            if (checked_tag.name != produced_tag.name or checked_tag.payloads.len != produced_tag.payloads.len) return null;
-            const payloads = try self.graph.arena().alloc(NodeId, produced_tag.payloads.len);
-            for (checked_tag.payloads, produced_tag.payloads, payloads) |checked_payload, produced_payload, *payload_out| {
-                const payload = try self.relateCheckedNodeToProducedValueInner(checked_payload, produced_payload, visiting);
-                payload_out.* = payload;
-                changed = changed or !self.graph.sameClass(payload, produced_payload);
-            }
-            out.* = .{
-                .name = produced_tag.name,
-                .checked_name = produced_tag.checked_name,
-                .payloads = payloads,
-            };
-        }
-        if (!changed) return produced_node;
-        return try self.graph.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = self.graph.rootNode(produced_row.ext),
-        } });
-    }
-
+    /// Whether a produced value's graph completes a request's. Composite
+    /// relations are explicit frames over their child relations, so type
+    /// depth never becomes native call depth; a pair already on the current
+    /// path is unchanged by assumption.
     fn requestCompletionRelation(
         self: *BodyContext,
         request_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(RequestCompletionPair, void),
     ) Allocator.Error!RequestCompletion {
+        const Frame = struct {
+            pair: RequestCompletionPair,
+            ops_start: usize,
+            next: usize,
+            relation: RequestCompletion,
+        };
+        var frames: std.ArrayListUnmanaged(Frame) = .empty;
+        defer frames.deinit(self.allocator);
+        var ops: std.ArrayListUnmanaged(RequestCompletionOp) = .empty;
+        defer ops.deinit(self.allocator);
+        errdefer for (frames.items) |frame| {
+            _ = visiting.remove(frame.pair);
+        };
+
+        var delivered: RequestCompletion = undefined;
+        var has_delivery = false;
+        if (try self.enterRequestCompletion(request_node, produced_node, visiting, &ops)) |relation| return relation;
+        try frames.append(self.allocator, .{
+            .pair = .{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) },
+            .ops_start = 0,
+            .next = 0,
+            .relation = .unchanged,
+        });
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            var finished: ?RequestCompletion = null;
+            if (has_delivery) {
+                has_delivery = false;
+                const op = ops.items[frame.next - 1];
+                switch (op.combine) {
+                    .fold => switch (delivered) {
+                        .unchanged => {},
+                        .completed => frame.relation = .completed,
+                        .mismatch => finished = .mismatch,
+                    },
+                    .unchanged_extension => if (delivered != .unchanged) {
+                        finished = .mismatch;
+                    },
+                    .backing => frame.relation = switch (delivered) {
+                        .unchanged, .completed => .completed,
+                        .mismatch => .mismatch,
+                    },
+                }
+            }
+            if (finished == null) {
+                if (frame.next < ops.items.len) {
+                    const op = ops.items[frame.next];
+                    frame.next += 1;
+                    const ops_start = ops.items.len;
+                    if (try self.enterRequestCompletion(op.request, op.produced, visiting, &ops)) |relation| {
+                        delivered = relation;
+                        has_delivery = true;
+                    } else {
+                        try frames.append(self.allocator, .{
+                            .pair = .{ .request = self.graph.rootNode(op.request), .produced = self.graph.rootNode(op.produced) },
+                            .ops_start = ops_start,
+                            .next = ops_start,
+                            .relation = .unchanged,
+                        });
+                    }
+                    continue;
+                }
+                finished = frame.relation;
+            }
+
+            const done = frames.pop().?;
+            _ = visiting.remove(done.pair);
+            ops.shrinkRetainingCapacity(done.ops_start);
+            if (frames.items.len == 0) return finished.?;
+            delivered = finished.?;
+            has_delivery = true;
+        }
+    }
+
+    /// A pair's relation when it is decided at once; otherwise mark it on the
+    /// current path, list its child relations, and return null.
+    fn enterRequestCompletion(
+        self: *BodyContext,
+        request_node: NodeId,
+        produced_node: NodeId,
+        visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        ops: *std.ArrayListUnmanaged(RequestCompletionOp),
+    ) Allocator.Error!?RequestCompletion {
+        const gpa = self.allocator;
         const request_root = self.graph.rootNode(request_node);
         const produced_root = self.graph.rootNode(produced_node);
         if (request_root == produced_root) return .unchanged;
@@ -24557,95 +24946,113 @@ const BodyContext = struct {
         const pair = RequestCompletionPair{ .request = request_root, .produced = produced_root };
         const entry = try visiting.getOrPut(pair);
         if (entry.found_existing) return .unchanged;
-        defer _ = visiting.remove(pair);
-
-        if (try self.producedPublicNamedBackingCompletion(request_root, produced_root, visiting)) |relation| {
-            return relation;
+        const start = ops.items.len;
+        const relation: ?RequestCompletion = relation: {
+            if (self.checkedPublicInspectableBacking(produced_root)) |backing| {
+                try ops.append(gpa, .{ .request = request_root, .produced = backing.node, .combine = .backing });
+                break :relation null;
+            }
+            if (self.checkedPublicInspectableBacking(request_root)) |backing| {
+                try ops.append(gpa, .{ .request = backing.node, .produced = produced_root, .combine = .backing });
+                break :relation null;
+            }
+            break :relation switch (self.graph.content(request_root)) {
+                .primitive => |request_primitive| switch (self.graph.content(produced_root)) {
+                    .primitive => |produced_primitive| if (request_primitive == produced_primitive) .unchanged else .mismatch,
+                    .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                },
+                .list => |request_elem| switch (self.graph.content(produced_root)) {
+                    .list => |produced_elem| blk: {
+                        try ops.append(gpa, .{ .request = request_elem, .produced = produced_elem, .combine = .fold });
+                        break :blk null;
+                    },
+                    .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                },
+                .box => |request_elem| switch (self.graph.content(produced_root)) {
+                    .box => |produced_elem| blk: {
+                        try ops.append(gpa, .{ .request = request_elem, .produced = produced_elem, .combine = .fold });
+                        break :blk null;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                },
+                .tuple => |request_items| switch (self.graph.content(produced_root)) {
+                    .tuple => |produced_items| blk: {
+                        if (request_items.len != produced_items.len) break :blk .mismatch;
+                        for (request_items, produced_items) |request_item, produced_item| {
+                            try ops.append(gpa, .{ .request = request_item, .produced = produced_item, .combine = .fold });
+                        }
+                        break :blk null;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                },
+                .func => |request_fn| switch (self.graph.content(produced_root)) {
+                    .func => |produced_fn| blk: {
+                        if (request_fn.args.len != produced_fn.args.len) break :blk .mismatch;
+                        for (request_fn.args, produced_fn.args) |request_arg, produced_arg| {
+                            if (!self.graph.sameClass(request_arg, produced_arg)) break :blk .mismatch;
+                        }
+                        try ops.append(gpa, .{ .request = request_fn.ret, .produced = produced_fn.ret, .combine = .fold });
+                        break :blk null;
+                    },
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                },
+                .tag_union => |request_row| switch (self.graph.content(produced_root)) {
+                    .tag_union => |produced_row| blk: {
+                        try ops.append(gpa, .{ .request = request_row.ext, .produced = produced_row.ext, .combine = .unchanged_extension });
+                        if (request_row.tags.len != produced_row.tags.len) break :blk .mismatch;
+                        for (request_row.tags, produced_row.tags) |request_tag, produced_tag| {
+                            if (request_tag.name != produced_tag.name) break :blk .mismatch;
+                            if (request_tag.payloads.len != produced_tag.payloads.len) break :blk .mismatch;
+                            for (request_tag.payloads, produced_tag.payloads) |request_payload, produced_payload| {
+                                try ops.append(gpa, .{ .request = request_payload, .produced = produced_payload, .combine = .fold });
+                            }
+                        }
+                        break :blk null;
+                    },
+                    .empty_tag_union => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                },
+                .record => |request_row| switch (self.graph.content(produced_root)) {
+                    .record => |produced_row| blk: {
+                        try ops.append(gpa, .{ .request = request_row.ext, .produced = produced_row.ext, .combine = .unchanged_extension });
+                        if (request_row.fields.len != produced_row.fields.len) break :blk .mismatch;
+                        for (request_row.fields, produced_row.fields) |request_field, produced_field| {
+                            if (request_field.name != produced_field.name) break :blk .mismatch;
+                            try ops.append(gpa, .{ .request = request_field.ty, .produced = produced_field.ty, .combine = .fold });
+                        }
+                        break :blk null;
+                    },
+                    .empty_record => .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                },
+                .empty_tag_union => switch (self.graph.content(produced_root)) {
+                    .empty_tag_union => .unchanged,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                },
+                .empty_record => switch (self.graph.content(produced_root)) {
+                    .empty_record => .unchanged,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                },
+                .erased => |request_digest| switch (self.graph.content(produced_root)) {
+                    .erased => |produced_digest| if (std.mem.eql(u8, request_digest.bytes[0..], produced_digest.bytes[0..])) .unchanged else .mismatch,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => .mismatch,
+                },
+                .zst => switch (self.graph.content(produced_root)) {
+                    .zst => .unchanged,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased => .mismatch,
+                },
+                .named,
+                .unresolved,
+                .redirect,
+                => .mismatch,
+            };
+        };
+        if (relation) |decided| {
+            ops.shrinkRetainingCapacity(start);
+            _ = visiting.remove(pair);
+            return decided;
         }
-        if (try self.requestPublicNamedBackingCompletion(request_root, produced_root, visiting)) |relation| {
-            return relation;
-        }
-
-        return switch (self.graph.content(request_root)) {
-            .primitive => |request_primitive| switch (self.graph.content(produced_root)) {
-                .primitive => |produced_primitive| if (request_primitive == produced_primitive) .unchanged else .mismatch,
-                .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
-            },
-            .list => |request_elem| switch (self.graph.content(produced_root)) {
-                .list => |produced_elem| try self.requestCompletionRelation(request_elem, produced_elem, visiting),
-                .redirect, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
-            },
-            .box => |request_elem| switch (self.graph.content(produced_root)) {
-                .box => |produced_elem| try self.requestCompletionRelation(request_elem, produced_elem, visiting),
-                .redirect, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
-            },
-            .tuple => |request_items| switch (self.graph.content(produced_root)) {
-                .tuple => |produced_items| try self.requestCompletionSliceRelation(request_items, produced_items, visiting),
-                .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
-            },
-            .func => |request_fn| switch (self.graph.content(produced_root)) {
-                .func => |produced_fn| try self.requestCompletionFunctionRelation(request_fn, produced_fn, visiting),
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
-            },
-            .tag_union => |request_row| switch (self.graph.content(produced_root)) {
-                .tag_union => |produced_row| try self.requestCompletionTagRowRelation(request_row, produced_row, visiting),
-                .empty_tag_union => .mismatch,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => .mismatch,
-            },
-            .record => |request_row| switch (self.graph.content(produced_root)) {
-                .record => |produced_row| try self.requestCompletionRecordRelation(request_row, produced_row, visiting),
-                .empty_record => .mismatch,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => .mismatch,
-            },
-            .empty_tag_union => switch (self.graph.content(produced_root)) {
-                .empty_tag_union => .unchanged,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_record, .named, .erased, .zst => .mismatch,
-            },
-            .empty_record => switch (self.graph.content(produced_root)) {
-                .empty_record => .unchanged,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .named, .erased, .zst => .mismatch,
-            },
-            .erased => |request_digest| switch (self.graph.content(produced_root)) {
-                .erased => |produced_digest| if (std.mem.eql(u8, request_digest.bytes[0..], produced_digest.bytes[0..])) .unchanged else .mismatch,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => .mismatch,
-            },
-            .zst => switch (self.graph.content(produced_root)) {
-                .zst => .unchanged,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased => .mismatch,
-            },
-            .named,
-            .unresolved,
-            .redirect,
-            => .mismatch,
-        };
-    }
-
-    fn producedPublicNamedBackingCompletion(
-        self: *BodyContext,
-        request_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!?RequestCompletion {
-        const backing = self.checkedPublicInspectableBacking(produced_node) orelse return null;
-
-        return switch (try self.requestCompletionRelation(request_node, backing.node, visiting)) {
-            .unchanged, .completed => .completed,
-            .mismatch => .mismatch,
-        };
-    }
-
-    fn requestPublicNamedBackingCompletion(
-        self: *BodyContext,
-        request_node: NodeId,
-        produced_node: NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!?RequestCompletion {
-        const backing = self.checkedPublicInspectableBacking(request_node) orelse return null;
-
-        return switch (try self.requestCompletionRelation(backing.node, produced_node, visiting)) {
-            .unchanged, .completed => .completed,
-            .mismatch => .mismatch,
-        };
+        return null;
     }
 
     fn checkedPublicInspectableBacking(self: *BodyContext, node: NodeId) ?InstBacking {
@@ -24656,81 +25063,6 @@ const BodyContext = struct {
         const backing = named.backing orelse return null;
         if (backing.authority != .checked_public or backing.use != .inspectable) return null;
         return backing;
-    }
-
-    fn requestCompletionSliceRelation(
-        self: *BodyContext,
-        request_items: []const NodeId,
-        produced_items: []const NodeId,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        if (request_items.len != produced_items.len) return .mismatch;
-        var relation: RequestCompletion = .unchanged;
-        for (request_items, produced_items) |request_item, produced_item| {
-            switch (try self.requestCompletionRelation(request_item, produced_item, visiting)) {
-                .unchanged => {},
-                .completed => relation = .completed,
-                .mismatch => return .mismatch,
-            }
-        }
-        return relation;
-    }
-
-    fn requestCompletionFunctionRelation(
-        self: *BodyContext,
-        request_fn: anytype,
-        produced_fn: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        if (request_fn.args.len != produced_fn.args.len) return .mismatch;
-        for (request_fn.args, produced_fn.args) |request_arg, produced_arg| {
-            if (!self.graph.sameClass(request_arg, produced_arg)) return .mismatch;
-        }
-        return try self.requestCompletionRelation(request_fn.ret, produced_fn.ret, visiting);
-    }
-
-    fn requestCompletionTagRowRelation(
-        self: *BodyContext,
-        request_row: anytype,
-        produced_row: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        if ((try self.requestCompletionRelation(request_row.ext, produced_row.ext, visiting)) != .unchanged) {
-            return .mismatch;
-        }
-        if (request_row.tags.len != produced_row.tags.len) return .mismatch;
-        var relation: RequestCompletion = .unchanged;
-        for (request_row.tags, produced_row.tags) |request_tag, produced_tag| {
-            if (request_tag.name != produced_tag.name) return .mismatch;
-            switch (try self.requestCompletionSliceRelation(request_tag.payloads, produced_tag.payloads, visiting)) {
-                .unchanged => {},
-                .completed => relation = .completed,
-                .mismatch => return .mismatch,
-            }
-        }
-        return relation;
-    }
-
-    fn requestCompletionRecordRelation(
-        self: *BodyContext,
-        request_row: anytype,
-        produced_row: anytype,
-        visiting: *std.AutoHashMap(RequestCompletionPair, void),
-    ) Allocator.Error!RequestCompletion {
-        if ((try self.requestCompletionRelation(request_row.ext, produced_row.ext, visiting)) != .unchanged) {
-            return .mismatch;
-        }
-        if (request_row.fields.len != produced_row.fields.len) return .mismatch;
-        var relation: RequestCompletion = .unchanged;
-        for (request_row.fields, produced_row.fields) |request_field, produced_field| {
-            if (request_field.name != produced_field.name) return .mismatch;
-            switch (try self.requestCompletionRelation(request_field.ty, produced_field.ty, visiting)) {
-                .unchanged => {},
-                .completed => relation = .completed,
-                .mismatch => return .mismatch,
-            }
-        }
-        return relation;
     }
 
     fn completedFunctionNodeForLoweredRet(
@@ -32470,12 +32802,15 @@ const BodyContext = struct {
         } } });
     }
 
+    /// The iterator over `backing_fields[start..]`: each level's length is
+    /// lowered on the way in, and each level's step, which continues with the
+    /// next level's iterator, on the way out.
     fn lowerFieldNamesValueIterFromIndex(
         self: *BodyContext,
         backing_fields: []const Type.Field,
         items_ty: Type.TypeId,
         items_local: DraftLocalId,
-        index: usize,
+        start: usize,
         field_handle_ty: Type.TypeId,
         iter_ty: Type.TypeId,
         iter_backing_ty: Type.TypeId,
@@ -32487,63 +32822,58 @@ const BodyContext = struct {
         checked_source_ty: checked.CheckedTypeId,
         source_expr_id: checked.CheckedExprId,
     ) Allocator.Error!DraftExprId {
-        const len_expr = try self.lowerFieldNamesIterLen(backing_fields.len - index, len_ty, if (size_local == null) .all else .for_size);
-
-        if (index == backing_fields.len) {
-            const step_expr = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, index, if (size_local == null) .all else .for_size, step_fn_ty, step_ret_ty);
-            return try self.lowerInterpolationIterRecord(iter_ty, iter_backing_ty, len_expr, step_expr);
+        const mode: FieldNamesIterMode = if (size_local == null) .all else .for_size;
+        var lens: std.ArrayListUnmanaged(DraftExprId) = .empty;
+        defer lens.deinit(self.allocator);
+        var index = start;
+        while (true) : (index += 1) {
+            try lens.append(self.allocator, try self.lowerFieldNamesIterLen(backing_fields.len - index, len_ty, mode));
+            if (index == backing_fields.len) break;
         }
+        const done_step = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, backing_fields.len, mode, step_fn_ty, step_ret_ty);
+        var rest_expr = try self.lowerInterpolationIterRecord(iter_ty, iter_backing_ty, lens.items[lens.items.len - 1], done_step);
 
-        const rest_expr = try self.lowerFieldNamesValueIterFromIndex(
-            backing_fields,
-            items_ty,
-            items_local,
-            index + 1,
-            field_handle_ty,
-            iter_ty,
-            iter_backing_ty,
-            len_ty,
-            step_fn_ty,
-            step_ret_ty,
-            size_local,
-            arg_tys,
-            checked_source_ty,
-            source_expr_id,
-        );
-        const item_expr = try self.addFieldAccessExpr(
-            try self.localExpr(items_local, items_ty),
-            backing_fields[index].name,
-            field_handle_ty,
-        );
-        const step_expr = if (size_local) |local|
-            try self.lowerFieldNamesSizeFilteredStep(
-                checked_source_ty,
-                source_expr_id,
-                index,
-                item_expr,
-                rest_expr,
-                step_fn_ty,
-                step_ret_ty,
-                local,
-                arg_tys[1],
-            )
-        else
-            try self.lowerFieldNamesOneStep(
-                checked_source_ty,
-                source_expr_id,
-                index,
-                item_expr,
-                rest_expr,
-                step_fn_ty,
-                step_ret_ty,
+        index = backing_fields.len;
+        while (index > start) {
+            index -= 1;
+            const item_expr = try self.addFieldAccessExpr(
+                try self.localExpr(items_local, items_ty),
+                backing_fields[index].name,
+                field_handle_ty,
             );
-        return try self.lowerInterpolationIterRecord(iter_ty, iter_backing_ty, len_expr, step_expr);
+            const step_expr = if (size_local) |local|
+                try self.lowerFieldNamesSizeFilteredStep(
+                    checked_source_ty,
+                    source_expr_id,
+                    index,
+                    item_expr,
+                    rest_expr,
+                    step_fn_ty,
+                    step_ret_ty,
+                    local,
+                    arg_tys[1],
+                )
+            else
+                try self.lowerFieldNamesOneStep(
+                    checked_source_ty,
+                    source_expr_id,
+                    index,
+                    item_expr,
+                    rest_expr,
+                    step_fn_ty,
+                    step_ret_ty,
+                );
+            rest_expr = try self.lowerInterpolationIterRecord(iter_ty, iter_backing_ty, lens.items[index - start], step_expr);
+        }
+        return rest_expr;
     }
 
+    /// The iterator over `fields[start..]`, built as
+    /// `lowerFieldNamesValueIterFromIndex` builds its own.
     fn lowerFieldNamesStaticIterFromIndex(
         self: *BodyContext,
         fields: []const Type.Field,
-        index: usize,
+        start: usize,
         field_handle_ty: Type.TypeId,
         iter_ty: Type.TypeId,
         backing_ty: Type.TypeId,
@@ -32553,36 +32883,32 @@ const BodyContext = struct {
         checked_source_ty: checked.CheckedTypeId,
         source_expr_id: checked.CheckedExprId,
     ) Allocator.Error!DraftExprId {
-        const len_expr = try self.lowerFieldNamesIterLen(fields.len - index, len_ty, .all);
-
-        if (index == fields.len) {
-            const step_expr = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, index, .all, step_fn_ty, step_ret_ty);
-            return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        var lens: std.ArrayListUnmanaged(DraftExprId) = .empty;
+        defer lens.deinit(self.allocator);
+        var index = start;
+        while (true) : (index += 1) {
+            try lens.append(self.allocator, try self.lowerFieldNamesIterLen(fields.len - index, len_ty, .all));
+            if (index == fields.len) break;
         }
+        const done_step = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, fields.len, .all, step_fn_ty, step_ret_ty);
+        var rest_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, lens.items[lens.items.len - 1], done_step);
 
-        const rest_expr = try self.lowerFieldNamesStaticIterFromIndex(
-            fields,
-            index + 1,
-            field_handle_ty,
-            iter_ty,
-            backing_ty,
-            len_ty,
-            step_fn_ty,
-            step_ret_ty,
-            checked_source_ty,
-            source_expr_id,
-        );
-        const item_expr = try self.lowerRecordFieldHandle(field_handle_ty, fields[index], index);
-        const step_expr = try self.lowerFieldNamesOneStep(
-            checked_source_ty,
-            source_expr_id,
-            index,
-            item_expr,
-            rest_expr,
-            step_fn_ty,
-            step_ret_ty,
-        );
-        return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        index = fields.len;
+        while (index > start) {
+            index -= 1;
+            const item_expr = try self.lowerRecordFieldHandle(field_handle_ty, fields[index], index);
+            const step_expr = try self.lowerFieldNamesOneStep(
+                checked_source_ty,
+                source_expr_id,
+                index,
+                item_expr,
+                rest_expr,
+                step_fn_ty,
+                step_ret_ty,
+            );
+            rest_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, lens.items[index - start], step_expr);
+        }
+        return rest_expr;
     }
 
     fn lowerFieldNamesForSizeIter(
@@ -32674,6 +33000,9 @@ const BodyContext = struct {
         );
     }
 
+    /// The iterator over the fields from `start_index` whose names have
+    /// `target_len` bytes, built as `lowerFieldNamesValueIterFromIndex`
+    /// builds its own.
     fn lowerFieldNamesStaticFilteredIterFromIndex(
         self: *BodyContext,
         fields: []const Type.Field,
@@ -32688,40 +33017,39 @@ const BodyContext = struct {
         checked_source_ty: checked.CheckedTypeId,
         source_expr_id: checked.CheckedExprId,
     ) Allocator.Error!DraftExprId {
-        const next_index = self.nextFieldIndexForLen(fields, start_index, target_len);
-        const remaining = self.countFieldNamesForLenFrom(fields, start_index, target_len);
-        const len_expr = try self.lowerFieldNamesIterLen(remaining, len_ty, .all);
+        const Level = struct { index: usize, len: DraftExprId };
+        var levels: std.ArrayListUnmanaged(Level) = .empty;
+        defer levels.deinit(self.allocator);
+        var remaining = self.countFieldNamesForLenFrom(fields, start_index, target_len);
+        var scan = start_index;
+        const done_start = while (true) {
+            const len_expr = try self.lowerFieldNamesIterLen(remaining, len_ty, .all);
+            const index = self.nextFieldIndexForLen(fields, scan, target_len) orelse {
+                try levels.append(self.allocator, .{ .index = scan, .len = len_expr });
+                break scan;
+            };
+            try levels.append(self.allocator, .{ .index = index, .len = len_expr });
+            remaining -= 1;
+            scan = index + 1;
+        };
+        const done_level = levels.pop().?;
+        const done_step = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, done_start, .all, step_fn_ty, step_ret_ty);
+        var rest_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, done_level.len, done_step);
 
-        if (next_index == null) {
-            const step_expr = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, start_index, .all, step_fn_ty, step_ret_ty);
-            return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        while (levels.pop()) |level| {
+            const item_expr = try self.lowerRecordFieldHandle(field_handle_ty, fields[level.index], level.index);
+            const step_expr = try self.lowerFieldNamesOneStep(
+                checked_source_ty,
+                source_expr_id,
+                level.index,
+                item_expr,
+                rest_expr,
+                step_fn_ty,
+                step_ret_ty,
+            );
+            rest_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, level.len, step_expr);
         }
-
-        const index = next_index.?;
-        const rest_expr = try self.lowerFieldNamesStaticFilteredIterFromIndex(
-            fields,
-            index + 1,
-            target_len,
-            field_handle_ty,
-            iter_ty,
-            backing_ty,
-            len_ty,
-            step_fn_ty,
-            step_ret_ty,
-            checked_source_ty,
-            source_expr_id,
-        );
-        const item_expr = try self.lowerRecordFieldHandle(field_handle_ty, fields[index], index);
-        const step_expr = try self.lowerFieldNamesOneStep(
-            checked_source_ty,
-            source_expr_id,
-            index,
-            item_expr,
-            rest_expr,
-            step_fn_ty,
-            step_ret_ty,
-        );
-        return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        return rest_expr;
     }
 
     fn nextFieldIndexForLen(
@@ -35121,7 +35449,7 @@ const BodyContext = struct {
             ret_ty,
             precomputed_plan,
         );
-        var plan_inputs = try self.serializationPlanInputs(.parser, shape_ty, encoding_ty, precomputed_plan);
+        var plan_inputs = try self.serializationPlanInputs(.parser, shape_ty, precomputed_plan);
         defer plan_inputs.deinit(self.allocator);
         const str_ty = try self.primitiveType(.str);
         const arg_tys = try self.allocator.alloc(Type.TypeId, 2 + plan_inputs.locals.items.len);
@@ -35169,7 +35497,7 @@ const BodyContext = struct {
         const def_id = try self.draft.reserveDef(self.draft.current_owner);
         try self.parser_defs.put(address, .{ .reserved = def_id });
 
-        var plan_inputs = try self.serializationPlanInputs(.parser, shape_ty, encoding_ty, precomputed_plan);
+        var plan_inputs = try self.serializationPlanInputs(.parser, shape_ty, precomputed_plan);
         defer plan_inputs.deinit(self.allocator);
         const str_ty = try self.primitiveType(.str);
         var helper_plan: ?SerializationHelperPlan = if (precomputed_plan) |plan|
@@ -39340,60 +39668,43 @@ const BodyContext = struct {
         if (self.checkedTypeIsClosed(ty)) return true;
         var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
-        return try self.checkedTypeSealsWithoutSpecializationInner(ty, &visited);
-    }
-
-    fn checkedTypeSealsWithoutSpecializationInner(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        visited: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        if ((try visited.getOrPut(checked_ty)).found_existing) return true;
-
-        const payload = checkedPayload(self.view, checked_ty);
-        return switch (payload) {
-            .pending => Common.invariant("pending checked type reached Monotype sealing scan"),
-            .err, .empty_record, .empty_tag_union => true,
-            .flex, .rigid => payload.variableSealsToRowDefault(),
-            .alias => |alias| (try self.checkedTypeSpanSealsWithoutSpecialization(alias.args, visited)) and
-                try self.checkedTypeSealsWithoutSpecializationInner(alias.backing, visited),
-            .record => |record| (try self.checkedRecordFieldsSealWithoutSpecialization(record.fields, visited)) and
-                try self.checkedTypeSealsWithoutSpecializationInner(record.ext, visited),
-            .tuple => |items| try self.checkedTypeSpanSealsWithoutSpecialization(items, visited),
-            .nominal => |nominal| (try self.checkedTypeSpanSealsWithoutSpecialization(nominal.args, visited)) and
-                try self.checkedTypeSpanSealsWithoutSpecialization(nominal.padding_field_types, visited),
-            .function => |function| (try self.checkedTypeSpanSealsWithoutSpecialization(function.args, visited)) and
-                try self.checkedTypeSealsWithoutSpecializationInner(function.ret, visited),
-            .tag_union => |tag_union| blk: {
-                for (tag_union.tags) |tag| {
-                    if (!try self.checkedTypeSpanSealsWithoutSpecialization(tag.argsSlice(self.view.types), visited)) break :blk false;
-                }
-                break :blk try self.checkedTypeSealsWithoutSpecializationInner(tag_union.ext, visited);
-            },
-        };
-    }
-
-    fn checkedTypeSpanSealsWithoutSpecialization(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-        visited: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (checked_tys) |ty| {
-            if (!try self.checkedTypeSealsWithoutSpecializationInner(ty, visited)) return false;
-        }
-        return true;
-    }
-
-    fn checkedRecordFieldsSealWithoutSpecialization(
-        self: *BodyContext,
-        fields: []const checked.CheckedRecordField,
-        visited: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (fields) |field| {
-            if (!try self.checkedTypeSealsWithoutSpecializationInner(field.ty, visited)) return false;
-            if (field.kind.undeterminedVariable()) |variable| {
-                if (!try self.checkedTypeSealsWithoutSpecializationInner(variable, visited)) return false;
+        var pending: std.ArrayListUnmanaged(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, ty);
+        while (pending.pop()) |next| {
+            if ((try visited.getOrPut(next)).found_existing) continue;
+            const start = pending.items.len;
+            const payload = checkedPayload(self.view, next);
+            switch (payload) {
+                .pending => Common.invariant("pending checked type reached Monotype sealing scan"),
+                .err, .empty_record, .empty_tag_union => {},
+                .flex, .rigid => if (!payload.variableSealsToRowDefault()) return false,
+                .alias => |alias| {
+                    try pending.appendSlice(self.allocator, alias.args);
+                    try pending.append(self.allocator, alias.backing);
+                },
+                .record => |record| {
+                    for (record.fields) |field| {
+                        try pending.append(self.allocator, field.ty);
+                        if (field.kind.undeterminedVariable()) |variable| try pending.append(self.allocator, variable);
+                    }
+                    try pending.append(self.allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .nominal => |nominal| {
+                    try pending.appendSlice(self.allocator, nominal.args);
+                    try pending.appendSlice(self.allocator, nominal.padding_field_types);
+                },
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(self.view.types));
+                    try pending.append(self.allocator, tag_union.ext);
+                },
             }
+            std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
         }
         return true;
     }
@@ -40603,146 +40914,241 @@ const BodyContext = struct {
         return result.root;
     }
 
+    /// One step of lowering a stored const type: a child type, or a label to
+    /// intern into the program's name store, in the order lowering takes them.
+    const ConstCaptureTypeOp = union(enum) {
+        child: check.ConstStore.ConstTypeId,
+        field_name: names.RecordFieldNameId,
+        field_default: ?check.ConstStore.TypeFieldDefault,
+        tag_name: names.TagNameId,
+        /// A named type's definition, interned between its declared order and
+        /// its backing.
+        named_def: check.ConstStore.TypeDef,
+        /// A named type's lowered arguments, the first `count` results, added
+        /// as a span before its backing lowers.
+        args_span: usize,
+    };
+
+    /// A step's result, read back by the frame that ran it.
+    const ConstCaptureTypeResult = union(enum) {
+        ty: Type.TypeId,
+        field_name: names.RecordFieldNameId,
+        field_default: ?Type.FieldDefault,
+        tag_name: names.TagNameId,
+        named_def: Type.TypeDef,
+        span: Type.Span,
+    };
+
+    const ConstCaptureTypeFrame = struct {
+        ty: check.ConstStore.ConstTypeId,
+        /// Null for an alias, which shares its backing's type.
+        slot: ?Type.Store.RecursiveSlot,
+        ops_start: usize,
+        next: usize,
+        results_start: usize,
+    };
+
+    /// Lower a stored const type, memoized in `map`. Each composite type is
+    /// an explicit frame whose steps run in order, so type depth never
+    /// becomes native call depth.
     fn lowerConstCaptureTypeInner(
         self: *BodyContext,
         store_view: ModuleView,
-        ty: check.ConstStore.ConstTypeId,
+        root: check.ConstStore.ConstTypeId,
         map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
     ) Allocator.Error!Type.TypeId {
-        if (map.get(ty)) |existing| return existing;
-        const stored = store_view.const_store.type_store.get(ty);
-        if (stored == .named and stored.named.kind == .alias) {
-            // Stored aliases retain the checked acyclic backing chain. Memoize
-            // its runtime identity without recreating source-only wrappers.
-            const backing = stored.named.backing orelse
-                Common.invariant("stored transparent alias had no backing type");
-            const lowered = try self.lowerConstCaptureTypeInner(store_view, backing.ty, map);
-            try map.put(ty, lowered);
-            return lowered;
+        var frames: std.ArrayListUnmanaged(ConstCaptureTypeFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        var ops: std.ArrayListUnmanaged(ConstCaptureTypeOp) = .empty;
+        defer ops.deinit(self.allocator);
+        var results: std.ArrayListUnmanaged(ConstCaptureTypeResult) = .empty;
+        defer results.deinit(self.allocator);
+        errdefer for (frames.items) |frame| {
+            _ = map.remove(frame.ty);
+            if (frame.slot) |slot| {
+                self.typeStore().abortRecursive(slot);
+                break;
+            }
+        };
+
+        if (try self.enterConstCaptureType(store_view, root, map, &frames, &ops, results.items.len)) |ty| return ty;
+        while (true) {
+            const index = frames.items.len - 1;
+            const frame = frames.items[index];
+            if (frame.next < ops.items.len) {
+                const op = ops.items[frame.next];
+                frames.items[index].next += 1;
+                const result: ConstCaptureTypeResult = switch (op) {
+                    .child => |child| if (try self.enterConstCaptureType(store_view, child, map, &frames, &ops, results.items.len)) |ty| .{ .ty = ty } else continue,
+                    .field_name => |name| .{ .field_name = try self.constRecordFieldName(store_view, name) },
+                    .field_default => |default| .{ .field_default = try self.constFieldDefault(store_view, default) },
+                    .tag_name => |name| .{ .tag_name = try self.constTagName(store_view, name) },
+                    .named_def => |def| .{ .named_def = try self.constTypeDef(store_view, def) },
+                    .args_span => |count| .{ .span = try self.addConstCaptureTypeSpan(results.items[frame.results_start..][0..count]) },
+                };
+                try results.append(self.allocator, result);
+                continue;
+            }
+
+            const ty = try self.finishConstCaptureType(store_view, map, frame, results.items[frame.results_start..]);
+            _ = frames.pop();
+            ops.shrinkRetainingCapacity(frame.ops_start);
+            results.shrinkRetainingCapacity(frame.results_start);
+            if (frames.items.len == 0) return ty;
+            try results.append(self.allocator, .{ .ty = ty });
         }
-        const context = ConstTypeLowerContext{
-            .body = self,
-            .store_view = store_view,
-            .ty = ty,
-            .map = map,
-        };
-        return self.typeStore().addRecursive(context, ConstTypeLowerContext.fill) catch |err| {
-            _ = map.remove(ty);
-            return err;
-        };
     }
 
-    const ConstTypeLowerContext = struct {
-        body: *BodyContext,
-        store_view: ModuleView,
-        ty: check.ConstStore.ConstTypeId,
-        map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
-
-        fn fill(self: ConstTypeLowerContext, reserved: Type.TypeId) Allocator.Error!Type.Content {
-            try self.map.put(self.ty, reserved);
-            return try self.body.lowerConstCaptureTypeContent(self.store_view, self.ty, self.map);
-        }
-    };
-
-    fn lowerConstCaptureTypeContent(
+    /// The lowered type when it is memoized; otherwise push the frame that
+    /// lowers it.
+    fn enterConstCaptureType(
         self: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
         map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
-    ) Allocator.Error!Type.Content {
+        frames: *std.ArrayListUnmanaged(ConstCaptureTypeFrame),
+        ops: *std.ArrayListUnmanaged(ConstCaptureTypeOp),
+        results_start: usize,
+    ) Allocator.Error!?Type.TypeId {
+        if (map.get(ty)) |existing| return existing;
+        const gpa = self.allocator;
         const type_store = &store_view.const_store.type_store;
-        return switch (type_store.get(ty)) {
+        const stored = type_store.get(ty);
+        const ops_start = ops.items.len;
+        // Stored aliases retain the checked acyclic backing chain. Memoize
+        // their runtime identity without recreating source-only wrappers.
+        const slot: ?Type.Store.RecursiveSlot = if (stored == .named and stored.named.kind == .alias) null else blk: {
+            const reserved = try self.typeStore().beginRecursive();
+            try map.put(ty, reserved.ty);
+            break :blk reserved;
+        };
+        try frames.append(gpa, .{ .ty = ty, .slot = slot, .ops_start = ops_start, .next = ops_start, .results_start = results_start });
+        if (slot == null) {
+            const backing = stored.named.backing orelse
+                Common.invariant("stored transparent alias had no backing type");
+            try ops.append(gpa, .{ .child = backing.ty });
+            return null;
+        }
+        switch (stored) {
+            .primitive, .zst, .erased => {},
+            .list, .box => |elem| try ops.append(gpa, .{ .child = elem }),
+            .tuple => |items| for (type_store.typeSpan(items)) |item| try ops.append(gpa, .{ .child = item }),
+            .func => |func| {
+                for (type_store.typeSpan(func.args)) |arg| try ops.append(gpa, .{ .child = arg });
+                try ops.append(gpa, .{ .child = func.ret });
+            },
+            .record => |fields| for (type_store.fieldSpan(fields)) |field| {
+                try ops.append(gpa, .{ .field_name = field.name });
+                try ops.append(gpa, .{ .child = field.ty });
+                if (field.value_ty) |value_ty| try ops.append(gpa, .{ .child = value_ty });
+                try ops.append(gpa, .{ .field_default = field.default });
+            },
+            .tag_union => |tags| for (type_store.tagSpan(tags)) |tag| {
+                for (type_store.typeSpan(tag.payloads)) |payload| try ops.append(gpa, .{ .child = payload });
+                try ops.append(gpa, .{ .tag_name = tag.name });
+                try ops.append(gpa, .{ .tag_name = tag.checked_name });
+            },
+            .named => |named| {
+                for (type_store.typeSpan(named.args)) |arg| try ops.append(gpa, .{ .child = arg });
+                for (type_store.declaredFieldSpan(named.declared_order)) |entry| switch (entry) {
+                    .named => |name| try ops.append(gpa, .{ .field_name = name }),
+                    .padding => |padding| try ops.append(gpa, .{ .child = padding }),
+                };
+                try ops.append(gpa, .{ .named_def = named.def });
+                try ops.append(gpa, .{ .args_span = type_store.typeSpan(named.args).len });
+                if (named.backing) |backing| try ops.append(gpa, .{ .child = backing.ty });
+            },
+        }
+        return null;
+    }
+
+    fn finishConstCaptureType(
+        self: *BodyContext,
+        store_view: ModuleView,
+        map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
+        frame: ConstCaptureTypeFrame,
+        results: []const ConstCaptureTypeResult,
+    ) Allocator.Error!Type.TypeId {
+        const slot = frame.slot orelse {
+            const backing = results[0].ty;
+            try map.put(frame.ty, backing);
+            return backing;
+        };
+        const gpa = self.allocator;
+        const type_store = &store_view.const_store.type_store;
+        var cursor: usize = 0;
+        const content: Type.Content = switch (type_store.get(frame.ty)) {
             .primitive => |primitive| .{ .primitive = monotypePrimitive(primitive) },
             .zst => .zst,
             .erased => |erased| .{ .erased = erased },
-            .list => |elem| .{ .list = try self.lowerConstCaptureTypeInner(store_view, elem, map) },
-            .box => |elem| .{ .box = try self.lowerConstCaptureTypeInner(store_view, elem, map) },
-            .tuple => |items| blk: {
-                const source = type_store.typeSpan(items);
-                const out = try self.allocator.alloc(Type.TypeId, source.len);
-                defer self.allocator.free(out);
-                for (source, 0..) |item, index| {
-                    out[index] = try self.lowerConstCaptureTypeInner(store_view, item, map);
-                }
-                break :blk .{ .tuple = try self.typeStore().addSpan(out) };
-            },
-            .func => |func| blk: {
-                const source = type_store.typeSpan(func.args);
-                const out = try self.allocator.alloc(Type.TypeId, source.len);
-                defer self.allocator.free(out);
-                for (source, 0..) |arg, index| {
-                    out[index] = try self.lowerConstCaptureTypeInner(store_view, arg, map);
-                }
-                break :blk .{ .func = .{
-                    .args = try self.typeStore().addSpan(out),
-                    .ret = try self.lowerConstCaptureTypeInner(store_view, func.ret, map),
-                } };
-            },
+            .list => .{ .list = results[0].ty },
+            .box => .{ .box = results[0].ty },
+            .tuple => .{ .tuple = try self.addConstCaptureTypeSpan(results) },
+            .func => .{ .func = .{
+                .args = try self.addConstCaptureTypeSpan(results[0 .. results.len - 1]),
+                .ret = results[results.len - 1].ty,
+            } },
             .record => |fields| blk: {
                 const source = type_store.fieldSpan(fields);
-                const out = try self.allocator.alloc(Type.Field, source.len);
-                defer self.allocator.free(out);
-                for (source, 0..) |field, index| {
-                    out[index] = .{
-                        .name = try self.constRecordFieldName(store_view, field.name),
-                        .ty = try self.lowerConstCaptureTypeInner(store_view, field.ty, map),
-                        .value_ty = if (field.value_ty) |value_ty|
-                            try self.lowerConstCaptureTypeInner(store_view, value_ty, map)
-                        else
-                            null,
-                        .default = try self.constFieldDefault(store_view, field.default),
-                    };
+                const out = try gpa.alloc(Type.Field, source.len);
+                defer gpa.free(out);
+                for (source, out) |field, *slot_out| {
+                    const name = results[cursor].field_name;
+                    const field_ty = results[cursor + 1].ty;
+                    cursor += 2;
+                    const value_ty: ?Type.TypeId = if (field.value_ty != null) value_blk: {
+                        const lowered = results[cursor].ty;
+                        cursor += 1;
+                        break :value_blk lowered;
+                    } else null;
+                    const default = results[cursor].field_default;
+                    cursor += 1;
+                    slot_out.* = .{ .name = name, .ty = field_ty, .value_ty = value_ty, .default = default };
                 }
                 break :blk .{ .record = try self.typeStore().addRecordFields(self.nameStore(), out) };
             },
             .tag_union => |tags| blk: {
                 const source = type_store.tagSpan(tags);
-                const out = try self.allocator.alloc(Type.Tag, source.len);
-                defer self.allocator.free(out);
-                for (source, 0..) |tag, index| {
-                    const payloads = type_store.typeSpan(tag.payloads);
-                    const out_payloads = try self.allocator.alloc(Type.TypeId, payloads.len);
-                    defer self.allocator.free(out_payloads);
-                    for (payloads, 0..) |payload, payload_index| {
-                        out_payloads[payload_index] = try self.lowerConstCaptureTypeInner(store_view, payload, map);
-                    }
-                    out[index] = .{
-                        .name = try self.constTagName(store_view, tag.name),
-                        .checked_name = try self.constTagName(store_view, tag.checked_name),
-                        .payloads = try self.typeStore().addSpan(out_payloads),
-                    };
+                const out = try gpa.alloc(Type.Tag, source.len);
+                defer gpa.free(out);
+                for (source, out) |tag, *slot_out| {
+                    const payload_count = type_store.typeSpan(tag.payloads).len;
+                    const payloads = results[cursor..][0..payload_count];
+                    cursor += payload_count;
+                    const name = results[cursor].tag_name;
+                    const checked_name = results[cursor + 1].tag_name;
+                    cursor += 2;
+                    slot_out.* = .{ .name = name, .checked_name = checked_name, .payloads = try self.addConstCaptureTypeSpan(payloads) };
                 }
                 break :blk .{ .tag_union = try self.typeStore().addTagVariants(self.nameStore(), out) };
             },
             .named => |named| blk: {
-                const args = type_store.typeSpan(named.args);
-                const out_args = try self.allocator.alloc(Type.TypeId, args.len);
-                defer self.allocator.free(out_args);
-                for (args, 0..) |arg, index| {
-                    out_args[index] = try self.lowerConstCaptureTypeInner(store_view, arg, map);
-                }
-
+                const arg_count = type_store.typeSpan(named.args).len;
+                cursor = arg_count;
                 const declared = type_store.declaredFieldSpan(named.declared_order);
-                const out_declared = try self.allocator.alloc(Type.DeclaredField, declared.len);
-                defer self.allocator.free(out_declared);
-                for (declared, 0..) |entry, index| {
-                    out_declared[index] = switch (entry) {
-                        .named => |name| .{ .named = try self.constRecordFieldName(store_view, name) },
-                        .padding => |padding| .{ .padding = try self.lowerConstCaptureTypeInner(store_view, padding, map) },
+                const out_declared = try gpa.alloc(Type.DeclaredField, declared.len);
+                defer gpa.free(out_declared);
+                for (declared, out_declared) |entry, *slot_out| {
+                    slot_out.* = switch (entry) {
+                        .named => .{ .named = results[cursor].field_name },
+                        .padding => .{ .padding = results[cursor].ty },
                     };
+                    cursor += 1;
                 }
-
+                const def = results[cursor].named_def;
+                const args_span = results[cursor + 1].span;
+                cursor += 2;
                 break :blk .{ .named = .{
                     .named_type = .{
                         .module = named.named_type.module,
                         .ty = named.named_type.ty,
                     },
-                    .def = try self.constTypeDef(store_view, named.def),
+                    .def = def,
                     .kind = monotypeNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
-                    .args = try self.typeStore().addSpan(out_args),
+                    .args = args_span,
                     .backing = if (named.backing) |backing| .{
-                        .ty = try self.lowerConstCaptureTypeInner(store_view, backing.ty, map),
+                        .ty = results[cursor].ty,
                         .use = monotypeBackingUse(backing.use),
                         .authority = monotypeBackingAuthority(backing.authority),
                     } else null,
@@ -40750,6 +41156,15 @@ const BodyContext = struct {
                 } };
             },
         };
+        self.typeStore().finishRecursive(slot, content);
+        return slot.ty;
+    }
+
+    fn addConstCaptureTypeSpan(self: *BodyContext, results: []const ConstCaptureTypeResult) Allocator.Error!Type.Span {
+        const tys = try self.allocator.alloc(Type.TypeId, results.len);
+        defer self.allocator.free(tys);
+        for (results, tys) |result, *ty| ty.* = result.ty;
+        return try self.typeStore().addSpan(tys);
     }
 
     fn constRecordFieldName(
@@ -42740,9 +43155,13 @@ const BodyContext = struct {
     }
 
     fn sameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId) bool {
-        var visiting = std.AutoHashMap(TypePair, void).init(self.allocator);
-        defer visiting.deinit();
-        return self.sameTypeInner(expected, actual, &visiting);
+        var equality = SameTypeEquality{
+            .ctx = self,
+            .visiting = std.AutoHashMap(TypePair, void).init(self.allocator),
+        };
+        defer equality.visiting.deinit();
+        return SameTypeEquality.Eval.run(self.allocator, &equality, .{ .same = .{ .expected = expected, .actual = actual } }) catch
+            Common.invariant("monotype equality could not record a recursive type pair");
     }
 
     const TypePair = struct {
@@ -42750,200 +43169,171 @@ const BodyContext = struct {
         actual: Type.TypeId,
     };
 
-    fn sameTypeInner(
-        self: *BodyContext,
-        expected: Type.TypeId,
-        actual: Type.TypeId,
-        visiting: *std.AutoHashMap(TypePair, void),
-    ) bool {
-        if (expected == actual) return true;
-        if (monoAliasBacking(self.typeStore(), expected)) |backing| {
-            if (self.sameTypeInner(backing, actual, visiting)) return true;
-        }
-        if (monoAliasBacking(self.typeStore(), actual)) |backing| {
-            if (self.sameTypeInner(expected, backing, visiting)) return true;
-        }
-        const expected_digest = self.typeStore().typeDigestCached(self.nameStore(), expected, null);
-        const actual_digest = self.typeStore().typeDigestCached(self.nameStore(), actual, null);
-        if (std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..])) return true;
+    /// Type equality through alias spellings. A pair is equal when either
+    /// side's alias backing is equal to the other, or when their contents
+    /// are; a pair already on the current path is equal by assumption, which
+    /// is what lets recursive types answer. Evaluated on explicit stacks.
+    const SameTypeEquality = struct {
+        ctx: *BodyContext,
+        visiting: std.AutoHashMap(TypePair, void),
 
-        const pair = TypePair{ .expected = expected, .actual = actual };
-        if (visiting.contains(pair)) return true;
-        visiting.put(pair, {}) catch Common.invariant("monotype equality could not record a recursive type pair");
-        defer _ = visiting.remove(pair);
-
-        return self.sameTypeContent(expected, actual, visiting);
-    }
-
-    fn sameTypeContent(
-        self: *BodyContext,
-        expected: Type.TypeId,
-        actual: Type.TypeId,
-        visiting: *std.AutoHashMap(TypePair, void),
-    ) bool {
-        const expected_content = self.typeStore().get(expected);
-        const actual_content = self.typeStore().get(actual);
-        return switch (expected_content) {
-            .primitive => |primitive| switch (actual_content) {
-                .primitive => |actual_primitive| primitive == actual_primitive,
-                .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
-            },
-            .named => |named| switch (actual_content) {
-                .named => |actual_named| self.sameNamedType(named, actual_named, visiting),
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
-            },
-            .record => |fields| switch (actual_content) {
-                .record => |actual_fields| self.sameRecordFieldNames(fields, actual_fields, visiting),
-                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
-            },
-            .tuple => |items| switch (actual_content) {
-                .tuple => |actual_items| self.sameTypeSpans(items, actual_items, visiting),
-                .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => false,
-            },
-            .tag_union => |tags| switch (actual_content) {
-                .tag_union => |actual_tags| self.sameTags(tags, actual_tags, visiting),
-                .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => false,
-            },
-            .list => |elem| switch (actual_content) {
-                .list => |actual_elem| self.sameTypeInner(elem, actual_elem, visiting),
-                .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => false,
-            },
-            .box => |elem| switch (actual_content) {
-                .box => |actual_elem| self.sameTypeInner(elem, actual_elem, visiting),
-                .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => false,
-            },
-            .func => |function| switch (actual_content) {
-                .func => |actual_function| self.sameTypeSpans(function.args, actual_function.args, visiting) and
-                    self.sameTypeInner(function.ret, actual_function.ret, visiting),
-                .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => false,
-            },
-            .erased => |erased| switch (actual_content) {
-                .erased => |actual_erased| std.mem.eql(u8, erased.bytes[0..], actual_erased.bytes[0..]),
-                .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .zst => false,
-            },
-            .zst => switch (actual_content) {
-                .zst => true,
-                .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .erased => false,
-            },
+        const Leaf = union(enum) {
+            same: TypePair,
+            content: TypePair,
         };
-    }
+        const Eval = collections.AnyAll.Evaluation(Leaf, SameTypeEquality);
 
-    fn sameNamedType(
-        self: *BodyContext,
-        expected: anytype,
-        actual: anytype,
-        visiting: *std.AutoHashMap(TypePair, void),
-    ) bool {
-        if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
-        if (expected.def.module != actual.def.module) return false;
-        if (expected.def.source_decl != actual.def.source_decl) return false;
-        if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
-        if (expected.kind != actual.kind) return false;
-        if (expected.builtin_owner != actual.builtin_owner) return false;
-        if (!self.sameTypeSpans(expected.args, actual.args, visiting)) return false;
-        if (!self.sameNamedBacking(expected.backing, actual.backing, visiting)) return false;
-        return self.sameDeclaredOrder(expected.declared_order, actual.declared_order, visiting);
-    }
-
-    fn sameNamedBacking(
-        self: *BodyContext,
-        expected: anytype,
-        actual: anytype,
-        visiting: *std.AutoHashMap(TypePair, void),
-    ) bool {
-        if (expected == null and actual == null) return true;
-        if (expected == null or actual == null) return false;
-
-        const expected_backing = expected.?;
-        const actual_backing = actual.?;
-        if (expected_backing.use != actual_backing.use) return false;
-        if (expected_backing.authority != actual_backing.authority) return false;
-        return self.sameTypeInner(expected_backing.ty, actual_backing.ty, visiting);
-    }
-
-    fn sameDeclaredOrder(
-        self: *BodyContext,
-        expected: Type.Span,
-        actual: Type.Span,
-        visiting: *std.AutoHashMap(TypePair, void),
-    ) bool {
-        const expected_entries = self.typeStore().declaredFieldSpan(expected);
-        const actual_entries = self.typeStore().declaredFieldSpan(actual);
-        if (expected_entries.len != actual_entries.len) return false;
-        for (0..GuardedList.borrowLen(expected_entries)) |index| {
-            const expected_entry = GuardedList.at(expected_entries, index);
-            const actual_entry = GuardedList.at(actual_entries, index);
-            switch (expected_entry) {
-                .named => |expected_name| switch (actual_entry) {
-                    .named => |actual_name| if (expected_name != actual_name) return false,
-                    .padding => return false,
+        pub fn enter(self: *SameTypeEquality, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
+            const store = self.ctx.typeStore();
+            switch (leaf) {
+                .same => |pair| {
+                    if (pair.expected == pair.actual) return .{ .value = true };
+                    var count: usize = 0;
+                    if (monoAliasBacking(store, pair.expected)) |backing| {
+                        try items.add(.{ .same = .{ .expected = backing, .actual = pair.actual } });
+                        count += 1;
+                    }
+                    if (monoAliasBacking(store, pair.actual)) |backing| {
+                        try items.add(.{ .same = .{ .expected = pair.expected, .actual = backing } });
+                        count += 1;
+                    }
+                    if (count == 0) return try self.enter(items, .{ .content = pair });
+                    try items.add(.{ .content = pair });
+                    return .{ .group = .any };
                 },
-                .padding => |expected_ty| switch (actual_entry) {
-                    .named => return false,
-                    .padding => |actual_ty| if (!self.sameTypeInner(expected_ty, actual_ty, visiting)) return false,
+                .content => |pair| {
+                    const expected_digest = store.typeDigestCached(self.ctx.nameStore(), pair.expected, null);
+                    const actual_digest = store.typeDigestCached(self.ctx.nameStore(), pair.actual, null);
+                    if (std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..])) return .{ .value = true };
+                    if (self.visiting.contains(pair)) return .{ .value = true };
+                    if (!try self.appendContentPairs(items, pair)) return .{ .value = false };
+                    try self.visiting.put(pair, {});
+                    return .{ .group = .all };
                 },
             }
         }
-        return true;
-    }
 
-    fn sameTypeSpans(
-        self: *BodyContext,
-        expected: Type.Span,
-        actual: Type.Span,
-        visiting: *std.AutoHashMap(TypePair, void),
-    ) bool {
-        const expected_items = self.typeStore().span(expected);
-        const actual_items = self.typeStore().span(actual);
-        if (expected_items.len != actual_items.len) return false;
-        for (0..GuardedList.borrowLen(expected_items)) |index| {
-            const expected_item = GuardedList.at(expected_items, index);
-            const actual_item = GuardedList.at(actual_items, index);
-            if (!self.sameTypeInner(expected_item, actual_item, visiting)) return false;
-        }
-        return true;
-    }
-
-    fn sameRecordFieldNames(
-        self: *BodyContext,
-        expected: Type.Span,
-        actual: Type.Span,
-        visiting: *std.AutoHashMap(TypePair, void),
-    ) bool {
-        const expected_fields = self.typeStore().fieldSpan(expected);
-        const actual_fields = self.typeStore().fieldSpan(actual);
-        if (expected_fields.len != actual_fields.len) return false;
-        for (0..GuardedList.borrowLen(expected_fields)) |index| {
-            const expected_field = GuardedList.at(expected_fields, index);
-            const actual_field = GuardedList.at(actual_fields, index);
-            if (expected_field.name != actual_field.name) return false;
-            if (expected_field.kind_state != actual_field.kind_state) return false;
-            if (!self.sameTypeInner(expected_field.ty, actual_field.ty, visiting)) return false;
-            if ((expected_field.value_ty == null) != (actual_field.value_ty == null)) return false;
-            if (expected_field.value_ty) |expected_value_ty| {
-                if (!self.sameTypeInner(expected_value_ty, actual_field.value_ty.?, visiting)) return false;
+        pub fn exit(self: *SameTypeEquality, leaf: Leaf, _: ?bool) Allocator.Error!void {
+            switch (leaf) {
+                .content => |pair| _ = self.visiting.remove(pair),
+                .same => {},
             }
         }
-        return true;
-    }
 
-    fn sameTags(
-        self: *BodyContext,
-        expected: Type.Span,
-        actual: Type.Span,
-        visiting: *std.AutoHashMap(TypePair, void),
-    ) bool {
-        const expected_tags = self.typeStore().tagSpan(expected);
-        const actual_tags = self.typeStore().tagSpan(actual);
-        if (expected_tags.len != actual_tags.len) return false;
-        for (0..GuardedList.borrowLen(expected_tags)) |index| {
-            const expected_tag = GuardedList.at(expected_tags, index);
-            const actual_tag = GuardedList.at(actual_tags, index);
-            if (expected_tag.name != actual_tag.name) return false;
-            if (!self.sameTypeSpans(expected_tag.payloads, actual_tag.payloads, visiting)) return false;
+        fn addPair(items: Eval.Items, expected: Type.TypeId, actual: Type.TypeId) Allocator.Error!void {
+            try items.add(.{ .same = .{ .expected = expected, .actual = actual } });
         }
-        return true;
-    }
+
+        fn addSpanPairs(self: *SameTypeEquality, items: Eval.Items, expected: Type.Span, actual: Type.Span) Allocator.Error!bool {
+            const expected_items = self.ctx.typeStore().span(expected);
+            const actual_items = self.ctx.typeStore().span(actual);
+            if (expected_items.len != actual_items.len) return false;
+            for (0..GuardedList.borrowLen(expected_items)) |index| {
+                try addPair(items, GuardedList.at(expected_items, index), GuardedList.at(actual_items, index));
+            }
+            return true;
+        }
+
+        /// List the child pairs two types' contents are equal through;
+        /// false when the contents already differ.
+        fn appendContentPairs(self: *SameTypeEquality, items: Eval.Items, pair: TypePair) Allocator.Error!bool {
+            const store = self.ctx.typeStore();
+            const expected_content = store.get(pair.expected);
+            const actual_content = store.get(pair.actual);
+            switch (expected_content) {
+                .primitive => |primitive| return actual_content == .primitive and actual_content.primitive == primitive,
+                .named => |expected| {
+                    if (actual_content != .named) return false;
+                    const actual = actual_content.named;
+                    if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
+                    if (expected.def.module != actual.def.module) return false;
+                    if (expected.def.source_decl != actual.def.source_decl) return false;
+                    if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
+                    if (expected.kind != actual.kind) return false;
+                    if (expected.builtin_owner != actual.builtin_owner) return false;
+                    if (!try self.addSpanPairs(items, expected.args, actual.args)) return false;
+                    if ((expected.backing == null) != (actual.backing == null)) return false;
+                    if (expected.backing) |expected_backing| {
+                        const actual_backing = actual.backing.?;
+                        if (expected_backing.use != actual_backing.use) return false;
+                        if (expected_backing.authority != actual_backing.authority) return false;
+                        try addPair(items, expected_backing.ty, actual_backing.ty);
+                    }
+                    const expected_entries = store.declaredFieldSpan(expected.declared_order);
+                    const actual_entries = store.declaredFieldSpan(actual.declared_order);
+                    if (expected_entries.len != actual_entries.len) return false;
+                    for (0..GuardedList.borrowLen(expected_entries)) |index| {
+                        const expected_entry = GuardedList.at(expected_entries, index);
+                        const actual_entry = GuardedList.at(actual_entries, index);
+                        switch (expected_entry) {
+                            .named => |expected_name| switch (actual_entry) {
+                                .named => |actual_name| if (expected_name != actual_name) return false,
+                                .padding => return false,
+                            },
+                            .padding => |expected_ty| switch (actual_entry) {
+                                .named => return false,
+                                .padding => |actual_ty| try addPair(items, expected_ty, actual_ty),
+                            },
+                        }
+                    }
+                    return true;
+                },
+                .record => |expected_span| {
+                    if (actual_content != .record) return false;
+                    const expected_fields = store.fieldSpan(expected_span);
+                    const actual_fields = store.fieldSpan(actual_content.record);
+                    if (expected_fields.len != actual_fields.len) return false;
+                    for (0..GuardedList.borrowLen(expected_fields)) |index| {
+                        const expected_field = GuardedList.at(expected_fields, index);
+                        const actual_field = GuardedList.at(actual_fields, index);
+                        if (expected_field.name != actual_field.name) return false;
+                        if (expected_field.kind_state != actual_field.kind_state) return false;
+                        if ((expected_field.value_ty == null) != (actual_field.value_ty == null)) return false;
+                        try addPair(items, expected_field.ty, actual_field.ty);
+                        if (expected_field.value_ty) |expected_value_ty| {
+                            try addPair(items, expected_value_ty, actual_field.value_ty.?);
+                        }
+                    }
+                    return true;
+                },
+                .tuple => |expected_items| {
+                    if (actual_content != .tuple) return false;
+                    return try self.addSpanPairs(items, expected_items, actual_content.tuple);
+                },
+                .tag_union => |expected_span| {
+                    if (actual_content != .tag_union) return false;
+                    const expected_tags = store.tagSpan(expected_span);
+                    const actual_tags = store.tagSpan(actual_content.tag_union);
+                    if (expected_tags.len != actual_tags.len) return false;
+                    for (0..GuardedList.borrowLen(expected_tags)) |index| {
+                        const expected_tag = GuardedList.at(expected_tags, index);
+                        const actual_tag = GuardedList.at(actual_tags, index);
+                        if (expected_tag.name != actual_tag.name) return false;
+                        if (!try self.addSpanPairs(items, expected_tag.payloads, actual_tag.payloads)) return false;
+                    }
+                    return true;
+                },
+                .list => |elem| {
+                    if (actual_content != .list) return false;
+                    try addPair(items, elem, actual_content.list);
+                    return true;
+                },
+                .box => |elem| {
+                    if (actual_content != .box) return false;
+                    try addPair(items, elem, actual_content.box);
+                    return true;
+                },
+                .func => |function| {
+                    if (actual_content != .func) return false;
+                    if (!try self.addSpanPairs(items, function.args, actual_content.func.args)) return false;
+                    try addPair(items, function.ret, actual_content.func.ret);
+                    return true;
+                },
+                .erased => |erased| return actual_content == .erased and std.mem.eql(u8, erased.bytes[0..], actual_content.erased.bytes[0..]),
+                .zst => return actual_content == .zst,
+            }
+        }
+    };
 
     /// Materialize a checked field-default identity at `field_cell`.
     fn defaultedFieldValueFromDefaultAtCell(
@@ -43205,79 +43595,6 @@ const BodyContext = struct {
         } });
     }
 
-    /// Translate an optional destructure from checked Try space into flat
-    /// Present/Missing slot space, queueing binder preludes as needed.
-    fn lowerOptionalDestructChildAtSlotNode(
-        self: *BodyContext,
-        child: checked.CheckedPatternId,
-        slot_node: NodeId,
-        result_node: NodeId,
-    ) Allocator.Error!DraftPatId {
-        const slot_cell = DraftTypeCell.fromGraphNode(slot_node);
-        const pattern = self.view.bodies.pattern(child);
-        const data: BodyPatData = switch (pattern.data) {
-            .underscore => .wildcard,
-            .assign => |binder| blk: {
-                const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
-                try self.queueOptionalDestructSlotBind(binder, slot_local, slot_node, result_node);
-                break :blk .{ .bind = slot_local };
-            },
-            .as => |as| blk: {
-                const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
-                try self.queueOptionalDestructSlotBind(as.binder, slot_local, slot_node, result_node);
-                break :blk .{ .as = .{
-                    .pattern = try self.lowerOptionalDestructChildAtSlotNode(as.pattern, slot_node, result_node),
-                    .local = slot_local,
-                } };
-            },
-            .nominal => |nominal| return try self.lowerOptionalDestructChildAtSlotNode(
-                nominal.backing_pattern,
-                slot_node,
-                self.optionalTryBackingNode(result_node),
-            ),
-            .applied_tag => |tag| blk: {
-                const tag_name = try self.tagName(self.view, tag.name);
-                const ok_name = try self.nameStoreMut().internTagLabel("Ok");
-                const err_name = try self.nameStoreMut().internTagLabel("Err");
-                const present_name = try self.nameStoreMut().internTagLabel(Builder.optional_slot_present_tag);
-                const missing_name = try self.nameStoreMut().internTagLabel(Builder.optional_slot_missing_tag);
-                if (tag.args.len != 1) {
-                    Common.invariant("optional destructure Try pattern tag did not carry exactly one payload");
-                }
-                if (tag_name == ok_name) {
-                    const payload_node = try self.graph.tagPayloadNode(slot_node, present_name, 0);
-                    break :blk .{ .tag = .{
-                        .name = present_name,
-                        .payloads = try self.addPatSpan(&.{try self.lowerPatternAtNode(tag.args[0], payload_node)}),
-                    } };
-                }
-                if (tag_name == err_name) {
-                    const err_node = try self.graph.tagPayloadNode(
-                        self.optionalTryBackingNode(result_node),
-                        err_name,
-                        0,
-                    );
-                    try self.queueOptionalDestructErrPayloadBinds(tag.args[0], err_node);
-                    break :blk .{ .tag = .{
-                        .name = missing_name,
-                        .payloads = .empty(),
-                    } };
-                }
-                Common.invariant("optional destructure Try pattern used a tag other than Ok or Err");
-            },
-            .pending,
-            .runtime_error,
-            .record_destructure,
-            .tuple,
-            .list,
-            .numeral_literal,
-            .str_literal,
-            .str_interpolation,
-            => Common.invariant("optional destructure sub-pattern had a non-Try checked shape"),
-        };
-        return try self.addPatWithTypeCell(slot_cell, data);
-    }
-
     /// Queue a translated optional-destruct binder whose value is the slot
     /// local materialized as Try.
     fn queueOptionalDestructSlotBind(
@@ -43304,44 +43621,49 @@ const BodyContext = struct {
     /// bind the constant error value.
     fn queueOptionalDestructErrPayloadBinds(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        root_pattern: checked.CheckedPatternId,
         err_node: NodeId,
     ) Allocator.Error!void {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .underscore => {},
-            .assign => |binder| {
-                const binder_local = try self.materializePatternBinderAtCell(binder, DraftTypeCell.fromGraphNode(err_node));
-                try self.optional_destruct_binds.append(self.allocator, .{
-                    .binder_local = binder_local,
-                    .value = .{ .missing_err = .{ .err_node = err_node } },
-                });
-            },
-            .as => |as| {
-                const binder_local = try self.materializePatternBinderAtCell(as.binder, DraftTypeCell.fromGraphNode(err_node));
-                try self.optional_destruct_binds.append(self.allocator, .{
-                    .binder_local = binder_local,
-                    .value = .{ .missing_err = .{ .err_node = err_node } },
-                });
-                try self.queueOptionalDestructErrPayloadBinds(as.pattern, err_node);
-            },
-            .applied_tag => |tag| {
-                // `[MissingField]` has exactly one payload-less tag; the
-                // pattern always matches once the slot is Missing.
-                if (tag.args.len != 0) {
-                    Common.invariant("optional destructure MissingField pattern carried a payload");
-                }
-            },
-            .pending,
-            .nominal,
-            .record_destructure,
-            .list,
-            .tuple,
-            .numeral_literal,
-            .str_literal,
-            .str_interpolation,
-            .runtime_error,
-            => Common.invariant("optional destructure Err payload pattern had a non-[MissingField] checked shape"),
+        var pattern_id = root_pattern;
+        while (true) {
+            const pattern = self.view.bodies.pattern(pattern_id);
+            switch (pattern.data) {
+                .underscore => return,
+                .assign => |binder| {
+                    const binder_local = try self.materializePatternBinderAtCell(binder, DraftTypeCell.fromGraphNode(err_node));
+                    try self.optional_destruct_binds.append(self.allocator, .{
+                        .binder_local = binder_local,
+                        .value = .{ .missing_err = .{ .err_node = err_node } },
+                    });
+                    return;
+                },
+                .as => |as| {
+                    const binder_local = try self.materializePatternBinderAtCell(as.binder, DraftTypeCell.fromGraphNode(err_node));
+                    try self.optional_destruct_binds.append(self.allocator, .{
+                        .binder_local = binder_local,
+                        .value = .{ .missing_err = .{ .err_node = err_node } },
+                    });
+                    pattern_id = as.pattern;
+                },
+                .applied_tag => |tag| {
+                    // `[MissingField]` has exactly one payload-less tag; the
+                    // pattern always matches once the slot is Missing.
+                    if (tag.args.len != 0) {
+                        Common.invariant("optional destructure MissingField pattern carried a payload");
+                    }
+                    return;
+                },
+                .pending,
+                .nominal,
+                .record_destructure,
+                .list,
+                .tuple,
+                .numeral_literal,
+                .str_literal,
+                .str_interpolation,
+                .runtime_error,
+                => Common.invariant("optional destructure Err payload pattern had a non-[MissingField] checked shape"),
+            }
         }
     }
 
@@ -47382,24 +47704,21 @@ const BodyContext = struct {
         self: *BodyContext,
         node: NodeId,
     ) ?static_dispatch.MethodOwner {
-        return switch (self.graph.content(node)) {
+        var current = node;
+        while (true) switch (self.graph.content(current)) {
             .redirect => unreachable,
-            .primitive => |primitive| .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
-            .list => .{ .builtin = .list },
-            .box => .{ .builtin = .box },
-            .named => |named| if (named.builtin_owner) |owner|
-                .{ .builtin = owner }
-            else if (named.kind == .alias)
-                (if (named.backing) |backing|
-                    self.methodOwnerFromNode(backing.node)
-                else
-                    null)
-            else
-                .{ .nominal = .{
+            .primitive => |primitive| return .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
+            .list => return .{ .builtin = .list },
+            .box => return .{ .builtin = .box },
+            .named => |named| {
+                if (named.builtin_owner) |owner| return .{ .builtin = owner };
+                if (named.kind != .alias) return .{ .nominal = .{
                     .module = named.def.module,
                     .type_name = named.def.type_name,
                     .source_decl = named.def.source_decl,
-                } },
+                } };
+                current = (named.backing orelse return null).node;
+            },
             .unresolved,
             .tuple,
             .func,
@@ -47409,7 +47728,7 @@ const BodyContext = struct {
             .empty_record,
             .erased,
             .zst,
-            => null,
+            => return null,
         };
     }
 
@@ -48770,7 +49089,7 @@ const BodyContext = struct {
             ret_ty,
             precomputed_plan,
         );
-        var plan_inputs = try self.serializationPlanInputs(.encoder, value_ty, encoding_ty, precomputed_plan);
+        var plan_inputs = try self.serializationPlanInputs(.encoder, value_ty, precomputed_plan);
         defer plan_inputs.deinit(self.allocator);
         const str_ty = try self.primitiveType(.str);
         const arg_tys = try self.allocator.alloc(Type.TypeId, 3 + plan_inputs.locals.items.len);
@@ -48820,7 +49139,7 @@ const BodyContext = struct {
         const def_id = try self.draft.reserveDef(self.draft.current_owner);
         try self.encoder_defs.put(address, .{ .reserved = def_id });
 
-        var plan_inputs = try self.serializationPlanInputs(.encoder, value_ty, encoding_ty, precomputed_plan);
+        var plan_inputs = try self.serializationPlanInputs(.encoder, value_ty, precomputed_plan);
         defer plan_inputs.deinit(self.allocator);
         const str_ty = try self.primitiveType(.str);
         var helper_plan: ?SerializationHelperPlan = if (precomputed_plan) |plan|
@@ -54619,36 +54938,57 @@ const BodyContext = struct {
         );
     }
 
-    fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        return switch (pattern.data) {
-            .list => true,
-            .record_destructure => |destructs| blk: {
-                if (self.recordDestructsNeedExplicitRest(destructs)) break :blk true;
-                if (try self.recordDestructsHaveOptionalField(pattern.ty, destructs)) break :blk true;
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required, .sub_pattern => |child| child,
-                        .rest => |rest| rest,
-                    };
-                    if (try self.patternNeedsExplicitBinding(child)) break :blk true;
+    /// Whether any node of the pattern must materialize on its own. Each
+    /// pattern's answer is memoized, computed after its subpatterns' from an
+    /// explicit work list.
+    fn patternNeedsExplicitBinding(self: *BodyContext, root: checked.CheckedPatternId) Allocator.Error!bool {
+        if (self.explicit_binding_memo.get(root)) |known| return known;
+        const Visit = struct { pattern: checked.CheckedPatternId, children_done: bool };
+        var pending: std.ArrayListUnmanaged(Visit) = .empty;
+        defer pending.deinit(self.allocator);
+        var children: std.ArrayListUnmanaged(checked.CheckedPatternId) = .empty;
+        defer children.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .pattern = root, .children_done = false });
+        while (pending.pop()) |visit| {
+            if (self.explicit_binding_memo.contains(visit.pattern)) continue;
+            children.clearRetainingCapacity();
+            try self.appendExplicitBindingChildren(visit.pattern, &children);
+            if (!visit.children_done) {
+                try pending.append(self.allocator, .{ .pattern = visit.pattern, .children_done = true });
+                for (children.items) |child| {
+                    if (!self.explicit_binding_memo.contains(child)) {
+                        try pending.append(self.allocator, .{ .pattern = child, .children_done = false });
+                    }
                 }
-                break :blk false;
+                continue;
+            }
+            var needs = try self.patternRequiresOwnMaterialization(visit.pattern);
+            for (children.items) |child| {
+                if (self.explicit_binding_memo.get(child).?) needs = true;
+            }
+            try self.explicit_binding_memo.put(self.allocator, visit.pattern, needs);
+        }
+        return self.explicit_binding_memo.get(root).?;
+    }
+
+    /// The subpatterns whose explicit-binding need a pattern inherits.
+    fn appendExplicitBindingChildren(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        children: *std.ArrayListUnmanaged(checked.CheckedPatternId),
+    ) Allocator.Error!void {
+        switch (self.view.bodies.pattern(pattern_id).data) {
+            .record_destructure => |destructs| for (destructs) |destruct| {
+                try children.append(self.allocator, switch (destruct.kind) {
+                    .required, .sub_pattern => |child| child,
+                    .rest => |rest| rest,
+                });
             },
-            .as => |as| try self.patternNeedsExplicitBinding(as.pattern),
-            .applied_tag => |tag| blk: {
-                for (tag.args) |arg| {
-                    if (try self.patternNeedsExplicitBinding(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .nominal => |nominal| try self.patternNeedsExplicitBinding(nominal.backing_pattern),
-            .tuple => |items| blk: {
-                for (items) |item| {
-                    if (try self.patternNeedsExplicitBinding(item)) break :blk true;
-                }
-                break :blk false;
-            },
+            .as => |as| try children.append(self.allocator, as.pattern),
+            .applied_tag => |tag| try children.appendSlice(self.allocator, tag.args),
+            .nominal => |nominal| try children.append(self.allocator, nominal.backing_pattern),
+            .tuple => |items| try children.appendSlice(self.allocator, items),
+            .list,
             .assign,
             .numeral_literal,
             .str_literal,
@@ -54656,8 +54996,8 @@ const BodyContext = struct {
             .underscore,
             .pending,
             .runtime_error,
-            => false,
-        };
+            => {},
+        }
     }
 
     fn patternRequiresOwnMaterialization(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
@@ -54898,356 +55238,98 @@ const BodyContext = struct {
         return try self.lowLevelExpr(op, &.{ len, required }, bool_ty);
     }
 
-    fn applyListCheck(
-        self: *BodyContext,
-        scrutinee: DraftExprId,
-        scrutinee_ty: Type.TypeId,
-        list: anytype,
-        body: DraftExprId,
-        fallback: DraftExprId,
-        output_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const elem_ty = self.constListElemType(scrutinee_ty);
-        const u64_ty = try self.primitiveType(.u64);
-        const needs_len = if (list.rest) |rest| rest.index < list.patterns.len or rest.pattern != null else false;
-        const len = if (needs_len) try self.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty) else null;
-
-        const values = try self.allocator.alloc(DraftExprId, list.patterns.len);
-        defer self.allocator.free(values);
-        const patterns = try self.allocator.alloc(DraftPatId, list.patterns.len);
-        defer self.allocator.free(patterns);
-        const sub_checks_per_elem = try self.allocator.alloc(std.ArrayList(CollectedListPattern), list.patterns.len);
-        defer {
-            for (sub_checks_per_elem) |*sub| sub.deinit(self.allocator);
-            self.allocator.free(sub_checks_per_elem);
-        }
-        for (sub_checks_per_elem) |*sub| sub.* = std.ArrayList(CollectedListPattern).empty;
-        const literal_guards_per_elem = try self.allocator.alloc([]PatternLiteralGuard, list.patterns.len);
-        defer {
-            for (literal_guards_per_elem) |guards| self.allocator.free(guards);
-            self.allocator.free(literal_guards_per_elem);
-        }
-        for (literal_guards_per_elem) |*guards| guards.* = &.{};
-
-        for (list.patterns, 0..) |pattern_id, index| {
-            const item_index = try self.listPatternItemIndex(index, list.patterns.len, list.rest, len, u64_ty);
-            values[index] = try self.lowLevelExpr(.list_get_unsafe, &.{ scrutinee, item_index }, elem_ty);
-            const guards_start = self.pattern_literal_guards.items.len;
-            patterns[index] = try self.lowerPatternAtTypeCollectingLists(pattern_id, elem_ty, &sub_checks_per_elem[index]);
-            literal_guards_per_elem[index] = try self.drainPatternLiteralGuards(guards_start);
-        }
-
-        var rest_pat: ?DraftPatId = null;
-        var rest_value: ?DraftExprId = null;
-        var rest_sub_checks = std.ArrayList(CollectedListPattern).empty;
-        defer rest_sub_checks.deinit(self.allocator);
-        var rest_literal_guards: []PatternLiteralGuard = &.{};
-        defer self.allocator.free(rest_literal_guards);
-        if (list.rest) |rest| {
-            if (rest.pattern) |rest_pattern| {
-                const list_len = len orelse try self.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty);
-                const fixed_count = try self.intLiteralExpr(list.patterns.len, u64_ty);
-                const rest_len = try self.lowLevelExpr(.num_minus, &.{ list_len, fixed_count }, u64_ty);
-                const rest_start = try self.intLiteralExpr(rest.index, u64_ty);
-                const range = try self.sublistRangeExpr(rest_start, rest_len, u64_ty);
-                rest_value = try self.lowLevelExpr(.list_sublist, &.{ scrutinee, range }, scrutinee_ty);
-                const guards_start = self.pattern_literal_guards.items.len;
-                rest_pat = try self.lowerPatternAtTypeCollectingLists(rest_pattern, scrutinee_ty, &rest_sub_checks);
-                rest_literal_guards = try self.drainPatternLiteralGuards(guards_start);
-            }
-        }
-
-        var success = body;
-
-        var index = patterns.len;
-        while (index > 0) {
-            index -= 1;
-            var elem_success = success;
-            var sub_index = sub_checks_per_elem[index].items.len;
-            while (sub_index > 0) {
-                sub_index -= 1;
-                const sub = sub_checks_per_elem[index].items[sub_index];
-                const sub_scrut = try self.localExpr(sub.local, sub.ty);
-                elem_success = try self.applyListCheck(sub_scrut, sub.ty, sub, elem_success, fallback, output_ty);
-            }
-            elem_success = try self.applyPatternLiteralGuards(literal_guards_per_elem[index], elem_success, fallback, output_ty);
-            success = try self.wrapPatternMatch(values[index], elem_ty, patterns[index], elem_success, fallback, output_ty);
-        }
-
-        if (rest_pat) |pat| {
-            var rest_success = success;
-            var sub_index = rest_sub_checks.items.len;
-            while (sub_index > 0) {
-                sub_index -= 1;
-                const sub = rest_sub_checks.items[sub_index];
-                const sub_scrut = try self.localExpr(sub.local, sub.ty);
-                rest_success = try self.applyListCheck(sub_scrut, sub.ty, sub, rest_success, fallback, output_ty);
-            }
-            rest_success = try self.applyPatternLiteralGuards(rest_literal_guards, rest_success, fallback, output_ty);
-            success = try self.wrapPatternMatch(
-                rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
-                scrutinee_ty,
-                pat,
-                rest_success,
-                fallback,
-                output_ty,
-            );
-        }
-
-        const cond = try self.listPatternCondition(scrutinee, list);
-        return try self.ifExpr(cond, success, fallback, output_ty);
-    }
-
+    /// Register every binder of `pattern_id` at its concrete type, in source
+    /// order, from an explicit work list.
     fn preRegisterPatternBinders(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        ty: Type.TypeId,
+        root_pattern: checked.CheckedPatternId,
+        root_ty: Type.TypeId,
     ) Allocator.Error!void {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => |binder| {
-                if (self.currentOwnerPatternBinderLocal(binder) == null) {
-                    const local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
-                    try self.bindLocalName(local, binder);
-                    try self.binders.put(binder, local);
-                }
-            },
-            .as => |as| {
-                if (self.currentOwnerPatternBinderLocal(as.binder) == null) {
-                    const local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
-                    try self.bindLocalName(local, as.binder);
-                    try self.binders.put(as.binder, local);
-                }
-                try self.preRegisterPatternBinders(as.pattern, ty);
-            },
-            .applied_tag => |tag| {
-                const name = try self.tagName(self.view, tag.name);
-                const payload_tys = self.tagPayloadTypes(ty, name);
-                if (tag.args.len != payload_tys.len) Common.invariant("pattern arity differs from concrete checked type");
-                for (tag.args, payload_tys) |arg, arg_ty| {
-                    try self.preRegisterPatternBinders(arg, arg_ty);
-                }
-            },
-            .nominal => |nominal| {
-                try self.preRegisterPatternBinders(nominal.backing_pattern, self.namedBackingType(ty) orelse ty);
-            },
-            .record_destructure => |destructs| {
-                for (destructs) |destruct| {
-                    switch (destruct.kind) {
-                        .required, .sub_pattern => |child| {
-                            const name = try self.recordFieldName(self.view, destruct.label);
-                            const child_ty = self.recordFieldType(ty, name);
-                            try self.preRegisterPatternBinders(child, child_ty);
-                        },
-                        .rest => |rest_pattern| {
-                            if (!self.patternIsIgnored(rest_pattern)) {
-                                Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                            }
-                        },
+        const Visit = struct { pattern: checked.CheckedPatternId, ty: Type.TypeId };
+        var pending: std.ArrayListUnmanaged(Visit) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .pattern = root_pattern, .ty = root_ty });
+        while (pending.pop()) |visit| {
+            const ty = visit.ty;
+            const start = pending.items.len;
+            const pattern = self.view.bodies.pattern(visit.pattern);
+            switch (pattern.data) {
+                .assign => |binder| {
+                    if (self.currentOwnerPatternBinderLocal(binder) == null) {
+                        const local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+                        try self.bindLocalName(local, binder);
+                        try self.binders.put(binder, local);
                     }
-                }
-            },
-            .list => |list| {
-                const elem_ty = self.constListElemType(ty);
-                for (list.patterns) |child| {
-                    try self.preRegisterPatternBinders(child, elem_ty);
-                }
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| {
-                        try self.preRegisterPatternBinders(rest_pattern, ty);
-                    }
-                }
-            },
-            .tuple => |items| {
-                const item_tys = self.tupleItemTypes(ty);
-                if (items.len != item_tys.len) Common.invariant("pattern arity differs from concrete checked type");
-                for (items, item_tys) |item, item_ty| {
-                    try self.preRegisterPatternBinders(item, item_ty);
-                }
-            },
-            .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| {
-                        try self.preRegisterPatternBinders(capture, ty);
-                    }
-                }
-            },
-            .pending,
-            .numeral_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-        }
-    }
-
-    fn lowerPatternAtTypeCollectingLists(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        ty: Type.TypeId,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!DraftPatId {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        try self.constrainTypeToMono(pattern.ty, ty);
-        const data: BodyPatData = switch (pattern.data) {
-            .pending,
-            .runtime_error,
-            => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
-            .assign => |binder| blk: {
-                const local = if (self.currentOwnerPatternBinderLocal(binder)) |existing| existing else inner: {
-                    const new_local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
-                    try self.bindLocalName(new_local, binder);
-                    try self.binders.put(binder, new_local);
-                    break :inner new_local;
-                };
-                break :blk .{ .bind = local };
-            },
-            .as => |as| blk: {
-                const local = if (self.currentOwnerPatternBinderLocal(as.binder)) |existing| existing else inner: {
-                    const new_local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
-                    try self.bindLocalName(new_local, as.binder);
-                    try self.binders.put(as.binder, new_local);
-                    break :inner new_local;
-                };
-                break :blk .{ .as = .{
-                    .pattern = try self.lowerPatternAtTypeCollectingLists(as.pattern, ty, checks_out),
-                    .local = local,
-                } };
-            },
-            .applied_tag => |tag| blk: {
-                if (self.nominalConstructionLayer(ty)) |layer| {
-                    break :blk .{ .nominal = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, checks_out) };
-                }
-                break :blk try self.lowerTagPatternCollectingLists(tag, ty, checks_out);
-            },
-            .nominal => |nominal| blk: {
-                const backing_ty = if (self.nominalConstructionLayer(ty)) |layer|
-                    layer.backing
-                else
-                    self.namedBackingType(ty) orelse ty;
-                break :blk .{ .nominal = try self.lowerPatternAtTypeCollectingLists(nominal.backing_pattern, backing_ty, checks_out) };
-            },
-            .record_destructure => |destructs| blk: {
-                if (self.nominalConstructionLayer(ty)) |layer| {
-                    break :blk .{ .nominal = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, checks_out) };
-                }
-                break :blk try self.lowerRecordPatternCollectingLists(pattern.ty, destructs, ty, checks_out);
-            },
-            .list => |list| blk: {
-                const local = try self.addLocal(self.builder.symbols.fresh(), ty);
-                try checks_out.append(self.allocator, .{
-                    .local = local,
-                    .ty = ty,
-                    .patterns = list.patterns,
-                    .rest = list.rest,
-                });
-                break :blk .{ .bind = local };
-            },
-            .tuple => |items| blk: {
-                if (self.nominalConstructionLayer(ty)) |layer| {
-                    break :blk .{ .nominal = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, checks_out) };
-                }
-                break :blk .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.tupleItemTypes(ty), checks_out) };
-            },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
-            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
-            .str_interpolation => |str| try self.lowerStrPatternCollectingLists(str, ty, checks_out),
-            .underscore => .wildcard,
-        };
-        return try self.addPat(.{ .ty = ty, .data = data });
-    }
-
-    fn lowerStrPatternCollectingLists(
-        self: *BodyContext,
-        str: anytype,
-        ty: Type.TypeId,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!BodyPatData {
-        const steps = try self.allocator.alloc(DraftStrPatternStep, str.steps.len);
-        defer self.allocator.free(steps);
-
-        for (str.steps, 0..) |step, i| {
-            steps[i] = .{
-                .capture = if (step.capture) |capture| try self.lowerPatternAtTypeCollectingLists(capture, ty, checks_out) else null,
-                .delimiter = try self.lowerStringLiteral(step.delimiter),
-            };
-        }
-
-        return .{ .str_pattern = .{
-            .prefix = try self.lowerStringLiteral(str.prefix),
-            .steps = try self.addStrPatternStepSpan(steps),
-            .end = switch (str.end) {
-                .exact => .exact,
-                .tail => .tail,
-            },
-        } };
-    }
-
-    fn lowerPatternSpanAtTypesCollectingLists(
-        self: *BodyContext,
-        checked_patterns: []const checked.CheckedPatternId,
-        tys: anytype,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!DraftSpan(DraftPatId) {
-        if (checked_patterns.len != GuardedList.borrowLen(tys)) Common.invariant("pattern arity differs from concrete checked type");
-        const stable_tys = try GuardedList.dupe(self.allocator, Type.TypeId, tys);
-        defer self.allocator.free(stable_tys);
-        const lowered = try self.allocator.alloc(DraftPatId, checked_patterns.len);
-        defer self.allocator.free(lowered);
-        for (checked_patterns, stable_tys, 0..) |child, child_ty, i| {
-            lowered[i] = try self.lowerPatternAtTypeCollectingLists(child, child_ty, checks_out);
-        }
-        return try self.addPatSpan(lowered);
-    }
-
-    fn lowerTagPatternCollectingLists(
-        self: *BodyContext,
-        tag: anytype,
-        ty: Type.TypeId,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!BodyPatData {
-        const name = try self.tagName(self.view, tag.name);
-        return .{ .tag = .{
-            .name = name,
-            .payloads = try self.lowerPatternSpanAtTypesCollectingLists(tag.args, self.tagPayloadTypes(ty, name), checks_out),
-        } };
-    }
-
-    fn lowerRecordPatternCollectingLists(
-        self: *BodyContext,
-        record_checked_ty: checked.CheckedTypeId,
-        destructs: []const checked.CheckedRecordDestruct,
-        ty: Type.TypeId,
-        checks_out: *std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!BodyPatData {
-        var lowered = std.ArrayList(DraftRecordDestruct).empty;
-        defer lowered.deinit(self.allocator);
-        for (destructs) |destruct| {
-            const child = switch (destruct.kind) {
-                .required => |pattern| pattern,
-                .sub_pattern => |pattern| pattern,
-                .rest => |pattern| {
-                    if (self.patternIsIgnored(pattern)) continue;
-                    Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
                 },
-            };
-            // Optional-field destructs never reach the typed pattern family:
-            // the explicit-binding routes and match translation own them
-            // (design.md "Field Kinds").
-            if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
-                Common.invariant("optional-field record destructure reached typed pattern lowering");
+                .as => |as| {
+                    if (self.currentOwnerPatternBinderLocal(as.binder) == null) {
+                        const local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
+                        try self.bindLocalName(local, as.binder);
+                        try self.binders.put(as.binder, local);
+                    }
+                    try pending.append(self.allocator, .{ .pattern = as.pattern, .ty = ty });
+                },
+                .applied_tag => |tag| {
+                    const name = try self.tagName(self.view, tag.name);
+                    const payload_tys = self.tagPayloadTypes(ty, name);
+                    if (tag.args.len != payload_tys.len) Common.invariant("pattern arity differs from concrete checked type");
+                    for (tag.args, payload_tys) |arg, arg_ty| {
+                        try pending.append(self.allocator, .{ .pattern = arg, .ty = arg_ty });
+                    }
+                },
+                .nominal => |nominal| {
+                    try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern, .ty = self.namedBackingType(ty) orelse ty });
+                },
+                .record_destructure => |destructs| {
+                    for (destructs) |destruct| {
+                        switch (destruct.kind) {
+                            .required, .sub_pattern => |child| {
+                                const name = try self.recordFieldName(self.view, destruct.label);
+                                const child_ty = self.recordFieldType(ty, name);
+                                try pending.append(self.allocator, .{ .pattern = child, .ty = child_ty });
+                            },
+                            .rest => |rest_pattern| {
+                                if (!self.patternIsIgnored(rest_pattern)) {
+                                    Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
+                                }
+                            },
+                        }
+                    }
+                },
+                .list => |list| {
+                    const elem_ty = self.constListElemType(ty);
+                    for (list.patterns) |child| {
+                        try pending.append(self.allocator, .{ .pattern = child, .ty = elem_ty });
+                    }
+                    if (list.rest) |rest| {
+                        if (rest.pattern) |rest_pattern| {
+                            try pending.append(self.allocator, .{ .pattern = rest_pattern, .ty = ty });
+                        }
+                    }
+                },
+                .tuple => |items| {
+                    const item_tys = self.tupleItemTypes(ty);
+                    if (items.len != item_tys.len) Common.invariant("pattern arity differs from concrete checked type");
+                    for (items, item_tys) |item, item_ty| {
+                        try pending.append(self.allocator, .{ .pattern = item, .ty = item_ty });
+                    }
+                },
+                .str_interpolation => |str| {
+                    for (str.steps) |step| {
+                        if (step.capture) |capture| {
+                            try pending.append(self.allocator, .{ .pattern = capture, .ty = ty });
+                        }
+                    }
+                },
+                .pending,
+                .numeral_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => {},
             }
-            const name = try self.recordFieldName(self.view, destruct.label);
-            const child_ty = switch (destruct.kind) {
-                .required, .sub_pattern => self.recordFieldType(ty, name),
-                .rest => unreachable,
-            };
-            try lowered.append(self.allocator, .{
-                .name = name,
-                .pattern = try self.lowerPatternAtTypeCollectingLists(child, child_ty, checks_out),
-            });
+            std.mem.reverse(Visit, pending.items[start..]);
         }
-        return .{ .record = try self.addRecordDestructSpan(lowered.items) };
     }
 
     fn wrapPatternMatch(
@@ -55324,6 +55406,63 @@ const BodyContext = struct {
         return try self.lowerBindingContinuation(continuation, result_cell);
     }
 
+    /// One pattern to bind against a value before a continuation.
+    const MaterializeRequest = struct {
+        pattern: checked.CheckedPatternId,
+        value: DraftExprId,
+        value_cell: DraftTypeCell,
+        result_cell: DraftTypeCell,
+        continuation: BindingContinuation,
+        miss: DraftExprId,
+        success_guard: ?PatternSuccessGuard,
+        mode: enum {
+            /// `lowerMaterializedPatternThen`: a root binding, guarding its
+            /// success on its own pattern.
+            then_root,
+            /// A pattern bound under the given success guard.
+            inner,
+            /// `lowerMaterializedPatternValueThen`.
+            value_then,
+        },
+        /// An enclosing root already registered this pattern's binders.
+        registered: bool = false,
+    };
+
+    /// A step of a binding's continuation program, run from the innermost
+    /// continuation outward: each step wraps the continuation built so far.
+    const MaterializeStep = union(enum) {
+        /// Bind a descendant plan's pattern against its local.
+        plan: PendingMaterializedPattern,
+        /// Match `value` against `pat`, continuing on success.
+        wrap: struct { value: DraftExprId, cell: DraftTypeCell, pat: DraftPatId },
+        /// Guard the continuation on a list pattern's length condition.
+        list_cond: struct { value: DraftExprId, pattern: checked.CheckedPatternId },
+        /// Bind a fresh local to the value before the continuation.
+        let_value: struct { local: DraftLocalId, value: DraftExprId, cell: DraftTypeCell },
+        /// Replace the continuation with this request's binding.
+        request: MaterializeRequest,
+    };
+
+    const MaterializeFrame = struct {
+        steps_start: usize,
+        next: usize,
+        continuation: DraftExprId,
+        miss: DraftExprId,
+        result_cell: DraftTypeCell,
+        /// The binder-reuse setting to restore once this binding is built.
+        saved_reuse: ?bool,
+    };
+
+    const MaterializeRun = struct {
+        frames: std.ArrayListUnmanaged(MaterializeFrame) = .empty,
+        steps: std.ArrayListUnmanaged(MaterializeStep) = .empty,
+
+        fn deinit(materialize_run: *MaterializeRun, allocator: Allocator) void {
+            materialize_run.steps.deinit(allocator);
+            materialize_run.frames.deinit(allocator);
+        }
+    };
+
     fn lowerMaterializedPatternValueThen(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
@@ -55334,37 +55473,16 @@ const BodyContext = struct {
         miss: DraftExprId,
         success_guard: ?PatternSuccessGuard,
     ) Allocator.Error!DraftExprId {
-        const value_node = try value_cell.toGraphNode(self.graph);
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern_id).ty, value_cell);
-        if (!try self.patternNeedsExplicitBinding(pattern_id)) {
-            const guards_start = self.pattern_literal_guards.items.len;
-            const binds_start = self.optional_destruct_binds.items.len;
-            const pat = try self.lowerPatternAtNode(pattern_id, value_node);
-            const literal_guards = try self.drainPatternLiteralGuards(guards_start);
-            defer self.allocator.free(literal_guards);
-            const optional_binds = try self.drainOptionalDestructBinds(binds_start);
-            defer self.allocator.free(optional_binds);
-            var success = try self.lowerPatternSuccessContinuation(continuation, result_cell, success_guard);
-            if (optional_binds.len > 0) {
-                success = try self.applyOptionalDestructBinds(optional_binds, success);
-            }
-            const rest = try self.applyPatternLiteralGuardsAtCell(
-                literal_guards,
-                success,
-                miss,
-                result_cell,
-            );
-            return try self.wrapPatternMatch(value, value_cell, pat, rest, miss, result_cell);
-        }
-
-        const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
-        const local_expr = try self.addExprWithTypeCell(value_cell, .{ .local = local });
-        const rest = try self.lowerMaterializedPatternThen(pattern_id, local_expr, value_cell, result_cell, continuation, miss);
-        return try self.addExprWithTypeCell(result_cell, .{ .let_ = .{
-            .bind = try self.addPatWithTypeCell(value_cell, .{ .bind = local }),
+        return try self.runMaterialize(.{
+            .pattern = pattern_id,
             .value = value,
-            .rest = rest,
-        } });
+            .value_cell = value_cell,
+            .result_cell = result_cell,
+            .continuation = continuation,
+            .miss = miss,
+            .success_guard = success_guard,
+            .mode = .value_then,
+        });
     }
 
     fn lowerMaterializedPatternThen(
@@ -55376,47 +55494,174 @@ const BodyContext = struct {
         continuation: BindingContinuation,
         miss: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern_id).ty, value_cell);
-        return try self.lowerMaterializedPatternThenInner(
-            pattern_id,
-            value,
-            value_cell,
-            result_cell,
-            continuation,
-            miss,
-            .{
-                .root_pattern = pattern_id,
-                .root_node = try value_cell.toGraphNode(self.graph),
-            },
-        );
+        return try self.runMaterialize(.{
+            .pattern = pattern_id,
+            .value = value,
+            .value_cell = value_cell,
+            .result_cell = result_cell,
+            .continuation = continuation,
+            .miss = miss,
+            .success_guard = null,
+            .mode = .then_root,
+        });
     }
 
-    fn lowerMaterializedPatternThenInner(
+    /// Bind a pattern and every descendant plan it materializes. Each
+    /// binding is an explicit frame whose continuation program runs step by
+    /// step, so pattern depth never becomes native call depth.
+    fn runMaterialize(self: *BodyContext, root: MaterializeRequest) Allocator.Error!DraftExprId {
+        var materialize_run = MaterializeRun{};
+        defer materialize_run.deinit(self.allocator);
+        errdefer while (materialize_run.frames.pop()) |frame| {
+            if (frame.saved_reuse) |saved| self.reuse_pre_registered_pattern_binders = saved;
+        };
+
+        var delivered: DraftExprId = (try self.enterMaterialize(&materialize_run, root)) orelse undefined;
+        if (materialize_run.frames.items.len == 0) return delivered;
+        var has_delivery = false;
+        while (true) {
+            const index = materialize_run.frames.items.len - 1;
+            if (has_delivery) {
+                materialize_run.frames.items[index].continuation = delivered;
+                has_delivery = false;
+            }
+            const frame = materialize_run.frames.items[index];
+            if (frame.next < materialize_run.steps.items.len) {
+                const step = materialize_run.steps.items[frame.next];
+                materialize_run.frames.items[index].next += 1;
+                const request: MaterializeRequest = switch (step) {
+                    .plan => |plan| .{
+                        .pattern = plan.pattern,
+                        .value = try self.addExprWithTypeCell(plan.cell, .{ .local = plan.local }),
+                        .value_cell = plan.cell,
+                        .result_cell = frame.result_cell,
+                        .continuation = .{ .expr = frame.continuation },
+                        .miss = frame.miss,
+                        .success_guard = null,
+                        .mode = .inner,
+                        .registered = true,
+                    },
+                    .request => |request| request,
+                    .wrap => |wrap| {
+                        materialize_run.frames.items[index].continuation = try self.wrapPatternMatch(
+                            wrap.value,
+                            wrap.cell,
+                            wrap.pat,
+                            frame.continuation,
+                            frame.miss,
+                            frame.result_cell,
+                        );
+                        continue;
+                    },
+                    .list_cond => |list_cond| {
+                        const list = self.view.bodies.pattern(list_cond.pattern).data.list;
+                        const cond = try self.listPatternCondition(list_cond.value, list);
+                        const branches = [_]DraftIfBranch{.{ .cond = cond, .body = frame.continuation }};
+                        materialize_run.frames.items[index].continuation = try self.addExprWithTypeCell(frame.result_cell, .{ .if_ = .{
+                            .branches = try self.addIfBranchSpan(&branches),
+                            .final_else = frame.miss,
+                        } });
+                        continue;
+                    },
+                    .let_value => |let_value| {
+                        materialize_run.frames.items[index].continuation = try self.addExprWithTypeCell(frame.result_cell, .{ .let_ = .{
+                            .bind = try self.addPatWithTypeCell(let_value.cell, .{ .bind = let_value.local }),
+                            .value = let_value.value,
+                            .rest = frame.continuation,
+                        } });
+                        continue;
+                    },
+                };
+                if (try self.enterMaterialize(&materialize_run, request)) |expr| {
+                    materialize_run.frames.items[index].continuation = expr;
+                }
+                continue;
+            }
+
+            _ = materialize_run.frames.pop();
+            materialize_run.steps.shrinkRetainingCapacity(frame.steps_start);
+            if (frame.saved_reuse) |saved| self.reuse_pre_registered_pattern_binders = saved;
+            if (materialize_run.frames.items.len == 0) return frame.continuation;
+            delivered = frame.continuation;
+            has_delivery = true;
+        }
+    }
+
+    fn pushMaterializeFrame(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        value: DraftExprId,
-        value_cell: DraftTypeCell,
-        result_cell: DraftTypeCell,
-        continuation: BindingContinuation,
-        miss: DraftExprId,
-        success_guard: ?PatternSuccessGuard,
-    ) Allocator.Error!DraftExprId {
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern_id).ty, value_cell);
-        const value_node = try value_cell.toGraphNode(self.graph);
-        try self.preRegisterPatternBindersAtNode(pattern_id, value_node);
-        const previous_reuse = self.reuse_pre_registered_pattern_binders;
-        defer self.reuse_pre_registered_pattern_binders = previous_reuse;
+        materialize_run: *MaterializeRun,
+        request: MaterializeRequest,
+        saved_reuse: ?bool,
+    ) Allocator.Error!void {
+        try materialize_run.frames.append(self.allocator, .{
+            .steps_start = materialize_run.steps.items.len,
+            .next = materialize_run.steps.items.len,
+            .continuation = undefined,
+            .miss = request.miss,
+            .result_cell = request.result_cell,
+            .saved_reuse = saved_reuse,
+        });
+    }
+
+    /// A binding needing no descendant plans, built at once; otherwise null
+    /// after pushing the frame whose program builds it.
+    fn enterMaterialize(self: *BodyContext, materialize_run: *MaterializeRun, request_in: MaterializeRequest) Allocator.Error!?DraftExprId {
+        var request = request_in;
+        switch (request.mode) {
+            .value_then => {
+                const value_node = try request.value_cell.toGraphNode(self.graph);
+                try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(request.pattern).ty, request.value_cell);
+                if (!try self.patternNeedsExplicitBinding(request.pattern)) {
+                    return try self.lowerMaterializedPatternValueLeaf(request, value_node);
+                }
+
+                const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), request.value_cell, null);
+                const local_expr = try self.addExprWithTypeCell(request.value_cell, .{ .local = local });
+                try self.pushMaterializeFrame(materialize_run, request, null);
+                try materialize_run.steps.append(self.allocator, .{ .request = .{
+                    .pattern = request.pattern,
+                    .value = local_expr,
+                    .value_cell = request.value_cell,
+                    .result_cell = request.result_cell,
+                    .continuation = request.continuation,
+                    .miss = request.miss,
+                    .success_guard = null,
+                    .mode = .then_root,
+                } });
+                try materialize_run.steps.append(self.allocator, .{ .let_value = .{
+                    .local = local,
+                    .value = request.value,
+                    .cell = request.value_cell,
+                } });
+                return null;
+            },
+            .then_root => {
+                try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(request.pattern).ty, request.value_cell);
+                request.success_guard = .{
+                    .root_pattern = request.pattern,
+                    .root_node = try request.value_cell.toGraphNode(self.graph),
+                };
+                request.mode = .inner;
+            },
+            .inner => {},
+        }
+
+        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(request.pattern).ty, request.value_cell);
+        const value_node = try request.value_cell.toGraphNode(self.graph);
+        // A descendant plan's binders were registered with its root's.
+        if (!request.registered) try self.preRegisterPatternBindersAtNode(request.pattern, value_node);
+        const saved_reuse = self.reuse_pre_registered_pattern_binders;
         self.reuse_pre_registered_pattern_binders = true;
-        const pattern = self.view.bodies.pattern(pattern_id);
-        return switch (pattern.data) {
-            .list => |list| try self.lowerListPatternBindingThen(value, value_cell, list, result_cell, continuation, miss, success_guard),
+        const pattern = self.view.bodies.pattern(request.pattern);
+        const variant: enum { list, record_rest, wrapped, value } = switch (pattern.data) {
+            .list => .list,
             .record_destructure => |destructs| if (self.recordDestructsNeedExplicitRest(destructs) or
                 try self.recordDestructsHaveOptionalField(pattern.ty, destructs))
-                try self.lowerRecordRestPatternBindingThen(value, value_cell, pattern.ty, destructs, result_cell, continuation, miss, success_guard)
-            else if (try self.patternNeedsExplicitBinding(pattern_id))
-                try self.lowerWrappedMaterializedPatternThen(pattern_id, value, value_node, value_cell, result_cell, continuation, miss, success_guard)
+                .record_rest
+            else if (try self.patternNeedsExplicitBinding(request.pattern))
+                .wrapped
             else
-                try self.lowerMaterializedPatternValueThen(pattern_id, value, value_cell, result_cell, continuation, miss, success_guard),
+                .value,
             .assign,
             .numeral_literal,
             .str_literal,
@@ -55424,134 +55669,93 @@ const BodyContext = struct {
             .underscore,
             .pending,
             .runtime_error,
-            => try self.lowerMaterializedPatternValueThen(pattern_id, value, value_cell, result_cell, continuation, miss, success_guard),
+            => .value,
             .as,
             .applied_tag,
             .nominal,
             .tuple,
-            => if (try self.patternNeedsExplicitBinding(pattern_id))
-                try self.lowerWrappedMaterializedPatternThen(pattern_id, value, value_node, value_cell, result_cell, continuation, miss, success_guard)
-            else
-                try self.lowerMaterializedPatternValueThen(pattern_id, value, value_cell, result_cell, continuation, miss, success_guard),
+            => if (try self.patternNeedsExplicitBinding(request.pattern)) .wrapped else .value,
         };
+        if (variant == .value) {
+            defer self.reuse_pre_registered_pattern_binders = saved_reuse;
+            const leaf_node = try request.value_cell.toGraphNode(self.graph);
+            try self.constrainCheckedInterfaceToCell(pattern.ty, request.value_cell);
+            if (try self.patternNeedsExplicitBinding(request.pattern)) {
+                Common.invariant("explicitly materialized pattern reached direct value binding");
+            }
+            return try self.lowerMaterializedPatternValueLeaf(request, leaf_node);
+        }
+
+        try self.pushMaterializeFrame(materialize_run, request, saved_reuse);
+        switch (variant) {
+            .value => unreachable,
+            .list => try self.prepareListPatternBinding(materialize_run, request, value_node),
+            .record_rest => try self.prepareRecordRestPatternBinding(materialize_run, request, value_node),
+            .wrapped => {
+                var pending = std.ArrayList(PendingMaterializedPattern).empty;
+                defer pending.deinit(self.allocator);
+                const shell = try self.lowerPatternShellAtNode(request.pattern, value_node, &pending);
+                if (pending.items.len == 0) {
+                    Common.invariant("recursive materialized wrapper produced no explicit descendant plan");
+                }
+                self.currentMaterializeFrame(materialize_run).continuation = try self.lowerPatternSuccessContinuation(request.continuation, request.result_cell, request.success_guard);
+                try self.appendPendingMaterializeSteps(materialize_run, pending.items);
+                try materialize_run.steps.append(self.allocator, .{ .wrap = .{ .value = request.value, .cell = request.value_cell, .pat = shell } });
+            },
+        }
+        return null;
     }
 
-    fn applyPendingMaterializedPatterns(
+    fn currentMaterializeFrame(_: *BodyContext, materialize_run: *MaterializeRun) *MaterializeFrame {
+        return &materialize_run.frames.items[materialize_run.frames.items.len - 1];
+    }
+
+    /// Queue descendant plans innermost first: the last plan binds closest to
+    /// the continuation.
+    fn appendPendingMaterializeSteps(
         self: *BodyContext,
+        materialize_run: *MaterializeRun,
         pending: []const PendingMaterializedPattern,
-        initial_success: DraftExprId,
-        miss: DraftExprId,
-        result_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        var success = initial_success;
+    ) Allocator.Error!void {
         var index = pending.len;
         while (index > 0) {
             index -= 1;
-            const plan = pending[index];
-            const local_value = try self.addExprWithTypeCell(plan.cell, .{ .local = plan.local });
-            success = try self.lowerMaterializedPatternThenInner(
-                plan.pattern,
-                local_value,
-                plan.cell,
-                result_cell,
-                .{ .expr = success },
-                miss,
-                null,
-            );
+            try materialize_run.steps.append(self.allocator, .{ .plan = pending[index] });
         }
-        return success;
     }
 
-    fn lowerWrappedMaterializedPatternThen(
+    /// Bind a pattern that needs no explicit descendant plans directly
+    /// against its value.
+    fn lowerMaterializedPatternValueLeaf(self: *BodyContext, request: MaterializeRequest, value_node: NodeId) Allocator.Error!DraftExprId {
+        const guards_start = self.pattern_literal_guards.items.len;
+        const binds_start = self.optional_destruct_binds.items.len;
+        const pat = try self.lowerPatternAtNode(request.pattern, value_node);
+        const literal_guards = try self.drainPatternLiteralGuards(guards_start);
+        defer self.allocator.free(literal_guards);
+        const optional_binds = try self.drainOptionalDestructBinds(binds_start);
+        defer self.allocator.free(optional_binds);
+        var success = try self.lowerPatternSuccessContinuation(request.continuation, request.result_cell, request.success_guard);
+        if (optional_binds.len > 0) {
+            success = try self.applyOptionalDestructBinds(optional_binds, success);
+        }
+        const rest = try self.applyPatternLiteralGuardsAtCell(
+            literal_guards,
+            success,
+            request.miss,
+            request.result_cell,
+        );
+        return try self.wrapPatternMatch(request.value, request.value_cell, pat, rest, request.miss, request.result_cell);
+    }
+
+    fn prepareListPatternBinding(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        value: DraftExprId,
+        materialize_run: *MaterializeRun,
+        request: MaterializeRequest,
         value_node: NodeId,
-        value_cell: DraftTypeCell,
-        result_cell: DraftTypeCell,
-        continuation: BindingContinuation,
-        miss: DraftExprId,
-        success_guard: ?PatternSuccessGuard,
-    ) Allocator.Error!DraftExprId {
-        var pending = std.ArrayList(PendingMaterializedPattern).empty;
-        defer pending.deinit(self.allocator);
-        const shell = try self.lowerPatternShellAtNode(pattern_id, value_node, &pending);
-        if (pending.items.len == 0) {
-            Common.invariant("recursive materialized wrapper produced no explicit descendant plan");
-        }
-        const continuation_expr = try self.lowerPatternSuccessContinuation(continuation, result_cell, success_guard);
-        const success = try self.applyPendingMaterializedPatterns(pending.items, continuation_expr, miss, result_cell);
-        return try self.wrapPatternMatch(value, value_cell, shell, success, miss, result_cell);
-    }
-
-    fn lowerListPatternBindingThen(
-        self: *BodyContext,
-        value: DraftExprId,
-        value_cell: DraftTypeCell,
-        list: anytype,
-        result_cell: DraftTypeCell,
-        continuation: BindingContinuation,
-        miss: DraftExprId,
-        success_guard: ?PatternSuccessGuard,
-    ) Allocator.Error!DraftExprId {
-        const success = try self.lowerListPatternBindingSuccess(value, value_cell, list, result_cell, continuation, miss, success_guard);
-        const cond = try self.listPatternCondition(value, list);
-        const branches = [_]DraftIfBranch{.{ .cond = cond, .body = success }};
-        return try self.addExprWithTypeCell(result_cell, .{ .if_ = .{
-            .branches = try self.addIfBranchSpan(&branches),
-            .final_else = miss,
-        } });
-    }
-
-    fn listPatternItemIndex(
-        self: *BodyContext,
-        index: usize,
-        pattern_count: usize,
-        rest: ?checked.CheckedListRestPattern,
-        len: ?DraftExprId,
-        u64_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        if (rest) |rest_info| {
-            if (index >= rest_info.index) {
-                const list_len = len orelse Common.invariant("list pattern trailing item index required list length");
-                const trailing_count = try self.intLiteralExpr(pattern_count - index, u64_ty);
-                return try self.lowLevelExpr(.num_minus, &.{ list_len, trailing_count }, u64_ty);
-            }
-        }
-        return try self.intLiteralExpr(index, u64_ty);
-    }
-
-    fn sublistRangeExpr(
-        self: *BodyContext,
-        start: DraftExprId,
-        len: DraftExprId,
-        u64_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const len_name = try self.nameStoreMut().internRecordFieldLabel("len");
-        const start_name = try self.nameStoreMut().internRecordFieldLabel("start");
-        const fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty, .default = null },
-            .{ .name = start_name, .ty = u64_ty, .default = null },
-        };
-        const ty = try self.typeStore().internRecord(self.nameStore(), &fields);
-        const exprs = [_]DraftFieldExpr{
-            .{ .name = len_name, .value = len },
-            .{ .name = start_name, .value = start },
-        };
-        return try self.addExpr(.{ .ty = ty, .data = .{ .record = try self.addFieldExprSpan(&exprs) } });
-    }
-
-    fn lowerListPatternBindingSuccess(
-        self: *BodyContext,
-        value: DraftExprId,
-        value_cell: DraftTypeCell,
-        list: anytype,
-        result_cell: DraftTypeCell,
-        continuation: BindingContinuation,
-        miss: DraftExprId,
-        success_guard: ?PatternSuccessGuard,
-    ) Allocator.Error!DraftExprId {
-        const value_node = try value_cell.toGraphNode(self.graph);
+    ) Allocator.Error!void {
+        const list = self.view.bodies.pattern(request.pattern).data.list;
+        const value = request.value;
+        const value_cell = request.value_cell;
         const elem_node = try self.graph.listElementNode(value_node);
         const elem_cell = DraftTypeCell.fromGraphNode(elem_node);
         const values = try self.allocator.alloc(DraftExprId, list.patterns.len);
@@ -55596,59 +55800,48 @@ const BodyContext = struct {
             }
         }
 
-        var success = try self.lowerPatternSuccessContinuation(continuation, result_cell, success_guard);
+        self.currentMaterializeFrame(materialize_run).continuation = try self.lowerPatternSuccessContinuation(request.continuation, request.result_cell, request.success_guard);
         const has_rest_plan = rest_pat != null;
         const rest_index = if (list.rest) |rest| rest.index else 0;
         var sequence_index = patterns.len + @intFromBool(has_rest_plan);
         while (sequence_index > 0) {
             sequence_index -= 1;
             if (has_rest_plan and sequence_index == rest_index) {
-                const rest_success = try self.applyPendingMaterializedPatterns(
-                    rest_pending.items,
-                    success,
-                    miss,
-                    result_cell,
-                );
-                success = try self.wrapPatternMatch(
-                    rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
-                    value_cell,
-                    rest_pat.?,
-                    rest_success,
-                    miss,
-                    result_cell,
-                );
+                try self.appendPendingMaterializeSteps(materialize_run, rest_pending.items);
+                try materialize_run.steps.append(self.allocator, .{ .wrap = .{
+                    .value = rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
+                    .cell = value_cell,
+                    .pat = rest_pat.?,
+                } });
                 continue;
             }
             const fixed_index = sequence_index - @intFromBool(has_rest_plan and sequence_index > rest_index);
-            const item_success = try self.applyPendingMaterializedPatterns(
-                pending_per_item[fixed_index].items,
-                success,
-                miss,
-                result_cell,
-            );
-            success = try self.wrapPatternMatch(values[fixed_index], elem_cell, patterns[fixed_index], item_success, miss, result_cell);
+            try self.appendPendingMaterializeSteps(materialize_run, pending_per_item[fixed_index].items);
+            try materialize_run.steps.append(self.allocator, .{ .wrap = .{
+                .value = values[fixed_index],
+                .cell = elem_cell,
+                .pat = patterns[fixed_index],
+            } });
         }
-        return success;
+        try materialize_run.steps.append(self.allocator, .{ .list_cond = .{ .value = value, .pattern = request.pattern } });
     }
 
-    fn lowerRecordRestPatternBindingThen(
+    fn prepareRecordRestPatternBinding(
         self: *BodyContext,
-        value: DraftExprId,
-        value_cell: DraftTypeCell,
-        record_checked_ty: checked.CheckedTypeId,
-        destructs: []const checked.CheckedRecordDestruct,
-        result_cell: DraftTypeCell,
-        continuation: BindingContinuation,
-        miss: DraftExprId,
-        success_guard: ?PatternSuccessGuard,
-    ) Allocator.Error!DraftExprId {
+        materialize_run: *MaterializeRun,
+        request: MaterializeRequest,
+        value_node: NodeId,
+    ) Allocator.Error!void {
         const PreparedChild = struct {
             value: DraftExprId,
             cell: DraftTypeCell,
             shell: DraftPatId,
             pending: std.ArrayList(PendingMaterializedPattern),
         };
-        const value_node = try value_cell.toGraphNode(self.graph);
+        const pattern = self.view.bodies.pattern(request.pattern);
+        const record_checked_ty = pattern.ty;
+        const destructs = pattern.data.record_destructure;
+        const value = request.value;
         const prepared = try self.allocator.alloc(?PreparedChild, destructs.len);
         defer {
             for (prepared) |*entry| {
@@ -55713,27 +55906,52 @@ const BodyContext = struct {
             }
         }
 
-        var success = try self.lowerPatternSuccessContinuation(continuation, result_cell, success_guard);
+        self.currentMaterializeFrame(materialize_run).continuation = try self.lowerPatternSuccessContinuation(request.continuation, request.result_cell, request.success_guard);
         var i = destructs.len;
         while (i > 0) {
             i -= 1;
             const child = prepared[i] orelse continue;
-            const child_success = try self.applyPendingMaterializedPatterns(
-                child.pending.items,
-                success,
-                miss,
-                result_cell,
-            );
-            success = try self.wrapPatternMatch(
-                child.value,
-                child.cell,
-                child.shell,
-                child_success,
-                miss,
-                result_cell,
-            );
+            try self.appendPendingMaterializeSteps(materialize_run, child.pending.items);
+            try materialize_run.steps.append(self.allocator, .{ .wrap = .{ .value = child.value, .cell = child.cell, .pat = child.shell } });
         }
-        return success;
+    }
+
+    fn listPatternItemIndex(
+        self: *BodyContext,
+        index: usize,
+        pattern_count: usize,
+        rest: ?checked.CheckedListRestPattern,
+        len: ?DraftExprId,
+        u64_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (rest) |rest_info| {
+            if (index >= rest_info.index) {
+                const list_len = len orelse Common.invariant("list pattern trailing item index required list length");
+                const trailing_count = try self.intLiteralExpr(pattern_count - index, u64_ty);
+                return try self.lowLevelExpr(.num_minus, &.{ list_len, trailing_count }, u64_ty);
+            }
+        }
+        return try self.intLiteralExpr(index, u64_ty);
+    }
+
+    fn sublistRangeExpr(
+        self: *BodyContext,
+        start: DraftExprId,
+        len: DraftExprId,
+        u64_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const len_name = try self.nameStoreMut().internRecordFieldLabel("len");
+        const start_name = try self.nameStoreMut().internRecordFieldLabel("start");
+        const fields = [_]Type.Field{
+            .{ .name = len_name, .ty = u64_ty, .default = null },
+            .{ .name = start_name, .ty = u64_ty, .default = null },
+        };
+        const ty = try self.typeStore().internRecord(self.nameStore(), &fields);
+        const exprs = [_]DraftFieldExpr{
+            .{ .name = len_name, .value = len },
+            .{ .name = start_name, .value = start },
+        };
+        return try self.addExpr(.{ .ty = ty, .data = .{ .record = try self.addFieldExprSpan(&exprs) } });
     }
 
     fn lowerRecordRestValueWithTypeCell(
@@ -56217,25 +56435,38 @@ const BodyContext = struct {
         defer seen.deinit();
         var active = std.AutoHashMap(PatternNodeVisit, void).init(self.allocator);
         defer active.deinit();
-        try self.collectRuntimeDemandGuardsForPattern(pattern_id, node, &guards, &seen, &active);
+        // The pattern is walked in source order from an explicit work list;
+        // a pattern/node pair repeated on the current path is an invariant
+        // violation, since every descent must advance.
+        var pending: std.ArrayListUnmanaged(PatternBinderVisit) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .visit = .{ .pattern = pattern_id, .node = node } });
+        while (pending.pop()) |item| switch (item) {
+            .exit => |key| _ = active.remove(key),
+            .visit => |key| {
+                if (active.contains(key)) {
+                    Common.invariant("runtime demand guard walk repeated an active pattern/node visit");
+                }
+                try active.put(key, {});
+                try pending.append(self.allocator, .{ .exit = key });
+                const start = pending.items.len;
+                try self.collectRuntimeDemandGuardsStep(key.pattern, key.node, &guards, &seen, &pending);
+                std.mem.reverse(PatternBinderVisit, pending.items[start..]);
+            },
+        };
         return try self.graph.arena().dupe(NodeId, guards.items);
     }
 
-    fn collectRuntimeDemandGuardsForPattern(
+    /// Record one pattern's demand guard; its subpatterns go on `pending`
+    /// with the graph nodes they inspect.
+    fn collectRuntimeDemandGuardsStep(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
         guards: *std.ArrayList(NodeId),
         seen: *collections.DenseMap(NodeId, void),
-        active: *std.AutoHashMap(PatternNodeVisit, void),
+        pending: *std.ArrayListUnmanaged(PatternBinderVisit),
     ) Allocator.Error!void {
-        const key: PatternNodeVisit = .{ .pattern = pattern_id, .node = node };
-        if (active.contains(key)) {
-            Common.invariant("runtime demand guard walk repeated an active pattern/node visit");
-        }
-        try active.put(key, {});
-        defer _ = active.remove(key);
-
         const seen_entry = try seen.getOrPut(node);
         if (!seen_entry.found_existing) try guards.append(self.allocator, node);
 
@@ -56246,31 +56477,25 @@ const BodyContext = struct {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tag demand guard had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tag demand guard backing did not advance");
-                    return try self.collectRuntimeDemandGuardsForPattern(pattern_id, backing.node, guards, seen, active);
+                    return try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 }
                 const name = try self.tagName(self.view, tag.name);
                 for (tag.args, 0..) |arg, payload_index| {
-                    try self.collectRuntimeDemandGuardsForPattern(
-                        arg,
-                        try self.graph.tagPayloadNode(node, name, payload_index),
-                        guards,
-                        seen,
-                        active,
-                    );
+                    try self.queuePatternBinderVisit(pending, arg, try self.graph.tagPayloadNode(node, name, payload_index));
                 }
             },
             .nominal => |nominal| {
                 const backing = self.graph.namedNodes(node).backing orelse
                     Common.invariant("nominal demand guard had no runtime backing");
                 if (backing.node == node) Common.invariant("nominal demand guard backing did not advance");
-                try self.collectRuntimeDemandGuardsForPattern(nominal.backing_pattern, backing.node, guards, seen, active);
+                try self.queuePatternBinderVisit(pending, nominal.backing_pattern, backing.node);
             },
             .record_destructure => |destructs| {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal record demand guard had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal record demand guard backing did not advance");
-                    return try self.collectRuntimeDemandGuardsForPattern(pattern_id, backing.node, guards, seen, active);
+                    return try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 }
                 for (destructs) |destruct| {
                     const child = switch (destruct.kind) {
@@ -56278,7 +56503,7 @@ const BodyContext = struct {
                         .rest => |rest| {
                             if (self.patternIsIgnored(rest)) continue;
                             const rest_node = try self.recordRestNodeForPattern(node, destructs, rest);
-                            try self.collectRuntimeDemandGuardsForPattern(rest, rest_node, guards, seen, active);
+                            try self.queuePatternBinderVisit(pending, rest, rest_node);
                             continue;
                         },
                     };
@@ -56287,23 +56512,11 @@ const BodyContext = struct {
                     // record's tagged slot node—mirror the walk the
                     // binder registration and pattern lowering use.
                     if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
-                        try self.collectRuntimeDemandGuardsForPattern(
-                            child,
-                            try self.instNode(self.view.bodies.pattern(child).ty),
-                            guards,
-                            seen,
-                            active,
-                        );
+                        try self.queuePatternBinderVisit(pending, child, try self.instNode(self.view.bodies.pattern(child).ty));
                         continue;
                     }
                     const name = try self.recordFieldName(self.view, destruct.label);
-                    try self.collectRuntimeDemandGuardsForPattern(
-                        child,
-                        try self.graph.recordFieldNode(node, name),
-                        guards,
-                        seen,
-                        active,
-                    );
+                    try self.queuePatternBinderVisit(pending, child, try self.graph.recordFieldNode(node, name));
                 }
             },
             .list => |list| {
@@ -56312,12 +56525,12 @@ const BodyContext = struct {
                     const elem_seen = try seen.getOrPut(elem);
                     if (!elem_seen.found_existing) try guards.append(self.allocator, elem);
                     for (list.patterns) |child| {
-                        try self.collectRuntimeDemandGuardsForPattern(child, elem, guards, seen, active);
+                        try self.queuePatternBinderVisit(pending, child, elem);
                     }
                 }
                 if (list.rest) |rest| {
                     if (rest.pattern) |rest_pattern| {
-                        try self.collectRuntimeDemandGuardsForPattern(rest_pattern, node, guards, seen, active);
+                        try self.queuePatternBinderVisit(pending, rest_pattern, node);
                     }
                 }
             },
@@ -56326,19 +56539,19 @@ const BodyContext = struct {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tuple demand guard had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tuple demand guard backing did not advance");
-                    return try self.collectRuntimeDemandGuardsForPattern(pattern_id, backing.node, guards, seen, active);
+                    return try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 }
                 const item_nodes = try self.graph.tupleItemNodes(node);
                 if (items.len != item_nodes.len) Common.invariant("tuple demand guard arity differed from graph tuple arity");
                 for (items, item_nodes) |item, item_node| {
-                    try self.collectRuntimeDemandGuardsForPattern(item, item_node, guards, seen, active);
+                    try self.queuePatternBinderVisit(pending, item, item_node);
                 }
             },
-            .as => |as| try self.collectRuntimeDemandGuardsForPattern(as.pattern, node, guards, seen, active),
+            .as => |as| try self.queuePatternBinderVisit(pending, as.pattern, node),
             .str_interpolation => |str| {
                 for (str.steps) |step| {
                     if (step.capture) |capture| {
-                        try self.collectRuntimeDemandGuardsForPattern(capture, node, guards, seen, active);
+                        try self.queuePatternBinderVisit(pending, capture, node);
                     }
                 }
             },
@@ -56352,46 +56565,62 @@ const BodyContext = struct {
         }
     }
 
+    /// Save every binder of `pattern_id` in the order its binders were bound:
+    /// an `as` binder after its subpattern's.
     fn savePatternBinders(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
         saved: *std.ArrayList(BinderRestore),
     ) Allocator.Error!void {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => |binder| try self.saveBinder(binder, saved),
-            .as => |as| {
-                try self.savePatternBinders(as.pattern, saved);
-                try self.saveBinder(as.binder, saved);
-            },
-            .applied_tag => |tag| for (tag.args) |arg| try self.savePatternBinders(arg, saved),
-            .nominal => |nominal| try self.savePatternBinders(nominal.backing_pattern, saved),
-            .record_destructure => |destructs| {
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required => |child_pattern| child_pattern,
-                        .sub_pattern => |child_pattern| child_pattern,
-                        .rest => |child_pattern| child_pattern,
-                    };
-                    try self.savePatternBinders(child, saved);
-                }
-            },
-            .list => |list| {
-                for (list.patterns) |child| try self.savePatternBinders(child, saved);
-                if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.savePatternBinders(rest_pattern, saved);
-            },
-            .tuple => |items| for (items) |child| try self.savePatternBinders(child, saved),
-            .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| try self.savePatternBinders(capture, saved);
-                }
-            },
-            .pending,
-            .numeral_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
+        const Step = union(enum) { pattern: checked.CheckedPatternId, binder: checked.PatternBinderId };
+        var pending: std.ArrayListUnmanaged(Step) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .pattern = pattern_id });
+        while (pending.pop()) |step| {
+            const next_pattern = switch (step) {
+                .binder => |binder| {
+                    try self.saveBinder(binder, saved);
+                    continue;
+                },
+                .pattern => |next| next,
+            };
+            const start = pending.items.len;
+            switch (self.view.bodies.pattern(next_pattern).data) {
+                .assign => |binder| try self.saveBinder(binder, saved),
+                .as => |as| {
+                    try pending.append(self.allocator, .{ .pattern = as.pattern });
+                    try pending.append(self.allocator, .{ .binder = as.binder });
+                },
+                .applied_tag => |tag| for (tag.args) |arg| try pending.append(self.allocator, .{ .pattern = arg }),
+                .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern }),
+                .record_destructure => |destructs| {
+                    for (destructs) |destruct| {
+                        const child = switch (destruct.kind) {
+                            .required => |child_pattern| child_pattern,
+                            .sub_pattern => |child_pattern| child_pattern,
+                            .rest => |child_pattern| child_pattern,
+                        };
+                        try pending.append(self.allocator, .{ .pattern = child });
+                    }
+                },
+                .list => |list| {
+                    for (list.patterns) |child| try pending.append(self.allocator, .{ .pattern = child });
+                    if (list.rest) |rest| if (rest.pattern) |rest_pattern| try pending.append(self.allocator, .{ .pattern = rest_pattern });
+                },
+                .tuple => |items| for (items) |child| try pending.append(self.allocator, .{ .pattern = child }),
+                .str_interpolation => |str| {
+                    for (str.steps) |str_step| {
+                        if (str_step.capture) |capture| try pending.append(self.allocator, .{ .pattern = capture });
+                    }
+                },
+                .pending,
+                .numeral_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => {},
+            }
+            std.mem.reverse(Step, pending.items[start..]);
         }
     }
 
@@ -59606,43 +59835,51 @@ const BodyContext = struct {
     }
 
     fn patternIsShapeFree(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
-        return switch (self.view.bodies.pattern(pattern_id).data) {
-            .assign, .underscore => true,
-            .as => |as| self.patternIsShapeFree(as.pattern),
-            .pending, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => false,
+        var current = pattern_id;
+        while (true) switch (self.view.bodies.pattern(current).data) {
+            .assign, .underscore => return true,
+            .as => |as| current = as.pattern,
+            .pending, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => return false,
         };
     }
 
     fn lowerShapeFreePatternAtCell(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        root_pattern: checked.CheckedPatternId,
         ty_cell: DraftTypeCell,
     ) Allocator.Error!DraftPatId {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        switch (ty_cell) {
-            .sealed => |ty| try self.requireClosedCheckedType(pattern.ty, ty),
-            .graph_node => |value_node| {
-                const pattern_node = try self.instNode(pattern.ty);
-                if (!try self.resultCompletesRequest(pattern_node, value_node) or
-                    try self.graph.containsGeneratedPrivate(value_node))
-                {
-                    try self.constrainCheckedInterfaceToCell(pattern.ty, ty_cell);
-                }
-            },
-        }
-        const data: BodyPatData = switch (pattern.data) {
-            .assign => |binder| .{ .bind = try self.materializePatternBinderAtCell(binder, ty_cell) },
-            .as => |as| blk: {
-                const local = try self.materializePatternBinderAtCell(as.binder, ty_cell);
-                break :blk .{ .as = .{
-                    .pattern = try self.lowerShapeFreePatternAtCell(as.pattern, ty_cell),
-                    .local = local,
-                } };
-            },
-            .underscore => .wildcard,
-            .pending, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => Common.invariant("shape-dependent pattern reached shape-free graph-cell lowering"),
+        // An `as` chain binds each layer before the pattern beneath it.
+        var as_locals: std.ArrayListUnmanaged(DraftLocalId) = .empty;
+        defer as_locals.deinit(self.allocator);
+        var pattern_id = root_pattern;
+        const data: BodyPatData = while (true) {
+            const pattern = self.view.bodies.pattern(pattern_id);
+            switch (ty_cell) {
+                .sealed => |ty| try self.requireClosedCheckedType(pattern.ty, ty),
+                .graph_node => |value_node| {
+                    const pattern_node = try self.instNode(pattern.ty);
+                    if (!try self.resultCompletesRequest(pattern_node, value_node) or
+                        try self.graph.containsGeneratedPrivate(value_node))
+                    {
+                        try self.constrainCheckedInterfaceToCell(pattern.ty, ty_cell);
+                    }
+                },
+            }
+            switch (pattern.data) {
+                .assign => |binder| break .{ .bind = try self.materializePatternBinderAtCell(binder, ty_cell) },
+                .as => |as| {
+                    try as_locals.append(self.allocator, try self.materializePatternBinderAtCell(as.binder, ty_cell));
+                    pattern_id = as.pattern;
+                },
+                .underscore => break .wildcard,
+                .pending, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => Common.invariant("shape-dependent pattern reached shape-free graph-cell lowering"),
+            }
         };
-        return try self.addPatWithTypeCell(ty_cell, data);
+        var pat = try self.addPatWithTypeCell(ty_cell, data);
+        while (as_locals.pop()) |local| {
+            pat = try self.addPatWithTypeCell(ty_cell, .{ .as = .{ .pattern = pat, .local = local } });
+        }
+        return pat;
     }
 
     fn currentOwnerPatternBinderLocal(
@@ -59935,8 +60172,278 @@ const BodyContext = struct {
         };
     }
 
+    /// Where a typed pattern's lowered node is typed: an explicit cell, or
+    /// the draft cell of a concrete type.
+    const PatTarget = union(enum) { cell: DraftTypeCell, ty: Type.TypeId };
+
+    /// A typed subpattern still to lower, at an explicit target or at the
+    /// pat_run's target for its type.
+    const PatTypeOp = struct { pattern: checked.CheckedPatternId, ty: Type.TypeId, target: ?PatTarget = null };
+
+    /// A typed pattern whose subpatterns are still lowering. Its ops occupy
+    /// `ops[ops_start..]`; each subpattern's result lands in `results`.
+    const PatTypeFrame = struct {
+        kind: union(enum) {
+            nominal: PatTarget,
+            as: struct { target: PatTarget, local: DraftLocalId },
+            tag: struct { target: PatTarget, name: names.TagNameId },
+            tuple: PatTarget,
+            list: struct { target: PatTarget, count: usize, rest: ?list_rest.Rest },
+            record: PatTarget,
+        },
+        ops_start: usize,
+        next: usize,
+        results_start: usize,
+        names_start: usize,
+    };
+
+    const PatTypeRun = struct {
+        frames: std.ArrayListUnmanaged(PatTypeFrame) = .empty,
+        ops: std.ArrayListUnmanaged(PatTypeOp) = .empty,
+        results: std.ArrayListUnmanaged(DraftPatId) = .empty,
+        field_names: std.ArrayListUnmanaged(names.RecordFieldNameId) = .empty,
+
+        fn deinit(pat_run: *PatTypeRun, allocator: Allocator) void {
+            pat_run.field_names.deinit(allocator);
+            pat_run.results.deinit(allocator);
+            pat_run.ops.deinit(allocator);
+            pat_run.frames.deinit(allocator);
+        }
+    };
+
     fn lowerPatternAtType(self: *BodyContext, pattern_id: checked.CheckedPatternId, ty: Type.TypeId) Allocator.Error!DraftPatId {
         return try self.lowerPatternAtTypeCell(pattern_id, try self.draftTypeCell(ty), ty);
+    }
+
+    fn lowerPatternAtTypeCell(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        ty_cell: DraftTypeCell,
+        ty: Type.TypeId,
+    ) Allocator.Error!DraftPatId {
+        var pat_run = PatTypeRun{};
+        defer pat_run.deinit(self.allocator);
+        if (try self.enterPatType(&pat_run, pattern_id, ty, .{ .cell = ty_cell })) |pat| return pat;
+        return try self.runPatType(&pat_run);
+    }
+
+    /// Drive typed pattern frames to completion. Each composite pattern is an
+    /// explicit frame whose subpatterns lower in source order, so pattern
+    /// depth never becomes native call depth.
+    fn runPatType(self: *BodyContext, pat_run: *PatTypeRun) Allocator.Error!DraftPatId {
+        while (true) {
+            const index = pat_run.frames.items.len - 1;
+            const frame = pat_run.frames.items[index];
+            if (frame.next < pat_run.ops.items.len) {
+                const op = pat_run.ops.items[frame.next];
+                pat_run.frames.items[index].next += 1;
+                const target: PatTarget = op.target orelse .{ .cell = try self.draftTypeCell(op.ty) };
+                if (try self.enterPatType(pat_run, op.pattern, op.ty, target)) |pat| {
+                    try pat_run.results.append(self.allocator, pat);
+                }
+                continue;
+            }
+
+            const pat = try self.finishPatType(pat_run, frame);
+            _ = pat_run.frames.pop();
+            pat_run.ops.shrinkRetainingCapacity(frame.ops_start);
+            pat_run.results.shrinkRetainingCapacity(frame.results_start);
+            pat_run.field_names.shrinkRetainingCapacity(frame.names_start);
+            if (pat_run.frames.items.len == 0) return pat;
+            try pat_run.results.append(self.allocator, pat);
+        }
+    }
+
+    fn pushPatTypeFrame(self: *BodyContext, pat_run: *PatTypeRun, kind: @FieldType(PatTypeFrame, "kind")) Allocator.Error!void {
+        try pat_run.frames.append(self.allocator, .{
+            .kind = kind,
+            .ops_start = pat_run.ops.items.len,
+            .next = pat_run.ops.items.len,
+            .results_start = pat_run.results.items.len,
+            .names_start = pat_run.field_names.items.len,
+        });
+    }
+
+    fn appendPatTypeChildren(
+        self: *BodyContext,
+        pat_run: *PatTypeRun,
+        checked_patterns: []const checked.CheckedPatternId,
+        tys: anytype,
+    ) Allocator.Error!void {
+        if (checked_patterns.len != GuardedList.borrowLen(tys)) Common.invariant("pattern arity differs from concrete checked type");
+        const stable_tys = try GuardedList.dupe(self.allocator, Type.TypeId, tys);
+        defer self.allocator.free(stable_tys);
+        for (checked_patterns, stable_tys) |child, child_ty| {
+            try pat_run.ops.append(self.allocator, .{ .pattern = child, .ty = child_ty });
+        }
+    }
+
+    /// The pattern a leaf lowers to, or null after pushing the frames that
+    /// lower a composite one.
+    fn enterPatType(
+        self: *BodyContext,
+        pat_run: *PatTypeRun,
+        pattern_id: checked.CheckedPatternId,
+        ty: Type.TypeId,
+        target: PatTarget,
+    ) Allocator.Error!?DraftPatId {
+        const pattern = self.view.bodies.pattern(pattern_id);
+        switch (pattern.data) {
+            .assign => {},
+            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => try self.constrainCheckedInterfaceToCell(pattern.ty, target.cell),
+        }
+        const data: BodyPatData = switch (pattern.data) {
+            .pending,
+            .runtime_error,
+            => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
+            .assign => |binder| .{ .bind = try self.materializePatternBinderAtCell(binder, target.cell) },
+            .as => |as| {
+                const local = try self.materializePatternBinderAtCell(as.binder, target.cell);
+                try self.pushPatTypeFrame(pat_run, .{ .as = .{ .target = target, .local = local } });
+                try pat_run.ops.append(self.allocator, .{ .pattern = as.pattern, .ty = ty, .target = target });
+                return null;
+            },
+            .applied_tag, .record_destructure, .tuple => {
+                if (self.nominalConstructionLayer(ty)) |layer| {
+                    try self.pushPatTypeFrame(pat_run, .{ .nominal = target });
+                    try self.enterConstructorPatWrapped(pat_run, pattern_id, layer.backing);
+                    return null;
+                }
+                try self.enterStructuralPatType(pat_run, pattern_id, ty, target);
+                return null;
+            },
+            .nominal => |nominal| {
+                const backing_ty = if (self.nominalConstructionLayer(ty)) |layer|
+                    layer.backing
+                else
+                    self.namedBackingType(ty) orelse ty;
+                try self.pushPatTypeFrame(pat_run, .{ .nominal = target });
+                try pat_run.ops.append(self.allocator, .{ .pattern = nominal.backing_pattern, .ty = backing_ty });
+                return null;
+            },
+            .list => |list| {
+                const elem_ty = self.constListElemType(ty);
+                try self.pushPatTypeFrame(pat_run, .{ .list = .{
+                    .target = target,
+                    .count = list.patterns.len,
+                    .rest = if (list.rest) |rest| .{ .index = rest.index, .has_pattern = rest.pattern != null } else null,
+                } });
+                for (list.patterns) |child| try pat_run.ops.append(self.allocator, .{ .pattern = child, .ty = elem_ty });
+                if (list.rest) |rest| {
+                    // A captured rest binds the remaining slice, which has the same
+                    // list type as the scrutinee.
+                    if (rest.pattern) |rest_pattern| try pat_run.ops.append(self.allocator, .{ .pattern = rest_pattern, .ty = ty });
+                }
+                return null;
+            },
+            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
+            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
+            .str_interpolation => |str| try self.lowerStrPattern(str, ty),
+            .underscore => .wildcard,
+        };
+        return try self.addPatAtTarget(target, data);
+    }
+
+    /// Push the nominal layer frames of a constructor pattern's type, then
+    /// the structural pattern at the innermost backing.
+    fn enterConstructorPatWrapped(
+        self: *BodyContext,
+        pat_run: *PatTypeRun,
+        pattern_id: checked.CheckedPatternId,
+        ty: Type.TypeId,
+    ) Allocator.Error!void {
+        var current = ty;
+        while (self.nominalConstructionLayer(current)) |layer| {
+            try self.pushPatTypeFrame(pat_run, .{ .nominal = .{ .ty = layer.named } });
+            current = layer.backing;
+        }
+        switch (self.view.bodies.pattern(pattern_id).data) {
+            .applied_tag, .record_destructure, .tuple => {},
+            .pending, .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("nominal constructor pattern lowering reached a non-constructor checked pattern"),
+        }
+        try self.enterStructuralPatType(pat_run, pattern_id, current, .{ .ty = current });
+    }
+
+    fn enterStructuralPatType(
+        self: *BodyContext,
+        pat_run: *PatTypeRun,
+        pattern_id: checked.CheckedPatternId,
+        ty: Type.TypeId,
+        target: PatTarget,
+    ) Allocator.Error!void {
+        const pattern = self.view.bodies.pattern(pattern_id);
+        switch (pattern.data) {
+            .applied_tag => |tag| {
+                const name = try self.tagName(self.view, tag.name);
+                try self.pushPatTypeFrame(pat_run, .{ .tag = .{ .target = target, .name = name } });
+                try self.appendPatTypeChildren(pat_run, tag.args, self.tagPayloadTypes(ty, name));
+            },
+            .tuple => |items| {
+                try self.pushPatTypeFrame(pat_run, .{ .tuple = target });
+                try self.appendPatTypeChildren(pat_run, items, self.tupleItemTypes(ty));
+            },
+            .record_destructure => |destructs| {
+                try self.pushPatTypeFrame(pat_run, .{ .record = target });
+                for (destructs) |destruct| {
+                    const child = switch (destruct.kind) {
+                        .required => |child_pattern| child_pattern,
+                        .sub_pattern => |child_pattern| child_pattern,
+                        .rest => |rest_pattern| {
+                            if (self.patternIsIgnored(rest_pattern)) continue;
+                            Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
+                        },
+                    };
+                    // Optional-field destructs never reach the typed pattern family:
+                    // the explicit-binding routes and match translation own them
+                    // (design.md "Field Kinds").
+                    if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
+                        Common.invariant("optional-field record destructure reached typed pattern lowering");
+                    }
+                    const name = try self.recordFieldName(self.view, destruct.label);
+                    try pat_run.field_names.append(self.allocator, name);
+                    try pat_run.ops.append(self.allocator, .{ .pattern = child, .ty = self.recordFieldType(ty, name) });
+                }
+            },
+            .pending, .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => unreachable,
+        }
+    }
+
+    fn addPatAtTarget(self: *BodyContext, target: PatTarget, data: BodyPatData) Allocator.Error!DraftPatId {
+        return switch (target) {
+            .cell => |cell| try self.addPatWithTypeCell(cell, data),
+            .ty => |ty| try self.addPat(.{ .ty = ty, .data = data }),
+        };
+    }
+
+    fn finishPatType(self: *BodyContext, pat_run: *PatTypeRun, frame: PatTypeFrame) Allocator.Error!DraftPatId {
+        const results = pat_run.results.items[frame.results_start..];
+        switch (frame.kind) {
+            .nominal => |target| return try self.addPatAtTarget(target, .{ .nominal = results[0] }),
+            .as => |as| return try self.addPatAtTarget(as.target, .{ .as = .{ .pattern = results[0], .local = as.local } }),
+            .tag => |tag| return try self.addPatAtTarget(tag.target, .{ .tag = .{
+                .name = tag.name,
+                .payloads = try self.addPatSpan(results),
+            } }),
+            .tuple => |target| return try self.addPatAtTarget(target, .{ .tuple = try self.addPatSpan(results) }),
+            .list => |list| {
+                const rest: ?DraftListRestPattern = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.has_pattern) results[list.count] else null,
+                } else null;
+                return try self.addPatAtTarget(list.target, .{ .list = .{
+                    .patterns = try self.addPatSpan(results[0..list.count]),
+                    .rest = rest,
+                } });
+            },
+            .record => |target| {
+                const field_names = pat_run.field_names.items[frame.names_start..];
+                std.debug.assert(field_names.len == results.len);
+                const lowered = try self.allocator.alloc(DraftRecordDestruct, results.len);
+                defer self.allocator.free(lowered);
+                for (lowered, field_names, results) |*slot, name, pat| slot.* = .{ .name = name, .pattern = pat };
+                return try self.addPatAtTarget(target, .{ .record = try self.addRecordDestructSpan(lowered) });
+            },
+        }
     }
 
     /// Register every user binder before lowering a continuation that may use
@@ -59950,6 +60457,10 @@ const BodyContext = struct {
         try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders, false);
     }
 
+    /// Register the binders of `pattern_id` at `node` in source order. The
+    /// pattern is walked from an explicit work list; a pattern/node pair
+    /// repeated on the current path is an invariant violation, since every
+    /// descent must advance.
     fn registerPatternBindersAtNodeInMap(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
@@ -59959,8 +60470,29 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var active = std.AutoHashMap(PatternNodeVisit, void).init(self.allocator);
         defer active.deinit();
-        try self.preRegisterPatternBindersAtNodeInner(pattern_id, node, binders, rebind_existing, &active);
+        var pending: std.ArrayListUnmanaged(PatternBinderVisit) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .visit = .{ .pattern = pattern_id, .node = node } });
+        while (pending.pop()) |item| switch (item) {
+            .exit => |key| _ = active.remove(key),
+            .visit => |key| {
+                if (active.contains(key)) {
+                    Common.invariant("materialized pattern binder prepass repeated a pattern/node visit");
+                }
+                try active.put(key, {});
+                try pending.append(self.allocator, .{ .exit = key });
+                const start = pending.items.len;
+                try self.preRegisterPatternBindersAtNodeStep(key.pattern, key.node, binders, rebind_existing, &pending);
+                std.mem.reverse(PatternBinderVisit, pending.items[start..]);
+            },
+        };
     }
+
+    const PatternBinderVisit = union(enum) {
+        visit: PatternNodeVisit,
+        /// Every descendant of this visit is registered.
+        exit: PatternNodeVisit,
+    };
 
     fn preRegisterPatternBinderAtNode(
         self: *BodyContext,
@@ -59991,43 +60523,33 @@ const BodyContext = struct {
         try binders.put(binder, local);
     }
 
-    fn preRegisterPatternBindersAtNodeInner(
+    /// Register one pattern's own binder; its subpatterns go on `pending`
+    /// with the graph nodes they bind at.
+    fn preRegisterPatternBindersAtNodeStep(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
         binders: *BinderMap,
         rebind_existing: bool,
-        active: anytype,
+        pending: *std.ArrayListUnmanaged(PatternBinderVisit),
     ) Allocator.Error!void {
-        const key: PatternNodeVisit = .{ .pattern = pattern_id, .node = node };
-        if (active.contains(key)) {
-            Common.invariant("materialized pattern binder prepass repeated a pattern/node visit");
-        }
-        try active.put(key, {});
-        defer _ = active.remove(key);
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .assign => |binder| try self.preRegisterPatternBinderAtNode(binder, node, binders, rebind_existing),
             .as => |as| {
                 try self.preRegisterPatternBinderAtNode(as.binder, node, binders, rebind_existing);
-                try self.preRegisterPatternBindersAtNodeInner(as.pattern, node, binders, rebind_existing, active);
+                try self.queuePatternBinderVisit(pending, as.pattern, node);
             },
             .applied_tag => |tag| {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tag pattern backing did not advance");
-                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, rebind_existing, active);
+                    try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 } else {
                     const name = try self.tagName(self.view, tag.name);
                     for (tag.args, 0..) |arg, payload_index| {
-                        try self.preRegisterPatternBindersAtNodeInner(
-                            arg,
-                            try self.graph.tagPayloadNode(node, name, payload_index),
-                            binders,
-                            rebind_existing,
-                            active,
-                        );
+                        try self.queuePatternBinderVisit(pending, arg, try self.graph.tagPayloadNode(node, name, payload_index));
                     }
                 }
             },
@@ -60035,14 +60557,14 @@ const BodyContext = struct {
                 const backing = self.graph.namedNodes(node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
                 if (backing.node == node) Common.invariant("nominal pattern backing did not advance");
-                try self.preRegisterPatternBindersAtNodeInner(nominal.backing_pattern, backing.node, binders, rebind_existing, active);
+                try self.queuePatternBinderVisit(pending, nominal.backing_pattern, backing.node);
             },
             .record_destructure => |destructs| {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal record pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal record pattern backing did not advance");
-                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, rebind_existing, active);
+                    try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 } else {
                     for (destructs) |destruct| switch (destruct.kind) {
                         .required, .sub_pattern => |child| {
@@ -60052,38 +60574,26 @@ const BodyContext = struct {
                             // the record's tagged slot node (design.md
                             // "Field Kinds").
                             if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
-                                try self.preRegisterPatternBindersAtNodeInner(
-                                    child,
-                                    try self.instNode(self.view.bodies.pattern(child).ty),
-                                    binders,
-                                    rebind_existing,
-                                    active,
-                                );
+                                try self.queuePatternBinderVisit(pending, child, try self.instNode(self.view.bodies.pattern(child).ty));
                                 continue;
                             }
                             const name = try self.recordFieldName(self.view, destruct.label);
-                            try self.preRegisterPatternBindersAtNodeInner(
-                                child,
-                                try self.graph.recordFieldNode(node, name),
-                                binders,
-                                rebind_existing,
-                                active,
-                            );
+                            try self.queuePatternBinderVisit(pending, child, try self.graph.recordFieldNode(node, name));
                         },
                         .rest => |rest| {
                             if (self.patternIsIgnored(rest)) continue;
                             const rest_node = try self.recordRestNodeForPattern(node, destructs, rest);
-                            try self.preRegisterPatternBindersAtNodeInner(rest, rest_node, binders, rebind_existing, active);
+                            try self.queuePatternBinderVisit(pending, rest, rest_node);
                         },
                     };
                 }
             },
             .list => |list| {
                 const elem_node = try self.graph.listElementNode(node);
-                for (list.patterns) |child| try self.preRegisterPatternBindersAtNodeInner(child, elem_node, binders, rebind_existing, active);
+                for (list.patterns) |child| try self.queuePatternBinderVisit(pending, child, elem_node);
                 if (list.rest) |rest| {
                     if (rest.pattern) |rest_pattern| {
-                        try self.preRegisterPatternBindersAtNodeInner(rest_pattern, node, binders, rebind_existing, active);
+                        try self.queuePatternBinderVisit(pending, rest_pattern, node);
                     }
                 }
             },
@@ -60092,18 +60602,18 @@ const BodyContext = struct {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tuple pattern backing did not advance");
-                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, rebind_existing, active);
+                    try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 } else {
                     const item_nodes = try self.graph.tupleItemNodes(node);
                     if (items.len != item_nodes.len) Common.invariant("tuple pattern arity differed from graph tuple arity");
                     for (items, item_nodes) |item, item_node| {
-                        try self.preRegisterPatternBindersAtNodeInner(item, item_node, binders, rebind_existing, active);
+                        try self.queuePatternBinderVisit(pending, item, item_node);
                     }
                 }
             },
             .str_interpolation => |str| {
                 for (str.steps) |step| {
-                    if (step.capture) |capture| try self.preRegisterPatternBindersAtNodeInner(capture, node, binders, rebind_existing, active);
+                    if (step.capture) |capture| try self.queuePatternBinderVisit(pending, capture, node);
                 }
             },
             .pending,
@@ -60113,6 +60623,15 @@ const BodyContext = struct {
             .runtime_error,
             => {},
         }
+    }
+
+    fn queuePatternBinderVisit(
+        self: *BodyContext,
+        pending: *std.ArrayListUnmanaged(PatternBinderVisit),
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        try pending.append(self.allocator, .{ .visit = .{ .pattern = pattern_id, .node = node } });
     }
 
     /// Lower the directly representable shell of a recursively materialized
@@ -60129,23 +60648,54 @@ const BodyContext = struct {
         return try self.lowerPatternShellAtNodeInner(pattern_id, node, pending, &active);
     }
 
+    /// A chain of nominal wrappers descends to its backing in a loop; the
+    /// wrappers are applied around the backing's shell afterward.
     fn lowerPatternShellAtNodeInner(
+        self: *BodyContext,
+        root_pattern: checked.CheckedPatternId,
+        root_node: NodeId,
+        pending: *std.ArrayList(PendingMaterializedPattern),
+        active: *std.AutoHashMap(PatternNodeVisit, void),
+    ) Allocator.Error!DraftPatId {
+        var wrappers: std.ArrayListUnmanaged(DraftTypeCell) = .empty;
+        defer wrappers.deinit(self.allocator);
+        var pattern_id = root_pattern;
+        var node = root_node;
+        var shell = while (true) {
+            const key: PatternNodeVisit = .{ .pattern = pattern_id, .node = node };
+            if (active.contains(key)) {
+                Common.invariant("materialized pattern shell repeated an active pattern/node visit");
+            }
+            try active.put(key, {});
+            switch (try self.lowerPatternShellLevel(pattern_id, node, pending)) {
+                .shell => |shell| break shell,
+                .nominal => |next| {
+                    try wrappers.append(self.allocator, DraftTypeCell.fromGraphNode(next.representation_node));
+                    pattern_id = next.pattern;
+                    node = next.backing;
+                },
+            }
+        };
+        while (wrappers.pop()) |wrapper_cell| {
+            shell = try self.addPatWithTypeCell(wrapper_cell, .{ .nominal = shell });
+        }
+        return shell;
+    }
+
+    /// One level of a materialization shell: the lowered shell, or the
+    /// nominal backing the shell continues into.
+    fn lowerPatternShellLevel(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
         pending: *std.ArrayList(PendingMaterializedPattern),
-        active: *std.AutoHashMap(PatternNodeVisit, void),
-    ) Allocator.Error!DraftPatId {
-        const key: PatternNodeVisit = .{ .pattern = pattern_id, .node = node };
-        if (active.contains(key)) {
-            Common.invariant("materialized pattern shell repeated an active pattern/node visit");
-        }
-        try active.put(key, {});
-        defer _ = active.remove(key);
-
+    ) Allocator.Error!union(enum) {
+        shell: DraftPatId,
+        nominal: struct { representation_node: NodeId, pattern: checked.CheckedPatternId, backing: NodeId },
+    } {
         const cell = DraftTypeCell.fromGraphNode(node);
         if (try self.patternRequiresOwnMaterialization(pattern_id)) {
-            return try self.lowerPatternPlanPlaceholderAtNode(pattern_id, node, pending);
+            return .{ .shell = try self.lowerPatternPlanPlaceholderAtNode(pattern_id, node, pending) };
         }
 
         const pattern = self.view.bodies.pattern(pattern_id);
@@ -60161,10 +60711,7 @@ const BodyContext = struct {
                     const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
                     if (backing.node == representation_node) Common.invariant("nominal tag pattern shell backing did not advance");
-                    return try self.addPatWithTypeCell(
-                        DraftTypeCell.fromGraphNode(representation_node),
-                        .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) },
-                    );
+                    return .{ .nominal = .{ .representation_node = representation_node, .pattern = pattern_id, .backing = backing.node } };
                 }
                 const name = try self.tagName(self.view, tag.name);
                 const payloads = try self.allocator.alloc(DraftPatId, tag.args.len);
@@ -60185,20 +60732,14 @@ const BodyContext = struct {
                 const backing = self.graph.namedNodes(representation_node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
                 if (backing.node == representation_node) Common.invariant("nominal pattern shell backing did not advance");
-                return try self.addPatWithTypeCell(
-                    DraftTypeCell.fromGraphNode(representation_node),
-                    .{ .nominal = try self.lowerPatternShellAtNodeInner(nominal.backing_pattern, backing.node, pending, active) },
-                );
+                return .{ .nominal = .{ .representation_node = representation_node, .pattern = nominal.backing_pattern, .backing = backing.node } };
             },
             .record_destructure => |destructs| blk: {
                 if (self.graph.content(representation_node) == .named) {
                     const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal record pattern had no runtime backing");
                     if (backing.node == representation_node) Common.invariant("nominal record pattern shell backing did not advance");
-                    return try self.addPatWithTypeCell(
-                        DraftTypeCell.fromGraphNode(representation_node),
-                        .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) },
-                    );
+                    return .{ .nominal = .{ .representation_node = representation_node, .pattern = pattern_id, .backing = backing.node } };
                 }
                 var lowered = std.ArrayList(DraftRecordDestruct).empty;
                 defer lowered.deinit(self.allocator);
@@ -60227,10 +60768,7 @@ const BodyContext = struct {
                     const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
                     if (backing.node == representation_node) Common.invariant("nominal tuple pattern shell backing did not advance");
-                    return try self.addPatWithTypeCell(
-                        DraftTypeCell.fromGraphNode(representation_node),
-                        .{ .nominal = try self.lowerPatternShellAtNodeInner(pattern_id, backing.node, pending, active) },
-                    );
+                    return .{ .nominal = .{ .representation_node = representation_node, .pattern = pattern_id, .backing = backing.node } };
                 }
                 const item_nodes = try self.graph.tupleItemNodes(representation_node);
                 if (items.len != item_nodes.len) Common.invariant("tuple pattern arity differed from graph tuple arity");
@@ -60246,13 +60784,13 @@ const BodyContext = struct {
             .str_literal,
             .str_interpolation,
             .underscore,
-            => return try self.lowerPatternAtNode(pattern_id, node),
+            => return .{ .shell = try self.lowerPatternAtNode(pattern_id, node) },
             .list => unreachable,
             .pending,
             .runtime_error,
             => Common.invariant("non-runtime checked pattern reached materialization shell lowering"),
         };
-        return try self.addPatWithTypeCell(cell, data);
+        return .{ .shell = try self.addPatWithTypeCell(cell, data) };
     }
 
     fn lowerPatternPlanPlaceholderAtNode(
@@ -60295,12 +60833,152 @@ const BodyContext = struct {
         return try self.lowerPatternAtNodeInner(pattern_id, node, &match_lowering);
     }
 
+    /// One step of lowering a pattern at graph nodes: a subpattern to lower,
+    /// or a record rest to bind in its place among the fields.
+    const PatNodeOp = union(enum) {
+        at_node: struct {
+            pattern: checked.CheckedPatternId,
+            node: NodeId,
+            /// Whether the subpattern lowers under the pat_run's match lowering.
+            in_match: bool,
+        },
+        optional_slot: struct {
+            pattern: checked.CheckedPatternId,
+            slot_node: NodeId,
+            result_node: NodeId,
+        },
+        record_rest: checked.CheckedPatternId,
+    };
+
+    /// A pattern whose subpatterns are still lowering. Its ops occupy
+    /// `ops[ops_start..]`; each subpattern's result lands in `results`.
+    const PatNodeFrame = struct {
+        kind: union(enum) {
+            /// Wrap the backing's pattern in one nominal layer at `cell`.
+            nominal: DraftTypeCell,
+            as: struct { cell: DraftTypeCell, local: DraftLocalId },
+            tag: struct { cell: DraftTypeCell, name: names.TagNameId },
+            list: struct { cell: DraftTypeCell, count: usize, rest: ?list_rest.Rest },
+            tuple: DraftTypeCell,
+            record: struct {
+                pattern: checked.CheckedPatternId,
+                cell: DraftTypeCell,
+                node: NodeId,
+                /// The record local a needed rest binding captures.
+                source_local: ?DraftLocalId = null,
+            },
+            optional_as: struct { cell: DraftTypeCell, local: DraftLocalId },
+            optional_present: struct { cell: DraftTypeCell, name: names.TagNameId },
+        },
+        ops_start: usize,
+        next: usize,
+        results_start: usize,
+        names_start: usize,
+    };
+
+    const list_rest = struct {
+        const Rest = struct { index: u32, has_pattern: bool };
+    };
+
+    const PatNodeRun = struct {
+        match_lowering: ?*MatchPatternLowering,
+        frames: std.ArrayListUnmanaged(PatNodeFrame) = .empty,
+        ops: std.ArrayListUnmanaged(PatNodeOp) = .empty,
+        results: std.ArrayListUnmanaged(DraftPatId) = .empty,
+        /// Field names of record frames in flight, one pat_run per record.
+        field_names: std.ArrayListUnmanaged(names.RecordFieldNameId) = .empty,
+
+        fn deinit(pat_run: *PatNodeRun, allocator: Allocator) void {
+            pat_run.field_names.deinit(allocator);
+            pat_run.results.deinit(allocator);
+            pat_run.ops.deinit(allocator);
+            pat_run.frames.deinit(allocator);
+        }
+    };
+
     fn lowerPatternAtNodeInner(
         self: *BodyContext,
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
         match_lowering: ?*MatchPatternLowering,
     ) Allocator.Error!DraftPatId {
+        return try self.runPatNode(.{ .at_node = .{ .pattern = pattern_id, .node = node, .in_match = true } }, match_lowering);
+    }
+
+    /// Translate an optional destructure from checked Try space into flat
+    /// Present/Missing slot space, queueing binder preludes as needed.
+    fn lowerOptionalDestructChildAtSlotNode(
+        self: *BodyContext,
+        child: checked.CheckedPatternId,
+        slot_node: NodeId,
+        result_node: NodeId,
+    ) Allocator.Error!DraftPatId {
+        return try self.runPatNode(.{ .optional_slot = .{ .pattern = child, .slot_node = slot_node, .result_node = result_node } }, null);
+    }
+
+    /// Lower a pattern tree at graph nodes. Each composite pattern is an
+    /// explicit frame whose subpatterns lower in source order, so pattern
+    /// depth never becomes native call depth.
+    fn runPatNode(self: *BodyContext, root: PatNodeOp, match_lowering: ?*MatchPatternLowering) Allocator.Error!DraftPatId {
+        var pat_run = PatNodeRun{ .match_lowering = match_lowering };
+        defer pat_run.deinit(self.allocator);
+        if (try self.enterPatNode(&pat_run, root)) |pat| return pat;
+        while (true) {
+            const index = pat_run.frames.items.len - 1;
+            const frame = pat_run.frames.items[index];
+            if (frame.next < pat_run.ops.items.len) {
+                const op = pat_run.ops.items[frame.next];
+                pat_run.frames.items[index].next += 1;
+                switch (op) {
+                    .record_rest => |rest| try self.bindPatNodeRecordRest(&pat_run, index, rest),
+                    .at_node, .optional_slot => if (try self.enterPatNode(&pat_run, op)) |pat| {
+                        try pat_run.results.append(self.allocator, pat);
+                    },
+                }
+                continue;
+            }
+
+            const pat = try self.finishPatNode(&pat_run, frame);
+            _ = pat_run.frames.pop();
+            pat_run.ops.shrinkRetainingCapacity(frame.ops_start);
+            pat_run.results.shrinkRetainingCapacity(frame.results_start);
+            pat_run.field_names.shrinkRetainingCapacity(frame.names_start);
+            if (pat_run.frames.items.len == 0) return pat;
+            try pat_run.results.append(self.allocator, pat);
+        }
+    }
+
+    fn pushPatNodeFrame(self: *BodyContext, pat_run: *PatNodeRun, kind: @FieldType(PatNodeFrame, "kind")) Allocator.Error!void {
+        try pat_run.frames.append(self.allocator, .{
+            .kind = kind,
+            .ops_start = pat_run.ops.items.len,
+            .next = pat_run.ops.items.len,
+            .results_start = pat_run.results.items.len,
+            .names_start = pat_run.field_names.items.len,
+        });
+    }
+
+    fn appendPatNodeChild(self: *BodyContext, pat_run: *PatNodeRun, pattern: checked.CheckedPatternId, node: NodeId, in_match: bool) Allocator.Error!void {
+        try pat_run.ops.append(self.allocator, .{ .at_node = .{ .pattern = pattern, .node = node, .in_match = in_match } });
+    }
+
+    /// The pattern a leaf op lowers to, or null after pushing the frame that
+    /// lowers a composite one.
+    fn enterPatNode(self: *BodyContext, pat_run: *PatNodeRun, op: PatNodeOp) Allocator.Error!?DraftPatId {
+        switch (op) {
+            .record_rest => unreachable,
+            .at_node => |at| return try self.enterPatNodeAtNode(pat_run, at.pattern, at.node, at.in_match),
+            .optional_slot => |slot| return try self.enterPatNodeOptionalSlot(pat_run, slot.pattern, slot.slot_node, slot.result_node),
+        }
+    }
+
+    fn enterPatNodeAtNode(
+        self: *BodyContext,
+        pat_run: *PatNodeRun,
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+        in_match: bool,
+    ) Allocator.Error!?DraftPatId {
         if (try self.patternNeedsExplicitBinding(pattern_id) and
             !self.allow_recursive_pattern_lowering_for_match)
         {
@@ -60314,36 +60992,26 @@ const BodyContext = struct {
             .runtime_error,
             => Common.invariant("non-runtime checked pattern reached graph-native Monotype lowering"),
             .assign => |binder| .{ .bind = try self.materializePatternBinderAtCell(binder, cell) },
-            .as => |as| blk: {
+            .as => |as| {
                 const local = try self.materializePatternBinderAtCell(as.binder, cell);
-                break :blk .{ .as = .{
-                    .pattern = try self.lowerPatternAtNodeInner(as.pattern, node, match_lowering),
-                    .local = local,
-                } };
+                try self.pushPatNodeFrame(pat_run, .{ .as = .{ .cell = cell, .local = local } });
+                try self.appendPatNodeChild(pat_run, as.pattern, node, in_match);
+                return null;
             },
-            .applied_tag => |tag| blk: {
+            .applied_tag => |tag| {
                 if (self.graph.content(representation_node) == .named) {
                     const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
-                    return try self.addPatWithTypeCell(
-                        DraftTypeCell.fromGraphNode(representation_node),
-                        .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) },
-                    );
+                    try self.pushPatNodeFrame(pat_run, .{ .nominal = DraftTypeCell.fromGraphNode(representation_node) });
+                    try self.appendPatNodeChild(pat_run, pattern_id, backing.node, in_match);
+                    return null;
                 }
                 const name = try self.tagName(self.view, tag.name);
-                const payloads = try self.allocator.alloc(DraftPatId, tag.args.len);
-                defer self.allocator.free(payloads);
+                try self.pushPatNodeFrame(pat_run, .{ .tag = .{ .cell = cell, .name = name } });
                 for (tag.args, 0..) |arg, payload_index| {
-                    payloads[payload_index] = try self.lowerPatternAtNodeInner(
-                        arg,
-                        try self.graph.tagPayloadNode(representation_node, name, payload_index),
-                        match_lowering,
-                    );
+                    try self.appendPatNodeChild(pat_run, arg, try self.graph.tagPayloadNode(representation_node, name, payload_index), in_match);
                 }
-                break :blk .{ .tag = .{
-                    .name = name,
-                    .payloads = try self.addPatSpan(payloads),
-                } };
+                return null;
             },
             .nominal => |nominal| {
                 if (self.graph.content(representation_node) != .named) {
@@ -60351,50 +61019,75 @@ const BodyContext = struct {
                 }
                 const backing = self.graph.namedNodes(representation_node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
-                return try self.addPatWithTypeCell(
-                    DraftTypeCell.fromGraphNode(representation_node),
-                    .{ .nominal = try self.lowerPatternAtNodeInner(nominal.backing_pattern, backing.node, match_lowering) },
-                );
+                try self.pushPatNodeFrame(pat_run, .{ .nominal = DraftTypeCell.fromGraphNode(representation_node) });
+                try self.appendPatNodeChild(pat_run, nominal.backing_pattern, backing.node, in_match);
+                return null;
             },
-            .record_destructure => |destructs| return try self.lowerRecordPatternAtNodeInner(
-                pattern_id,
-                node,
-                destructs,
-                match_lowering,
-            ),
-            .list => |list| blk: {
-                const elem_node = try self.graph.listElementNode(node);
-                const lowered = try self.allocator.alloc(DraftPatId, list.patterns.len);
-                defer self.allocator.free(lowered);
-                for (list.patterns, 0..) |child, child_index| {
-                    lowered[child_index] = try self.lowerPatternAtNodeInner(child, elem_node, match_lowering);
+            .record_destructure => |destructs| {
+                if (self.graph.content(representation_node) == .named) {
+                    const backing = self.graph.namedNodes(representation_node).backing orelse
+                        Common.invariant("nominal record pattern had no runtime backing");
+                    if (backing.node == representation_node) Common.invariant("nominal record pattern backing did not advance");
+                    try self.pushPatNodeFrame(pat_run, .{ .nominal = DraftTypeCell.fromGraphNode(representation_node) });
+                    try self.appendPatNodeChild(pat_run, pattern_id, backing.node, in_match);
+                    return null;
                 }
-                const rest: ?DraftListRestPattern = if (list.rest) |rest| .{
-                    .index = rest.index,
-                    .pattern = if (rest.pattern) |rest_pattern| try self.lowerPatternAtNodeInner(rest_pattern, node, match_lowering) else null,
-                } else null;
-                break :blk .{ .list = .{
-                    .patterns = try self.addPatSpan(lowered),
-                    .rest = rest,
-                } };
+                try self.pushPatNodeFrame(pat_run, .{ .record = .{ .pattern = pattern_id, .cell = cell, .node = node } });
+                const record_checked_ty = pattern.ty;
+                for (destructs) |destruct| {
+                    switch (destruct.kind) {
+                        .required, .sub_pattern => |child| {
+                            const name = try self.recordFieldName(self.view, destruct.label);
+                            try pat_run.field_names.append(self.allocator, name);
+                            if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
+                                // A destructured OPTIONAL field's sub-pattern is typed
+                                // at the nominal Try while the slot holds the tagged
+                                // `[#Missing, #Present(v)]` union: translate it into
+                                // slot space, queueing binder preludes for the
+                                // enclosing branch (design.md "Field Kinds").
+                                try pat_run.ops.append(self.allocator, .{ .optional_slot = .{
+                                    .pattern = child,
+                                    .slot_node = try self.graph.recordFieldNode(representation_node, name),
+                                    .result_node = try self.instNode(self.view.bodies.pattern(child).ty),
+                                } });
+                                continue;
+                            }
+                            try self.appendPatNodeChild(pat_run, child, try self.graph.recordFieldNode(representation_node, name), in_match);
+                        },
+                        .rest => |rest| {
+                            if (self.patternIsIgnored(rest)) continue;
+                            try pat_run.ops.append(self.allocator, .{ .record_rest = rest });
+                        },
+                    }
+                }
+                return null;
             },
-            .tuple => |items| blk: {
+            .list => |list| {
+                const elem_node = try self.graph.listElementNode(node);
+                try self.pushPatNodeFrame(pat_run, .{ .list = .{
+                    .cell = cell,
+                    .count = list.patterns.len,
+                    .rest = if (list.rest) |rest| .{ .index = rest.index, .has_pattern = rest.pattern != null } else null,
+                } });
+                for (list.patterns) |child| try self.appendPatNodeChild(pat_run, child, elem_node, in_match);
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| try self.appendPatNodeChild(pat_run, rest_pattern, node, in_match);
+                }
+                return null;
+            },
+            .tuple => |items| {
                 if (self.graph.content(representation_node) == .named) {
                     const backing = self.graph.namedNodes(representation_node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
-                    return try self.addPatWithTypeCell(
-                        DraftTypeCell.fromGraphNode(representation_node),
-                        .{ .nominal = try self.lowerPatternAtNodeInner(pattern_id, backing.node, match_lowering) },
-                    );
+                    try self.pushPatNodeFrame(pat_run, .{ .nominal = DraftTypeCell.fromGraphNode(representation_node) });
+                    try self.appendPatNodeChild(pat_run, pattern_id, backing.node, in_match);
+                    return null;
                 }
                 const item_nodes = try self.graph.tupleItemNodes(representation_node);
                 if (items.len != item_nodes.len) Common.invariant("tuple pattern arity differed from graph tuple arity");
-                const lowered = try self.allocator.alloc(DraftPatId, items.len);
-                defer self.allocator.free(lowered);
-                for (items, item_nodes, 0..) |item, item_node, item_index| {
-                    lowered[item_index] = try self.lowerPatternAtNodeInner(item, item_node, match_lowering);
-                }
-                break :blk .{ .tuple = try self.addPatSpan(lowered) };
+                try self.pushPatNodeFrame(pat_run, .{ .tuple = cell });
+                for (items, item_nodes) |item, item_node| try self.appendPatNodeChild(pat_run, item, item_node, in_match);
+                return null;
             },
             .numeral_literal => |num| blk: {
                 const ty = try self.activeTypeFromNode(node);
@@ -60410,102 +61103,159 @@ const BodyContext = struct {
         return try self.addPatWithTypeCell(cell, data);
     }
 
-    fn lowerRecordPatternAtNodeInner(
+    fn enterPatNodeOptionalSlot(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        node: NodeId,
-        destructs: []const checked.CheckedRecordDestruct,
-        match_lowering: ?*MatchPatternLowering,
-    ) Allocator.Error!DraftPatId {
-        const cell = DraftTypeCell.fromGraphNode(node);
-        const representation_node = self.constructorRepresentationNode(node);
-        if (self.graph.content(representation_node) == .named) {
-            const backing = self.graph.namedNodes(representation_node).backing orelse
-                Common.invariant("nominal record pattern had no runtime backing");
-            if (backing.node == representation_node) Common.invariant("nominal record pattern backing did not advance");
-            return try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(representation_node), .{ .nominal = try self.lowerRecordPatternAtNodeInner(
-                pattern_id,
-                backing.node,
-                destructs,
-                match_lowering,
-            ) });
-        }
-
-        var lowered = std.ArrayList(DraftRecordDestruct).empty;
-        defer lowered.deinit(self.allocator);
-        var source_local: ?DraftLocalId = null;
-        const record_checked_ty = self.view.bodies.pattern(pattern_id).ty;
-        for (destructs) |destruct| {
-            switch (destruct.kind) {
-                .required, .sub_pattern => |child| {
-                    const name = try self.recordFieldName(self.view, destruct.label);
-                    if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
-                        // A destructured OPTIONAL field's sub-pattern is typed
-                        // at the nominal Try while the slot holds the tagged
-                        // `[#Missing, #Present(v)]` union: translate it into
-                        // slot space, queueing binder preludes for the
-                        // enclosing branch (design.md "Field Kinds").
-                        try lowered.append(self.allocator, .{
-                            .name = name,
-                            .pattern = try self.lowerOptionalDestructChildAtSlotNode(
-                                child,
-                                try self.graph.recordFieldNode(representation_node, name),
-                                try self.instNode(self.view.bodies.pattern(child).ty),
-                            ),
-                        });
-                        continue;
-                    }
-                    try lowered.append(self.allocator, .{
-                        .name = name,
-                        .pattern = try self.lowerPatternAtNodeInner(
-                            child,
-                            try self.graph.recordFieldNode(representation_node, name),
-                            match_lowering,
-                        ),
-                    });
+        pat_run: *PatNodeRun,
+        root_child: checked.CheckedPatternId,
+        slot_node: NodeId,
+        root_result_node: NodeId,
+    ) Allocator.Error!?DraftPatId {
+        const slot_cell = DraftTypeCell.fromGraphNode(slot_node);
+        var child = root_child;
+        var result_node = root_result_node;
+        // A nominal Try pattern translates as its backing.
+        const pattern = while (true) {
+            const pattern = self.view.bodies.pattern(child);
+            switch (pattern.data) {
+                .nominal => |nominal| {
+                    child = nominal.backing_pattern;
+                    result_node = self.optionalTryBackingNode(result_node);
                 },
-                .rest => |rest| {
-                    if (self.patternIsIgnored(rest)) continue;
-                    const lowering = match_lowering orelse
-                        Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                    const rest_data = self.view.bodies.pattern(rest).data;
-                    if (rest_data != .assign) Common.invariant("named record rest was not an assignment pattern");
-                    const rest_binder = rest_data.assign;
-                    const rest_local = self.currentOwnerPatternBinderLocal(rest_binder) orelse
-                        Common.invariant("record rest binder was not pre-registered at its exact graph node");
-                    const needed_by_guard = if (lowering.guard) |guard|
-                        try self.exprDependsOnFreeLocal(guard, rest_local)
-                    else
-                        false;
-                    const needed_by_body = try self.exprDependsOnFreeLocal(lowering.body, rest_local);
-                    if (!needed_by_guard and !needed_by_body) continue;
-
-                    const captured = source_local orelse blk: {
-                        const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
-                        source_local = local;
-                        break :blk local;
-                    };
-                    const rest_cell = self.localTypeCell(rest_local);
-                    try lowering.record_rests.append(self.allocator, .{
-                        .source_local = captured,
-                        .source_node = node,
-                        .rest_local = rest_local,
-                        .rest_node = try rest_cell.toGraphNode(self.graph),
-                        .rest_cell = rest_cell,
-                        .before_guard = needed_by_guard,
-                    });
-                },
+                else => break pattern,
             }
-        }
+        };
+        const data: BodyPatData = switch (pattern.data) {
+            .nominal => unreachable,
+            .underscore => .wildcard,
+            .assign => |binder| blk: {
+                const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
+                try self.queueOptionalDestructSlotBind(binder, slot_local, slot_node, result_node);
+                break :blk .{ .bind = slot_local };
+            },
+            .as => |as| {
+                const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
+                try self.queueOptionalDestructSlotBind(as.binder, slot_local, slot_node, result_node);
+                try self.pushPatNodeFrame(pat_run, .{ .optional_as = .{ .cell = slot_cell, .local = slot_local } });
+                try pat_run.ops.append(self.allocator, .{ .optional_slot = .{ .pattern = as.pattern, .slot_node = slot_node, .result_node = result_node } });
+                return null;
+            },
+            .applied_tag => |tag| blk: {
+                const tag_name = try self.tagName(self.view, tag.name);
+                const ok_name = try self.nameStoreMut().internTagLabel("Ok");
+                const err_name = try self.nameStoreMut().internTagLabel("Err");
+                const present_name = try self.nameStoreMut().internTagLabel(Builder.optional_slot_present_tag);
+                const missing_name = try self.nameStoreMut().internTagLabel(Builder.optional_slot_missing_tag);
+                if (tag.args.len != 1) {
+                    Common.invariant("optional destructure Try pattern tag did not carry exactly one payload");
+                }
+                if (tag_name == ok_name) {
+                    const payload_node = try self.graph.tagPayloadNode(slot_node, present_name, 0);
+                    try self.pushPatNodeFrame(pat_run, .{ .optional_present = .{ .cell = slot_cell, .name = present_name } });
+                    try self.appendPatNodeChild(pat_run, tag.args[0], payload_node, false);
+                    return null;
+                }
+                if (tag_name == err_name) {
+                    const err_node = try self.graph.tagPayloadNode(
+                        self.optionalTryBackingNode(result_node),
+                        err_name,
+                        0,
+                    );
+                    try self.queueOptionalDestructErrPayloadBinds(tag.args[0], err_node);
+                    break :blk .{ .tag = .{
+                        .name = missing_name,
+                        .payloads = .empty(),
+                    } };
+                }
+                Common.invariant("optional destructure Try pattern used a tag other than Ok or Err");
+            },
+            .pending,
+            .runtime_error,
+            .record_destructure,
+            .tuple,
+            .list,
+            .numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            => Common.invariant("optional destructure sub-pattern had a non-Try checked shape"),
+        };
+        return try self.addPatWithTypeCell(slot_cell, data);
+    }
 
-        const record_pattern = try self.addPatWithTypeCell(cell, .{
-            .record = try self.addRecordDestructSpan(lowered.items),
+    /// Bind a named record rest in place among its record's fields, when the
+    /// guard or body reads it.
+    fn bindPatNodeRecordRest(self: *BodyContext, pat_run: *PatNodeRun, index: usize, rest: checked.CheckedPatternId) Allocator.Error!void {
+        const record = &pat_run.frames.items[index].kind.record;
+        const lowering = pat_run.match_lowering orelse
+            Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
+        const rest_data = self.view.bodies.pattern(rest).data;
+        if (rest_data != .assign) Common.invariant("named record rest was not an assignment pattern");
+        const rest_binder = rest_data.assign;
+        const rest_local = self.currentOwnerPatternBinderLocal(rest_binder) orelse
+            Common.invariant("record rest binder was not pre-registered at its exact graph node");
+        const needed_by_guard = if (lowering.guard) |guard|
+            try self.exprDependsOnFreeLocal(guard, rest_local)
+        else
+            false;
+        const needed_by_body = try self.exprDependsOnFreeLocal(lowering.body, rest_local);
+        if (!needed_by_guard and !needed_by_body) return;
+
+        const captured = record.source_local orelse blk: {
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), record.cell, null);
+            pat_run.frames.items[index].kind.record.source_local = local;
+            break :blk local;
+        };
+        const rest_cell = self.localTypeCell(rest_local);
+        try lowering.record_rests.append(self.allocator, .{
+            .source_local = captured,
+            .source_node = pat_run.frames.items[index].kind.record.node,
+            .rest_local = rest_local,
+            .rest_node = try rest_cell.toGraphNode(self.graph),
+            .rest_cell = rest_cell,
+            .before_guard = needed_by_guard,
         });
-        const captured = source_local orelse return record_pattern;
-        return try self.addPatWithTypeCell(cell, .{ .as = .{
-            .pattern = record_pattern,
-            .local = captured,
-        } });
+    }
+
+    fn finishPatNode(self: *BodyContext, pat_run: *PatNodeRun, frame: PatNodeFrame) Allocator.Error!DraftPatId {
+        const results = pat_run.results.items[frame.results_start..];
+        switch (frame.kind) {
+            .nominal => |cell| return try self.addPatWithTypeCell(cell, .{ .nominal = results[0] }),
+            .as => |as| return try self.addPatWithTypeCell(as.cell, .{ .as = .{ .pattern = results[0], .local = as.local } }),
+            .optional_as => |as| return try self.addPatWithTypeCell(as.cell, .{ .as = .{ .pattern = results[0], .local = as.local } }),
+            .tag => |tag| return try self.addPatWithTypeCell(tag.cell, .{ .tag = .{
+                .name = tag.name,
+                .payloads = try self.addPatSpan(results),
+            } }),
+            .optional_present => |present| return try self.addPatWithTypeCell(present.cell, .{ .tag = .{
+                .name = present.name,
+                .payloads = try self.addPatSpan(results),
+            } }),
+            .tuple => |cell| return try self.addPatWithTypeCell(cell, .{ .tuple = try self.addPatSpan(results) }),
+            .list => |list| {
+                const rest: ?DraftListRestPattern = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.has_pattern) results[list.count] else null,
+                } else null;
+                return try self.addPatWithTypeCell(list.cell, .{ .list = .{
+                    .patterns = try self.addPatSpan(results[0..list.count]),
+                    .rest = rest,
+                } });
+            },
+            .record => |record| {
+                const field_names = pat_run.field_names.items[frame.names_start..];
+                std.debug.assert(field_names.len == results.len);
+                const lowered = try self.allocator.alloc(DraftRecordDestruct, results.len);
+                defer self.allocator.free(lowered);
+                for (lowered, field_names, results) |*slot, name, pat| slot.* = .{ .name = name, .pattern = pat };
+                const record_pattern = try self.addPatWithTypeCell(record.cell, .{
+                    .record = try self.addRecordDestructSpan(lowered),
+                });
+                const captured = record.source_local orelse return record_pattern;
+                return try self.addPatWithTypeCell(record.cell, .{ .as = .{
+                    .pattern = record_pattern,
+                    .local = captured,
+                } });
+            },
+        }
     }
 
     fn lowerMatchRecordRestBindings(
@@ -60568,70 +61318,6 @@ const BodyContext = struct {
         return try self.lowerPatternAtNode(pattern_id, node);
     }
 
-    fn lowerPatternAtTypeCell(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        ty_cell: DraftTypeCell,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftPatId {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => {},
-            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => try self.constrainCheckedInterfaceToCell(pattern.ty, ty_cell),
-        }
-        const data: BodyPatData = switch (pattern.data) {
-            .pending,
-            .runtime_error,
-            => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
-            .assign => |binder| blk: {
-                const local = try self.materializePatternBinderAtCell(binder, ty_cell);
-                break :blk .{ .bind = local };
-            },
-            .as => |as| blk: {
-                const local = try self.materializePatternBinderAtCell(as.binder, ty_cell);
-                break :blk .{ .as = .{
-                    .pattern = try self.lowerPatternAtTypeCell(as.pattern, ty_cell, ty),
-                    .local = local,
-                } };
-            },
-            .applied_tag => |tag| blk: {
-                if (self.nominalConstructionLayer(ty)) |layer| {
-                    break :blk .{ .nominal = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, null) };
-                }
-                break :blk try self.lowerTagPattern(tag, ty);
-            },
-            .nominal => |nominal| blk: {
-                const backing_ty = if (self.nominalConstructionLayer(ty)) |layer|
-                    layer.backing
-                else
-                    self.namedBackingType(ty) orelse ty;
-                break :blk .{ .nominal = try self.lowerPatternAtTypeCell(
-                    nominal.backing_pattern,
-                    try self.draftTypeCell(backing_ty),
-                    backing_ty,
-                ) };
-            },
-            .record_destructure => |destructs| blk: {
-                if (self.nominalConstructionLayer(ty)) |layer| {
-                    break :blk .{ .nominal = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, null) };
-                }
-                break :blk try self.lowerRecordPattern(pattern.ty, destructs, ty);
-            },
-            .list => |list| try self.lowerListPattern(list, ty),
-            .tuple => |items| blk: {
-                if (self.nominalConstructionLayer(ty)) |layer| {
-                    break :blk .{ .nominal = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, null) };
-                }
-                break :blk .{ .tuple = try self.lowerTuplePattern(items, ty) };
-            },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
-            .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
-            .str_interpolation => |str| try self.lowerStrPattern(str, ty),
-            .underscore => .wildcard,
-        };
-        return try self.addPatWithTypeCell(ty_cell, data);
-    }
-
     fn lowerStrPattern(
         self: *BodyContext,
         str: anytype,
@@ -60655,119 +61341,6 @@ const BodyContext = struct {
                 .tail => .tail,
             },
         } };
-    }
-
-    fn lowerPatternSpanAtTypes(
-        self: *BodyContext,
-        checked_patterns: []const checked.CheckedPatternId,
-        tys: anytype,
-    ) Allocator.Error!DraftSpan(DraftPatId) {
-        if (checked_patterns.len != GuardedList.borrowLen(tys)) Common.invariant("pattern arity differs from concrete checked type");
-        const stable_tys = try GuardedList.dupe(self.allocator, Type.TypeId, tys);
-        defer self.allocator.free(stable_tys);
-        const lowered = try self.allocator.alloc(DraftPatId, checked_patterns.len);
-        defer self.allocator.free(lowered);
-        for (checked_patterns, stable_tys, 0..) |child, child_ty, i| {
-            lowered[i] = try self.lowerPatternAtType(child, child_ty);
-        }
-        return try self.addPatSpan(lowered);
-    }
-
-    fn lowerTuplePattern(self: *BodyContext, items: []const checked.CheckedPatternId, ty: Type.TypeId) Allocator.Error!DraftSpan(DraftPatId) {
-        return try self.lowerPatternSpanAtTypes(items, self.tupleItemTypes(ty));
-    }
-
-    fn lowerListPattern(self: *BodyContext, list: anytype, ty: Type.TypeId) Allocator.Error!BodyPatData {
-        const elem_ty = self.constListElemType(ty);
-        const lowered = try self.allocator.alloc(DraftPatId, list.patterns.len);
-        defer self.allocator.free(lowered);
-        for (list.patterns, 0..) |child, i| {
-            lowered[i] = try self.lowerPatternAtType(child, elem_ty);
-        }
-        const rest: ?DraftListRestPattern = if (list.rest) |r| .{
-            .index = r.index,
-            // A captured rest binds the remaining slice, which has the same
-            // list type as the scrutinee.
-            .pattern = if (r.pattern) |rest_pattern| try self.lowerPatternAtType(rest_pattern, ty) else null,
-        } else null;
-        return .{ .list = .{
-            .patterns = try self.addPatSpan(lowered),
-            .rest = rest,
-        } };
-    }
-
-    fn lowerTagPattern(self: *BodyContext, tag: anytype, ty: Type.TypeId) Allocator.Error!BodyPatData {
-        const name = try self.tagName(self.view, tag.name);
-        return .{ .tag = .{
-            .name = name,
-            .payloads = try self.lowerPatternSpanAtTypes(tag.args, self.tagPayloadTypes(ty, name)),
-        } };
-    }
-
-    /// Lower a structural constructor pattern (tag, record destructure, or
-    /// tuple) whose type is nominal: the structural pattern is typed at the
-    /// nominal construction backing and wrapped in one explicit `.nominal`
-    /// pattern per nominal layer of the type, mirroring constructor
-    /// expression lowering so pattern and value representations always
-    /// align.
-    fn lowerConstructorPatWrapped(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        ty: Type.TypeId,
-        checks_out: ?*std.ArrayList(CollectedListPattern),
-    ) Allocator.Error!DraftPatId {
-        if (self.nominalConstructionLayer(ty)) |layer| {
-            const backing_pat = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, checks_out);
-            return try self.addPat(.{ .ty = layer.named, .data = .{ .nominal = backing_pat } });
-        }
-        const pattern = self.view.bodies.pattern(pattern_id);
-        const data: BodyPatData = switch (pattern.data) {
-            .applied_tag => |tag| if (checks_out) |checks|
-                try self.lowerTagPatternCollectingLists(tag, ty, checks)
-            else
-                try self.lowerTagPattern(tag, ty),
-            .record_destructure => |destructs| if (checks_out) |checks|
-                try self.lowerRecordPatternCollectingLists(pattern.ty, destructs, ty, checks)
-            else
-                try self.lowerRecordPattern(pattern.ty, destructs, ty),
-            .tuple => |items| if (checks_out) |checks|
-                BodyPatData{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.tupleItemTypes(ty), checks) }
-            else
-                BodyPatData{ .tuple = try self.lowerTuplePattern(items, ty) },
-            .pending, .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("nominal constructor pattern lowering reached a non-constructor checked pattern"),
-        };
-        return try self.addPat(.{ .ty = ty, .data = data });
-    }
-
-    fn lowerRecordPattern(self: *BodyContext, record_checked_ty: checked.CheckedTypeId, destructs: []const checked.CheckedRecordDestruct, ty: Type.TypeId) Allocator.Error!BodyPatData {
-        var lowered = std.ArrayList(DraftRecordDestruct).empty;
-        defer lowered.deinit(self.allocator);
-        for (destructs) |destruct| {
-            const child = switch (destruct.kind) {
-                .required => |pattern| pattern,
-                .sub_pattern => |pattern| pattern,
-                .rest => |pattern| {
-                    if (self.patternIsIgnored(pattern)) continue;
-                    Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                },
-            };
-            // Optional-field destructs never reach the typed pattern family:
-            // the explicit-binding routes and match translation own them
-            // (design.md "Field Kinds").
-            if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
-                Common.invariant("optional-field record destructure reached typed pattern lowering");
-            }
-            const name = try self.recordFieldName(self.view, destruct.label);
-            const child_ty = switch (destruct.kind) {
-                .required, .sub_pattern => self.recordFieldType(ty, name),
-                .rest => unreachable,
-            };
-            try lowered.append(self.allocator, .{
-                .name = name,
-                .pattern = try self.lowerPatternAtType(child, child_ty),
-            });
-        }
-        return .{ .record = try self.addRecordDestructSpan(lowered.items) };
     }
 
     fn patternIsIgnored(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
@@ -60862,25 +61435,6 @@ const BodyContext = struct {
         const drained = try self.allocator.dupe(PatternLiteralGuard, self.pattern_literal_guards.items[start..]);
         self.pattern_literal_guards.shrinkRetainingCapacity(start);
         return drained;
-    }
-
-    /// Wrap a match-branch body so it only runs when every collected literal
-    /// equality holds, jumping to the branch's miss target otherwise.
-    fn applyPatternLiteralGuards(
-        self: *BodyContext,
-        guards: []const PatternLiteralGuard,
-        body: DraftExprId,
-        fallback: DraftExprId,
-        output_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        var result = body;
-        var i = guards.len;
-        while (i > 0) {
-            i -= 1;
-            const eq = try self.lowerPatternLiteralEq(guards[i]);
-            result = try self.ifExpr(eq, result, fallback, output_ty);
-        }
-        return result;
     }
 
     fn applyPatternLiteralGuardsAtCell(
