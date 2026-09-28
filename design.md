@@ -10928,7 +10928,14 @@ type. Each explicitly independent request or restored-constant occurrence
 receives fresh mutable graph cells while preserving the snapshot's internal
 sharing and recursion within that occurrence. Repeated imports inside one
 ownership scope reconnect to its cells. Equal interned content is not occurrence
-identity; only explicit ownership selects either operation. Every context-free procedure-template request defers until the requesting
+identity; only explicit ownership selects either operation. A nominal owns its
+imported backing cell: the backing neither registers in nor reconnects through
+the ownership scope, and interface-summary replay imports a settled backing
+leaf the same way. An equal structural value elsewhere in the scope is a
+different occurrence, and relating it to a nominal lifts its class into that
+nominal; a backing sharing that class would come to name the nominal it backs,
+and joining the two nominal instances would make a nominal its own backing.
+Every context-free procedure-template request defers until the requesting
 graph is final, when its specialization key is stable. Constraints formerly
 owned only by an unresolved callee body are present in the checked interface
 program and have already participated in the request's relation closure.

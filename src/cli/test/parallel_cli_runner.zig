@@ -2439,6 +2439,8 @@ const subcommand_cases = [_]CliCase{
     // runtime-empty string onto a heap-sized literal must produce a unique
     // result before the following concat tries to grow it.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10595: dev interpolation copies a static prefix before appending a suffix", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_10595_empty_runtime_str_concat.roc", .exit = .success, .stdout_exact = "aaaaaaaaaaaaaaaaaaaaaaaab\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11767: nominal match on a flex-dispatched result keeps the nominal's backing distinct (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_11767_nominal_match_after_flex_dispatch.roc", .exit = .success, .stdout_exact = "x\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11767: nominal match on a flex-dispatched result keeps the nominal's backing distinct (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/issue_11767_nominal_match_after_flex_dispatch.roc", .exit = .success, .stdout_exact = "x\n" } } },
     // Non-`?` channels asking a hosted result for a wider error row: every one
     // is a type error, never an extern emitted at the wider row (design.md
     // "Host Symbol ABI"). The three mismatches are the annotated binding, the

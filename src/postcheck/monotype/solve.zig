@@ -409,9 +409,24 @@ pub const InterfaceConstraints = struct {
             .nodes = node_ids,
             .kinds = kind_ids,
         };
-        for (self.nodes, instance.nodes) |node, *id| {
+        // A settled leaf that backs a captured nominal becomes a backing cell
+        // owned by that nominal, like any imported nominal's backing.
+        var owned_backings: std.DynamicBitSetUnmanaged = .{};
+        defer owned_backings.deinit(graph.allocator);
+        for (self.open_nodes) |open| {
+            if (open.content != .named) continue;
+            const backing = open.content.named.backing orelse continue;
+            const index = @intFromEnum(backing.node);
+            if (self.nodes[index] != .mono) continue;
+            if (owned_backings.bit_length == 0) owned_backings = try .initEmpty(graph.allocator, self.nodes.len);
+            owned_backings.set(index);
+        }
+        for (self.nodes, instance.nodes, 0..) |node, *id, index| {
             id.* = switch (node) {
-                .mono => |ty| try graph.importMono(ty),
+                .mono => |ty| if (owned_backings.bit_length != 0 and owned_backings.isSet(index))
+                    try graph.importOwnedBacking(ty)
+                else
+                    try graph.importMono(ty),
                 .open => try graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
             };
         }
@@ -6424,6 +6439,26 @@ pub const InstGraph = struct {
         } else {
             try self.imported_type_nodes.put(ty, node);
         }
+        return try self.fillImportedMono(node, ty, imported_types);
+    }
+
+    /// Import the backing of a nominal occurrence as a cell that the nominal
+    /// owns. The ownership-scope memo keys cells by interned content, and an
+    /// equal structural value elsewhere in the scope is a different
+    /// occurrence: a nominal relation lifts that value into the nominal's
+    /// class, so a backing shared with it would come to name the nominal it
+    /// backs. The backing's components still reconnect through the memo.
+    fn importOwnedBacking(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
+        const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        return try self.fillImportedMono(node, ty, null);
+    }
+
+    fn fillImportedMono(
+        self: *InstGraph,
+        node: NodeId,
+        ty: Type.TypeId,
+        imported_types: ?*collections.DenseMap(Type.TypeId, NodeId),
+    ) Allocator.Error!NodeId {
         try self.registerImportedMono(node, ty);
 
         const types = self.types;
@@ -6493,7 +6528,7 @@ pub const InstGraph = struct {
                 .builtin_owner = named.builtin_owner,
                 .args = try self.importMonoSlice(types.span(named.args), imported_types),
                 .backing = if (named.backing) |backing| .{
-                    .node = try self.importMonoInner(backing.ty, imported_types),
+                    .node = try self.importOwnedBacking(backing.ty),
                     .use = backing.use,
                     .authority = backing.authority,
                 } else null,
@@ -11366,6 +11401,52 @@ test "issue 9647: recursive nominal backing cycle is not chased as structural ba
 
     try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
     try std.testing.expectEqual(graph.find(nominal), graph.find(structural));
+}
+
+test "issue 11767: an imported nominal owns its backing apart from an equal structural import" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x76} ** 32));
+    const type_name = try name_store.internTypeName("Maybe");
+    const just = try name_store.internTagLabel("Just");
+    const nothing = try name_store.internTagLabel("Nothing");
+    const str_ty = try type_store.add(.{ .primitive = .str });
+    const backing_tags = try type_store.addTags(&.{
+        .{ .name = just, .checked_name = just, .payloads = try type_store.addSpan(&.{str_ty}) },
+        .{ .name = nothing, .checked_name = nothing, .payloads = try type_store.addSpan(&.{}) },
+    });
+    const backing_ty = try type_store.add(.{ .tag_union = backing_tags });
+    const maybe_ty = try type_store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try type_store.addSpan(&.{str_ty}),
+        .backing = .{ .ty = backing_ty, .use = .inspectable },
+    } });
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const imported = try graph.importMono(maybe_ty);
+    const structural = try graph.importMono(backing_ty);
+    try std.testing.expect(!graph.sameClass(graph.namedNodes(imported).backing.?.node, structural));
+
+    // Lifting the structural value into another instance of the nominal, then
+    // joining both instances, leaves each backing structural.
+    const lifted = try graph.importMonoIndependent(maybe_ty);
+    try graph.unify(lifted, structural);
+    try graph.unify(imported, lifted);
+
+    const backing = graph.namedNodes(imported).backing.?.node;
+    try std.testing.expect(!graph.sameClass(backing, imported));
+    try std.testing.expect(graph.content(backing) == .tag_union);
 }
 
 test "recursive nominal backing can meet an alias to that nominal" {
