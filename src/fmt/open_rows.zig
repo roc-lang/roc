@@ -56,11 +56,6 @@ const try_type_name = "Try";
 const try_arity: usize = 2;
 const try_error_arg_index: usize = 1;
 
-/// Bounds on the `Try` alias walk. A walk that reaches one gives no answer,
-/// and an unanswered question keeps the `..`.
-const max_tracked_alias_formals: usize = 8;
-const max_try_alias_depth: usize = 64;
-
 const Polarity = enum {
     pos,
     neg,
@@ -389,30 +384,51 @@ pub const OpenRows = struct {
         return !as_written;
     }
 
+    /// One annotation the walk still has to visit, with its context.
+    const WalkItem = struct {
+        anno: AST.TypeAnno.Idx,
+        ctx: Ctx,
+        polarity: Polarity,
+    };
+
     /// `Check.generateAnnoTypeInPlace`, deciding only where an anonymous `..`
-    /// is generated exactly as its absence would be.
-    fn walk(self: *OpenRows, anno_idx: AST.TypeAnno.Idx, ctx: Ctx, polarity: Polarity, occurrences: ?*VarOccurrences) Allocator.Error!void {
+    /// is generated exactly as its absence would be. Annotations nest as
+    /// deeply as source does, so the walk keeps its pending annotations on an
+    /// explicit stack, visiting them in source order.
+    fn walk(self: *OpenRows, root: AST.TypeAnno.Idx, root_ctx: Ctx, root_polarity: Polarity, occurrences: ?*VarOccurrences) Allocator.Error!void {
+        var pending = std.ArrayList(WalkItem).empty;
+        defer pending.deinit(self.gpa);
+        try pending.append(self.gpa, .{ .anno = root, .ctx = root_ctx, .polarity = root_polarity });
+        while (pending.pop()) |item| {
+            const children_start = pending.items.len;
+            try self.walkOne(&pending, item.anno, item.ctx, item.polarity, occurrences);
+            std.mem.reverse(WalkItem, pending.items[children_start..]);
+        }
+    }
+
+    /// Visit one annotation, pushing its children in source order.
+    fn walkOne(self: *OpenRows, pending: *std.ArrayList(WalkItem), anno_idx: AST.TypeAnno.Idx, ctx: Ctx, polarity: Polarity, occurrences: ?*VarOccurrences) Allocator.Error!void {
         switch (self.ast.store.getTypeAnno(anno_idx)) {
             .ty_var => |v| try noteOccurrence(self.gpa, occurrences, self.tokenName(v.tok), ctx),
             .underscore_type_var => |v| try noteOccurrence(self.gpa, occurrences, self.tokenName(v.tok), ctx),
             .underscore, .ty, .malformed => {},
-            .parens => |parens| try self.walk(parens.anno, ctx, polarity, occurrences),
+            .parens => |parens| try pending.append(self.gpa, .{ .anno = parens.anno, .ctx = ctx, .polarity = polarity }),
             .@"fn" => |func| {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try self.walk(arg, ctx.withReach(.nested), polarity.flip(), occurrences);
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx.withReach(.nested), .polarity = polarity.flip() });
                 }
                 const ret_reach: Reach = switch (ctx.reach) {
                     .signature => .result,
                     .result, .try_row, .nested => .nested,
                 };
-                try self.walk(func.ret, ctx.withReach(ret_reach), polarity, occurrences);
+                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx.withReach(ret_reach), .polarity = polarity });
             },
             .tag_union => |tag_union| {
                 const tags = self.ast.store.typeAnnoSlice(tag_union.tags);
                 for (tags) |tag_idx| {
                     switch (self.ast.store.getTypeAnno(tag_idx)) {
                         .apply => |tag| for (self.ast.store.typeAnnoSlice(tag.args)[1..]) |payload| {
-                            try self.walk(payload, ctx.withReach(.nested), polarity, occurrences);
+                            try pending.append(self.gpa, .{ .anno = payload, .ctx = ctx.withReach(.nested), .polarity = polarity });
                         },
                         .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {},
                     }
@@ -421,20 +437,20 @@ pub const OpenRows = struct {
                     .open => if (tags.len > 0 and polarity == .pos and outputOpens(ctx)) {
                         self.redundant.set(@intFromEnum(anno_idx));
                     },
-                    .named => |named| try self.walk(named.anno, ctx.withReach(.nested), polarity, occurrences),
+                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
                     .closed => {},
                 }
             },
             .tuple => |tuple| for (self.ast.store.typeAnnoSlice(tuple.annos)) |elem| {
-                try self.walk(elem, ctx.withReach(.nested), polarity, occurrences);
+                try pending.append(self.gpa, .{ .anno = elem, .ctx = ctx.withReach(.nested), .polarity = polarity });
             },
             .record => |record| {
                 for (self.ast.store.annoRecordFieldSlice(record.fields)) |field_idx| {
                     const field = self.ast.store.getAnnoRecordField(field_idx) catch continue;
-                    try self.walk(field.ty, ctx.withReach(.nested), polarity, occurrences);
+                    try pending.append(self.gpa, .{ .anno = field.ty, .ctx = ctx.withReach(.nested), .polarity = polarity });
                 }
                 switch (record.ext) {
-                    .named => |named| try self.walk(named.anno, ctx.withReach(.nested), polarity, occurrences),
+                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
                     .open, .closed => {},
                 }
             },
@@ -455,7 +471,7 @@ pub const OpenRows = struct {
                 };
 
                 const try_error_index: ?usize = switch (ctx.reach) {
-                    .result => self.tryErrorArgIndex(head, args.len, 0),
+                    .result => try self.tryErrorArgIndex(head, args.len),
                     .signature, .try_row, .nested => null,
                 };
 
@@ -466,7 +482,7 @@ pub const OpenRows = struct {
                         .opaque_variance => ctx.withReach(reach).withOpening(.as_written),
                         .keep, .flip, .neg => ctx.withReach(reach),
                     };
-                    try self.walk(arg, arg_ctx, rule.apply(polarity), occurrences);
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = arg_ctx, .polarity = rule.apply(polarity) });
                 }
             },
         }
@@ -829,35 +845,100 @@ pub const OpenRows = struct {
         }
     }
 
+    /// A head whose candidate declarations are being asked for their `Try`
+    /// error row, and the argument count it is applied to.
+    const TryRowHead = struct {
+        head: AST.TypeAnno.Idx,
+        arity: usize,
+        locals: []const AST.Statement.Idx,
+        next_local: usize = 0,
+        answer: ?usize,
+    };
+
+    /// A local alias whose body's head is being asked for its `Try` error
+    /// row.
+    const TryRowAlias = struct {
+        decl_idx: AST.Statement.Idx,
+        formals: []const AST.TypeAnno.Idx,
+        body_args: []const AST.TypeAnno.Idx,
+        body_is_try: bool,
+    };
+
+    const TryRowFrame = union(enum) {
+        head: TryRowHead,
+        alias: TryRowAlias,
+    };
+
     /// `Check.applyTryErrorArgIndex`: which argument of an application of
     /// `head` lands in the builtin `Try`'s error row, answered unanimously
-    /// over every declaration `head` could name.
-    fn tryErrorArgIndex(self: *const OpenRows, head: AST.TypeAnno.Idx, arity: usize, depth: usize) ?usize {
-        if (depth == max_try_alias_depth) return null;
-        if (arity > max_tracked_alias_formals) return null;
+    /// over every declaration `head` could name. Every step fails closed: a
+    /// shape not recognized exactly, disagreeing candidates, or an alias chain
+    /// that returns to a declaration it is still expanding leaves the question
+    /// unanswered.
+    fn tryErrorArgIndex(self: *OpenRows, head: AST.TypeAnno.Idx, arity: usize) Allocator.Error!?usize {
+        var frames = std.ArrayList(TryRowFrame).empty;
+        defer frames.deinit(self.gpa);
+        // Aliases being expanded, to detect a chain returning to itself.
+        var expanding = std.AutoHashMapUnmanaged(AST.Statement.Idx, void).empty;
+        defer expanding.deinit(self.gpa);
+
+        try frames.append(self.gpa, .{ .head = self.tryRowHead(head, arity) orelse return null });
+        var input: ?usize = null;
+        while (frames.items.len != 0) {
+            const top = &frames.items[frames.items.len - 1];
+            switch (top.*) {
+                .head => |*head_frame| {
+                    if (input) |index| {
+                        // The previous local declaration answered `index`.
+                        input = null;
+                        if (head_frame.answer) |existing| {
+                            if (existing != index) return null;
+                        }
+                        head_frame.answer = index;
+                    }
+                    if (head_frame.next_local < head_frame.locals.len) {
+                        const decl_idx = head_frame.locals[head_frame.next_local];
+                        head_frame.next_local += 1;
+                        const alias = self.tryRowAlias(decl_idx, head_frame.arity) orelse return null;
+                        if ((try expanding.getOrPut(self.gpa, decl_idx)).found_existing) return null;
+                        const body_head = alias.body_args[0];
+                        const body_arity = alias.body_args.len - 1;
+                        try frames.append(self.gpa, .{ .alias = alias });
+                        try frames.append(self.gpa, .{ .head = self.tryRowHead(body_head, body_arity) orelse return null });
+                        continue;
+                    }
+                    const answer = head_frame.answer orelse return null;
+                    _ = frames.pop();
+                    input = answer;
+                },
+                .alias => |alias| {
+                    const inner_index = input orelse return null;
+                    _ = frames.pop();
+                    _ = expanding.remove(alias.decl_idx);
+                    input = self.tryRowAliasIndex(alias, inner_index) orelse return null;
+                },
+            }
+        }
+        return input;
+    }
+
+    /// The candidates of `head` to ask, or null when the question has no
+    /// answer at this head.
+    fn tryRowHead(self: *const OpenRows, head: AST.TypeAnno.Idx, arity: usize) ?TryRowHead {
         const found = self.candidates(head);
         if (found.external) return null;
-
         var answer: ?usize = null;
         if (found.builtin) {
             const name = self.tokenName(self.ast.store.getTypeAnno(head).ty.token);
             if (!std.mem.eql(u8, name, try_type_name) or arity != try_arity) return null;
             answer = try_error_arg_index;
         }
-        for (found.locals) |decl_idx| {
-            const index = self.aliasTryErrorArgIndex(decl_idx, arity, depth) orelse return null;
-            if (answer) |existing| {
-                if (existing != index) return null;
-            }
-            answer = index;
-        }
-        return answer;
+        return .{ .head = head, .arity = arity, .locals = found.locals, .answer = answer };
     }
 
-    /// One local declaration's answer to `tryErrorArgIndex`: a transparent
-    /// alias passing a formal straight through to a `Try`'s error row, or a
-    /// chain of such aliases.
-    fn aliasTryErrorArgIndex(self: *const OpenRows, decl_idx: AST.Statement.Idx, arity: usize, depth: usize) ?usize {
+    /// A local declaration's shape for the question: a transparent alias of
+    /// `arity` formals whose body is an application.
+    fn tryRowAlias(self: *const OpenRows, decl_idx: AST.Statement.Idx, arity: usize) ?TryRowAlias {
         const decl = self.ast.store.getStatement(decl_idx).type_decl;
         if (decl.kind != .alias) return null;
         const header = self.ast.store.getTypeHeader(decl.header) catch return null;
@@ -869,20 +950,27 @@ pub const OpenRows = struct {
             .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => return null,
         };
         const body_all_args = self.ast.store.typeAnnoSlice(body.args);
-        const body_args = body_all_args[1..];
-        const inner_index = self.tryErrorArgIndex(body_all_args[0], body_args.len, depth + 1) orelse return null;
+        return .{
+            .decl_idx = decl_idx,
+            .formals = formals,
+            .body_args = body_all_args,
+            .body_is_try = self.candidatesAreOnlyBuiltin(body_all_args[0]),
+        };
+    }
 
-        // Past a `Try` itself only its error row must be a formal; through an
-        // alias over an alias every argument must be passed straight through.
-        const body_is_try = self.candidatesAreOnlyBuiltin(body_all_args[0]);
-        if (!body_is_try) {
+    /// Map the body head's answer back to one of the alias's formals. Past a
+    /// `Try` itself only its error row must be a formal; through an alias
+    /// over an alias every argument must be passed straight through.
+    fn tryRowAliasIndex(self: *const OpenRows, alias: TryRowAlias, inner_index: usize) ?usize {
+        const body_args = alias.body_args[1..];
+        if (!alias.body_is_try) {
             for (body_args) |body_arg| {
                 const name = self.varName(body_arg) orelse return null;
-                _ = self.formalIndex(name, formals) orelse return null;
+                _ = self.formalIndex(name, alias.formals) orelse return null;
             }
         }
         const name = self.varName(body_args[inner_index]) orelse return null;
-        return self.formalIndex(name, formals);
+        return self.formalIndex(name, alias.formals);
     }
 
     fn candidatesAreOnlyBuiltin(self: *const OpenRows, head: AST.TypeAnno.Idx) bool {

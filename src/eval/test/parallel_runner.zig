@@ -122,6 +122,8 @@ pub const TestCase = struct {
     /// stage whose native call depth grows with source nesting or sequence
     /// length fails deterministically instead of only past some large depth.
     stack_bytes: ?usize = null,
+    /// How post-check lowering specializes the program.
+    specialization_strategy: base.SpecializationStrategy = .lss,
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
@@ -980,7 +982,7 @@ fn backendTimeoutBudgetMs(io: std.Io, index: usize, standard_deadline_ms: ?i64) 
 
 fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) RunnerError!TestOutcome {
     return switch (tc.expected) {
-        .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, timeout_ms),
+        .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, tc.specialization_strategy, timeout_ms),
         .allocations_at_most => |expected| runAllocationTest(io, allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
         .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => runComptimeFloatBitsTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
@@ -1367,9 +1369,10 @@ fn runInspectTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
     skip: TestCase.Skip,
+    specialization_strategy: base.SpecializationStrategy,
     timeout_ms: u64,
 ) RunnerError!TestOutcome {
-    var compiled = try helpers.compileInspectedProgram(allocator, io, source_kind, src, imports);
+    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{

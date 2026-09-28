@@ -20,8 +20,22 @@ fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
 }
 
-/// Deep-nesting eval cases, each run on a `stack_bytes` stack.
-pub const tests = [_]TestCase{
+/// Deep-nesting eval cases, each run on a `stack_bytes` stack under both
+/// specialization strategies.
+pub const tests = cases ++ boxyVariants(&cases);
+
+/// Each case again, lowered without specialization (`--specialize=no`).
+fn boxyVariants(comptime lss: []const TestCase) [lss.len]TestCase {
+    var out: [lss.len]TestCase = undefined;
+    for (lss, &out) |case, *variant| {
+        variant.* = case;
+        variant.name = case.name ++ " (specialize=no)";
+        variant.specialization_strategy = .boxy;
+    }
+    return out;
+}
+
+const cases = [_]TestCase{
     .{
         .name = "TEMPDEEP else-if chain",
         .source_kind = .module,
@@ -124,9 +138,9 @@ pub const tests = [_]TestCase{
         .source = blk: {
             @setEvalBranchQuota(10_000_000);
             var out: []const u8 = "";
-            for (0..depth) |i| out = out ++ std.fmt.comptimePrint("f{d} = |x| f{d}(x + 1)\n", .{ i, i + 1 });
+            for (0..depth) |i| out = out ++ std.fmt.comptimePrint("f{d} : U64 -> U64\nf{d} = |x| f{d}(x + 1)\n", .{ i, i, i + 1 });
             break :blk out;
-        } ++ "f" ++ depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
+        } ++ "f" ++ depth_str ++ " : U64 -> U64\nf" ++ depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
         .stack_bytes = stack_bytes,
         .opt_in = true,

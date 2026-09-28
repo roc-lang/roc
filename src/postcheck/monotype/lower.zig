@@ -5734,7 +5734,7 @@ const Builder = struct {
                         },
                     }
                 },
-            .structural => |structural| try nodes.append(self.allocator, .{ .structural = .{
+                .structural => |structural| try nodes.append(self.allocator, .{ .structural = .{
                     .derivation = structural.derivation,
                     .checked = if (structural.checked) |checked_structural| .{
                         .view = .{ .bytes = checked_structural.view.key.bytes },
@@ -19207,6 +19207,9 @@ const BodyContext = struct {
     /// occurrence is the recursive reference, so the check answers for it
     /// from the rest of the cycle rather than walking the backing again.
     codec_support_path: collections.DenseMap(Type.TypeId, void),
+    /// Frame stacks of finished instantiation runs, reused by later runs so
+    /// a deep type does not regrow a stack for every instantiation.
+    spare_inst_frames: std.ArrayListUnmanaged(std.ArrayList(InstFrame)) = .empty,
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
@@ -20219,6 +20222,7 @@ const BodyContext = struct {
         self.hash_expansion_stack.deinit();
         self.equality_expansion_stack.deinit();
         self.codec_support_path.deinit();
+        self.deinitSpareInstFrames();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
         self.direct_call_requests.deinit(self.allocator);
@@ -23090,9 +23094,19 @@ const BodyContext = struct {
         ret: InstResult,
     };
 
+    fn deinitSpareInstFrames(self: *BodyContext) void {
+        for (self.spare_inst_frames.items) |*frames| frames.deinit(self.allocator);
+        self.spare_inst_frames.deinit(self.allocator);
+    }
+
     fn runInst(self: *BodyContext, root: InstTask) Allocator.Error!InstResult {
-        var frames: std.ArrayList(InstFrame) = .empty;
-        defer frames.deinit(self.allocator);
+        // Reserve the slot this run's stack returns to before taking one.
+        try self.spare_inst_frames.ensureUnusedCapacity(self.allocator, 1);
+        var frames: std.ArrayList(InstFrame) = self.spare_inst_frames.pop() orelse .empty;
+        defer {
+            frames.clearRetainingCapacity();
+            self.spare_inst_frames.appendAssumeCapacity(frames);
+        }
         errdefer {
             // Scopes nest, so the innermost frame releases first.
             var index = frames.items.len;
@@ -23862,36 +23876,121 @@ const BodyContext = struct {
         template: checked.CheckedProcedureTemplate,
         root_node: NodeId,
     ) Allocator.Error!void {
-        const replay_state = &self.draft.interface_replay;
         var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
         defer active_local_scopes.deinit();
-        try self.applyCheckedTemplateInterfaceScopeRelations(
-            template,
-            null,
-            root_node,
-            &active_local_scopes,
-            replay_state,
-        );
+        const root = try self.allocator.create(InterfaceScopeFrame);
+        root.* = .{
+            .ctx = self,
+            .owns_ctx = false,
+            .template = template,
+            .scope_id = null,
+            .scope_root_node = root_node,
+            .active_local_scopes = &active_local_scopes,
+            .replay_state = &self.draft.interface_replay,
+        };
+        try self.runInterfaceRelations(root);
     }
 
-    fn applyCheckedTemplateInterfaceScopeRelations(
-        self: *BodyContext,
+    const InterfacePendingDependency = struct {
+        target: checked.ResolvedValueId,
+        source_fn_ty: checked.CheckedTypeId,
+        request_fn_node: NodeId,
+    };
+
+    /// The relations of one checked dispatch scope, applied in order. A
+    /// generalized local scope's relations apply as a child frame in its own
+    /// context; each direct callee's interface expands as a child frame after
+    /// every relation of this scope is applied.
+    const InterfaceScopeFrame = struct {
+        ctx: *BodyContext,
+        /// Whether `ctx` is this frame's own heap-allocated local context.
+        owns_ctx: bool,
         template: checked.CheckedProcedureTemplate,
         scope_id: ?checked.DispatchScopeId,
         scope_root_node: NodeId,
         active_local_scopes: *collections.DenseMap(checked.DispatchScopeId, NodeId),
         replay_state: *InterfaceReplayState,
-    ) Allocator.Error!void {
-        const PendingDependency = struct {
-            target: checked.ResolvedValueId,
-            source_fn_ty: checked.CheckedTypeId,
-            request_fn_node: NodeId,
-        };
-        var pending_dependencies = std.ArrayList(PendingDependency).empty;
-        defer pending_dependencies.deinit(self.allocator);
+        pending: std.ArrayList(InterfacePendingDependency) = .empty,
+        next_relation: usize = 0,
+        next_dependency: usize = 0,
+        /// The local scope this frame made active, inactive again when it
+        /// finishes.
+        leave_scope: ?checked.DispatchScopeId = null,
+    };
 
-        const relations = self.view.templates.specializationRelations(&template);
-        for (relations) |relation| {
+    const InterfaceRelationFrame = union(enum) {
+        scope: *InterfaceScopeFrame,
+        callee: *DirectCalleeExpansion,
+    };
+
+    /// Checked specialization relations reach callees' relations through
+    /// call chains and nested local scopes, so each scope and each callee
+    /// expansion is an explicit frame.
+    fn runInterfaceRelations(self: *BodyContext, root: *InterfaceScopeFrame) Allocator.Error!void {
+        var frames = std.ArrayList(InterfaceRelationFrame).empty;
+        defer {
+            var index = frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                switch (frames.items[index]) {
+                    .scope => |frame| self.releaseInterfaceScopeFrame(frame),
+                    .callee => |expansion| expansion.destroy(),
+                }
+            }
+            frames.deinit(self.allocator);
+        }
+        frames.append(self.allocator, .{ .scope = root }) catch |err| {
+            self.releaseInterfaceScopeFrame(root);
+            return err;
+        };
+        while (frames.items.len != 0) {
+            switch (frames.items[frames.items.len - 1]) {
+                .scope => |frame| {
+                    if (try self.stepInterfaceScope(frame)) |child| {
+                        frames.append(self.allocator, child) catch |err| {
+                            switch (child) {
+                                .scope => |child_frame| self.releaseInterfaceScopeFrame(child_frame),
+                                .callee => |expansion| expansion.destroy(),
+                            }
+                            return err;
+                        };
+                        continue;
+                    }
+                    _ = frames.pop();
+                    self.releaseInterfaceScopeFrame(frame);
+                },
+                .callee => |expansion| {
+                    if (try expansion.beginScope()) |child| {
+                        try frames.append(self.allocator, .{ .scope = child });
+                        continue;
+                    }
+                    _ = frames.pop();
+                    try expansion.finish();
+                },
+            }
+        }
+    }
+
+    fn releaseInterfaceScopeFrame(self: *BodyContext, frame: *InterfaceScopeFrame) void {
+        frame.pending.deinit(self.allocator);
+        if (frame.leave_scope) |scope| _ = frame.active_local_scopes.remove(scope);
+        if (frame.owns_ctx) {
+            frame.ctx.deinit();
+            self.allocator.destroy(frame.ctx);
+        }
+        self.allocator.destroy(frame);
+    }
+
+    /// Apply the scope's next relations up to the next child frame, or null
+    /// once every relation and callee interface is applied.
+    fn stepInterfaceScope(_: *BodyContext, frame: *InterfaceScopeFrame) Allocator.Error!?InterfaceRelationFrame {
+        const self = frame.ctx;
+        const scope_id = frame.scope_id;
+        const scope_root_node = frame.scope_root_node;
+        const relations = self.view.templates.specializationRelations(&frame.template);
+        while (frame.next_relation < relations.len) {
+            const relation = relations[frame.next_relation];
+            frame.next_relation += 1;
             if (!dispatchRefBelongsToScope(relation.scope, scope_id)) continue;
             switch (relation.data) {
                 .type_equality => |equality| try relateRequestComponent(
@@ -23928,7 +24027,7 @@ const BodyContext = struct {
                     }
                     try relateRequestComponent(self.graph, function.ret, try self.instNode(call.ret_ty));
                     if (call.direct_target) |target| {
-                        try pending_dependencies.append(self.allocator, .{
+                        try frame.pending.append(self.allocator, .{
                             .target = target,
                             .source_fn_ty = source_fn_ty,
                             .request_fn_node = fn_node,
@@ -23944,11 +24043,12 @@ const BodyContext = struct {
                     const local_scope = local.dispatch_scope orelse
                         Common.invariant("generalized local specialization relation had no checked scope");
                     const request_node = try self.instNode(record.checked_ty);
-                    if (active_local_scopes.get(local_scope)) |active_root| {
+                    if (frame.active_local_scopes.get(local_scope)) |active_root| {
                         try relateFunctionRequestInterface(self.graph, active_root, request_node);
                         continue;
                     }
-                    var local_ctx = try BodyContext.initWithMethodScope(
+                    const local_ctx = try self.allocator.create(BodyContext);
+                    local_ctx.* = BodyContext.initWithMethodScope(
                         self.allocator,
                         self.builder,
                         self.view,
@@ -23956,8 +24056,25 @@ const BodyContext = struct {
                         self.owner_template,
                         self.graph,
                         self.draft,
-                    );
-                    defer local_ctx.deinit();
+                    ) catch |err| {
+                        self.allocator.destroy(local_ctx);
+                        return err;
+                    };
+                    const child = self.allocator.create(InterfaceScopeFrame) catch |err| {
+                        local_ctx.deinit();
+                        self.allocator.destroy(local_ctx);
+                        return err;
+                    };
+                    child.* = .{
+                        .ctx = local_ctx,
+                        .owns_ctx = true,
+                        .template = frame.template,
+                        .scope_id = local_scope,
+                        .scope_root_node = undefined,
+                        .active_local_scopes = frame.active_local_scopes,
+                        .replay_state = frame.replay_state,
+                    };
+                    errdefer self.releaseInterfaceScopeFrame(child);
                     local_ctx.owner_context_fn_key = self.owner_context_fn_key;
                     local_ctx.current_fn_key = self.current_fn_key;
                     const use_evidence = try self.evidenceForUseSiteForPurposeAtNode(
@@ -23990,29 +24107,27 @@ const BodyContext = struct {
                     }
                     const local_root_node = try local_ctx.checkedTemplateInterfaceScopeRootNode(local_scope);
                     try relateFunctionRequestInterface(self.graph, local_root_node, request_node);
-                    try active_local_scopes.put(local_scope, local_root_node);
-                    defer _ = active_local_scopes.remove(local_scope);
+                    try frame.active_local_scopes.put(local_scope, local_root_node);
+                    child.leave_scope = local_scope;
+                    child.scope_root_node = local_root_node;
 
-                    try local_ctx.instantiateTemplateDispatchRelations(template, local_scope);
-                    try local_ctx.applyCheckedTemplateInterfaceScopeRelations(
-                        template,
-                        local_scope,
-                        local_root_node,
-                        active_local_scopes,
-                        replay_state,
-                    );
+                    try local_ctx.instantiateTemplateDispatchRelations(frame.template, local_scope);
+                    return .{ .scope = child };
                 },
             }
         }
 
-        for (pending_dependencies.items) |pending| {
-            try self.applyDirectCalleeInterfaceRelations(
+        while (frame.next_dependency < frame.pending.items.len) {
+            const pending = frame.pending.items[frame.next_dependency];
+            frame.next_dependency += 1;
+            if (try self.beginDirectCalleeInterface(
                 pending.target,
                 pending.source_fn_ty,
                 pending.request_fn_node,
-                replay_state,
-            );
+                frame.replay_state,
+            )) |expansion| return .{ .callee = expansion };
         }
+        return null;
     }
 
     fn checkedTemplateInterfaceScopeRootNode(
@@ -24174,13 +24289,16 @@ const BodyContext = struct {
         for (produced[1..], requested[1..]) |left, right| try relateRequestComponent(self.graph, left, right);
     }
 
-    fn applyDirectCalleeInterfaceRelations(
+    /// Relate a direct callee's interface to its request: from a replayed or
+    /// cached summary, or by starting an expansion of the callee's checked
+    /// relations, returned for the caller to run as a frame.
+    fn beginDirectCalleeInterface(
         self: *BodyContext,
         target: checked.ResolvedValueId,
         source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
         replay_state: *InterfaceReplayState,
-    ) Allocator.Error!void {
+    ) Allocator.Error!?*DirectCalleeExpansion {
         self.builder.count("interface_relation_requests");
         const record = self.view.resolved_refs.records[@intFromEnum(target)];
         const procedure, const root_evidence = switch (record.ref) {
@@ -24190,7 +24308,7 @@ const BodyContext = struct {
             .promoted_top_level_proc,
             => |procedure| .{ procedure, @as(?checked.CheckedEvidenceSpan, null) },
             .platform_required_proc => |required| .{ required.procedure, required.root_evidence },
-            .local_proc => return,
+            .local_proc => return null,
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -24231,14 +24349,20 @@ const BodyContext = struct {
             stored_evidence.frames,
             stored_evidence.head,
         );
-        var request_roots = std.ArrayList(NodeId).empty;
-        defer request_roots.deinit(self.allocator);
+        const expansion = try self.allocator.create(DirectCalleeExpansion);
+        expansion.* = .{
+            .caller = self,
+            .replay_state = replay_state,
+            .input_arena = std.heap.ArenaAllocator.init(self.allocator),
+        };
+        var expanding = false;
+        defer if (!expanding) expansion.destroy();
+        const request_roots = &expansion.request_roots;
         try request_roots.append(self.allocator, request_fn_node);
         for (edge.subst) |slot| if (slot == .node) {
             try request_roots.append(self.allocator, slot.node);
         };
-        var input_arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer input_arena.deinit();
+        const input_arena = &expansion.input_arena;
         const holes = try self.parametricRequestHoles(input_arena.allocator(), template_ref, callee_view, &template, edge.subst);
         const hole_classes = try input_arena.allocator().alloc(?NodeId, holes.nodes.len);
         const input = try InterfaceConstraints.captureWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
@@ -24271,7 +24395,7 @@ const BodyContext = struct {
                         replay_state.entries.items[current].lowlink = @min(replay_state.entries.items[current].lowlink, raw_entry);
                     }
                     try self.relateInterfaceRoots(entry.roots, request_roots.items);
-                    return;
+                    return null;
                 },
                 .ready => {
                     if (!replay_state.use_finished_summaries) continue;
@@ -24283,7 +24407,8 @@ const BodyContext = struct {
         if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request);
         var verify_summary: ?InterfaceSummary = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
-        defer replay_state.use_finished_summaries = saved_use_summaries;
+        expansion.saved_use_summaries = saved_use_summaries;
+        expansion.restores_use_summaries = true;
         if (cached) |summary| {
             self.builder.count("interface_summary_hits");
             if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
@@ -24294,11 +24419,11 @@ const BodyContext = struct {
             } else switch (summary) {
                 .unchanged => {
                     self.builder.count("interface_summary_unchanged_hits");
-                    return;
+                    return null;
                 },
                 .constraints => |constraints| {
                     try self.relateInterfaceRoots(try constraints.instantiate(self.graph), request_roots.items);
-                    return;
+                    return null;
                 },
             }
         }
@@ -24332,12 +24457,13 @@ const BodyContext = struct {
         try replay_state.stack.append(self.allocator, replay_index);
         const parent = replay_state.current;
         replay_state.current = replay_index;
-        defer replay_state.current = parent;
+        expansion.parent = parent;
+        expansion.restores_current = true;
         const bucket = try replay_state.buckets.getOrPut(address);
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         try bucket.value_ptr.append(self.allocator, @intCast(replay_index));
 
-        var callee_ctx = try BodyContext.initWithMethodScope(
+        expansion.callee_ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
             callee_view,
@@ -24346,7 +24472,8 @@ const BodyContext = struct {
             self.graph,
             self.draft,
         );
-        defer callee_ctx.deinit();
+        expansion.callee_ctx_live = true;
+        const callee_ctx = &expansion.callee_ctx;
         callee_ctx.owner_context_fn_key = self.owner_context_fn_key;
         callee_ctx.current_fn_key = self.current_fn_key;
         callee_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(callee_view, &template), edge);
@@ -24373,87 +24500,149 @@ const BodyContext = struct {
         )) {
             try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
         }
-        try callee_ctx.relateMaterializedEvidenceConstraints(&callee_ctx, callee_ctx.evidence.schema.?, edge.vector);
+        try callee_ctx.relateMaterializedEvidenceConstraints(callee_ctx, callee_ctx.evidence.schema.?, edge.vector);
         if (templateInterfaceIsClosed(callee_view, &template)) {
             // A closed interface is complete once the request is related to
             // its checked root; its relation table never enters this graph.
             self.builder.count("interface_closed_expansions");
         } else {
             try callee_ctx.instantiateTemplateDispatchRelations(template, null);
+            expansion.open_scope = .{ .template = template, .root_node = root_node };
+        }
+        expansion.replay_index = replay_index;
+        expansion.hole_classes = hole_classes;
+        expansion.roots = roots;
+        expanding = true;
+        return expansion;
+    }
 
-            var active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(self.allocator);
-            defer active_local_scopes.deinit();
-            try callee_ctx.applyCheckedTemplateInterfaceScopeRelations(
-                template,
-                null,
-                root_node,
-                &active_local_scopes,
-                replay_state,
-            );
+    /// A callee interface expansion: its replay entry is on the replay stack
+    /// and `replay_state.current` names it until it finishes.
+    const DirectCalleeExpansion = struct {
+        caller: *BodyContext,
+        replay_state: *InterfaceReplayState,
+        input_arena: std.heap.ArenaAllocator,
+        request_roots: std.ArrayList(NodeId) = .empty,
+        callee_ctx: BodyContext = undefined,
+        callee_ctx_live: bool = false,
+        /// The callee's open checked relations, applied as a child scope
+        /// frame before the expansion finishes.
+        open_scope: ?struct { template: checked.CheckedProcedureTemplate, root_node: NodeId } = null,
+        active_local_scopes: ?collections.DenseMap(checked.DispatchScopeId, NodeId) = null,
+        saved_use_summaries: bool = undefined,
+        restores_use_summaries: bool = false,
+        parent: ?usize = null,
+        restores_current: bool = false,
+        replay_index: usize = undefined,
+        hole_classes: []const ?NodeId = &.{},
+        roots: []const NodeId = &.{},
+
+        /// The child frame applying the callee's open relations, once.
+        fn beginScope(expansion: *DirectCalleeExpansion) Allocator.Error!?*InterfaceScopeFrame {
+            const scope = expansion.open_scope orelse return null;
+            expansion.open_scope = null;
+            const allocator = expansion.caller.allocator;
+            expansion.active_local_scopes = collections.DenseMap(checked.DispatchScopeId, NodeId).init(allocator);
+            const frame = try allocator.create(InterfaceScopeFrame);
+            frame.* = .{
+                .ctx = &expansion.callee_ctx,
+                .owns_ctx = false,
+                .template = scope.template,
+                .scope_id = null,
+                .scope_root_node = scope.root_node,
+                .active_local_scopes = &expansion.active_local_scopes.?,
+                .replay_state = expansion.replay_state,
+            };
+            return frame;
         }
-        // A component of one request is complete before it relates back to
-        // that request. A parametric request's summary is therefore taken
-        // from its expansion alone, so relating back cannot fill its holes.
-        const single_request_component = replay_state.entries.items[replay_index].lowlink == replay_index and
-            replay_state.stack.items[replay_state.stack.items.len - 1] == replay_index;
-        const parametric_request = for (hole_classes) |hole_class| {
-            if (hole_class != null) break true;
-        } else false;
-        var component_scratch = std.heap.ArenaAllocator.init(self.allocator);
-        defer component_scratch.deinit();
-        const single_request_constraints: ?InterfaceConstraints = if (single_request_component and parametric_request)
-            try InterfaceConstraints.capture(self.graph, component_scratch.allocator(), roots)
-        else
-            null;
-        try self.relateInterfaceRoots(roots, request_roots.items);
-        replay_state.entries.items[replay_index].status = .expanded;
-        const lowlink = replay_state.entries.items[replay_index].lowlink;
-        if (parent) |parent_index| {
-            replay_state.entries.items[parent_index].lowlink = @min(replay_state.entries.items[parent_index].lowlink, lowlink);
+
+        fn destroy(expansion: *DirectCalleeExpansion) void {
+            const allocator = expansion.caller.allocator;
+            if (expansion.active_local_scopes) |*scopes| scopes.deinit();
+            if (expansion.callee_ctx_live) expansion.callee_ctx.deinit();
+            if (expansion.restores_current) expansion.replay_state.current = expansion.parent;
+            if (expansion.restores_use_summaries) expansion.replay_state.use_finished_summaries = expansion.saved_use_summaries;
+            expansion.input_arena.deinit();
+            expansion.request_roots.deinit(allocator);
+            allocator.destroy(expansion);
         }
-        if (lowlink == replay_index) {
-            // All members of this recursive component have contributed their
-            // constraints. Store each interface only after this fixed point.
-            while (replay_state.stack.pop()) |index| {
-                const entry = &replay_state.entries.items[index];
-                var scratch = std.heap.ArenaAllocator.init(self.allocator);
-                defer scratch.deinit();
-                // Members of a larger component are captured after relating
-                // back to each other's requests, so their interfaces hold the
-                // settled types their holes stood for; only exact requests
-                // may reuse them.
-                const parametric = for (entry.hole_classes) |hole_class| {
-                    if (hole_class != null) break true;
-                } else false;
-                if (parametric and !single_request_component) {
-                    entry.status = .ready;
-                    if (index == replay_index) break;
-                    continue;
-                }
-                const constraints = single_request_constraints orelse try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
-                const entry_input: InterfaceConstraints.Identity = .{ .bytes = entry.request.bytes[0..entry.input_len], .leaves = entry.request.leaves };
-                const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(entry_input, self.typeStore(), self.nameStore()))
-                    .unchanged
-                else
-                    .{ .constraints = constraints };
-                entry.status = .ready;
-                if (entry.verify_summary) |expected| {
-                    if (!try expected.eql(summary, self.graph, scratch.allocator(), self.typeStore(), self.nameStore())) {
-                        Common.compilerBug("cached interface constraints disagreed with fresh checked relation expansion");
+
+        /// Relate the expansion back to its request and, when it closes a
+        /// recursive component, store each member's interface summary.
+        fn finish(expansion: *DirectCalleeExpansion) Allocator.Error!void {
+            defer expansion.destroy();
+            const self = expansion.caller;
+            const replay_state = expansion.replay_state;
+            const replay_index = expansion.replay_index;
+            const hole_classes = expansion.hole_classes;
+            const roots = expansion.roots;
+            const request_roots = &expansion.request_roots;
+            const parent = expansion.parent;
+            const saved_use_summaries = expansion.saved_use_summaries;
+            // A component of one request is complete before it relates back to
+            // that request. A parametric request's summary is therefore taken
+            // from its expansion alone, so relating back cannot fill its holes.
+            const single_request_component = replay_state.entries.items[replay_index].lowlink == replay_index and
+                replay_state.stack.items[replay_state.stack.items.len - 1] == replay_index;
+            const parametric_request = for (hole_classes) |hole_class| {
+                if (hole_class != null) break true;
+            } else false;
+            var component_scratch = std.heap.ArenaAllocator.init(self.allocator);
+            defer component_scratch.deinit();
+            const single_request_constraints: ?InterfaceConstraints = if (single_request_component and parametric_request)
+                try InterfaceConstraints.capture(self.graph, component_scratch.allocator(), roots)
+            else
+                null;
+            try self.relateInterfaceRoots(roots, request_roots.items);
+            replay_state.entries.items[replay_index].status = .expanded;
+            const lowlink = replay_state.entries.items[replay_index].lowlink;
+            if (parent) |parent_index| {
+                replay_state.entries.items[parent_index].lowlink = @min(replay_state.entries.items[parent_index].lowlink, lowlink);
+            }
+            if (lowlink == replay_index) {
+                // All members of this recursive component have contributed their
+                // constraints. Store each interface only after this fixed point.
+                while (replay_state.stack.pop()) |index| {
+                    const entry = &replay_state.entries.items[index];
+                    var scratch = std.heap.ArenaAllocator.init(self.allocator);
+                    defer scratch.deinit();
+                    // Members of a larger component are captured after relating
+                    // back to each other's requests, so their interfaces hold the
+                    // settled types their holes stood for; only exact requests
+                    // may reuse them.
+                    const parametric = for (entry.hole_classes) |hole_class| {
+                        if (hole_class != null) break true;
+                    } else false;
+                    if (parametric and !single_request_component) {
+                        entry.status = .ready;
+                        if (index == replay_index) break;
+                        continue;
                     }
+                    const constraints = single_request_constraints orelse try InterfaceConstraints.capture(self.graph, scratch.allocator(), entry.roots);
+                    const entry_input: InterfaceConstraints.Identity = .{ .bytes = entry.request.bytes[0..entry.input_len], .leaves = entry.request.leaves };
+                    const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(entry_input, self.typeStore(), self.nameStore()))
+                        .unchanged
+                    else
+                        .{ .constraints = constraints };
+                    entry.status = .ready;
+                    if (entry.verify_summary) |expected| {
+                        if (!try expected.eql(summary, self.graph, scratch.allocator(), self.typeStore(), self.nameStore())) {
+                            Common.compilerBug("cached interface constraints disagreed with fresh checked relation expansion");
+                        }
+                    }
+                    // Completed replay entries borrow the durable cache's immutable
+                    // storage; only uncached verification expansions remain graph-local.
+                    entry.summary = if (saved_use_summaries) try self.insertInterfaceSummary(.{
+                        .address = entry.address,
+                        .evidence = entry.evidence,
+                        .request = entry.request,
+                        .summary = summary,
+                    }) else try summary.copy(self.graph.arena(), InterfaceSummaryCopy{});
+                    if (index == replay_index) break;
                 }
-                // Completed replay entries borrow the durable cache's immutable
-                // storage; only uncached verification expansions remain graph-local.
-                entry.summary = if (saved_use_summaries) try self.insertInterfaceSummary(.{
-                    .address = entry.address,
-                    .evidence = entry.evidence,
-                    .request = entry.request,
-                    .summary = summary,
-                }) else try summary.copy(self.graph.arena(), InterfaceSummaryCopy{});
-                if (index == replay_index) break;
             }
         }
-    }
+    };
 
     fn lowerEntryWrapperAtCell(
         self: *BodyContext,
@@ -62908,6 +63097,8 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     builder.program = &program;
     builder.active_body_draft = null;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.allocator = std.testing.allocator;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -62940,6 +63131,8 @@ test "body context inspects graph-owned types despite program TypeId collisions"
     builder.bool_ty = program_ty;
     builder.timing = null;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -63075,6 +63268,8 @@ test "graph constructor representation follows aliases and preserves nominal lay
     }));
 
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.graph = graph;
     try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(structural));
     try std.testing.expectEqual(structural, ctx.constructorRepresentationNode(alias));
@@ -63123,6 +63318,8 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -63225,6 +63422,8 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
         .vector = &.{ .{ .structural = .{ .derivation = .encoder } }, .checked_error, .{ .structural = .{ .derivation = .parser } } },
     };
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.graph = graph;
     ctx.evidence = frame;
 
@@ -66984,6 +67183,8 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -67049,6 +67250,8 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
             var ctx: BodyContext = undefined;
+            ctx.spare_inst_frames = .empty;
+            defer ctx.deinitSpareInstFrames();
             ctx.allocator = allocator;
             ctx.builder = &builder;
             ctx.graph = graph;
@@ -67184,6 +67387,8 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -67263,6 +67468,8 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -67313,6 +67520,8 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
             var ctx: BodyContext = undefined;
+            ctx.spare_inst_frames = .empty;
+            defer ctx.deinitSpareInstFrames();
             ctx.allocator = allocator;
             ctx.builder = &builder;
             ctx.graph = graph;
@@ -67357,6 +67566,8 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.allocator = allocator;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -67458,6 +67669,8 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
             var ctx: BodyContext = undefined;
+            ctx.spare_inst_frames = .empty;
+            defer ctx.deinitSpareInstFrames();
             ctx.allocator = gpa;
             ctx.builder = &builder;
             ctx.graph = graph;
@@ -67510,6 +67723,8 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.graph = graph;
     ctx.view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), @splat(0));
@@ -67705,6 +67920,8 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var builder: Builder = undefined;
     builder.program = &program;
     var ctx: BodyContext = undefined;
+    ctx.spare_inst_frames = .empty;
+    defer ctx.deinitSpareInstFrames();
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;

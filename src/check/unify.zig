@@ -576,25 +576,52 @@ const Unifier = struct {
     /// Check if we're already unifying this pair of descriptors (recursion guard).
     /// This prevents infinite recursion on self-referential types.
     /// We check pairs because unifying (A, B) shouldn't block unifying (A, C).
-    fn isPairVisited(self: *Self, a_var: Var, b_var: Var) bool {
-        const a_resolved = self.types_store.resolveVar(a_var);
-        const b_resolved = self.types_store.resolveVar(b_var);
-
+    /// The in-flight pairs are indexed by their current resolved descriptors,
+    /// re-indexed whenever a slot write may have changed a resolution, so a
+    /// nested walk does not rescan the whole in-flight path per pair.
+    fn isPairVisited(self: *Self, a_var: Var, b_var: Var) std.mem.Allocator.Error!bool {
+        const scratch = self.scratch;
         // Visited vars are stored as pairs: [a1, b1, a2, b2, ...]
-        const items = self.scratch.visited_vars.items.items;
-        var i: usize = 0;
-        while (i + 1 < items.len) : (i += 2) {
-            const visited_a = self.types_store.resolveVar(items[i]);
-            const visited_b = self.types_store.resolveVar(items[i + 1]);
+        const items = scratch.visited_vars.items.items;
+        const pair_count = items.len / 2;
+        if (scratch.visited_index_generation != self.types_store.slot_generation or scratch.visited_index_pairs > pair_count) {
+            scratch.visited_index.clearRetainingCapacity();
+            scratch.visited_index_pairs = 0;
+            scratch.visited_index_generation = self.types_store.slot_generation;
+        }
+        while (scratch.visited_index_pairs < pair_count) : (scratch.visited_index_pairs += 1) {
+            const i = scratch.visited_index_pairs * 2;
+            const key = self.visitedPairKey(items[i], items[i + 1]);
+            const entry = try scratch.visited_index.getOrPut(scratch.gpa, key);
+            entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
+        }
+        // Unordered keys match both orderings, since unify(A,B) is symmetric
+        // with unify(B,A).
+        return scratch.visited_index.contains(self.visitedPairKey(a_var, b_var));
+    }
 
-            // Check both orderings since unify(A,B) is symmetric with unify(B,A)
-            if ((a_resolved.desc_idx == visited_a.desc_idx and b_resolved.desc_idx == visited_b.desc_idx) or
-                (a_resolved.desc_idx == visited_b.desc_idx and b_resolved.desc_idx == visited_a.desc_idx))
-            {
-                return true;
+    fn visitedPairKey(self: *Self, a_var: Var, b_var: Var) VisitedPairKey {
+        const a = @intFromEnum(self.types_store.resolveVar(a_var).desc_idx);
+        const b = @intFromEnum(self.types_store.resolveVar(b_var).desc_idx);
+        return .{ .low = @min(a, b), .high = @max(a, b) };
+    }
+
+    /// Drop the in-flight pairs past `len` vars, keeping the index in step.
+    fn truncateVisited(self: *Self, len: u32) void {
+        const scratch = self.scratch;
+        const items = scratch.visited_vars.items.items;
+        const keep_pairs = len / 2;
+        if (scratch.visited_index_generation == self.types_store.slot_generation) {
+            while (scratch.visited_index_pairs > keep_pairs) {
+                scratch.visited_index_pairs -= 1;
+                const i = scratch.visited_index_pairs * 2;
+                const key = self.visitedPairKey(items[i], items[i + 1]);
+                const count = scratch.visited_index.getPtr(key).?;
+                count.* -= 1;
+                if (count.* == 0) _ = scratch.visited_index.remove(key);
             }
         }
-        return false;
+        scratch.visited_vars.items.items.len = len;
     }
 
     /// Check if a single var is already being unified in constraint unification (legacy mark-based behavior).
@@ -667,7 +694,7 @@ const Unifier = struct {
             .root_pair => |pair| try self.processRootPair(pair.a, pair.b, pair.relation),
             .guarded_pair => |pair| try self.processGuardedPair(pair.a, pair.b),
             .guard_handler => |handler| {
-                self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
+                self.truncateVisited(handler.visited_vars_len);
                 self.unresolved_a = handler.saved_unresolved_a;
                 self.unresolved_b = handler.saved_unresolved_b;
             },
@@ -704,7 +731,7 @@ const Unifier = struct {
         switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
             .equiv => return,
             .not_equiv => |vars| {
-                if (self.isPairVisited(a_var, b_var)) {
+                if (try self.isPairVisited(a_var, b_var)) {
                     return;
                 }
 
@@ -732,7 +759,7 @@ const Unifier = struct {
             const frame_tag = std.meta.activeTag(frame);
             if (frame_tag == .guard_handler) {
                 const handler = frame.guard_handler;
-                self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
+                self.truncateVisited(handler.visited_vars_len);
                 self.unresolved_a = handler.saved_unresolved_a;
                 self.unresolved_b = handler.saved_unresolved_b;
             } else if (frame_tag == .restore_enclosing_records) {
@@ -4092,6 +4119,9 @@ pub const ChainDuplicateTag = struct {
 /// itself creates new tag unions that may not be sorted, so partitionFields/partitionTags
 /// still perform a final sort. To fully eliminate these sorts, we would need to ensure
 /// unifySharedTags also produces sorted output.
+/// An unordered pair of resolved type descriptors.
+const VisitedPairKey = struct { low: u32, high: u32 };
+
 pub const Scratch = struct {
     const Self = @This();
 
@@ -4140,6 +4170,12 @@ pub const Scratch = struct {
 
     // Vars currently being unified (recursion guard for self-referential types)
     visited_vars: VarSafeList,
+    /// `visited_vars` pairs indexed by their resolved descriptor pair, valid
+    /// while the type store's `slot_generation` equals `visited_index_generation`
+    /// and covering the first `visited_index_pairs` pairs.
+    visited_index: std.AutoHashMapUnmanaged(VisitedPairKey, u32) = .empty,
+    visited_index_generation: u64 = 0,
+    visited_index_pairs: usize = 0,
 
     // Reusable formal->actual substitution map for the nominal-vs-structural
     // lift's declaration-backed opening operation.
@@ -4336,6 +4372,7 @@ pub const Scratch = struct {
         self.b_static_dispatch_constraint_indices.deinit(self.gpa);
         self.occurs_scratch.deinit();
         self.visited_vars.deinit(self.gpa);
+        self.visited_index.deinit(self.gpa);
         self.constraint_visited_vars.deinit(self.gpa);
         self.open_var_map.deinit();
         self.opened_nominals.deinit(self.gpa);
@@ -4371,6 +4408,8 @@ pub const Scratch = struct {
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.visited_vars.items.clearRetainingCapacity();
+        self.visited_index.clearRetainingCapacity();
+        self.visited_index_pairs = 0;
         self.constraint_visited_vars.items.clearRetainingCapacity();
         self.opened_nominals.clearRetainingCapacity();
         self.opened_nominal_args.items.clearRetainingCapacity();
