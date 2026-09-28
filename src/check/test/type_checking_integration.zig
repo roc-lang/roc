@@ -8832,6 +8832,41 @@ test "check type - annotated self recursive function - polymorphic recursion all
     try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
 }
 
+test "check type - issue 11740 custom literal requirements in polymorphic recursion" {
+    // An annotated recursive edge may instantiate a at Poly(a). The literal
+    // therefore requires conversions at Poly(U8), Poly(Poly(U8)), and so on;
+    // the recursion depth is a runtime argument. A literal planner cannot
+    // assume that structural requirement deduplication makes this finite.
+    const source =
+        \\Poly(a) := [Val(a), Quoted(Str)].{
+        \\    from_quote : Str -> Try(Poly(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |text| {
+        \\        dbg text
+        \\        Ok(Quoted(text))
+        \\    }
+        \\    is_eq : Poly(a), Poly(a) -> Bool
+        \\    is_eq = |left, right| match (left, right) {
+        \\        (Quoted(x), Quoted(y)) => x == y
+        \\        _ => Bool.False
+        \\    }
+        \\}
+        \\walk : U64, a -> U64 where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), a.is_eq : a, a -> Bool]
+        \\walk = |remaining, value| {
+        \\    if remaining == 0 {
+        \\        0
+        \\    } else {
+        \\        matched = match value {
+        \\            "low" => 1
+        \\            _ => 0
+        \\        }
+        \\        matched + walk(remaining - 1, Poly.Val(value))
+        \\    }
+        \\}
+        \\entry = |remaining| walk(remaining, Poly.Val(0.U8))
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "entry" } }, "U64 -> U64");
+}
+
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
     // Inner let-def lambda should generalize normally even while the
     // enclosing binding group's own generalization waits for the group

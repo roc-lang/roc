@@ -193,6 +193,9 @@ const Builder = struct {
             .str => try self.string(job),
             .list => |element| try self.list(job, source_plan.list, element),
             .named => |named| try self.enqueue(source_plan.named.backing, job.source_layout, named.backing, job.layout_idx, job.source, job.dest, .value, .value),
+            .boxy_box => |box| if (self.size(box.layout_idx) != 0) {
+                try self.boxed(job, source_plan.boxy_box.payload, source_plan.boxy_box.layout_idx, box.payload, box.layout_idx);
+            },
             .box => |element| switch (physical.tag) {
                 .box_of_zst => self.writeWord(job.dest, 0),
                 .box => try self.boxed(job, source_plan.box, source_physical.getIdx(), element, physical.getIdx()),
@@ -315,28 +318,78 @@ const Builder = struct {
             try self.enqueue(s.plan, source.idx, t.plan, target.idx, source.location, target.location, s.storage, t.storage);
         }
     }
+    fn boxyCaptureLocation(program: *const Program.Result, idx: layout.Idx, slot: u32) struct { idx: layout.Idx, offset: usize } {
+        const physical = program.layouts.getLayout(idx);
+        if (physical.tag == .struct_) return .{
+            .idx = program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
+            .offset = program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
+        };
+        if (slot != 0) invariant("non-struct Boxy capture had multiple fields");
+        return .{ .idx = idx, .offset = 0 };
+    }
+
+    fn frozenDescriptor(self: *Builder, id: Program.BoxyTypeDescId) Allocator.Error!Destination {
+        const descriptor = &self.program.boxy_type_descs.items[@intFromEnum(id)];
+        if (descriptor.closure != .closed) invariant("target frozen descriptor retains runtime context");
+        const symbol = try self.addNode(try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len)), @sizeOf(Program.BoxyTypeDesc), @alignOf(Program.BoxyTypeDesc));
+        const dest = Destination{ .symbol = symbol };
+        @memcpy(self.bytes(dest, @sizeOf(Program.BoxyTypeDesc)), std.mem.asBytes(descriptor));
+        return dest;
+    }
+
+    fn frozenDictionary(self: *Builder, id: Program.BoxyDictId) Allocator.Error!Destination {
+        const dict = self.program.boxy_dicts.items[@intFromEnum(id)];
+        if (dict.template) invariant("frozen dictionary retained a runtime template");
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
+        const symbol = try self.addNode(name, @sizeOf(Program.BoxyDict), @alignOf(Program.BoxyDict));
+        const dest = Destination{ .symbol = symbol, .offset = 0 };
+        @memcpy(self.bytes(dest, @sizeOf(Program.BoxyDict)), std.mem.asBytes(&dict));
+        return dest;
+    }
+
     fn erased(self: *Builder, job: Job, source_set: Program.ErasedFnsId, target_set: Program.ErasedFnsId) Allocator.Error!void {
         const src = self.pointer(job.source);
         const code = self.sourceRelocation(src) orelse invariant("erased code lacked relocation");
         const source_proc = code.procedure orelse invariant("erased code lacked procedure identity");
-        const source_entry = for (self.source_program.erased_fns.items[@intFromEnum(source_set)].entries) |entry| {
+        const source_entries = self.source_program.erased_fns.items[@intFromEnum(source_set)].entries;
+        const source_entry = if (code.boxy_recipe) |index| source_entries[index] else for (source_entries) |entry| {
             if (entry.entry == source_proc) break entry;
         } else invariant("erased procedure absent from source plan");
-        requireUniqueFrozenFunction(Program.ErasedFn, source_entry.template, self.program.erased_fns.items[@intFromEnum(target_set)].entries);
+        if (source_entry.entry != source_proc) invariant("frozen recipe disagreed with its procedure");
+        var count: usize = 0;
         for (self.program.erased_fns.items[@intFromEnum(target_set)].entries) |entry| {
-            if (!sameFrozenFunction(source_entry.template, entry.template)) continue;
+            if (sameErasedFunction(source_entry, entry)) count += 1;
+        }
+        if (count != 1) invariant("frozen erased callable lacks unique target identity");
+        for (self.program.erased_fns.items[@intFromEnum(target_set)].entries, 0..) |entry, recipe_index| {
+            if (!sameErasedFunction(source_entry, entry)) continue;
             const capture_offset = std.mem.alignForward(usize, 2 * self.word(), builtins.erased_callable.payload_alignment);
-            const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset + self.size(entry.capture_layout), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset + (if (entry.boxy != null) std.mem.alignForward(usize, self.size(entry.capture_layout), self.word()) + self.word() else self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry });
+            try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
             switch (entry.on_drop) {
                 .none => {},
                 .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
                 .boxy_capture, .interpreter_context_drop => invariant("frozen callable target lacks durable drop authority"),
             }
 
-            try self.captures(source_entry.captures, source_entry.capture_layout, entry.captures, entry.capture_layout, src.offsetBy(code.callable_capture_offset orelse invariant("erased source lacked capture offset")), result.dest.offsetBy(capture_offset));
+            if (entry.boxy) |boxy| {
+                const source_boxy = source_entry.boxy.?;
+                const source_capture_offset = code.callable_capture_offset orelse invariant("erased source lacked capture offset");
+                for (boxy.captures, source_boxy.captures) |capture, source_capture| {
+                    if (capture.slot != source_capture.slot) invariant("paired Boxy captures disagree on field identity");
+                    const source_field = boxyCaptureLocation(self.source_program, source_entry.capture_layout, source_capture.slot);
+                    const field = boxyCaptureLocation(self.program, entry.capture_layout, capture.slot);
+                    const dest = result.dest.offsetBy(capture_offset + field.offset);
+                    switch (capture.value) {
+                        .value => |plan| try self.enqueue(source_capture.value.value, source_field.idx, plan, field.idx, src.offsetBy(source_capture_offset + source_field.offset), dest, .value, .value),
+                        .descriptor, .contents_descriptor => |id| try self.relocate(dest, try self.frozenDescriptor(id)),
+                        .dictionary => |id| try self.relocate(dest, try self.frozenDictionary(id)),
+                    }
+                }
+                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(capture_offset + std.mem.alignForward(usize, self.size(entry.capture_layout), self.word())), try self.frozenDescriptor(id));
+            } else try self.captures(source_entry.captures, source_entry.capture_layout, entry.captures, entry.capture_layout, src.offsetBy(code.callable_capture_offset orelse invariant("erased source lacked capture offset")), result.dest.offsetBy(capture_offset));
             return;
         }
         invariant("target erased callable correspondence absent");
@@ -392,6 +445,15 @@ const Builder = struct {
 fn invariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) std.debug.panic("frozen root transcode invariant violated: {s}", .{message});
     unreachable;
+}
+
+fn sameErasedFunction(source: Program.ErasedFn, target: Program.ErasedFn) bool {
+    if (source.boxy) |boxy| {
+        const other = target.boxy orelse return false;
+        return std.meta.eql(boxy.key, other.key);
+    }
+    if (target.boxy != null) return false;
+    return sameFrozenFunction(source.template.?, target.template.?);
 }
 
 fn sameFrozenFunction(source: Program.FnTemplate, target: Program.FnTemplate) bool {
@@ -479,7 +541,7 @@ test "frozen root transcode promotes inline strings when target width shrinks" {
 fn requireUniqueFrozenFunction(comptime Entry: type, source: Program.FnTemplate, targets: []const Entry) void {
     var found = false;
     for (targets) |entry| {
-        if (!sameFrozenFunction(source, entry.template)) continue;
+        if (!sameFrozenFunction(source, if (Entry == Program.ErasedFn) entry.template.? else entry.template)) continue;
         if (found) invariant("frozen callable owner has ambiguous target representation");
         found = true;
     }
@@ -826,4 +888,85 @@ fn boxedValueSlot(
         },
     });
     return id;
+}
+
+test "frozen root transcode preserves Boxy recipe identity and generic boxed captures" {
+    const allocator = std.testing.allocator;
+    const Fixture = struct {
+        proc: lir.LIR.LirProcSpecId,
+        plan: Program.ConstPlanId,
+        callable: layout.Idx,
+        capture: layout.Idx,
+        string_desc: Program.BoxyTypeDescId,
+        fn init(program: *Program.Result, reverse: bool) !@This() {
+            const gpa = std.testing.allocator;
+            const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
+            const callable = try program.layouts.insertErasedCallable();
+            const capture = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = try program.layouts.insertErasedBox() }, .{ .index = 1, .layout = .opaque_ptr } });
+            const entries = try gpa.alloc(Program.ErasedFn, 2);
+            var string_desc: Program.BoxyTypeDescId = undefined;
+            for (0..2) |index| {
+                const string = (index == 1) != reverse;
+                const payload_layout: layout.Idx = if (string) .str else .u64;
+                const payload: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+                try program.const_plans.append(gpa, if (string) .str else .scalar);
+                const boxed: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+                try program.const_plans.append(gpa, .{ .boxy_box = .{ .payload = payload, .layout_idx = payload_layout } });
+                const desc: Program.BoxyTypeDescId = @enumFromInt(program.boxy_type_descs.items.len);
+                try program.boxy_type_descs.append(gpa, .{ .payload_layout = payload_layout, .contains_refcounted = string, .shape = .primitive, .closure = .closed });
+                if (string) string_desc = desc;
+                entries[index] = .{ .entry = proc, .capture_layout = capture, .boxy = .{
+                    .key = @splat(if (string) 1 else 2),
+                    .result_desc = desc,
+                    .captures = try gpa.dupe(Program.BoxyFrozenCapture, &.{ .{ .slot = 0, .value = .{ .value = boxed } }, .{ .slot = 1, .value = .{ .descriptor = desc } } }),
+                } };
+            }
+            const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+            try program.const_plans.append(gpa, .{ .erased_fn = @enumFromInt(program.erased_fns.items.len) });
+            try program.erased_fns.append(gpa, .{ .layout = callable, .entries = entries });
+            return .{ .proc = proc, .plan = plan, .callable = callable, .capture = capture, .string_desc = string_desc };
+        }
+    };
+    var source = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer source.deinit();
+    var target = try Program.Result.init(allocator, .u32);
+    defer target.deinit();
+    const source_fixture = try Fixture.init(&source, false);
+    const target_fixture = try Fixture.init(&target, true);
+    var host = @import("runtime_host.zig").init(allocator);
+    defer host.deinit();
+    const runtime = try @import("boxy_abi.zig").createRuntimeFromStores(allocator, &source.store, &source.layouts, @import("boxy_runtime.zig").BoxyTables.fromResult(&source), host.get_ops());
+    defer @import("boxy_abi.zig").deinitRuntime(runtime);
+    var string = builtins.str.RocStr.fromSliceSmall("capture");
+    var capture: [2]usize = @splat(0);
+    const source_struct = source.layouts.getLayout(source_fixture.capture).getStruct().idx;
+    capture[source.layouts.getStructFieldOffsetByOriginalIndex(source_struct, 0) / @sizeOf(usize)] = @intFromPtr(&string);
+    capture[source.layouts.getStructFieldOffsetByOriginalIndex(source_struct, 1) / @sizeOf(usize)] = @intFromPtr(&source.boxy_type_descs.items[@intFromEnum(source_fixture.string_desc)]);
+    var pointer = @intFromPtr(&capture);
+    const Resolver = struct {
+        fn resolve(context: ?*anyopaque, data: [*]u8) error{RuntimeError}!@import("native_root_export.zig").CallableResolution {
+            const proc: *const lir.LIR.LirProcSpecId = @ptrCast(@alignCast(context.?));
+            return .{ .proc = proc.*, .capture_ptr = data };
+        }
+    };
+    var proc = source_fixture.proc;
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_fixture.callable), testRoot(source_fixture.plan, source_fixture.callable), .{ .ptr = @ptrCast(&pointer) }, .{ .context = &proc, .resolve = Resolver.resolve, .runtime = &runtime.runtime });
+    defer static_data.deinitStaticData(allocator, native);
+    const native_pointer = native[0].relocations[0];
+    try std.testing.expectEqual(@as(u32, 1), native[@intFromEnum(native_pointer.target.data_symbol)].relocations[0].boxy_recipe.?);
+    const converted = try transcodeRoot(allocator, &source, testRoot(source_fixture.plan, source_fixture.callable), native, testRootSymbol(native), &target, testRoot(target_fixture.plan, target_fixture.callable), try testSlot(&target, target_fixture.callable));
+    defer static_data.deinitStaticData(allocator, converted);
+    const root_pointer = converted[0].relocations[0];
+    const closure = converted[@intFromEnum(root_pointer.target.data_symbol)];
+    try std.testing.expectEqual(@as(u32, 0), closure.relocations[0].boxy_recipe.?);
+    try std.testing.expectEqual(target_fixture.proc, closure.relocations[0].procedure.?);
+    const target_struct = target.layouts.getLayout(target_fixture.capture).getStruct().idx;
+    const value_offset = @as(u64, @intCast(root_pointer.addend)) + closure.relocations[0].callable_capture_offset.? + target.layouts.getStructFieldOffsetByOriginalIndex(target_struct, 0);
+    const value_pointer = for (closure.relocations) |relocation| {
+        if (relocation.offset == value_offset) break relocation;
+    } else return error.TestUnexpectedResult;
+    const payload = converted[@intFromEnum(value_pointer.target.data_symbol)];
+    const offset: usize = @intCast(value_pointer.addend);
+    try std.testing.expectEqualStrings("capture", payload.bytes[offset..][0..7]);
+    try std.testing.expectEqual(@as(u8, 0x87), payload.bytes[offset + 11]);
 }

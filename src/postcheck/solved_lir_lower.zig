@@ -4494,8 +4494,8 @@ const Lowerer = struct {
         errdefer {
             for (entries[0..initialized]) |entry| {
                 if (entry.captures.len > 0) self.allocator.free(entry.captures);
-                if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
-                if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
+                if (entry.template.?.evidence.len > 0) self.allocator.free(entry.template.?.evidence);
+                if (entry.template.?.evidence_frames.len > 0) self.allocator.free(entry.template.?.evidence_frames);
             }
             self.allocator.free(entries);
         }

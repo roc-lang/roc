@@ -76,6 +76,8 @@ pub const StaticDataRelocation = struct {
     /// In-process consumers use this identity directly; object backends use
     /// `target_symbol_name` as its linker representation.
     procedure: ?LIR.LirProcSpecId = null,
+    /// Producer recipe within the erased-function set, retained for transcoding.
+    boxy_recipe: ?u32 = null,
     /// Exact generated RC helper required by this function-pointer relocation.
     ///
     /// Static erased-callable `on_drop` slots are always atomic: their
@@ -198,8 +200,39 @@ pub const ErasedFn = struct {
     on_drop: LIR.ErasedCallableOnDrop = .none,
     entry: LIR.LirProcSpecId,
     capture_layout: layout.Idx = .zst,
-    template: FnTemplate,
+    template: ?FnTemplate = null,
     captures: []const CaptureSlot = &.{},
+    /// Boxy-owned producer identity and typed runtime environment. These
+    /// captures do not claim ConstStore provenance.
+    boxy: ?BoxyFrozenCallable = null,
+};
+
+/// Typed field of a Boxy callable frozen during literal evaluation.
+pub const BoxyFrozenCapture = struct {
+    slot: u32,
+    value: union(enum) {
+        value: ConstPlanId,
+        descriptor: BoxyTypeDescId,
+        contents_descriptor: BoxyTypeDescId,
+        dictionary: BoxyDictId,
+    },
+};
+
+/// Closed producer recipe shared by host and target literal lowering.
+pub const BoxyFrozenCallable = struct {
+    key: [32]u8,
+    result_desc: ?BoxyTypeDescId = null,
+    captures: []const BoxyFrozenCapture,
+};
+
+/// Checked contract and selected implementation of a dictionary boundary.
+/// The implementation identity survives inlining and procedure pruning.
+pub const BoxyFrozenMethodOrigin = struct {
+    worker: LIR.ProcIdentity,
+    requirement_module: checked.ModuleId,
+    requirement_type: checked.CheckedTypeId,
+    callable_module: checked.ModuleId,
+    callable_type: checked.CheckedTypeId,
 };
 
 /// Runtime encoding for an erased callable value type.
@@ -449,6 +482,8 @@ pub const ConstPlan = union(enum) {
     str,
     list: ConstPlanId,
     box: ConstPlanId,
+    /// Boxy worker box with a producer-resolved payload layout.
+    boxy_box: struct { payload: ConstPlanId, layout_idx: layout.Idx },
     tuple: []const ConstPlanId,
     record: []const ConstPlanId,
     tag_union: []const ConstTagVariant,
@@ -601,6 +636,9 @@ pub const Result = struct {
     erased_fns: std.ArrayList(ErasedFns),
     boxy_type_descs: std.ArrayList(BoxyTypeDesc),
     boxy_dicts: std.ArrayList(BoxyDict),
+    /// Selected implementation behind each Boxy dictionary boundary adapter.
+    /// Compiler-only evidence used when freezing captured dictionaries.
+    boxy_frozen_method_origins: std.AutoHashMapUnmanaged(LIR.LirProcSpecId, BoxyFrozenMethodOrigin) = .empty,
     boxy_adapters: std.ArrayList(BoxyAdapter),
     boxy_desc_refs: std.ArrayList(BoxyDescRef),
     boxy_dict_refs: std.ArrayList(BoxyDictRef),
@@ -710,6 +748,7 @@ pub const Result = struct {
         self.boxy_desc_refs.deinit(allocator);
         self.boxy_adapters.deinit(allocator);
         self.boxy_dicts.deinit(allocator);
+        self.boxy_frozen_method_origins.deinit(allocator);
         self.boxy_type_descs.deinit(allocator);
         self.erased_fns.deinit(allocator);
         self.fn_sets.deinit(allocator);
@@ -924,6 +963,7 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
                 allocator.free(variants);
             },
             .zst,
+            .boxy_box,
             .layout_only,
             .pending,
             .scalar,
@@ -956,8 +996,11 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
     for (erased_fns) |set| {
         for (set.entries) |entry| {
             if (entry.captures.len > 0) allocator.free(entry.captures);
-            if (entry.template.evidence.len > 0) allocator.free(entry.template.evidence);
-            if (entry.template.evidence_frames.len > 0) allocator.free(entry.template.evidence_frames);
+            if (entry.template) |template| {
+                if (template.evidence.len > 0) allocator.free(template.evidence);
+                if (template.evidence_frames.len > 0) allocator.free(template.evidence_frames);
+            }
+            if (entry.boxy) |boxy| allocator.free(boxy.captures);
         }
         if (set.entries.len > 0) allocator.free(set.entries);
     }
