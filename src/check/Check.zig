@@ -8005,31 +8005,20 @@ fn instantiateVarHelp(
                     .rigid => |rigid| rigid.constraints.len(),
                     .alias, .field_presence, .structure, .err => 0,
                 };
-                // A `#polarity` marker is a quantified variable of the
-                // scheme—`canonical_type_keys` enumerates every rigid as an
-                // identity variable, marker included—but the instantiator
-                // resolves it to a CONTENT rather than to a variable: a use
-                // that closes the deferred row copies it as
+                // The scheme-side variable is judged, by the same predicate
+                // the identity walk over the scheme uses, because the copy
+                // need not itself be a variable: the instantiator resolves a
+                // `#polarity` marker that the use closes to
                 // `.structure = .empty_tag_union` (`types/instantiate.zig`,
-                // the `.close`/`.neg`/`.nested` arms). That closed row IS this
-                // instantiation's substitution for the marker, so the pair must
-                // be recorded even though the copy is not itself quantified.
-                // Without it `appendSiteSubstitution` finds no substitution for
-                // a variable the identity walk enumerated, falls back to the
-                // pristine marker, and panics because publication—which walks
-                // the recorded pairs—never reached it. Only markers widen the
-                // predicate: pairing every copied structural node would change
-                // the length of every substitution.
+                // the `.close`/`.neg`/`.nested` arms), and an identity the
+                // checker defaulted closed copies as a structural `[]`. That
+                // copy IS this instantiation's substitution for the variable,
+                // so `appendSiteSubstitution` must find it among the pairs;
+                // publication reaches only the recorded fresh copies.
+                // Structural nodes that are not identities stay unpaired, so a
+                // substitution's length stays the scheme's identity count.
                 const old_resolved = self.types.resolveVar(x.key_ptr.*);
-                const old_is_polarity_marker = switch (old_resolved.desc.content) {
-                    .rigid => |old_rigid| old_rigid.name.eql(self.cir.idents.polarity_var),
-                    .flex, .alias, .field_presence, .structure, .err => false,
-                };
-                const fresh_is_quantified = old_is_polarity_marker or switch (fresh_resolved.desc.content) {
-                    .flex, .rigid => true,
-                    .alias, .field_presence, .structure, .err => false,
-                };
-                if (fresh_is_quantified) {
+                if (canonical_type_keys.isIdentityVariable(old_resolved.desc)) {
                     try self.scratch_evidence_pairs.append(self.gpa, .{
                         .old_var = @intFromEnum(x.key_ptr.*),
                         .fresh_var = @intFromEnum(fresh_var),
@@ -15186,12 +15175,11 @@ fn appendPredeclaredUsePairs(self: *Self, annotation_idx: CIR.Annotation.Idx, us
     }
     for (body, use_copies[0..body.len]) |body_var, fresh_var| {
         const resolved = self.types.resolveVar(body_var);
-        switch (resolved.desc.content) {
-            .flex, .rigid => try self.scratch_evidence_pairs.append(self.gpa, .{
+        if (canonical_type_keys.isIdentityVariable(resolved.desc)) {
+            try self.scratch_evidence_pairs.append(self.gpa, .{
                 .old_var = @intFromEnum(resolved.var_),
                 .fresh_var = @intFromEnum(fresh_var),
-            }),
-            .alias, .field_presence, .structure, .err => {},
+            });
         }
     }
     var fresh_fn_index = body.len;
@@ -16197,11 +16185,7 @@ fn replayPredeclaredSchemeUse(
         // Every copied quantified variable is paired: the pairs are the
         // replayed use's substitution. The scheme-side var is judged, since
         // the replay's fresh copy may already be solved.
-        const old_is_quantified = switch (old_resolved.desc.content) {
-            .flex, .rigid => true,
-            .alias, .field_presence, .structure, .err => false,
-        };
-        if (old_is_quantified) {
+        if (canonical_type_keys.isIdentityVariable(old_resolved.desc)) {
             try self.scratch_evidence_pairs.append(self.gpa, .{
                 .old_var = @intFromEnum(old_resolved.var_),
                 .fresh_var = @intFromEnum(fresh_resolved.var_),
