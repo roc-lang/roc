@@ -27,6 +27,18 @@ const win32 = struct {
         hEvent: ?HANDLE,
     };
 
+    extern "kernel32" fn GetOverlappedResult(
+        hFile: HANDLE,
+        lpOverlapped: *OVERLAPPED,
+        lpNumberOfBytesTransferred: *DWORD,
+        bWait: std.os.windows.BOOL,
+    ) callconv(.winapi) std.os.windows.BOOL;
+
+    extern "kernel32" fn CancelIoEx(
+        hFile: HANDLE,
+        lpOverlapped: *OVERLAPPED,
+    ) callconv(.winapi) std.os.windows.BOOL;
+
     const FILE_NOTIFY_INFORMATION = extern struct {
         NextEntryOffset: DWORD,
         Action: DWORD,
@@ -377,6 +389,7 @@ pub const Watcher = struct {
 
         const OverlappedData = struct {
             overlapped: win32.OVERLAPPED,
+            read_pending: bool = false,
             buffer: []align(@alignOf(win32.FILE_NOTIFY_INFORMATION)) u8,
             path: []const u8,
         };
@@ -647,8 +660,9 @@ pub const Watcher = struct {
         // Wait for the watcher to be ready
         while (!self.is_ready.load(.seq_cst)) {
             if (self.startup_failed.load(.seq_cst)) {
-                self.thread.?.join();
-                self.thread = null;
+                // Release partial registrations, including any submitted reads,
+                // before a caller can retry startup and grow the arrays again.
+                self.stop();
                 return error.WatchBackendFailed;
             }
             std.Thread.yield() catch {};
@@ -703,8 +717,10 @@ pub const Watcher = struct {
                     self.impl.stop_event = null;
                 }
 
-                // Close directory handles and overlapped events
-                for (self.impl.handles.items) |handle| {
+                // Shards have joined, so no thread can rearm these reads. Keep
+                // their storage and events alive until cancellation completes.
+                for (self.impl.handles.items, 0..) |handle, index| {
+                    self.cancelWindowsRead(index);
                     _ = std.os.windows.CloseHandle(handle);
                 }
                 self.impl.handles.clearRetainingCapacity();
@@ -1547,7 +1563,8 @@ pub const Watcher = struct {
             return;
         };
         defer self.allocator.free(watch_paths);
-        // Set up ReadDirectoryChangesW for each path
+        // Finish growing the arrays before submitting any I/O: Windows retains
+        // pointers to the OVERLAPPED records until each read completes.
         for (watch_paths) |path| {
             self.setupWindowsWatch(path) catch |err| {
                 std.log.warn("Failed to set up watch for {s}: {}", .{ path, err });
@@ -1564,6 +1581,13 @@ pub const Watcher = struct {
         }
 
         const watched_count = self.impl.overlapped_data.items.len;
+        for (0..watched_count) |index| {
+            self.startWindowsRead(index) catch |err| {
+                std.log.warn("Failed to start directory read: {}", .{err});
+                self.markStartupFailed();
+                return;
+            };
+        }
         const shard_count = std.math.divCeil(usize, watched_count, windows_max_watched_handles_per_thread) catch {
             self.markStartupFailed();
             return;
@@ -1644,7 +1668,7 @@ pub const Watcher = struct {
         }
     }
 
-    fn setupWindowsWatch(self: *Watcher, path: []const u8) (Allocator.Error || error{ InvalidUtf8, FailedToOpenDirectory, FailedToCreateEvent, ReadDirectoryChangesFailed })!void {
+    fn setupWindowsWatch(self: *Watcher, path: []const u8) (Allocator.Error || error{ InvalidUtf8, FailedToOpenDirectory, FailedToCreateEvent })!void {
         // Convert path to wide string
         var path_w_buf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
         const path_w_len = try std.unicode.utf8ToUtf16Le(path_w_buf[0..], path);
@@ -1687,6 +1711,8 @@ pub const Watcher = struct {
             return error.FailedToOpenDirectory;
         }
 
+        errdefer _ = std.os.windows.CloseHandle(dir_handle);
+
         // Create event for overlapped I/O
         const CreateEventW = struct {
             extern "kernel32" fn CreateEventW(
@@ -1697,29 +1723,29 @@ pub const Watcher = struct {
             ) callconv(.winapi) ?std.os.windows.HANDLE;
         }.CreateEventW;
 
-        const event_handle = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse {
-            _ = std.os.windows.CloseHandle(dir_handle);
-            return error.FailedToCreateEvent;
-        };
+        const event_handle = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse return error.FailedToCreateEvent;
+        errdefer _ = std.os.windows.CloseHandle(event_handle);
 
         // Allocate buffer for ReadDirectoryChangesW
         const buffer_size = 4096;
         const buffer = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(win32.FILE_NOTIFY_INFORMATION)), buffer_size);
 
-        // Create overlapped data
+        errdefer self.allocator.free(buffer);
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+
+        // Reserve both slots before transferring ownership of the resources.
+        try self.impl.handles.ensureUnusedCapacity(1);
+        try self.impl.overlapped_data.ensureUnusedCapacity(1);
         var overlapped_data = WindowsData.OverlappedData{
             .overlapped = std.mem.zeroes(win32.OVERLAPPED),
             .buffer = buffer,
-            .path = try self.allocator.dupe(u8, path),
+            .path = owned_path,
         };
         overlapped_data.overlapped.hEvent = event_handle;
 
-        try self.impl.handles.append(dir_handle);
-        try self.impl.overlapped_data.append(overlapped_data);
-
-        // Start the first ReadDirectoryChangesW operation
-        // Both arrays should have the same length, use handles.len for consistency
-        try self.startWindowsRead(self.impl.handles.items.len - 1);
+        self.impl.handles.appendAssumeCapacity(dir_handle);
+        self.impl.overlapped_data.appendAssumeCapacity(overlapped_data);
     }
 
     fn startWindowsRead(self: *Watcher, index: usize) (Allocator.Error || error{ReadDirectoryChangesFailed})!void {
@@ -1748,6 +1774,7 @@ pub const Watcher = struct {
             FILE_NOTIFY_CHANGE_LAST_WRITE |
             FILE_NOTIFY_CHANGE_CREATION | FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_SECURITY;
 
+        std.debug.assert(!self.impl.overlapped_data.items[index].read_pending);
         const result = ReadDirectoryChangesW(
             self.impl.handles.items[index],
             self.impl.overlapped_data.items[index].buffer.ptr,
@@ -1764,38 +1791,52 @@ pub const Watcher = struct {
             std.log.err("ReadDirectoryChangesW failed with error: {}", .{err});
             return error.ReadDirectoryChangesFailed;
         }
+        self.impl.overlapped_data.items[index].read_pending = true;
+    }
+
+    fn cancelWindowsRead(self: *Watcher, index: usize) void {
+        const data = &self.impl.overlapped_data.items[index];
+        if (!data.read_pending) return;
+        const handle = self.impl.handles.items[index];
+        if (win32.CancelIoEx(handle, &data.overlapped) == .FALSE) {
+            const err = std.os.windows.GetLastError();
+            // Completion can race cancellation; we must still collect it.
+            if (err != .NOT_FOUND) std.log.err("CancelIoEx failed: {}", .{err});
+        }
+        var bytes_transferred: std.os.windows.DWORD = 0;
+        // CancelIoEx only requests cancellation. A blocking completion wait
+        // keeps both the OVERLAPPED and buffer alive until Windows releases them.
+        // Success, OPERATION_ABORTED, and other completed errors all retire I/O.
+        _ = win32.GetOverlappedResult(handle, &data.overlapped, &bytes_transferred, .TRUE);
+        data.read_pending = false;
     }
 
     fn processWindowsEvents(self: *Watcher, index: usize) Allocator.Error!void {
-        const GetOverlappedResult = struct {
-            extern "kernel32" fn GetOverlappedResult(
-                hFile: std.os.windows.HANDLE,
-                lpOverlapped: *win32.OVERLAPPED,
-                lpNumberOfBytesTransferred: *std.os.windows.DWORD,
-                bWait: std.os.windows.BOOL,
-            ) callconv(.winapi) std.os.windows.BOOL;
-        }.GetOverlappedResult;
-
         const ResetEvent = struct {
             extern "kernel32" fn ResetEvent(hEvent: std.os.windows.HANDLE) callconv(.winapi) std.os.windows.BOOL;
         }.ResetEvent;
 
         var bytes_transferred: std.os.windows.DWORD = 0;
-        const result = GetOverlappedResult(
+        const result = win32.GetOverlappedResult(
             self.impl.handles.items[index],
             &self.impl.overlapped_data.items[index].overlapped,
             &bytes_transferred,
             .FALSE,
         );
 
+        const completion_error = if (result == .FALSE) std.os.windows.GetLastError() else .SUCCESS;
+        // An incomplete poll does not consume the read or permit resetting its
+        // event, reusing its OVERLAPPED, or submitting another read.
+        if (completion_error == .IO_INCOMPLETE) return;
+        self.impl.overlapped_data.items[index].read_pending = false;
         if (result == .FALSE) {
-            if (std.os.windows.GetLastError() == .NOTIFY_ENUM_DIR) {
+            if (completion_error == .NOTIFY_ENUM_DIR) {
                 // Continue through reset/rearm with an empty completion, which
                 // requests reconciliation below.
                 bytes_transferred = 0;
             } else {
                 if (self.should_stop.load(.seq_cst)) return;
-                std.log.err("GetOverlappedResult failed: {}", .{std.os.windows.GetLastError()});
+                std.log.err("GetOverlappedResult failed: {}", .{completion_error});
                 self.failBackend();
                 return;
             }
@@ -2470,6 +2511,90 @@ test "file rename detection" {
 
     if (builtin.os.tag == .linux) {
         try expectEventsOrSkip(&global.event_count, 1);
+    }
+}
+
+test "windows incomplete polls preserve pending reads until cancellation" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    var count = std.atomic.Value(u32).init(0);
+    const callback = struct {
+        fn call(context: ?*anyopaque, _: WatchEvent) void {
+            const counter: *std.atomic.Value(u32) = @ptrCast(@alignCast(context.?));
+            _ = counter.fetchAdd(1, .seq_cst);
+        }
+    }.call;
+    const watcher = try Watcher.initAllFiles(a, io, &.{root}, &count, callback);
+    defer watcher.deinit();
+    // Drive an idle read directly so polling before completion is deterministic.
+    try watcher.setupWindowsWatch(root);
+    try watcher.startWindowsRead(0);
+    for (0..3) |_| {
+        try watcher.processWindowsEvents(0);
+        try std.testing.expect(watcher.impl.overlapped_data.items[0].read_pending);
+        try std.testing.expect(!watcher.hasBackendFailed());
+        try std.testing.expectEqual(0, count.load(.seq_cst));
+    }
+    watcher.cancelWindowsRead(0);
+    try std.testing.expect(!watcher.impl.overlapped_data.items[0].read_pending);
+    // Reusing the same record is safe only after cancellation has completed.
+    try watcher.startWindowsRead(0);
+    watcher.stop();
+}
+
+test "windows exact inputs survive registration growth and pending read shutdown" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+
+    // Exceed both the initial array capacity and a single Windows wait shard.
+    var paths: [Watcher.windows_max_wait_handles + 1][]const u8 = undefined;
+    var initialized: usize = 0;
+    defer for (paths[0..initialized]) |path| a.free(path);
+    for (&paths, 0..) |*path, i| {
+        var buffer: [64]u8 = undefined;
+        const dir = try std.fmt.bufPrint(&buffer, "input-{d}", .{i});
+        try tmp.dir.createDirPath(io, dir);
+        path.* = try std.fs.path.join(a, &.{ root, dir, "asset.txt" });
+        initialized += 1;
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path.*, .data = "initial" });
+    }
+    const callback = struct {
+        fn call(_: ?*anyopaque, _: WatchEvent) void {}
+    }.call;
+    const watcher = try Watcher.initInputs(a, io, &paths, null, callback);
+    defer watcher.deinit();
+
+    // Stop idle reads, then repeatedly complete/rearm reads and stop again.
+    try watcher.start();
+    watcher.stop();
+    for (0..3) |_| {
+        try watcher.start();
+        for (paths, 0..) |path, i| {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "changed" });
+            const start = std.Io.Clock.now(.awake, io);
+            while (!watcher.takeInputChange(i)) {
+                try std.testing.expect(!watcher.hasBackendFailed());
+                if (start.durationTo(std.Io.Clock.now(.awake, io)).toMilliseconds() > 5000) {
+                    return error.EventsNotReceived;
+                }
+                std.Thread.yield() catch {};
+            }
+        }
+        watcher.stop();
+        try std.testing.expect(!watcher.hasBackendFailed());
+        try std.testing.expectEqual(0, watcher.impl.handles.items.len);
+        try std.testing.expectEqual(0, watcher.impl.overlapped_data.items.len);
+        for (paths, 0..) |_, i| _ = watcher.takeInputChange(i);
     }
 }
 

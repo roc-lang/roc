@@ -17953,10 +17953,13 @@ entries in the input graph, without enumerating directory contents. macOS uses
 vnode notifications for this exact-input mode to avoid recursive FSEvents
 coverage of ancestor directories. Filesystem timestamps do not establish
 content identity, and access-time-only notifications must not create read loops.
-Lost notifications require coverage and input-state reconciliation. Registration
-is validated against the path graph after watches are installed, followed by
-the existing comparison with the states consumed by compilation; neither path
-replacement nor source edits during setup may silently escape detection.
+Lost notifications require coverage and input-state reconciliation. Windows
+registrations must keep their overlapped I/O records and buffers at stable
+addresses until completion, including cancellation completion during shutdown.
+Registration is validated against the path graph after watches are installed,
+followed by the existing comparison with the states consumed by compilation;
+neither path replacement nor source edits during setup may silently escape
+detection.
 
 Filesystem event bursts are debounced for 25ms before re-reading watched inputs.
 If another filesystem event with changed bytes arrives while a check/test rerun
