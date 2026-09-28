@@ -6383,10 +6383,12 @@ fn singleLabelRow(self: *Self, name: Ident.Idx, occurrence: RowLabelOccurrence) 
 
 /// Normalize the row the canonical key writer reported repeating a label
 /// during its last request. Returns true when the caller must ask again.
-fn normalizeReportedDuplicateRow(self: *Self, env: *Env) Allocator.Error!bool {
+/// `value` is the binding or expression whose type holds the row, when the
+/// request has one.
+fn normalizeReportedDuplicateRow(self: *Self, value: ?Var, env: *Env) Allocator.Error!bool {
     const row = self.canonical_key_writer.takeDuplicateRow() orelse return false;
     if (try self.normalizeRowUnion(row, env)) |conflict| {
-        try self.reportRowUnionConflict(row, conflict, null, env);
+        try self.reportRowUnionConflict(row, conflict, value, env);
         try self.types.setVarContent(row, .err);
     }
     return true;
@@ -15005,7 +15007,9 @@ fn predeclareAnnotationSchemeHelp(
     try self.judgeFieldKindsAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-    try self.deduplicateGeneralizedDispatchRequirements(scheme_var, env);
+    // Problems raised here are discarded below; the annotation's own check
+    // reports them against the def.
+    try self.deduplicateGeneralizedDispatchRequirements(scheme_var, null, env);
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
@@ -15696,7 +15700,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
             const expr_var = ModuleEnv.varFrom(member_def.expr);
-            try self.deduplicateGeneralizedDispatchRequirements(expr_var, env);
+            try self.deduplicateGeneralizedDispatchRequirements(expr_var, ModuleEnv.varFrom(member_def.pattern), env);
             try self.publishBindingScheme(expr_var);
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
@@ -21280,6 +21284,8 @@ const ExprCheckFrame = struct {
     is_call_arg: bool,
     is_immediate_callee: bool,
     is_binding_rhs: bool,
+    /// The pattern this expression is the right-hand side of, if any.
+    binding_pattern: ?CIR.Pattern.Idx,
     previous_instantiation_source: ?CIR.Expr.Idx,
     previous_instantiation_is_immediate_callee: bool,
     previous_discarded_binding_rhs_expr: ?CIR.Expr.Idx,
@@ -21386,7 +21392,11 @@ const ExprCheckFrame = struct {
             checker.unify_scratch.clearPersistentOpenings();
             try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
             try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
-            try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw, env);
+            try checker.deduplicateGeneralizedDispatchRequirements(
+                self.expr_var_raw,
+                if (self.binding_pattern) |pattern_idx| ModuleEnv.varFrom(pattern_idx) else self.expr_var_raw,
+                env,
+            );
             try checker.publishBindingScheme(self.expr_var_raw);
             checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
             try checker.retireStructurallyPublishedTypeSchemeRequirements(
@@ -21436,6 +21446,7 @@ fn beginExprCheckFrame(
         .is_call_arg = false,
         .is_immediate_callee = false,
         .is_binding_rhs = false,
+        .binding_pattern = null,
         .previous_instantiation_source = previous_instantiation_source,
         .previous_instantiation_is_immediate_callee = previous_instantiation_is_immediate_callee,
         .previous_discarded_binding_rhs_expr = previous_discarded_binding_rhs_expr,
@@ -21471,6 +21482,7 @@ fn beginExprCheckFrame(
     self.checking_binding_rhs = false;
     self.checking_binding_rhs_pattern = null;
     if (frame.is_binding_rhs) {
+        frame.binding_pattern = binding_rhs_pattern;
         if (binding_rhs_pattern) |pattern_idx| {
             if (self.cir.store.getPattern(pattern_idx) == .underscore) {
                 self.discarded_binding_rhs_expr = expr_idx;
@@ -24983,7 +24995,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     self.unify_scratch.clearPersistentOpenings();
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
-                    try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, env);
+                    try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, decl_pattern_var, env);
                     try self.publishBindingScheme(decl_pattern_var);
                     try self.bindTypeSchemeVar(decl_pattern_var, decl_expr_var);
                     self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
@@ -31225,6 +31237,7 @@ fn generalizedCallableShape(
     anchors: *const std.AutoHashMap(Var, void),
     cache: *std.AutoHashMap(Var, [32]u8),
     fn_var: Var,
+    value: ?Var,
     env: *Env,
 ) Allocator.Error![32]u8 {
     const fn_root = self.types.resolveVar(fn_var).var_;
@@ -31234,7 +31247,7 @@ fn generalizedCallableShape(
     defer self.canonical_key_writer.setReportDuplicateRows(false);
     const shape = while (true) {
         const key = try self.canonical_key_writer.fromVarWithAnchoredIdentities(fn_root, anchors);
-        if (!try self.normalizeReportedDuplicateRow(env)) break key.bytes;
+        if (!try self.normalizeReportedDuplicateRow(value, env)) break key.bytes;
     };
     try cache.put(fn_root, shape);
     return shape;
@@ -31267,34 +31280,37 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
 /// pass because attached and side-table requirements commonly refer to the
 /// same callable graph.
 /// The identities of a generalized type, ignoring requirements, with any row
-/// that repeats a label normalized first.
-fn generalizedIdentityVars(self: *Self, var_: Var, env: *Env) Allocator.Error![]Var {
+/// that repeats a label normalized first. A conflict is reported at `value`.
+fn generalizedIdentityVars(self: *Self, var_: Var, value: ?Var, env: *Env) Allocator.Error![]Var {
     self.canonical_key_writer.setReportDuplicateRows(true);
     defer self.canonical_key_writer.setReportDuplicateRows(false);
     while (true) {
         const identity_vars = try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(var_);
-        if (!try self.normalizeReportedDuplicateRow(env)) return identity_vars;
+        if (!try self.normalizeReportedDuplicateRow(value, env)) return identity_vars;
         self.gpa.free(identity_vars);
     }
 }
 
-fn appendGeneralizedIdentityVars(self: *Self, var_: Var, out: *std.ArrayListUnmanaged(Var), env: *Env) Allocator.Error!void {
+fn appendGeneralizedIdentityVars(self: *Self, var_: Var, out: *std.ArrayListUnmanaged(Var), value: ?Var, env: *Env) Allocator.Error!void {
     self.canonical_key_writer.setReportDuplicateRows(true);
     defer self.canonical_key_writer.setReportDuplicateRows(false);
     const base_len = out.items.len;
     while (true) {
         try self.canonical_key_writer.appendIdentityVarsFromVar(var_, out);
-        if (!try self.normalizeReportedDuplicateRow(env)) return;
+        if (!try self.normalizeReportedDuplicateRow(value, env)) return;
         out.shrinkRetainingCapacity(base_len);
     }
 }
 
+/// `value` is the binding or expression whose scheme `scheme_var` is: a row
+/// conflict found while keying the scheme is reported there.
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
     scheme_var: Var,
+    value: ?Var,
     env: *Env,
 ) Allocator.Error!void {
-    const identity_vars = try self.generalizedIdentityVars(scheme_var, env);
+    const identity_vars = try self.generalizedIdentityVars(scheme_var, value, env);
     defer self.gpa.free(identity_vars);
 
     // Neither loop can merge a singleton. Inspect both sources before
@@ -31352,7 +31368,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 .fn_name = constraint.fn_name,
                 .origin_tag = std.meta.activeTag(constraint.origin),
                 .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
-                .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, constraint.fn_var, env),
+                .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, constraint.fn_var, value, env),
             };
             const entry = try retained_by_key.getOrPut(key);
             if (!entry.found_existing) {
@@ -31360,7 +31376,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 continue;
             }
             if (try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env)) {
-                try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, env);
+                try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, value, env);
             }
         }
 
@@ -31426,7 +31442,7 @@ fn deduplicateGeneralizedDispatchRequirements(
             .fn_name = requirement.constraint.fn_name,
             .origin_tag = std.meta.activeTag(requirement.constraint.origin),
             .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
-            .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, requirement.constraint.fn_var, env),
+            .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, requirement.constraint.fn_var, value, env),
         };
         const entry = seen.getOrPutAssumeCapacity(key);
         if (entry.found_existing) {
@@ -31576,7 +31592,7 @@ test "issue 11350 singleton dispatch requirements need no deduplication scratch"
             var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
             checker.gpa = failing.allocator();
             defer checker.gpa = gpa;
-            try checker.deduplicateGeneralizedDispatchRequirements(root, &env);
+            try checker.deduplicateGeneralizedDispatchRequirements(root, root, &env);
             try std.testing.expect(!failing.has_induced_failure);
             try std.testing.expectEqual(attached_count, contentConstraintRange(checker.types.resolveVar(root).desc.content).?.len());
             if (checker.typeSchemeIndexForRoot(root)) |scheme_idx| {
@@ -34700,21 +34716,24 @@ fn shrinkDispatchDerivationsTo(self: *Self, new_len: usize) void {
 /// changes the digest. Erroneous content digests per poisoned var, so two
 /// states poisoned by unrelated failures never compare equal while a chain
 /// that genuinely cycles through one poisoned var still digests stably.
+/// A row conflict found while keying is reported at `value`, the dispatch's
+/// expression, whose type holds the receiver and callable.
 fn dispatchStateTypeKey(
     self: *Self,
     dispatcher_var: Var,
     constraint_fn_var: Var,
+    value: ?Var,
     env: *Env,
 ) Allocator.Error![32]u8 {
     self.canonical_key_writer.setReportDuplicateRows(true);
     defer self.canonical_key_writer.setReportDuplicateRows(false);
     const receiver_key = while (true) {
         const key = try self.canonical_key_writer.fromVarErrSensitive(dispatcher_var);
-        if (!try self.normalizeReportedDuplicateRow(env)) break key;
+        if (!try self.normalizeReportedDuplicateRow(value, env)) break key;
     };
     const callable_key = while (true) {
         const key = try self.canonical_key_writer.fromVarErrSensitive(constraint_fn_var);
-        if (!try self.normalizeReportedDuplicateRow(env)) break key;
+        if (!try self.normalizeReportedDuplicateRow(value, env)) break key;
     };
     var hasher = TypeDigestHasher.init();
     hasher.update(&receiver_key.bytes);
@@ -35589,7 +35608,13 @@ fn resolveDispatchTargetMethodVar(
         return existing.method_var;
     }
 
-    const state_type_key = try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var, env);
+    const dispatch_expr = failure_expr orelse constraintIntroExpr(constraint);
+    const state_type_key = try self.dispatchStateTypeKey(
+        dispatcher_var,
+        constraint.fn_var,
+        if (dispatch_expr) |expr_idx| ModuleEnv.varFrom(expr_idx) else null,
+        env,
+    );
     if (self.repeatedDispatchStateAncestor(
         constraint,
         parent_constraint_fn_var,
