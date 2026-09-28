@@ -4752,6 +4752,14 @@ test "issue 11773: comments preserved around a method list" {
             .expected = "MyModule := U64. # after dot\n{\n\tx = 1\n}\n",
         },
         .{
+            .input = "Outer := U64.{\n\tInner := U64 # before dot\n\t.{ x = 1 }\n}",
+            .expected = "Outer := U64.{\n\tInner := U64 # before dot\n\t.{\n\t\tx = 1\n\t}\n}\n",
+        },
+        .{
+            .input = "Foo(a) := List(a) where [a.eq : a, a -> Bool] # before dot\n.{}",
+            .expected = "Foo(a) := List(a)\n\twhere [a.eq : a, a -> Bool] # before dot\n\t.{}\n",
+        },
+        .{
             .input = "MyModule := U64\n.\n{}",
             .expected = "MyModule := U64.{}\n",
         },
