@@ -1515,6 +1515,7 @@ pub const Evaluator = struct {
             => self.evalSimd(op, args, arg_types, result_ty),
 
             .bool_not => .{ .bool_ = !truthy(args[0]) },
+            .bool_likely => .{ .bool_ = truthy(args[0]) },
 
             .f32_to_bits => self.canonicalInt(.u32, builtins.float_bits.normalizeF32NanBits(@bitCast(args[0].float32))),
             .f32_from_bits => .{ .float32 = @bitCast(readInt(u32, args[0])) },

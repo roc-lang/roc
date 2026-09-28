@@ -14132,6 +14132,21 @@ hidden by an unused result.
 Interprocedural inlining, generated-procedure variants, global reachability,
 and ARC's solve remain outside this boundary.
 
+### Branch Expectation
+
+A switch's default arm may be marked cold (`default_is_cold`). The LLVM
+backend turns the mark into branch weights and lays the arm out of line; the
+other backends ignore it. Compiler-introduced diamonds mark their own slow
+arms (a promoted append's reserve, a Try sequence's error edge). Builtin
+Roc marks one through `bool_likely : Bool -> Bool`, the identity on its
+operand: the `branch_expectation` pass, first of the procedure-local
+rewrites, marks cold the default of every Bool switch whose condition is a
+`bool_likely` result, reached through pure aliases from a single definition.
+`List.get` and `List.set` guard their unchecked operation this way, so a
+bounds check's miss arm is cold wherever those inline. The marker stays an
+ordinary identity low-level, and the range prover reads through it to the
+comparison that defined its operand, so a proven check still folds.
+
 ### Statement Provenance
 
 Every LIR statement records where it came from and why it exists. This is the

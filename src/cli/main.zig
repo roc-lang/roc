@@ -17282,6 +17282,7 @@ fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics)
     };
     inline for (comptime std.meta.tags(lir.CheckedPipeline.LirPassPhase), 0..) |phase, index| {
         const name = comptime switch (phase) {
+            .branch_expectation => "Branch expectation",
             .trmc => "TRMC",
             .forwarding_join => "Forwarding joins",
             .tag_fusion => "Tag-case fusion",

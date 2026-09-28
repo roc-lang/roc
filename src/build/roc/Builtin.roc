@@ -4120,7 +4120,7 @@ Builtin :: [].{
 		## expect [100, 200, 300].get(5) == Err(OutOfBounds)
 		## ```
 		get : List(item), U64 -> Try(item, [OutOfBounds])
-		get = |list, index| if index < List.len(list) {
+		get = |list, index| if bool_likely(index < List.len(list)) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
 			Try.Err(OutOfBounds)
@@ -4165,7 +4165,7 @@ Builtin :: [].{
 		## ```
 		set : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		set = |list, index, value|
-			if index < List.len(list) {
+			if bool_likely(index < List.len(list)) {
 				Ok(list_set_unsafe(list, index, value))
 			} else {
 				Err(OutOfBounds)
@@ -24462,6 +24462,10 @@ append_utf8_code_point = |out, code_point|
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler: the same Bool, marking the branch it decides as
+# the one taken in the common case, so the other branch is laid out cold.
+bool_likely : Bool -> Bool
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)

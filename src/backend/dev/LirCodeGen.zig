@@ -5173,6 +5173,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(src_reg);
                     return .{ .general_reg = result_reg };
                 },
+                .bool_likely => {
+                    const inner_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const src_reg = try self.ensureInGeneralReg(inner_loc);
+                    const result_reg = try self.allocTempGeneral();
+                    try self.emitCmpImm(src_reg, 0);
+                    try self.emitSetCond(result_reg, condNotEqual());
+                    self.codegen.freeGeneral(src_reg);
+                    return .{ .general_reg = result_reg };
+                },
 
                 .dict_pseudo_seed,
                 .hasher_finish,
@@ -7225,6 +7234,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .simd_concat_shift_bytes => .{ .vectors = 2, .scalars = 1 },
 
                 .bool_not,
+                .bool_likely,
                 .box_alloc_zeroed,
                 .box_box,
                 .box_prepare_update,

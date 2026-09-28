@@ -12151,6 +12151,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 0));
             self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
         },
+        .bool_likely => try self.emitProcLocal(GuardedList.at(args, 0)),
 
         .dict_pseudo_seed => return self.emitHasherLowLevel(.dict_pseudo_seed, args),
         .hasher_finish => return self.emitHasherLowLevel(.hasher_finish, args),
@@ -15979,6 +15980,7 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_owned_unique,
         .list_set_in_place_unsafe,
         .bool_not,
+        .bool_likely,
         .dict_pseudo_seed,
         .hasher_finish,
         .hasher_write_bool,

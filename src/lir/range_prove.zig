@@ -3014,6 +3014,26 @@ const Pass = struct {
             .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte => {
                 try self.modelCompare(stmt, s, args, arg_count);
             },
+            .bool_likely => {
+                // The expected outcome of a branch, not a different value:
+                // the result is the operand, with the comparison that
+                // defined it, so a switch on it still asserts that
+                // comparison along its arms.
+                if (arg_count == 1) {
+                    const operand = GuardedList.at(args, 0);
+                    if (try self.valueOf(operand)) |node| {
+                        const source = self.lookup(operand);
+                        try self.bind(s.target, .{
+                            .node = node,
+                            .pred = if (source) |b| b.pred else null,
+                            .overflow_pred = if (source) |b| b.overflow_pred else null,
+                            .arithmetic_chain = if (source) |b| b.arithmetic_chain else null,
+                        });
+                        return;
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
             .num_int_add_wrap,
             .num_int_add_crash_on_overflow,
             .num_int_add_overflows,
