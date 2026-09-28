@@ -4984,8 +4984,11 @@ shape must name the same prepared target, otherwise freezing reports an
 invariant violation rather than choosing one. Phase B performs no method
 lookup and its structural comparison is bounded to the normally-single-entry
 digest bucket. After relation freeze, generated bodies may consume only that
-frozen prepared-call plan. They do not repeat method lookup, synthesize another
-specialization request, or interpret the shape to recover a call absent from
+frozen prepared-call plan. A prepared custom nominal codec takes precedence
+over structural descent into its list, tuple, or box backing in both parser
+and encoder emission, just as it does during preparation. Generated bodies do
+not repeat method lookup, synthesize another specialization request, or
+interpret the shape to recover a call absent from
 `StaticDispatchPlanTable.generated_codec_derivations`. Debug compiler builds
 audit that every producer-required call was consumed and that repeated roles
 have equal checked type graphs up to transparent aliases. A parent
