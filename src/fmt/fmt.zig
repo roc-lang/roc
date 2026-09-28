@@ -1988,7 +1988,12 @@ const Formatter = struct {
 
                 if (empty_has_comment) {
                     fmt.curr_indent += 1;
-                    try fmt.flushCommentsBeforeDiscard(fmt.regionClosingToken(r.region).?);
+                    // A comment-only `{ }` parses as an empty record; its braces
+                    // trim boundary blank lines exactly as a block's do.
+                    _ = try fmt.flushCommentsBeforeWithSpacing(fmt.regionClosingToken(r.region).?, .{
+                        .after_block_open = true,
+                        .before_block_close = true,
+                    });
                     fmt.curr_indent -= 1;
                     try fmt.ensureNewline();
                     try fmt.pushIndent();

@@ -472,13 +472,7 @@ fn nestedCallableSiteExprForExpr(
     module: ProcedureModuleView,
     expr: checked.CheckedExprId,
 ) ?checked.CheckedExprId {
-    for (module.nested_proc_sites.sites) |site| {
-        const site_expr_id = site.checked_expr orelse continue;
-        if (site_expr_id == expr) return expr;
-        const site_expr = module.checked_bodies.expr(site_expr_id);
-        if (site_expr.data == .closure and site_expr.data.closure.lambda == expr) return site_expr_id;
-    }
-    return null;
+    return Plan.nestedCallableSiteExprFor(module, expr);
 }
 
 fn resolveProcedureTemplate(
@@ -24716,81 +24710,7 @@ const ProcBodyBuilder = struct {
         pattern_id: checked.CheckedPatternId,
         expr_id: checked.CheckedExprId,
     ) bool {
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        const binder = switch (pattern.data) {
-            .assign => |binder| binder,
-            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return false,
-        };
-        if (self.module.checked_bodies.patternBinder(binder).is_scheme_alias) return true;
-        _ = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return false;
-        // Procedure lookups construct the callable at the instantiated use,
-        // including its source captures. Only another closure's capture of
-        // this binder reads the declaration's runtime local. Materializing an
-        // otherwise unread declaration would require descriptors for scheme
-        // parameters before any use has instantiated them.
-        return !self.binderCapturedByNestedCallable(binder);
-    }
-
-    fn binderCapturedByNestedCallable(self: *ProcBodyBuilder, binder: checked.PatternBinderId) bool {
-        var expr_index: usize = 0;
-        while (expr_index < self.module.checked_bodies.exprCount()) : (expr_index += 1) {
-            const expr_id: checked.CheckedExprId = @enumFromInt(@as(u32, @intCast(expr_index)));
-            const expr = self.module.checked_bodies.expr(expr_id);
-            switch (expr.data) {
-                .closure => |closure| {
-                    for (closure.captures) |capture| {
-                        if (self.patternBindsCapture(capture.pattern, binder)) return true;
-                    }
-                },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-            }
-        }
-        return false;
-    }
-
-    fn patternBindsCapture(
-        self: *ProcBodyBuilder,
-        pattern_id: checked.CheckedPatternId,
-        binder: checked.PatternBinderId,
-    ) bool {
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        return switch (pattern.data) {
-            .assign => |candidate| candidate == binder,
-            .as => |as| as.binder == binder or self.patternBindsCapture(as.pattern, binder),
-            .tuple => |items| for (items) |item| {
-                if (self.patternBindsCapture(item, binder)) break true;
-            } else false,
-            .record_destructure => |destructs| for (destructs) |destruct| {
-                const child = switch (destruct.kind) {
-                    .required,
-                    .sub_pattern,
-                    .rest,
-                    => |child| child,
-                };
-                if (self.patternBindsCapture(child, binder)) break true;
-            } else false,
-            .nominal => |nominal| self.patternBindsCapture(nominal.backing_pattern, binder),
-            .list => |list| blk: {
-                for (list.patterns) |item| {
-                    if (self.patternBindsCapture(item, binder)) break :blk true;
-                }
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| {
-                        if (self.patternBindsCapture(rest_pattern, binder)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .underscore,
-            .numeral_literal,
-            .str_literal,
-            .str_interpolation,
-            => false,
-            .applied_tag,
-            .runtime_error,
-            .pending,
-            => false,
-        };
+        return Plan.declarationOmitsRuntimeBinding(self.module, pattern_id, expr_id);
     }
 
     fn bindPatternFromLocal(

@@ -9029,12 +9029,17 @@ const Builder = struct {
         if (key.param >= schema.len)
             boxyPlanInvariant("dictionary did not name a checked evidence parameter");
         const param = schema[key.param];
+        // When the program has custom numerals, a numeral requirement outside the
+        // scheme's own requirements is proved at compile time; every other owned
+        // dictionary is passed at runtime.
+        const compile_time_only = self.has_custom_numeral and
+            key.callable_contract == null and param.source != .scheme_requirement and
+            std.mem.eql(u8, view.canonical_names.?.methodNameText(param.method), "from_numeral");
         const callable_ty = if (key.callable_contract) |contract| blk: {
             if (contract >= param.callable_contracts.len)
                 boxyPlanInvariant("dictionary callable contract was outside its checked parameter");
             break :blk view.checked_procedure_templates.evidence_param_callables[param.callable_contracts.start + contract];
-        } else if ((param.runtime_dictionary and param.source != .scheme_callable) or
-            std.mem.eql(u8, view.canonical_names.?.methodNameText(param.method), "from_numeral"))
+        } else if ((param.runtime_dictionary and param.source != .scheme_callable) or compile_time_only)
             param.callable_ty
         else
             boxyPlanInvariant("owned dictionary did not name a checked requirement outside the callable signature");
@@ -9044,8 +9049,9 @@ const Builder = struct {
         // they name the same receiver and primary callable. Share its group so
         // an inline closure captures that dictionary instead of introducing a
         // second requirement for the identical checked variable. Independent
-        // callable contracts and composite scheme requirements own separate ABIs.
-        if (key.callable_contract == null and param.source != .scheme_requirement) {
+        // callable contracts, composite scheme requirements, and compile-time
+        // literal proofs own separate ABIs.
+        if (key.callable_contract == null and param.source != .scheme_requirement and !compile_time_only) {
             const group = self.plan.representations.items[@intFromEnum(rep)].dictionaries;
             for (self.plan.dictionarySlice(group), 0..) |requirement, index| {
                 if (requirement.fn_name != param.method) continue;
@@ -9066,7 +9072,7 @@ const Builder = struct {
         // signature slot; their checked schema explicitly supplies this slot.
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
         try self.plan.dictionaries.append(self.allocator, .{
-            .compile_time_only = param.source != .scheme_requirement,
+            .compile_time_only = compile_time_only,
             .source_type = typeRef(view, param.dispatcher_ty),
             .constraint_index = key.param,
             .slot = try self.internDictionaryMethodSlot(view.key, param.method),
@@ -15331,10 +15337,9 @@ const Builder = struct {
             .promoted_proc => {},
             .decl => |decl| {
                 if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
-                // A scheme alias binds no runtime value: each typed use
-                // instantiates its target, so the declaration's own generalized
-                // right-hand side is never lowered.
-                if (patternIsSchemeAlias(view, decl.pattern)) return;
+                // A declaration that binds no runtime value is never lowered:
+                // each typed use instantiates its target instead.
+                if (declarationOmitsRuntimeBinding(view, decl.pattern, decl.expr)) return;
                 try self.analyzePatternTypes(view, decl.pattern);
                 try self.analyzeExprTypes(view, decl.expr);
             },
@@ -15383,13 +15388,6 @@ const Builder = struct {
             },
             .return_ => |ret| try self.analyzeExprTypes(view, ret.expr),
         }
-    }
-
-    fn patternIsSchemeAlias(view: ModuleView, pattern_id: checked.CheckedPatternId) bool {
-        return switch (view.checked_bodies.pattern(pattern_id).data) {
-            .assign => |binder| view.checked_bodies.patternBinder(binder).is_scheme_alias,
-            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => false,
-        };
     }
 
     fn analyzePatternTypes(self: *Builder, view: ModuleView, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
@@ -15683,13 +15681,7 @@ const Builder = struct {
         view: ModuleView,
         expr: checked.CheckedExprId,
     ) ?checked.CheckedExprId {
-        for (view.nested_proc_sites.sites) |site| {
-            const site_expr_id = site.checked_expr orelse continue;
-            if (site_expr_id == expr) return expr;
-            const site_expr = view.checked_bodies.expr(site_expr_id);
-            if (site_expr.data == .closure and site_expr.data.closure.lambda == expr) return site_expr_id;
-        }
-        return null;
+        return nestedCallableSiteExprFor(view, expr);
     }
 
     fn topLevelProcedureBindingForExpr(
@@ -17195,6 +17187,104 @@ fn boxyPlanInvariant(comptime message: []const u8) noreturn {
         std.debug.panic("boxy plan invariant violated: {s}", .{message});
     }
     unreachable;
+}
+
+/// The nested procedure site expression that `expr` constructs: the site's
+/// own expression, or the closure wrapping a lambda.
+pub fn nestedCallableSiteExprFor(module: anytype, expr: checked.CheckedExprId) ?checked.CheckedExprId {
+    for (module.nested_proc_sites.sites) |site| {
+        const site_expr_id = site.checked_expr orelse continue;
+        if (site_expr_id == expr) return expr;
+        const site_expr = module.checked_bodies.expr(site_expr_id);
+        if (site_expr.data == .closure and site_expr.data.closure.lambda == expr) return site_expr_id;
+    }
+    return null;
+}
+
+/// Whether a declaration binds no runtime value in its enclosing body. A
+/// scheme alias instantiates its target at each typed use. A nested callable
+/// declaration is constructed at each instantiated procedure lookup instead,
+/// unless another closure captures the declared binder.
+pub fn declarationOmitsRuntimeBinding(
+    module: anytype,
+    pattern_id: checked.CheckedPatternId,
+    expr_id: checked.CheckedExprId,
+) bool {
+    const pattern = module.checked_bodies.pattern(pattern_id);
+    const binder = switch (pattern.data) {
+        .assign => |binder| binder,
+        .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return false,
+    };
+    if (module.checked_bodies.patternBinder(binder).is_scheme_alias) return true;
+    _ = nestedCallableSiteExprFor(module, expr_id) orelse return false;
+    // Procedure lookups construct the callable at the instantiated use,
+    // including its source captures. Only another closure's capture of
+    // this binder reads the declaration's runtime local. Materializing an
+    // otherwise unread declaration would require descriptors for scheme
+    // parameters before any use has instantiated them.
+    return !binderCapturedByNestedCallable(module, binder);
+}
+
+fn binderCapturedByNestedCallable(module: anytype, binder: checked.PatternBinderId) bool {
+    var expr_index: usize = 0;
+    while (expr_index < module.checked_bodies.exprCount()) : (expr_index += 1) {
+        const expr_id: checked.CheckedExprId = @enumFromInt(@as(u32, @intCast(expr_index)));
+        const expr = module.checked_bodies.expr(expr_id);
+        switch (expr.data) {
+            .closure => |closure| {
+                for (closure.captures) |capture| {
+                    if (patternBindsCapture(module, capture.pattern, binder)) return true;
+                }
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+        }
+    }
+    return false;
+}
+
+fn patternBindsCapture(
+    module: anytype,
+    pattern_id: checked.CheckedPatternId,
+    binder: checked.PatternBinderId,
+) bool {
+    const pattern = module.checked_bodies.pattern(pattern_id);
+    return switch (pattern.data) {
+        .assign => |candidate| candidate == binder,
+        .as => |as| as.binder == binder or patternBindsCapture(module, as.pattern, binder),
+        .tuple => |items| for (items) |item| {
+            if (patternBindsCapture(module, item, binder)) break true;
+        } else false,
+        .record_destructure => |destructs| for (destructs) |destruct| {
+            const child = switch (destruct.kind) {
+                .required,
+                .sub_pattern,
+                .rest,
+                => |child| child,
+            };
+            if (patternBindsCapture(module, child, binder)) break true;
+        } else false,
+        .nominal => |nominal| patternBindsCapture(module, nominal.backing_pattern, binder),
+        .list => |list| blk: {
+            for (list.patterns) |item| {
+                if (patternBindsCapture(module, item, binder)) break :blk true;
+            }
+            if (list.rest) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    if (patternBindsCapture(module, rest_pattern, binder)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .underscore,
+        .numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        => false,
+        .applied_tag,
+        .runtime_error,
+        .pending,
+        => false,
+    };
 }
 
 test "boxy planner records root wrapper plans from checked root metadata" {

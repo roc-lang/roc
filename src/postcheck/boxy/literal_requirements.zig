@@ -535,7 +535,7 @@ test "boxy literal demands only request substitutions on demanded edges" {
     try std.testing.expectEqual(fixed, graph.requirements.items[@intFromEnum(graph.argument(root, demand.parameter).?.closed)].ty);
 }
 
-fn allocationFailureFixture(allocator: Allocator) Allocator.Error!void {
+fn allocationFailureFixture(allocator: Allocator) (Allocator.Error || error{ UnboundRootRequirement, MissingSubstitution })!void {
     var graph = Graph.init(allocator);
     defer graph.deinit();
     const worker = try graph.addWorker();
