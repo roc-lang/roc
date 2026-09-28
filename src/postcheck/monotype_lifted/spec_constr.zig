@@ -11860,7 +11860,7 @@ const Cloner = struct {
                 &self.pass.program.types,
                 &self.pass.program.names,
             ),
-            .callable_abi = self.pass.program.types.typeDigestCached(&self.pass.program.names, callable.ty, null),
+            .callable_abi = self.pass.program.types.representationDigestCached(&self.pass.program.names, callable.ty, null),
             .capture_abi = self.callableCaptureAbiDigest(source_captures, callable.captures),
         };
         if (self.pass.callable_workers.get(worker_key)) |worker_fn_id| {
@@ -12010,7 +12010,7 @@ const Cloner = struct {
                 Common.invariant("rewritten callable had no value for a source capture slot");
             std.mem.writeInt(u32, &word, @intFromEnum(id), .little);
             hasher.update(&word);
-            const digest = self.pass.program.types.typeDigestCached(&self.pass.program.names, valueType(self.pass.program, value), null);
+            const digest = self.pass.program.types.representationDigestCached(&self.pass.program.names, valueType(self.pass.program, value), null);
             hasher.update(&digest.bytes);
         }
         return .{ .bytes = hasher.finalResult() };
@@ -14174,20 +14174,25 @@ fn structuralValueStripping(value: Value, strip_depth: usize) Value {
     };
 }
 
-/// Whether two Monotype ids denote the same type. The type store is not
-/// interned: each specialization materializes its own ids, so structurally
-/// identical types reached from different specializations (a call site and
-/// the callee's own body) carry different ids and compare by digest. Both
-/// sides digest through the store's memoized construction, which is why this
-/// probe (and everything that reaches it) takes the program mutable.
+/// Whether two Monotype ids denote the same type with the same
+/// representation. The type store is not interned: each specialization
+/// materializes its own ids, so structurally identical types reached from
+/// different specializations (a call site and the callee's own body) carry
+/// different ids and compare by digest. The representation digest ignores a
+/// named type's checked re-entry reference, which depends on the route that
+/// produced the id (an interface summary replay or an expansion), so that
+/// route never changes a SpecConstr decision. It still observes backings, so
+/// equal types with different representations stay distinct. Both sides
+/// digest through the store's memoized construction, which is why this probe
+/// (and everything that reaches it) takes the program mutable.
 ///
-/// The full digest treats aliases as opaque, so this deliberately answers
-/// false for an alias-wrapped type against its backing: that can miss an
+/// Aliases digest as opaque named nodes, so this deliberately answers false
+/// for an alias-wrapped type against its backing: that can miss an
 /// optimization but can never merge two representations invalidly.
 fn sameType(program: *Ast.Program, lhs: Type.TypeId, rhs: Type.TypeId) bool {
     if (lhs == rhs) return true;
-    const lhs_digest = program.types.typeDigestCached(&program.names, lhs, null);
-    const rhs_digest = program.types.typeDigestCached(&program.names, rhs, null);
+    const lhs_digest = program.types.representationDigestCached(&program.names, lhs, null);
+    const rhs_digest = program.types.representationDigestCached(&program.names, rhs, null);
     return std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes);
 }
 
@@ -14264,7 +14269,7 @@ fn writeShapeDigest(program: *Ast.Program, hasher: *TypeDigestHasher, shape: Sha
 }
 
 fn writePatternType(program: *Ast.Program, hasher: *TypeDigestHasher, ty: Type.TypeId) void {
-    const digest = program.types.typeDigestCached(&program.names, ty, null);
+    const digest = program.types.representationDigestCached(&program.names, ty, null);
     hasher.update(&digest.bytes);
 }
 
@@ -15299,6 +15304,37 @@ test "SpecConstr accepts a transparent alias record update base" {
     try std.testing.expectEqual(record_ty, cloned.value.record.ty);
 }
 
+test "SpecConstr compares representations, not checked provenance" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const u16_ty = try program.types.add(.{ .primitive = .u16 });
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const type_name = try program.names.internTypeName("Wrapper");
+    const Nominal = struct {
+        fn add(p: *Ast.Program, module: names.ModuleIdentityId, name: names.TypeNameId, checked_ty: u32, backing: Type.TypeId) Allocator.Error!Type.TypeId {
+            return p.types.add(.{ .named = .{
+                .named_type = .{ .module = .{}, .ty = @enumFromInt(checked_ty) },
+                .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+                .kind = .nominal,
+                .args = Type.Span.empty(),
+                .backing = .{ .ty = backing, .use = .inspectable },
+            } });
+        }
+    };
+    const first = try Nominal.add(&program, module_identity, type_name, 1, u8_ty);
+    const other_occurrence = try Nominal.add(&program, module_identity, type_name, 2, u8_ty);
+    const other_backing = try Nominal.add(&program, module_identity, type_name, 1, u16_ty);
+
+    const first_full = program.types.typeDigestCached(&program.names, first, null);
+    const other_occurrence_full = program.types.typeDigestCached(&program.names, other_occurrence, null);
+    try std.testing.expect(!std.mem.eql(u8, &first_full.bytes, &other_occurrence_full.bytes));
+    try std.testing.expect(sameType(&program, first, other_occurrence));
+    try std.testing.expect(!sameType(&program, first, other_backing));
+}
+
 test "call-pattern scans direct call and function reference capture operands" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -15449,7 +15485,7 @@ test "staged SpecConstr discovery admits source order with duplicates and bounde
         // second wave after coordinator admission has saturated the target.
         try std.testing.expectEqual(@as(u64, 40), metrics.patterns_recorded);
         try std.testing.expectEqual(@as(u64, Pass.wave_capacity), metrics.peak_retained_shards);
-        try std.testing.expectEqual(@as(u64, if (worker_count == 0) 0 else 41), metrics.tasks_committed);
+        try std.testing.expectEqual(@as(u64, if (worker_count == 0) 0 else if (builtin.mode == .Debug) 41 else 40), metrics.tasks_committed);
         try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
     }
 }
@@ -15625,13 +15661,26 @@ test "staged SpecConstr submission failure drains accepted tasks" {
     defer program.deinit();
     const unit_ty = try program.types.add(.zst);
     const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const target = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @enumFromInt(1),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = unit },
+        .ret = unit_ty,
+    });
+    const call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = target },
+        .args = .empty(),
+        .captures = .empty(),
+    } } });
     for (0..4) |index| {
         _ = try program.addFn(.{
-            .shapes = program.finishFnShapes(.{}),
-            .symbol = @enumFromInt(@as(u32, @intCast(index))),
+            .shapes = program.finishFnShapes(.{}).merged(.{ .direct_call = true }),
+            .symbol = @enumFromInt(@as(u32, @intCast(index + 2))),
             .args = .empty(),
             .captures = .empty(),
-            .body = .{ .roc = unit },
+            .body = .{ .roc = call },
             .ret = unit_ty,
         });
     }
@@ -15639,7 +15688,7 @@ test "staged SpecConstr submission failure drains accepted tasks" {
     defer pass.deinit();
     var executor: ReverseSpecConstrExecutor = .{ .worker_count = 4, .fail_after = 2 };
     pass.options.executor = executor.executor();
-    try std.testing.expectError(error.OutOfMemory, pass.collectValueAwareCallPatterns(4));
+    try std.testing.expectError(error.OutOfMemory, pass.collectValueAwareCallPatterns(program.fnCount()));
     try std.testing.expectEqual(@as(usize, 0), executor.len);
 }
 
@@ -16641,25 +16690,31 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
     try std.testing.expectEqual(argument, program.getExpr(cloned_body).data.local);
 }
 
-test "substitution resolves equivalent named types with distinct checked provenance" {
-    const allocator = std.testing.allocator;
-    var program = emptyLiftedProgramForTest(allocator);
-    defer program.deinit();
-
+/// Substitutes a local of the first nominal for a same-binder local of the
+/// second, and returns the substituted expression.
+fn substituteNamedForTest(
+    program: *Ast.Program,
+    first_checked_ty: u32,
+    first_backing: Type.TypeId,
+    second_checked_ty: u32,
+    second_backing: Type.TypeId,
+) Common.LowerError!struct { cloned: Ast.ExprId, replacement: Ast.LocalId, second_ty: Type.TypeId } {
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try program.names.internTypeName("Nominal");
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const first_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(first_checked_ty) },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
+        .backing = .{ .ty = first_backing, .use = .inspectable },
     } });
     const second_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(second_checked_ty) },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
+        .backing = .{ .ty = second_backing, .use = .inspectable },
     } });
     const binder: check.CheckedModule.PatternBinderId = @enumFromInt(1);
     const first = try program.addLocalWithBinder(@enumFromInt(1), first_ty, binder);
@@ -16668,15 +16723,33 @@ test "substitution resolves equivalent named types with distinct checked provena
     const replacement_expr = try program.addExpr(.{ .ty = first_ty, .data = .{ .local = replacement } });
     const second_expr = try program.addExpr(.{ .ty = second_ty, .data = .{ .local = second } });
 
-    var pass = try Pass.init(allocator, &program);
+    var pass = try Pass.init(program.allocator, program);
     defer pass.deinit();
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
-    try cloner.subst.put(&program, first, .{ .expr = replacement_expr });
-    const cloned = try cloner.cloneExpr(second_expr);
-    const boundary = program.getExpr(cloned).data.typed_boundary;
-    try std.testing.expectEqual(second_ty, program.getExpr(cloned).ty);
-    try std.testing.expectEqual(replacement, program.getExpr(boundary.value).data.local);
+    try cloner.subst.put(program, first, .{ .expr = replacement_expr });
+    return .{ .cloned = try cloner.cloneExpr(second_expr), .replacement = replacement, .second_ty = second_ty };
+}
+
+test "substitution keeps a typed boundary between named types with distinct representations" {
+    var program = emptyLiftedProgramForTest(std.testing.allocator);
+    defer program.deinit();
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const u16_ty = try program.types.add(.{ .primitive = .u16 });
+
+    const result = try substituteNamedForTest(&program, 1, u8_ty, 1, u16_ty);
+    const boundary = program.getExpr(result.cloned).data.typed_boundary;
+    try std.testing.expectEqual(result.second_ty, program.getExpr(result.cloned).ty);
+    try std.testing.expectEqual(result.replacement, program.getExpr(boundary.value).data.local);
+}
+
+test "substitution resolves named types that differ only in checked provenance" {
+    var program = emptyLiftedProgramForTest(std.testing.allocator);
+    defer program.deinit();
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+
+    const result = try substituteNamedForTest(&program, 1, u8_ty, 2, u8_ty);
+    try std.testing.expectEqual(result.replacement, program.getExpr(result.cloned).data.local);
 }
 
 test "known match fold aborts on undecidable branches and keeps the match when every branch is excluded" {

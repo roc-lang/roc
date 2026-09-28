@@ -151,6 +151,7 @@ pub const Token = struct {
         KwExposes,
         KwExposing,
         KwFor,
+        KwForBang,
         KwGenerates,
         KwHas,
         KwHosted,
@@ -258,6 +259,7 @@ pub const Token = struct {
                 .KwExposes,
                 .KwExposing,
                 .KwFor,
+                .KwForBang,
                 .KwGenerates,
                 .KwHas,
                 .KwHosted,
@@ -419,6 +421,7 @@ pub const Token = struct {
                 .KwExposes,
                 .KwExposing,
                 .KwFor,
+                .KwForBang,
                 .KwGenerates,
                 .KwHas,
                 .KwHosted,
@@ -586,6 +589,7 @@ pub const Token = struct {
         .{ "exposes", .KwExposes },
         .{ "exposing", .KwExposing },
         .{ "for", .KwFor },
+        .{ "for!", .KwForBang },
         .{ "generates", .KwGenerates },
         .{ "has", .KwHas },
         .{ "hosted", .KwHosted },
@@ -2565,6 +2569,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwFor => {
                 try buf2.appendSlice("for");
+            },
+            .KwForBang => {
+                try buf2.appendSlice("for!");
             },
             .KwGenerates => {
                 try buf2.appendSlice("generates");

@@ -71,7 +71,7 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
     pub const WatchEvent = struct { path: []const u8 };
     pub const WatchCallbackWithContext = *const fn (context: ?*anyopaque, event: WatchEvent) void;
     pub const Watcher = struct {
-        pub fn initAllFiles(
+        pub fn initInputs(
             _: std.mem.Allocator,
             _: std.Io,
             _: []const []const u8,
@@ -86,6 +86,15 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
         }
 
         pub fn deinit(_: *Watcher) void {}
+        pub fn takeInputChange(_: *Watcher, _: usize) bool {
+            return false;
+        }
+        pub fn takeCoverageChange(_: *Watcher) bool {
+            return false;
+        }
+        pub fn hasBackendFailed(_: *Watcher) bool {
+            return false;
+        }
     };
 } else @import("watch");
 
@@ -8031,17 +8040,13 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
 
     // Determine output directory
     var output_dir = if (args.output_dir) |dir|
-        try cwd.openDir(ctx.io.std_io, dir, .{})
+        cwd.openDir(ctx.io.std_io, dir, .{}) catch |err| {
+            try stderr.print("Error: Could not open bundle output directory '{s}': {}\n", .{ dir, err });
+            return err;
+        }
     else
         cwd;
     defer if (args.output_dir != null) output_dir.close(ctx.io.std_io);
-
-    // Create a temporary directory for the output file
-    var tmp_dir = try std.Io.Dir.cwd().createDirPathOpen(ctx.io.std_io, ".roc_bundle_tmp", .{});
-    defer {
-        tmp_dir.close(ctx.io.std_io);
-        std.Io.Dir.cwd().deleteTree(ctx.io.std_io, ".roc_bundle_tmp") catch {};
-    }
 
     // Collect canonical source paths separately from their eventual archive
     // names. A command-line spelling is only a way to find a file; it must not
@@ -8146,14 +8151,32 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     };
     defer bundle_root_dir.close(ctx.io.std_io);
 
-    // Create temporary output file
-    const temp_filename = "temp_bundle.tar.zst";
-    const temp_file = try tmp_dir.createFile(ctx.io.std_io, temp_filename, .{
-        // Allow querying metadata (stat) on the handle, necessary for windows
-        .read = true,
-        .truncate = true,
-    });
-    defer temp_file.close(ctx.io.std_io);
+    // The content-addressed name is only known after compression finishes.
+    // Stage in the destination so publication never crosses filesystems, and
+    // exclusively create a unique file so concurrent invocations own their data.
+    var temp_name_buffer: [64]u8 = undefined;
+    var temp_filename: []const u8 = undefined;
+    const temp_file = while (true) {
+        var random: [16]u8 = undefined;
+        ctx.io.std_io.random(&random);
+        const hex = std.fmt.bytesToHex(random, .lower);
+        temp_filename = std.fmt.bufPrint(&temp_name_buffer, ".roc-bundle-{s}.tmp", .{hex}) catch unreachable;
+        break output_dir.createFile(ctx.io.std_io, temp_filename, .{
+            // Allow querying metadata (stat) on the handle, necessary for Windows.
+            .read = true,
+            .exclusive = true,
+        }) catch |err| switch (err) {
+            error.PathAlreadyExists => continue,
+            else => {
+                try stderr.print("Error: Could not create temporary bundle in '{s}': {}\n", .{ args.output_dir orelse ".", err });
+                return err;
+            },
+        };
+    };
+    var temp_file_exists = true;
+    defer if (temp_file_exists) output_dir.deleteFile(ctx.io.std_io, temp_filename) catch {};
+    var temp_file_open = true;
+    defer if (temp_file_open) temp_file.close(ctx.io.std_io);
 
     const EntryIterator = struct {
         entries: []const bundle.Entry,
@@ -8216,8 +8239,15 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     const compressed_stat = try temp_file.stat(ctx.io.std_io);
     const compressed_size = compressed_stat.size;
 
-    // Move the temp file to the final location
-    try tmp_dir.rename(temp_filename, output_dir, final_filename, ctx.io.std_io);
+    // Close before publication for Windows. Rename publishes the complete
+    // archive atomically, replacing an existing bundle with the same name.
+    temp_file.close(ctx.io.std_io);
+    temp_file_open = false;
+    output_dir.rename(temp_filename, output_dir, final_filename, ctx.io.std_io) catch |err| {
+        try stderr.print("Error: Could not publish bundle '{s}' in '{s}': {}\n", .{ final_filename, args.output_dir orelse ".", err });
+        return err;
+    };
+    temp_file_exists = false;
 
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
@@ -9030,7 +9060,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .entry = 0,
             .frame = null,
             .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_eq", .scope = .program, .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .function }},
             .data = &.{},
         },
     };
@@ -12201,15 +12231,15 @@ fn buildCliTestPlan(
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
 
-        // Root requests deliberately exclude erroneous bodies. The checked
-        // roots still retain their identities and the checker's diagnostic
+        // Root requests deliberately exclude roots reaching checked errors.
+        // The checked roots retain their identities and the checker's diagnostic
         // facts, so rejected tests can participate in result aggregation
         // without being lowered, executed, or stored in the execution cache.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots) |root| {
             if (root.kind != .expect) continue;
-            if (!artifact.checked_bodies.exprContainsDiagnosticError(root.expr)) continue;
+            if (!artifact.compileTimeRootReachesCheckedError(root)) continue;
             std.debug.assert(root.request_eligibility == .ineligible);
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
@@ -12740,7 +12770,7 @@ fn lowerCheckedSourceToLir(
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
-) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
+) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
         .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -14084,10 +14114,9 @@ const WatchSnapshotError = Allocator.Error;
 const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
 const WatchWriteInputsError = WatchCollectInputSetError || std.Io.Dir.WriteFileError;
 const WatchReadInputsError = WatchCollectPathsError || WatchSnapshotError || error{ WatchInputsMissing, WatchInputsReadFailed, WatchInputsMalformed };
-const WatchDirectoryError = Allocator.Error;
 const WatcherStartError = std.Thread.SpawnError || error{ AlreadyStarted, UnsupportedWatchMode, WatchBackendFailed };
-const WatchRefreshError = WatchSnapshotError || WatchDirectoryError || WatcherStartError;
-const WatchChangeError = WatchSnapshotError;
+const WatchRefreshError = WatchSnapshotError || WatcherStartError;
+const WatchChangeError = WatchRefreshError;
 const WatchInputsPathError = Allocator.Error || std.Io.Dir.CreateDirPathError;
 const WatchSpawnChildError = Allocator.Error || std.process.SpawnError || std.Thread.SpawnError;
 const CliOutputWriteError = error{WriteFailed};
@@ -14800,54 +14829,6 @@ fn watchSnapshotChanged(a: []const WatchSnapshotEntry, b: []const WatchSnapshotE
     return false;
 }
 
-fn existingDirectory(ctx: *CliCtx, path: []const u8) bool {
-    var dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, path, .{}) catch return false;
-    dir.close(ctx.io.std_io);
-    return true;
-}
-
-fn nearestExistingAncestor(ctx: *CliCtx, path: []const u8) WatchDirectoryError![]const u8 {
-    var candidate = try ctx.gpa.dupe(u8, std.fs.path.dirname(path) orelse path);
-    errdefer ctx.gpa.free(candidate);
-
-    while (!existingDirectory(ctx, candidate)) {
-        const parent = std.fs.path.dirname(candidate) orelse break;
-        if (parent.len == candidate.len) break;
-
-        const parent_copy = try ctx.gpa.dupe(u8, parent);
-        ctx.gpa.free(candidate);
-        candidate = parent_copy;
-    }
-
-    return candidate;
-}
-
-fn collectWatchDirectories(ctx: *CliCtx, paths: []const []const u8) WatchDirectoryError![]const []const u8 {
-    var dirs = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (dirs.items) |dir| ctx.gpa.free(dir);
-        dirs.deinit(ctx.gpa);
-    }
-
-    var seen: std.StringHashMapUnmanaged(void) = .{};
-    defer seen.deinit(ctx.gpa);
-
-    for (paths) |path| {
-        const dir = try nearestExistingAncestor(ctx, path);
-        errdefer ctx.gpa.free(dir);
-
-        if (seen.contains(dir)) {
-            ctx.gpa.free(dir);
-            continue;
-        }
-
-        try seen.put(ctx.gpa, dir, {});
-        try dirs.append(ctx.gpa, dir);
-    }
-
-    return dirs.toOwnedSlice(ctx.gpa);
-}
-
 fn refreshWatchState(
     ctx: *CliCtx,
     state: *WatchState,
@@ -14857,13 +14838,10 @@ fn refreshWatchState(
     var owned_input_set = new_input_set;
     errdefer owned_input_set.deinit(ctx);
 
-    const watch_dirs = try collectWatchDirectories(ctx, owned_input_set.inputs);
-    defer freeOwnedPathSlice(ctx.gpa, watch_dirs);
-
     var new_watcher: ?*watch_mod.Watcher = null;
-    if (watch_dirs.len > 0) {
-        new_watcher = try watch_mod.Watcher.initAllFiles(ctx.gpa, ctx.io.std_io, watch_dirs, signal, watchCallback);
-        errdefer if (new_watcher) |watcher| watcher.deinit();
+    errdefer if (new_watcher) |watcher| watcher.deinit();
+    if (owned_input_set.inputs.len > 0) {
+        new_watcher = try watch_mod.Watcher.initInputs(ctx.gpa, ctx.io.std_io, owned_input_set.inputs, signal, watchCallback);
         new_watcher.?.start() catch |err| switch (err) {
             error.WatchBackendFailed => {
                 ctx.io.stderr().writeAll("Error: failed to start filesystem watching for source inputs.\n") catch {};
@@ -14914,7 +14892,34 @@ fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *
     if (!signal.dirty.swap(false, .seq_cst)) return false;
     std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
     _ = signal.dirty.swap(false, .seq_cst);
-    return try watchStateHasByteChanges(ctx, state);
+    const watcher = state.watcher orelse return false;
+    if (watcher.hasBackendFailed()) return error.WatchBackendFailed;
+    if (watcher.takeCoverageChange()) {
+        // Coverage must advance even if creating a directory did not yet change
+        // an input's bytes. Keep the old baseline through registration so edits
+        // during the handoff are detected by refreshWatchState's snapshot check.
+        const input_set = blk: {
+            const paths = try ctx.gpa.alloc([]const u8, state.inputs.len);
+            errdefer ctx.gpa.free(paths);
+            var copied: usize = 0;
+            errdefer for (paths[0..copied]) |path| ctx.gpa.free(path);
+            for (state.inputs, 0..) |path, i| {
+                paths[i] = try ctx.gpa.dupe(u8, path);
+                copied += 1;
+            }
+            const snapshot = try ctx.gpa.dupe(WatchSnapshotEntry, state.snapshot);
+            break :blk WatchInputSet{ .inputs = paths, .snapshot = snapshot };
+        };
+        return refreshWatchState(ctx, state, signal, input_set);
+    }
+    var changed = false;
+    for (state.inputs, state.snapshot, 0..) |path, *entry, index| {
+        if (!watcher.takeInputChange(index)) continue;
+        const current = try readWatchFileState(ctx, path);
+        changed = changed or !entry.state.eql(current);
+        entry.state = current;
+    }
+    return changed;
 }
 
 fn waitForWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!void {
@@ -16790,13 +16795,18 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
     if (args.check) {
         var unformatted_files = std.ArrayList([]const u8).empty;
-        defer unformatted_files.deinit(ctx.gpa);
+        defer {
+            for (unformatted_files.items) |path| ctx.gpa.free(path);
+            unformatted_files.deinit(ctx.gpa);
+        }
 
         for (args.paths) |path| {
             var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, format_options, ctx.io.std_io, stderr);
             defer result.deinit();
-            if (result.unformatted_files) |files| {
+            if (result.unformatted_files) |*files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
+                // Transfer the owned paths so they survive result.deinit().
+                files.clearRetainingCapacity();
             }
             failure_count += result.failure;
         }
@@ -20146,6 +20156,64 @@ test "watch byte change advances snapshot before rebuild completes" {
 
     try testing.expect(try watchStateHasByteChanges(&ctx, &state));
     try testing.expect(!try watchStateHasByteChanges(&ctx, &state));
+}
+
+test "watch exact inputs recover missing directories and atomic replacement" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(root);
+    const input = try std.fs.path.join(allocator, &.{ root, "generated/deep/data.txt" });
+    defer allocator.free(input);
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, try collectWatchInputSet(&ctx, null, &.{input})));
+
+    // Directory creation must advance coverage without requiring byte changes.
+    for ([_][]const u8{ "generated", "generated/deep" }) |relative| {
+        try tmp.dir.createDirPath(testing.io, relative);
+        const directory = try std.fs.path.join(allocator, &.{ root, relative });
+        defer allocator.free(directory);
+        const start = std.Io.Clock.now(.awake, testing.io);
+        while (true) {
+            try testing.expect(!try consumeDebouncedWatchChange(&ctx, &signal, &state));
+            if (state.watcher.?.input_plan.?.nodes.get(directory)) |node| {
+                if (node.kind == .directory) break;
+            }
+            try testing.expect(start.durationTo(std.Io.Clock.now(.awake, testing.io)).toMilliseconds() < 5000);
+            std.Thread.yield() catch {};
+        }
+    }
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "generated/deep/data.txt", .data = "first" });
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "replacement", .data = "second" });
+    try tmp.dir.rename("replacement", tmp.dir, "generated/deep/data.txt", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+
+    // Moving an ancestor removes the logical input even though its inode lives.
+    try tmp.dir.rename("generated", tmp.dir, "moved", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+    // Moving a populated tree into place must discover the file immediately.
+    try tmp.dir.rename("moved", tmp.dir, "generated", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+}
+
+fn expectWatchChangeForTest(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) (WatchChangeError || error{TestUnexpectedResult})!void {
+    const start = std.Io.Clock.now(.awake, ctx.io.std_io);
+    while (!try consumeDebouncedWatchChange(ctx, signal, state)) {
+        try std.testing.expect(start.durationTo(std.Io.Clock.now(.awake, ctx.io.std_io)).toMilliseconds() < 5000);
+        std.Thread.yield() catch {};
+    }
 }
 
 test "appendWindowsQuotedArg" {

@@ -764,7 +764,6 @@ rgba = |r, g, b, a| {
 
 hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
-
 	bytes = str.to_utf8()
 	is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 

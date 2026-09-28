@@ -112,15 +112,18 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11622_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11624_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11632_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11728_test.zig"));
     std.testing.refAllDecls(@import("test/redundant_open_fmt_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11640_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11602_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11625_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11246_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11730_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11214_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11248_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11489_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11407_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11366_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11390_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11465_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11464_test.zig"));

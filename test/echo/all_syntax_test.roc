@@ -226,6 +226,28 @@ destructuring = || {
 	(str, num, x, y)
 }
 
+# A record builder combines wrapped field values using the suffix type's `map2`.
+# Its type variables let each field have a different type and the result be a record.
+Builder(a) := { value : a }.{
+	pure : a -> Builder(a)
+	pure = |x| { value: x }
+
+	map2 : Builder(a), Builder(b), (a, b -> c) -> Builder(c)
+	map2 = |a, b, combine| { value: combine(a.value, b.value) }
+
+	run : Builder(a) -> a
+	run = |builder| builder.value
+}
+
+record_builder = || {
+	built = {
+		count: Builder.pure(42.U64),
+		name: Builder.pure("Roc"),
+	}.Builder
+	# The two-field builder above calls Builder.map2 with a function that makes the record.
+	built.run()
+}
+
 NominalTypeRecord := { x : U64 }
 
 # `Type.{ fields }` also works as a pattern, destructuring a nominal type's
@@ -430,6 +452,8 @@ main! = |_args| {
 	print!(type_var(["a", "b"]))
 
 	print!(destructuring())
+
+	print!(record_builder())
 
 	print!(destructure_nominal_type(NominalTypeRecord.{ x: 42 }))
 

@@ -2126,7 +2126,6 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -2167,7 +2166,6 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox => |assign| assign.next,
                 .assign_boxy_adapt => |assign| assign.next,
                 .assign_boxy_inspect => |assign| assign.next,
-                .assign_boxy_eq => |assign| assign.next,
                 .assign_boxy_tag => |assign| assign.next,
                 .assign_boxy_tag_payload => |assign| assign.next,
                 .assign_call_dict => |assign| assign.next,
@@ -2864,7 +2862,7 @@ pub const Interpreter = struct {
                         const local = GuardedList.at(hidden_arg_locals, hidden_index);
                         hidden_values[hidden_index] = try self.getLocalChecked(frame, local);
                     }
-                    const prepared = try self.boxy_runtime.prepareDictCall(
+                    const call = try self.boxy_runtime.prepareDictCall(
                         self.boxyFrameHooks(frame),
                         self.arena.allocator(),
                         dict,
@@ -2874,65 +2872,47 @@ pub const Interpreter = struct {
                         hidden_values,
                         .move,
                     );
-                    switch (prepared) {
-                        .structural_eq => |operand_desc| {
-                            const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
-                            result.write(u8, if (try self.boxyValuesEqual(
-                                frame,
-                                call_args[0].value,
-                                call_args[1].value,
-                                call_args[0].layout,
-                                operand_desc,
-                            )) 1 else 0);
-                            for (call_args) |arg| {
-                                try self.performBoxyLayoutDrop(frame, arg.value, arg.layout, arg.source_desc, .decref, 1, .atomic);
-                            }
-                            try self.setLocalChecked(frame, current, assign.target, result, false);
-                        },
-                        .call => |call| {
-                            const call_loc = self.active_stmt_loc;
-                            const call_region = self.active_stmt_region;
-                            const call_inline_scope = self.active_stmt_inline_scope;
-                            const result = self.evalProcById(call.proc, call.arg_values, call.arg_layouts) catch |err| {
-                                self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
-                                return err;
+                    const call_loc = self.active_stmt_loc;
+                    const call_region = self.active_stmt_region;
+                    const call_inline_scope = self.active_stmt_inline_scope;
+                    const result = self.evalProcById(call.proc, call.arg_values, call.arg_layouts) catch |err| {
+                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
+                        return err;
+                    };
+                    const proc = self.store.getProcSpec(call.proc);
+                    if (proc.rc_ret_borrowed) {
+                        try self.performBoxyLayoutDrop(frame, result.value, result.layout, result.desc, .incref, 1, .atomic);
+                    }
+                    for (call.arg_values, call.arg_layouts, call.arg_descs, 0..) |arg_value, arg_layout, arg_desc, arg_index| {
+                        if (arg_index >= 64 or ((proc.rc_borrowed_params >> @as(u6, @intCast(arg_index))) & 1) == 0) continue;
+                        try self.performBoxyLayoutDrop(frame, arg_value, arg_layout, arg_desc, .decref, 1, .atomic);
+                    }
+                    const materialized_result = try self.materializeCallResultToLayout(
+                        frame,
+                        result.value,
+                        result.layout,
+                        result.desc,
+                        assign.result_desc,
+                        self.store.getLocal(assign.target).layout_idx,
+                    );
+                    try self.setLocalChecked(
+                        frame,
+                        current,
+                        assign.target,
+                        materialized_result.value,
+                        false,
+                    );
+                    frame.setLocalDesc(assign.target, materialized_result.desc);
+                    if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
+                        if (desc_ref.localOrNull()) |desc_local| {
+                            const desc = materialized_result.desc orelse {
+                                return self.invariantFailedError(
+                                    "LIR/interpreter invariant violated: dictionary call declared a descriptor output but produced no descriptor",
+                                    .{},
+                                );
                             };
-                            const proc = self.store.getProcSpec(call.proc);
-                            if (proc.rc_ret_borrowed) {
-                                try self.performBoxyLayoutDrop(frame, result.value, result.layout, result.desc, .incref, 1, .atomic);
-                            }
-                            for (call.arg_values, call.arg_layouts, call.arg_descs, 0..) |arg_value, arg_layout, arg_desc, arg_index| {
-                                if (arg_index >= 64 or ((proc.rc_borrowed_params >> @as(u6, @intCast(arg_index))) & 1) == 0) continue;
-                                try self.performBoxyLayoutDrop(frame, arg_value, arg_layout, arg_desc, .decref, 1, .atomic);
-                            }
-                            const materialized_result = try self.materializeCallResultToLayout(
-                                frame,
-                                result.value,
-                                result.layout,
-                                result.desc,
-                                assign.result_desc,
-                                self.store.getLocal(assign.target).layout_idx,
-                            );
-                            try self.setLocalChecked(
-                                frame,
-                                current,
-                                assign.target,
-                                materialized_result.value,
-                                false,
-                            );
-                            frame.setLocalDesc(assign.target, materialized_result.desc);
-                            if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
-                                if (desc_ref.localOrNull()) |desc_local| {
-                                    const desc = materialized_result.desc orelse {
-                                        return self.invariantFailedError(
-                                            "LIR/interpreter invariant violated: dictionary call declared a descriptor output but produced no descriptor",
-                                            .{},
-                                        );
-                                    };
-                                    try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
-                                }
-                            }
-                        },
+                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
+                        }
                     }
                     current = assign.next;
                 },
@@ -3080,21 +3060,6 @@ pub const Interpreter = struct {
                         try self.inspectBoxyValue(frame, source_value, self.store.getLocal(assign.source).layout_idx, source_desc),
                         false,
                     );
-                    current = assign.next;
-                },
-                .assign_boxy_eq => |assign| {
-                    const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
-                    const lhs_value = try self.getLocalChecked(frame, assign.lhs);
-                    const rhs_value = try self.getLocalChecked(frame, assign.rhs);
-                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
-                    result.write(u8, if (try self.boxyValuesEqual(
-                        frame,
-                        lhs_value,
-                        rhs_value,
-                        self.store.getLocal(assign.lhs).layout_idx,
-                        source_desc,
-                    )) 1 else 0);
-                    try self.setLocalChecked(frame, current, assign.target, result, false);
                     current = assign.next;
                 },
                 .assign_boxy_adapt => |assign| {
@@ -3650,7 +3615,6 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 => |assign| {
@@ -8283,30 +8247,7 @@ pub const Interpreter = struct {
     }
 
     fn valuesEqual(self: *LirInterpreter, a: Value, b: Value, layout_idx: layout_mod.Idx) Error!bool {
-        return self.valuesEqualWithDesc(null, a, b, layout_idx, null);
-    }
-
-    fn boxyValuesEqual(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        a: Value,
-        b: Value,
-        value_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!bool {
-        return self.boxy_runtime.boxyValuesEqual(self.boxyFrameHooks(frame), a, b, value_layout, desc);
-    }
-
-    fn valuesEqualWithDesc(
-        self: *LirInterpreter,
-        maybe_frame: ?*const Frame,
-        a: Value,
-        b: Value,
-        layout_idx: layout_mod.Idx,
-        desc: ?*const LirProgram.BoxyTypeDesc,
-    ) Error!bool {
-        const maybe_hooks: ?BoxyFrameHooks = if (maybe_frame) |frame| self.boxyFrameHooks(frame) else null;
-        return self.boxy_runtime.valuesEqualWithDesc(maybe_hooks, a, b, layout_idx, desc);
+        return self.boxy_runtime.valuesEqual(a, b, layout_idx);
     }
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {

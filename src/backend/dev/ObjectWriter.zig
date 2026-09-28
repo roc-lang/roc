@@ -1148,18 +1148,22 @@ test "all-zero static data without relocations is declared as zero-fill, not sto
     const allocator = std.testing.allocator;
     const Compiler = @import("ObjectFileCompiler.zig");
     const zeros = [_]u8{0} ** 65536;
-    const relocations = [_]Compiler.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .named, .addend = 8 }};
-    const exports = [_]Compiler.StaticDataExport{
-        // A list backing: an allocation header word, then 65528 zero bytes.
-        .{ .symbol_name = "table", .bytes = &zeros, .symbol_offset = 8, .alignment = 8, .is_exported = false },
+    var exports: std.ArrayList(Compiler.StaticDataExport) = .empty;
+    defer exports.deinit(allocator);
+    // Relocations identify the table by its actual position in the export list.
+    const table_index = exports.items.len;
+    // A list backing: an allocation header word, then 65528 zero bytes.
+    try exports.append(allocator, .{ .symbol_name = "table", .bytes = &zeros, .symbol_offset = 8, .alignment = 8, .is_exported = false });
+    const relocations = [_]Compiler.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "table", .target = .{ .data_symbol = @enumFromInt(table_index) }, .addend = 8 }};
+    try exports.appendSlice(allocator, &.{
         // The descriptor is all zeros too, but a relocation writes the
         // table's address into it at link time.
         .{ .symbol_name = "descriptor", .bytes = &([_]u8{0} ** 24), .alignment = 8, .is_exported = false, .relocations = &relocations },
         .{ .symbol_name = "filled", .bytes = &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, .alignment = 8, .is_exported = false },
-    };
+    });
     for ([_]RocTarget{ .x64linux, .x64mac, .x64win }) |target| {
         var compiler = Compiler.ObjectFileCompiler.init(allocator);
-        var result = try compiler.compileStaticDataObject(&exports, target);
+        var result = try compiler.compileStaticDataObject(exports.items, target);
         defer result.deinit();
         // The object declares the table's 64 KB and stores none of it.
         try std.testing.expect(result.object_bytes.len < zeros.len);
