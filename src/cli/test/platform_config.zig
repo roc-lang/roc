@@ -108,6 +108,14 @@ const fx_open_tests = [_]SimpleTestSpec{
         .description = "Regression test: an optimized runtime program that never reads a completed compile-time literal still builds (issue 11723)",
     },
     .{
+        .roc_file = "test/fx-open/issue_11767_nominal_match_after_flex_dispatch.roc",
+        .description = "Regression test: a structural value lifted into a nominal never shares a cell with an imported nominal's backing (issue 11767)",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_11764_same_name_method_relations.roc",
+        .description = "Regression test: a method selected through evidence relates its target to every same-name call on one receiver (issue 11764)",
+    },
+    .{
         .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",
         .description = "Regression test: named closure using map_err compiles when its result is propagated with ? (issue 10270)",
     },

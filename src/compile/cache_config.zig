@@ -242,9 +242,12 @@ pub const Constants = struct {
     ///      named by the `.malformed` payload.
     /// 110: Expect roots reaching checked errors are ineligible for execution,
     ///      including errors in referenced procedures and constants.
-    /// 111: `Stream` is a checked builtin nominal, so every module interns its
+    /// 111: Checked type keys refer to each context-free subtree by its own
+    ///      key, use one-byte tags and varint integers, and a synthetic
+    ///      function over composed children shares its source key.
+    /// 113: `Stream` is a checked builtin nominal, so every module interns its
     ///      unqualified and fully qualified type names as common identifiers.
-    pub const CACHE_VERSION = 111;
+    pub const CACHE_VERSION = 113;
 };
 
 /// Configuration for the Roc cache system.

@@ -1458,6 +1458,7 @@ fn expectTestStackOverflowsReportedAsFailures(opt: []const u8) FxPlatformTestErr
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
+    errdefer std.debug.print("Stack-overflow test stdout:\n{s}\nstderr:\n{s}\n", .{ run_result.stdout, run_result.stderr });
     try util.checkFailure(run_result);
     try testing.expect(std.mem.find(u8, run_result.stderr, "2 passed") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "2 failed") != null);
@@ -1482,6 +1483,7 @@ test "comptime stack overflow is a compile error, not a compiler crash" {
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
+    errdefer std.debug.print("Stack-overflow test stdout:\n{s}\nstderr:\n{s}\n", .{ run_result.stdout, run_result.stderr });
     try util.checkFailure(run_result);
     const combined = [_][]const u8{ run_result.stdout, run_result.stderr };
     var saw_overflow_diagnostic = false;

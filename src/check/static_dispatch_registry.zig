@@ -1447,17 +1447,22 @@ pub const EvidenceChainIndex = struct {
 
 /// Reference to an enclosing evidence slot. Explicit per-use callable
 /// instantiations can share the slot's target identity without sharing its
-/// callable instantiation. An independent rank-1 relation rebuilds
+/// callable instantiation. An indexed contract supplies the exact per-use
+/// evidence when the target requires checked records. Otherwise an independent
+/// rank-1 relation rebuilds
 /// callable-derived nested evidence from its callable. It retains the slot's
 /// vector when the target schema is target-owned, or when a recorded
 /// where-method use proves the signature copy shares every non-marker leaf.
 pub const ConstraintEvidenceRef = struct {
-    /// Composite requirements name their exact owner parameter in the checked
-    /// module's evidence pool, so dictionary ABIs need no lexical type search.
+    /// Requirements outside the callable signature and independent callable
+    /// contracts name their exact owner in the checked evidence pool, so
+    /// dictionary ABIs need no lexical type search.
     scheme_param: ?u32 = null,
     index: EvidenceChainIndex,
     independent_callable: bool = false,
     reuse_slot_nested_evidence: bool = false,
+    /// Index of an exact per-call contract alongside the shared target slot.
+    callable_contract: ?u32 = null,
 };
 
 /// Public `CheckedEvidence` declaration.
@@ -1477,6 +1482,8 @@ pub const CheckedEvidence = struct {
     /// Literal-defaulting constraints remain in canonical evidence vectors for
     /// specialization, but do not become Boxy dictionary requirements.
     runtime_dictionary: bool,
+    /// Independent callable contracts in `evidence_refs`, sharing one target slot.
+    callable_contracts: artifact_serialize.Span = .{},
 
     pub const Resolution = union(enum) {
         direct: EvidenceNodeId,
@@ -1586,6 +1593,8 @@ pub const EvidencePathStep = dispatch_evidence.PathStep;
 /// a constraint's fn type, or is an open-row remainder erased on closure).
 pub const EvidenceParamRecord = struct {
     method: canonical.MethodNameId,
+    /// Range of independent callable types in the template table.
+    callable_contracts: artifact_serialize.Span = .{},
     dispatcher_ty: CheckedTypeId,
     /// The constraint's callable type in the owning scheme: the interface
     /// the selected target must satisfy. Relating a target to it binds the
@@ -1704,6 +1713,7 @@ pub const CheckedCallResolution = union(enum) {
         /// its callable instantiation. This is set only for a recorded
         /// where-method use, whose signature copy shares every non-marker leaf.
         reuse_slot_nested_evidence: bool = false,
+        callable_contract: ?u32 = null,
     },
     /// The checker chose a compiler-derived structural implementation.
     structural: StructuralDerivation,
