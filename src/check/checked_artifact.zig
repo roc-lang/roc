@@ -13157,6 +13157,11 @@ pub const CheckedBodyStore = struct {
             };
             std.debug.assert(ref_id == indexed);
             const data = &self.stored_exprs.items[@intFromEnum(record.expr)].data;
+            if (record.ref == .platform_required_checked_error) {
+                data.* = .runtime_error;
+                rejected_binding = true;
+                continue;
+            }
             const procedure: ?ProcedureUseTemplate = switch (record.ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |proc| proc,
                 .platform_required_proc => |required| required.procedure,
@@ -26002,6 +26007,7 @@ pub const PlatformPairing = struct {
         checked_types: CheckedTypeStore.Serialized,
         templates: SerializedSlice(CheckedProcedureTemplate),
         body_exprs: SerializedSlice(StoredCheckedExpr),
+        body_statements: SerializedSlice(StoredCheckedStatement),
         body_patterns: SerializedSlice(StoredCheckedPattern),
         body_field_access_segments: SerializedSlice(CheckedFieldAccessSegment),
         canonical_names: canonical.CanonicalNameStore.Serialized,
@@ -26036,6 +26042,10 @@ pub const PlatformPairing = struct {
             try self.checked_types.serialize(&delta, gpa, writer);
             try self.templates.serialize(artifact.checked_procedure_templates.templates.items, gpa, writer);
             try self.body_exprs.serialize(artifact.checked_bodies.stored_exprs.items, gpa, writer);
+            try self.body_statements.serialize(if (artifact.platform_required_bindings.checked_error_requires.len != 0)
+                artifact.checked_bodies.stored_statements.items
+            else
+                &.{}, gpa, writer);
             try self.body_patterns.serialize(artifact.checked_bodies.stored_patterns.items, gpa, writer);
             try self.body_field_access_segments.serialize(artifact.checked_bodies.field_access_segment_pool.items, gpa, writer);
             try self.canonical_names.serialize(&artifact.canonical_names, gpa, writer);
@@ -26087,6 +26097,9 @@ pub const PlatformPairing = struct {
             result.canonical_names = self.canonical_names.deserialize(address, allocator);
             result.platform_requirement_relations = self.platform_requirement_relations.deserialize(address);
             result.platform_required_bindings = self.platform_required_bindings.deserialize(address);
+            if (result.platform_required_bindings.checked_error_requires.len != 0) {
+                result.checked_bodies.stored_statements = artifact_serialize.arrayListFromSlice(StoredCheckedStatement, self.body_statements.deserialize(address));
+            }
             result.resolved_value_refs = self.resolved_value_refs.deserialize(address);
             result.provided_exports = self.provided_exports.deserialize(address);
             result.root_requests = self.root_requests.deserialize(address);
@@ -26184,6 +26197,14 @@ pub fn pairCheckedPlatform(
                 }
             },
             .interpolation => |*interpolation| interpolation.step_fn_ty = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, interpolation.step_fn_ty, &type_memo),
+            .lookup_required => |maybe_ref| {
+                const ref_id = maybe_ref orelse checkedArtifactInvariant("paired requirement lookup has no resolved reference", .{});
+                if (result.resolved_value_refs.records[@intFromEnum(ref_id)].ref == .platform_required_checked_error) {
+                    // A rejected requirement produces no value. Publish that
+                    // fact before any lowering asks for its argument type.
+                    expr.data = .runtime_error;
+                }
+            },
             .pending,
             .numeral,
             .str_from_quote,
@@ -26192,7 +26213,6 @@ pub fn pairCheckedPlatform(
             .bytes_literal,
             .lookup_local,
             .lookup_external,
-            .lookup_required,
             .list,
             .empty_list,
             .tuple,
@@ -26230,6 +26250,13 @@ pub fn pairCheckedPlatform(
             .run_low_level,
             => {},
         }
+    }
+    if (result.platform_required_bindings.checked_error_requires.len != 0) {
+        // Divergence is pairing-owned too: the unpaired platform's callers
+        // and statements could return before these bindings were rejected.
+        result.checked_bodies.stored_statements = try copyPairingColumns(@TypeOf(platform.checked_bodies.stored_statements), platform.checked_bodies.stored_statements, session);
+        try result.checked_bodies.publishInspectEvaluationElisionAfterRejectedBindings(session);
+        try result.checked_bodies.publishResolvedDispatchDivergence(session, &result.static_dispatch_plans);
     }
     result.checked_bodies.stored_patterns = try copyPairingColumns(@TypeOf(platform.checked_bodies.stored_patterns), platform.checked_bodies.stored_patterns, session);
     for (result.checked_bodies.stored_patterns.items) |*pattern| {
@@ -33252,7 +33279,8 @@ pub const CheckedModuleArtifact = struct {
     // Version 104 gives standalone literal roots only to conversions whose
     // complete checked dispatch contract is specialization-independent.
     // Version 105 also declares literal-conversion roots at their validated payload type.
-    const serialized_layout_version: u32 = 105;
+    // Version 106 publishes rejected requirement lookups as runtime errors.
+    const serialized_layout_version: u32 = 106;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
