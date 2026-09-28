@@ -9,6 +9,7 @@ const tracy = @import("tracy");
 const types_mod = @import("types");
 const can = @import("can");
 const reporting = @import("reporting");
+const tokenize = @import("parse").tokenize;
 
 const snapshot = @import("snapshot.zig");
 const diff = @import("snapshot/diff.zig");
@@ -252,8 +253,42 @@ pub const ReportBuilder = struct {
         return self.can_ir.store.getExprRegion(@enumFromInt(id.expr_node));
     }
 
+    /// Point at the construct introducing an expression instead of covering its
+    /// body, where independent diagnostics may need their own highlights.
+    fn expressionHighlightRegion(self: *Self, region: Region) Allocator.Error!Region {
+        const source = self.source[region.start.offset..region.end.offset];
+        if (!std.mem.startsWith(u8, source, "match") and !std.mem.startsWith(u8, source, "|")) return region;
+
+        // Use tokens to distinguish the keyword from an identifier and to keep
+        // pipes inside strings, comments, or nested patterns out of the header.
+        var env = try base.CommonEnv.init(self.gpa, source);
+        defer env.deinit(self.gpa);
+        var messages: [0]tokenize.Diagnostic = .{};
+        var tokenizer = try tokenize.Tokenizer.init(&env, self.gpa, source, &messages);
+        defer tokenizer.deinit(self.gpa);
+        try tokenizer.tokenize(self.gpa);
+        const tags = tokenizer.output.tokens.items(.tag);
+        switch (tags[0]) {
+            .KwMatch => return Region.from_raw_offsets(region.start.offset, region.start.offset + tokenizer.output.resolve(0).end.offset),
+            .OpBar => {},
+            else => return region,
+        }
+        var depth: usize = 0;
+        for (tags[1..], 1..) |tag, i| {
+            switch (tag) {
+                .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly, .OpenStringInterpolation => depth += 1,
+                .CloseRound, .CloseSquare, .CloseCurly, .CloseStringInterpolation => depth -|= 1,
+                .OpBar => if (depth == 0) {
+                    return Region.from_raw_offsets(region.start.offset, region.start.offset + tokenizer.output.resolve(i).end.offset);
+                },
+                else => {},
+            }
+        }
+        return region;
+    }
+
     fn addSourceHighlightRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
-        const region_info = self.module_env.calcRegionInfo(region);
+        const region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(region));
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -294,7 +329,7 @@ pub const ReportBuilder = struct {
         const outer_region_info = self.module_env.calcRegionInfo(outer_region.*);
 
         const inner_region = self.getRegionSafe(inner_region_idx) orelse return;
-        const inner_region_info = self.module_env.calcRegionInfo(inner_region.*);
+        const inner_region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(inner_region.*));
 
         const display_region = SourceCodeDisplayRegion{
             .line_text = try self.gpa.dupe(u8, outer_region_info.calculateLineText(self.source, self.module_env.getLineStarts())),
@@ -5347,14 +5382,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.match_expr)))) |match_region| {
-            const region_info = self.module_env.calcRegionInfo(match_region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceHighlightRegion(&report, match_region.*);
             try report.document.addLineBreak();
         }
 

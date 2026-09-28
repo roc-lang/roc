@@ -422,7 +422,9 @@ pub const Report = struct {
     }
 
     /// Extract region information from the document elements.
-    /// Returns the first source region found, or null if none exists.
+    /// Returns the first highlighted region in 1-based display coordinates,
+    /// or null if none exists. Context surrounding an underline is not part
+    /// of the diagnostic location.
     pub fn getRegionInfo(self: *const Report) ?RegionInfo {
         for (self.document.elements.items) |element| {
             switch (element) {
@@ -435,11 +437,23 @@ pub const Report = struct {
                     };
                 },
                 .source_code_with_underlines => |underlines_data| {
+                    if (underlines_data.underline_regions.len == 0) continue;
+                    const region = underlines_data.underline_regions[0];
                     return RegionInfo{
-                        .start_line_idx = underlines_data.display_region.start_line,
-                        .start_col_idx = underlines_data.display_region.start_column,
-                        .end_line_idx = underlines_data.display_region.end_line,
-                        .end_col_idx = underlines_data.display_region.end_column,
+                        .start_line_idx = region.start_line,
+                        .start_col_idx = region.start_column,
+                        .end_line_idx = region.end_line,
+                        .end_col_idx = region.end_column,
+                    };
+                },
+                .source_code_multi_region => |multi| {
+                    if (multi.regions.len == 0) continue;
+                    const region = multi.regions[0];
+                    return RegionInfo{
+                        .start_line_idx = region.start_line,
+                        .start_col_idx = region.start_column,
+                        .end_line_idx = region.end_line,
+                        .end_col_idx = region.end_column,
                     };
                 },
                 .text,
@@ -455,7 +469,6 @@ pub const Report = struct {
                 .link,
                 .vertical_stack,
                 .horizontal_concat,
-                .source_code_multi_region,
                 .source_location,
                 => {},
             }
@@ -520,4 +533,29 @@ test "Report basic functionality" {
 
     try testing.expect(!report.isEmpty());
     try testing.expect(report.getLineCount() > 2);
+}
+
+test "Report diagnostic location uses the underline rather than its context" {
+    var report = try Report.init(testing.allocator, "Type Mismatch", "", .runtime_error);
+    defer report.deinit();
+    try report.document.addSourceCodeWithUnderlines(.{
+        .line_text = try testing.allocator.dupe(u8, "match value {\n    A(_) => 1\n}"),
+        .start_line = 3,
+        .start_column = 1,
+        .end_line = 5,
+        .end_column = 2,
+        .region_annotation = .dimmed,
+        .filename = "test.roc",
+    }, &.{.{
+        .start_line = 4,
+        .start_column = 5,
+        .end_line = 4,
+        .end_column = 9,
+        .annotation = .error_highlight,
+    }});
+    const region = report.getRegionInfo().?;
+    try testing.expectEqual(@as(u32, 4), region.start_line_idx);
+    try testing.expectEqual(@as(u32, 5), region.start_col_idx);
+    try testing.expectEqual(@as(u32, 4), region.end_line_idx);
+    try testing.expectEqual(@as(u32, 9), region.end_col_idx);
 }

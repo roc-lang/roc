@@ -12,8 +12,8 @@ s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
 EMPTY TUPLE NOT ALLOWED - fuzz_hang_004.md:1:24:1:26
 TYPE MISMATCH - fuzz_hang_004.md:1:10:1:11
 INVALID TUPLE ACCESS - fuzz_hang_004.md:1:27:1:35
-REDUNDANT PATTERN - fuzz_hang_004.md:1:4:1:37
-NON EXHAUSTIVE MATCH - fuzz_hang_004.md:1:4:1:37
+REDUNDANT PATTERN - fuzz_hang_004.md:1:4:1:9
+NON EXHAUSTIVE MATCH - fuzz_hang_004.md:1:4:1:9
 # PROBLEMS
 ~~~clojure
 (reports
@@ -60,7 +60,7 @@ NON EXHAUSTIVE MATCH - fuzz_hang_004.md:1:4:1:37
 	(report
 		(severity warning)
 		(title "Redundant Pattern")
-		(region (start 1 4) (end 1 37))
+		(region (start 1 4) (end 1 9))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -72,17 +72,17 @@ NON EXHAUSTIVE MATCH - fuzz_hang_004.md:1:4:1:37
 			(reflow " ")
 			(reflow "is redundant."))
 		(document
-			(source-region (file "fuzz_hang_004.md") (start 1 4) (end 1 37) (annotation error) (line-text "s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}"))
+			(source-region (file "fuzz_hang_004.md") (start 1 4) (end 1 9) (annotation error) (line-text "s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}"))
 			(line-break)
 			(reflow "This pattern can never match because earlier patterns already cover all the values it would match.")))
 	(report
 		(severity runtime_error)
 		(title "Non Exhaustive Match")
-		(region (start 1 4) (end 1 37))
+		(region (start 1 4) (end 1 9))
 		(headline
 			(reflow "This match expression doesn't cover all possible cases."))
 		(document
-			(source-region (file "fuzz_hang_004.md") (start 1 4) (end 1 37) (annotation error) (line-text "s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}"))
+			(source-region (file "fuzz_hang_004.md") (start 1 4) (end 1 9) (annotation error) (line-text "s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}"))
 			(line-break)
 			(reflow "The value being matched on has type:")
 			(line-break)
