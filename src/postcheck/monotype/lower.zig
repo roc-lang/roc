@@ -26267,51 +26267,739 @@ const BodyContext = struct {
             .type_cell => |cell| try self.lowerDivergentExprAtTypeCell(expr_id, cell),
         };
     }
+    // Expression lowering //
+    //
+    // Lowering a checked expression lowers its child expressions first, from
+    // inside the parent's own lowering. Every lowering computation that lowers
+    // a child expression of the same body suspends as a `LowerFrame` on one
+    // heap-backed stack and resumes with the child's result, so expression
+    // nesting depth never becomes native call depth. Each frame runs on the
+    // exact body context the direct computation used, and every draft
+    // expression, graph relation, and builder location change happens in the
+    // same order. Lowering another body (a nested procedure, a template, a
+    // literal conversion root) starts that body's own lowering run.
 
-    fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
-        const expr = self.view.bodies.expr(expr_id);
-        const lowered = try self.lowerExprInner(expr_id);
-        return try self.requireLoweredExpr(
-            expr,
-            try self.exprTypeCell(lowered).toGraphNode(self.graph),
-            .runtime_value,
-            lowered,
-        );
+    const LowerResult = union(enum) {
+        expr: DraftExprId,
+        maybe_expr: ?DraftExprId,
+        call: LoweredCall,
+        maybe_call: ?LoweredCall,
+        span: DraftSpan(DraftExprId),
+        closed_operands: ClosedDispatchOperands,
+
+        fn exprValue(self: LowerResult) DraftExprId {
+            return switch (self) {
+                .expr => |expr| expr,
+                .maybe_expr, .call, .maybe_call, .span, .closed_operands => unreachable,
+            };
+        }
+
+        fn maybeExprValue(self: LowerResult) ?DraftExprId {
+            return switch (self) {
+                .maybe_expr => |expr| expr,
+                .expr, .call, .maybe_call, .span, .closed_operands => unreachable,
+            };
+        }
+
+        fn callValue(self: LowerResult) LoweredCall {
+            return switch (self) {
+                .call => |call| call,
+                .expr, .maybe_expr, .maybe_call, .span, .closed_operands => unreachable,
+            };
+        }
+
+        fn maybeCallValue(self: LowerResult) ?LoweredCall {
+            return switch (self) {
+                .maybe_call => |call| call,
+                .expr, .maybe_expr, .call, .span, .closed_operands => unreachable,
+            };
+        }
+
+        fn spanValue(self: LowerResult) DraftSpan(DraftExprId) {
+            return switch (self) {
+                .span => |span| span,
+                .expr, .maybe_expr, .call, .maybe_call, .closed_operands => unreachable,
+            };
+        }
+
+        fn closedOperandsValue(self: LowerResult) ClosedDispatchOperands {
+            return switch (self) {
+                .closed_operands => |operands| operands,
+                .expr, .maybe_expr, .call, .maybe_call, .span => unreachable,
+            };
+        }
+    };
+
+    /// The builder's current source location, saved by a lowering frame that
+    /// moves it to its own expression and restored when that frame finishes.
+    const SavedSourceLocation = struct {
+        loc: base.SourceLoc,
+        region: base.Region,
+    };
+
+    const LowerTask = union(enum) {
+        /// `lowerExprAtTypeCellWithKnownDivergence`
+        at_type_cell: struct {
+            expr: checked.CheckedExprId,
+            cell: DraftTypeCell,
+            demand: LoweringDemand,
+            diverges: bool,
+            saved: ?SavedSourceLocation = null,
+        },
+        /// `lowerExprAtTypeCellInner`
+        cell_inner: struct {
+            expr: checked.CheckedExprId,
+            cell: DraftTypeCell,
+            expected_node: NodeId,
+            tuple_node: NodeId = undefined,
+        },
+        /// `lowerExprAtTypeWithDemandInner`
+        type_inner: struct { expr: checked.CheckedExprId, ty: Type.TypeId },
+        /// `lowerExpr`
+        expr: struct { expr: checked.CheckedExprId },
+        /// `lowerExprInner`
+        expr_inner: struct { expr: checked.CheckedExprId, saved: ?SavedSourceLocation = null },
+        /// `lowerExprWithType`
+        with_type: WithTypeTask,
+        /// `lowerDispatchExprAtType`
+        dispatch: DispatchLowerTask,
+        /// `lowerClosedDirectLowLevelDispatch`
+        closed_low_level: struct {
+            plan: static_dispatch.StaticDispatchCallPlan,
+            op: can.CIR.Expr.LowLevel,
+            expected_ret_cell: DraftTypeCell,
+        },
+        /// `lowerClosedDirectProcedureDispatch`
+        closed_procedure: ClosedProcedureTask,
+        /// `lowerClosedDispatchOperandsAtTypes`
+        closed_operands_at_types: ClosedOperandsAtTypesTask,
+        /// `lowerClosedDispatchOperandsAtNode`
+        closed_operands_at_node: struct {
+            operands: []const static_dispatch.StaticDispatchOperand,
+            callable_node: NodeId,
+            expected_ret_cell: DraftTypeCell,
+            arg_nodes: []const NodeId = &.{},
+        },
+        /// `lowerPreparedDispatchOperandsAtNodes`
+        prepared_operands: PreparedOperandsTask,
+        /// `lowerDispatchOperandAtType`
+        operand_at_type: struct { operand: static_dispatch.StaticDispatchOperand, ty: Type.TypeId },
+        /// `lowerDispatchWithUninhabitedArgument`
+        uninhabited_dispatch: UninhabitedArgumentTask,
+        /// `lowerDirectCallWithUninhabitedArgument`
+        uninhabited_call: UninhabitedArgumentTask,
+        /// `lowerExprSpan`
+        span: SpanTask,
+        /// `lowerPreparedExprSpanAtNodes`
+        prepared_span: SpanTask,
+        /// `lowerExprSpanAtTypes`
+        span_at_types: SpanTask,
+        /// `lowerListExpr`
+        list_span: SpanTask,
+        /// `lowerCallAtExpectedNode`
+        call: CallLowerTask,
+        /// `lowerCallExprAtNode`
+        call_expr_at_node: struct { expr: checked.CheckedExprId, expected_node: NodeId, producer_request: ?NodeId = null },
+        /// `lowerCallExpr`
+        call_expr: struct { expr: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall },
+    };
+
+    const WithTypeTask = struct {
+        expr: checked.CheckedExprId,
+        ty: Type.TypeId,
+        saved: ?SavedSourceLocation = null,
+        field_access_start: u32 = 0,
+        receiver_ty: Type.TypeId = undefined,
+        tag_name: names.TagNameId = undefined,
+        nominal_named: Type.TypeId = undefined,
+    };
+
+    const DispatchLowerTask = struct {
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        expected_ret_cell: DraftTypeCell,
+        timing: BodyWorkTimingScope = .{},
+        call_ctx: ?*BodyContext = null,
+        direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null,
+        direct_graph_call: bool = false,
+        plan_args: []const static_dispatch.StaticDispatchOperand = &.{},
+        callable_node: NodeId = undefined,
+        callable_args: []const NodeId = &.{},
+        callable_ret: NodeId = undefined,
+        pre_lowered: std.ArrayList(PreLoweredOperand) = .empty,
+        index: usize = 0,
+    };
+
+    const ClosedProcedureTask = struct {
+        checked_ret_ty: checked.CheckedTypeId,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        evidence_id: static_dispatch.EvidenceNodeId,
+        procedure: static_dispatch.ProcedureMethodTarget,
+        expected_ret_cell: DraftTypeCell,
+        callable_node: NodeId = undefined,
+    };
+
+    const ClosedOperandsAtTypesTask = struct {
+        operands: []const static_dispatch.StaticDispatchOperand,
+        /// Owned copy of the sealed argument types.
+        stable_types: []const Type.TypeId,
+        ret_cell: DraftTypeCell,
+        uninhabited_index: ?usize = null,
+        prior: []DraftExprId = &.{},
+        reserved: BodyDraftStore.ReservedExprSpan = undefined,
+        reserving: bool = false,
+        index: usize = 0,
+    };
+
+    const PreparedOperandsTask = struct {
+        operands: []const static_dispatch.StaticDispatchOperand,
+        nodes: []const NodeId,
+        pre_lowered: []const PreLoweredOperand,
+        reserved: BodyDraftStore.ReservedExprSpan = undefined,
+        reserving: bool = false,
+        index: usize = 0,
+    };
+
+    const UninhabitedArgumentTask = struct {
+        /// Dispatch operands, or checked call arguments as operands.
+        operands: []const static_dispatch.StaticDispatchOperand = &.{},
+        checked_args: []const checked.CheckedExprId = &.{},
+        arg_nodes: []const NodeId,
+        ret_cell: DraftTypeCell,
+        uninhabited_index: usize = 0,
+        prior: []DraftExprId = &.{},
+        index: usize = 0,
+    };
+
+    const SpanTask = struct {
+        exprs: []const checked.CheckedExprId,
+        nodes: []const NodeId = &.{},
+        types: []const Type.TypeId = &.{},
+        owns_types: bool = false,
+        list_ty: Type.TypeId = undefined,
+        elem_ty: Type.TypeId = undefined,
+        reserved: BodyDraftStore.ReservedExprSpan = undefined,
+        /// The reserved span is still being filled; an unwinding frame
+        /// returns its slots.
+        reserving: bool = false,
+        index: usize = 0,
+    };
+
+    const CallLowerTask = struct {
+        expr: checked.CheckedExprId,
+        checked_ret_ty: checked.CheckedTypeId,
+        call: CheckedCall,
+        expected_ret_node: ?NodeId,
+        expected_ret_ty: ?Type.TypeId,
+        timing: BodyWorkTimingScope = .{},
+        call_ctx: ?*BodyContext = null,
+        fn_node: NodeId = undefined,
+        fn_nodes: FunctionNodes = undefined,
+        callee_ret: NodeId = undefined,
+        callee: DraftFnSlot = undefined,
+        iterator_procedure: ?checked.IteratorProcedureId = null,
+        fn_ty: Type.TypeId = undefined,
+        callee_expr: DraftExprId = undefined,
+    };
+
+    const LowerFrame = struct {
+        ctx: *BodyContext,
+        cursor: u8 = 0,
+        task: LowerTask,
+    };
+
+    const LowerStep = union(enum) {
+        call: struct { ctx: *BodyContext, task: LowerTask },
+        ret: LowerResult,
+    };
+
+    fn requestLowerTask(ctx: *BodyContext, task: LowerTask) LowerStep {
+        return .{ .call = .{ .ctx = ctx, .task = task } };
     }
 
-    fn lowerExprInner(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
-        const expr = self.view.bodies.expr(expr_id);
-        const saved_loc = self.builder.current_loc;
-        defer self.builder.current_loc = saved_loc;
-        const saved_region = self.builder.current_region;
-        defer self.builder.current_region = saved_region;
+    /// Run a lowering computation to completion on an explicit frame stack.
+    fn runLower(self: *BodyContext, root: LowerTask) Allocator.Error!LowerResult {
+        var frames: std.ArrayList(LowerFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        errdefer {
+            while (frames.pop()) |frame| {
+                var owned = frame;
+                owned.ctx.releaseLowerFrame(&owned);
+            }
+        }
+        try frames.append(self.allocator, .{ .ctx = self, .task = root });
+        var input: ?LowerResult = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (try frame.ctx.stepLower(frame, input)) {
+                .call => |next| {
+                    try frames.append(self.allocator, .{ .ctx = next.ctx, .task = next.task });
+                    input = null;
+                },
+                .ret => |result| {
+                    var finished = frames.pop().?;
+                    finished.ctx.releaseLowerFrame(&finished);
+                    if (frames.items.len == 0) return result;
+                    input = result;
+                },
+            }
+        }
+    }
+
+    fn saveSourceLocation(self: *BodyContext, expr: checked.CheckedExpr) Allocator.Error!SavedSourceLocation {
+        const saved: SavedSourceLocation = .{
+            .loc = self.builder.current_loc,
+            .region = self.builder.current_region,
+        };
         const region = self.sourceRegionForExpr(expr);
         self.builder.current_loc = try self.sourceLocFor(region);
         self.builder.current_region = region;
-        if (try self.lowerDivergentExprInContext(expr_id, .uncontextual)) |lowered| return lowered;
+        return saved;
+    }
+
+    fn restoreSourceLocation(self: *BodyContext, saved: *?SavedSourceLocation) void {
+        const location = saved.* orelse return;
+        self.builder.current_loc = location.loc;
+        self.builder.current_region = location.region;
+        saved.* = null;
+    }
+
+    /// Release what a frame still owns. Idempotent, so a frame that already
+    /// released its state on its normal path is unaffected.
+    fn releaseLowerFrame(self: *BodyContext, frame: *LowerFrame) void {
+        switch (frame.task) {
+            .at_type_cell => |*task| self.restoreSourceLocation(&task.saved),
+            .expr_inner => |*task| self.restoreSourceLocation(&task.saved),
+            .with_type => |*task| self.restoreSourceLocation(&task.saved),
+            .dispatch => |*task| {
+                task.pre_lowered.deinit(self.allocator);
+                task.pre_lowered = .empty;
+                if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+                task.call_ctx = null;
+                task.timing.end();
+            },
+            .call => |*task| {
+                if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+                task.call_ctx = null;
+                task.timing.end();
+            },
+            .closed_operands_at_types => |*task| {
+                if (task.reserving) self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
+                task.reserving = false;
+                self.allocator.free(task.stable_types);
+                task.stable_types = &.{};
+                self.allocator.free(task.prior);
+                task.prior = &.{};
+            },
+            .uninhabited_dispatch, .uninhabited_call => |*task| {
+                self.allocator.free(task.prior);
+                task.prior = &.{};
+            },
+            .span, .prepared_span, .span_at_types, .list_span => |*task| self.releaseSpanTask(task),
+            .prepared_operands => |*task| {
+                if (task.reserving) self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
+                task.reserving = false;
+            },
+            .cell_inner,
+            .type_inner,
+            .expr,
+            .closed_low_level,
+            .closed_procedure,
+            .closed_operands_at_node,
+            .operand_at_type,
+            .call_expr_at_node,
+            .call_expr,
+            => {},
+        }
+    }
+
+    fn stepLower(self: *BodyContext, frame: *LowerFrame, input: ?LowerResult) Allocator.Error!LowerStep {
+        return switch (frame.task) {
+            .at_type_cell => |*task| self.stepAtTypeCell(frame, task, input),
+            .cell_inner => |*task| self.stepCellInner(frame, task, input),
+            .type_inner => |*task| self.stepTypeInner(frame, task, input),
+            .expr => |*task| self.stepLowerExpr(frame, task, input),
+            .expr_inner => |*task| self.stepExprInner(frame, task, input),
+            .with_type => |*task| self.stepWithType(frame, task, input),
+            .dispatch => |*task| self.stepDispatchLower(frame, task, input),
+            .closed_low_level => |*task| self.stepClosedLowLevel(frame, task, input),
+            .closed_procedure => |*task| self.stepClosedProcedure(frame, task, input),
+            .closed_operands_at_types => |*task| self.stepClosedOperandsAtTypes(frame, task, input),
+            .closed_operands_at_node => |*task| self.stepClosedOperandsAtNode(frame, task, input),
+            .prepared_operands => |*task| self.stepPreparedOperands(frame, task, input),
+            .operand_at_type => |*task| self.stepOperandAtType(frame, task, input),
+            .uninhabited_dispatch => |*task| self.stepUninhabitedDispatch(frame, task, input),
+            .uninhabited_call => |*task| self.stepUninhabitedCall(frame, task, input),
+            .span => |*task| self.stepSpan(frame, task, input, .typed_by_expr),
+            .prepared_span => |*task| self.stepSpan(frame, task, input, .at_nodes),
+            .span_at_types => |*task| self.stepSpan(frame, task, input, .at_types),
+            .list_span => |*task| self.stepSpan(frame, task, input, .list_elements),
+            .call => |*task| self.stepCallLower(frame, task, input),
+            .call_expr_at_node => |*task| self.stepCallExprAtNode(frame, task, input),
+            .call_expr => |*task| self.stepCallExpr(frame, task, input),
+        };
+    }
+
+    fn requestLowerChild(ctx: *BodyContext, expr: checked.CheckedExprId, cell: DraftTypeCell) LowerStep {
+        return requestLowerTask(ctx, .{ .at_type_cell = .{
+            .expr = expr,
+            .cell = cell,
+            .demand = .runtime_value,
+            .diverges = ctx.checkedExprDivergesInLoweredRuntime(expr),
+        } });
+    }
+
+    fn stepAtTypeCell(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        const checked_expr = task.expr;
+        const expr = self.view.bodies.expr(checked_expr);
+        if (frame.cursor == 1) {
+            const lowered = input.?.exprValue();
+            const result = switch (task.cell) {
+                .sealed => try self.requireLoweredExprAtCell(expr, task.cell, task.demand, lowered),
+                .graph_node => |expected_node| try self.requireLoweredExpr(expr, expected_node, task.demand, lowered),
+            };
+            self.restoreSourceLocation(&task.saved);
+            return .{ .ret = .{ .expr = result } };
+        }
+        task.saved = try self.saveSourceLocation(expr);
+        frame.cursor = 1;
+        return switch (task.cell) {
+            .sealed => |ty| if (task.diverges)
+                .{ .ret = .{ .expr = try self.finishAtTypeCellNow(task, expr, try self.lowerDivergentExprAtTypeCell(checked_expr, task.cell)) } }
+            else
+                requestLowerTask(self, .{ .type_inner = .{ .expr = checked_expr, .ty = ty } }),
+            .graph_node => |expected_node| if (task.diverges)
+                .{ .ret = .{ .expr = try self.finishAtTypeCellNow(task, expr, try self.lowerDivergentExprAtTypeCell(checked_expr, task.cell)) } }
+            else
+                requestLowerTask(self, .{ .cell_inner = .{ .expr = checked_expr, .cell = task.cell, .expected_node = expected_node } }),
+        };
+    }
+
+    fn finishAtTypeCellNow(self: *BodyContext, task: anytype, expr: checked.CheckedExpr, lowered: DraftExprId) Allocator.Error!DraftExprId {
+        const result = switch (task.cell) {
+            .sealed => try self.requireLoweredExprAtCell(expr, task.cell, task.demand, lowered),
+            .graph_node => |expected_node| try self.requireLoweredExpr(expr, expected_node, task.demand, lowered),
+        };
+        self.restoreSourceLocation(&task.saved);
+        return result;
+    }
+
+    fn stepLowerExpr(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor == 0) {
+            frame.cursor = 1;
+            return requestLowerTask(self, .{ .expr_inner = .{ .expr = task.expr } });
+        }
+        const lowered = input.?.exprValue();
+        return .{ .ret = .{ .expr = try self.requireLoweredExpr(
+            self.view.bodies.expr(task.expr),
+            try self.exprTypeCell(lowered).toGraphNode(self.graph),
+            .runtime_value,
+            lowered,
+        ) } };
+    }
+
+    fn loweredExprStep(expr: DraftExprId) LowerStep {
+        return .{ .ret = .{ .expr = expr } };
+    }
+
+    fn stepCellInner(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        const checked_expr = task.expr;
+        const cell = task.cell;
+        const expected_node = task.expected_node;
+        const expr = self.view.bodies.expr(checked_expr);
+        switch (frame.cursor) {
+            0 => {},
+            // A tuple access's tuple.
+            2 => {
+                const access = expr.data.tuple_access;
+                const item_node = (try self.graph.tupleItemNodes(task.tuple_node))[access.elem_index];
+                const result_cell = DraftTypeCell.fromGraphNode(
+                    if (try self.graph.containsGeneratedPrivate(item_node)) item_node else expected_node,
+                );
+                return loweredExprStep(try self.addExprWithTypeCell(result_cell, .{ .tuple_access = .{
+                    .tuple = input.?.exprValue(),
+                    .elem_index = access.elem_index,
+                } }));
+            },
+            // A low-level operation's arguments.
+            3 => return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .low_level = .{
+                .op = expr.data.run_low_level.op,
+                .args = input.?.spanValue(),
+            } })),
+            // The expression lowered without a contextual node.
+            4 => {
+                const lowered = input.?.exprValue();
+                try relateRequestComponent(
+                    self.graph,
+                    expected_node,
+                    try self.exprTypeCell(lowered).toGraphNode(self.graph),
+                );
+                self.draft.exprs.items[@intFromEnum(lowered)].ty = cell;
+                return loweredExprStep(lowered);
+            },
+            // A dispatch or call lowered at this node.
+            else => return .{ .ret = input.? },
+        }
+        switch (cell) {
+            .sealed => Common.invariant("sealed expression reached graph-cell lowering"),
+            .graph_node => {},
+        }
+        if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored| {
+            return loweredExprStep(restored);
+        }
+        frame.cursor = 5;
+        switch (expr.data) {
+            .lookup_local => |lookup| return loweredExprStep(try self.lowerLookupExprAtNode(checked_expr, lookup.resolved, expected_node)),
+            .lookup_external => |resolved| return loweredExprStep(try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node)),
+            .lookup_required => |resolved| return loweredExprStep(try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node)),
+            .lambda => return loweredExprStep(try self.lowerLambdaExprAtNode(checked_expr, expected_node)),
+            .closure => |closure| return loweredExprStep(try self.lowerClosureAtNode(checked_expr, closure, expected_node)),
+            .field_access => |field| return loweredExprStep(try self.lowerFieldAccessExprAtNode(checked_expr, field, expected_node)),
+            .tag => |tag| return loweredExprStep(try self.lowerTagConstructorAtNode(tag, expected_node)),
+            .zero_argument_tag => |tag| return loweredExprStep(try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
+                .name = try self.tagName(self.view, tag.name),
+                .payloads = .empty(),
+            } })),
+            .nominal => |nominal| return loweredExprStep(try self.lowerNominalConstructorAtNode(nominal, expected_node)),
+            .tuple => |items| return loweredExprStep(try self.lowerTupleConstructorAtNode(items, expected_node)),
+            .list => |items| return loweredExprStep(try self.lowerListConstructorAtNode(items, expected_node)),
+            .empty_list => return loweredExprStep(try self.addExprWithTypeCell(
+                DraftTypeCell.fromGraphNode(expected_node),
+                .{ .list = .empty() },
+            )),
+            // `{}` is a record construction that omits every field: lower it
+            // through the record path so the demanded row's DEFAULTED fields
+            // materialize their defaults into the inline slots (design.md
+            // "Defaulted Fields").
+            .empty_record => return loweredExprStep(try self.lowerRecordConstructorAtNode(checked_expr, .{
+                .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
+                .ext = @as(?checked.CheckedExprId, null),
+            }, expected_node)),
+            .record => |record| return loweredExprStep(try self.lowerRecordConstructorAtNode(checked_expr, record, expected_node)),
+            .call => return requestLowerTask(self, .{ .call_expr_at_node = .{ .expr = checked_expr, .expected_node = expected_node } }),
+            .numeral => |numeral| if (numeral.conversion_root) |root_id| {
+                return loweredExprStep(try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node));
+            },
+            .str_from_quote => |quote| if (quote.conversion_root) |root_id| {
+                return loweredExprStep(try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node));
+            },
+            .dispatch_call => |plan| {
+                try self.selectExprRepresentationAtNode(checked_expr, expected_node);
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = cell } });
+            },
+            .interpolation => |interpolation| {
+                try self.selectExprRepresentationAtNode(checked_expr, expected_node);
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_cell = cell } });
+            },
+            .type_dispatch_call => |plan| {
+                try self.selectExprRepresentationAtNode(checked_expr, expected_node);
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = cell } });
+            },
+            .method_eq => |plan| {
+                try self.selectExprRepresentationAtNode(checked_expr, expected_node);
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = cell } });
+            },
+            .block => |block| return loweredExprStep(try self.lowerBlockAtTypeCell(block, cell)),
+            .match_ => |match| return loweredExprStep(try self.lowerMatchExprAtTypeCell(checked_expr, match, cell)),
+            .if_ => |if_| return loweredExprStep(try self.lowerIfExprAtTypeCell(checked_expr, if_, cell)),
+            .runtime_error => return loweredExprStep(try self.runtimeCrashExprAtCell(cell, "runtime error")),
+            .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
+            .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+        }
+        switch (expr.data) {
+            .tuple_access => |access| {
+                if (try self.checkedTypeContainsError(expr.ty)) {
+                    return loweredExprStep(try self.runtimeCrashExprAtCell(cell, "runtime error"));
+                }
+                if (try self.checkedTypeContainsError(self.view.bodies.expr(access.tuple).ty)) {
+                    return loweredExprStep(try self.runtimeCrashExprAtCell(cell, "runtime error"));
+                }
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+        }
+        try relateRequestComponent(
+            self.graph,
+            expected_node,
+            try self.lowerExprTypeNode(checked_expr),
+        );
+        switch (expr.data) {
+            .tuple_access => |access| {
+                const tuple_node = try self.lowerExprTypeNode(access.tuple);
+                const item_nodes = try self.graph.tupleItemNodes(tuple_node);
+                if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
+                const item_node = item_nodes[access.elem_index];
+                try relateRequestComponent(self.graph, expected_node, item_node);
+                task.tuple_node = tuple_node;
+                frame.cursor = 2;
+                return requestLowerChild(self, access.tuple, DraftTypeCell.fromGraphNode(tuple_node));
+            },
+            .run_low_level => |low_level| {
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } });
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
+        }
+        frame.cursor = 4;
+        return requestLowerTask(self, .{ .expr_inner = .{ .expr = checked_expr } });
+    }
+
+    fn stepTypeInner(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        const checked_expr = task.expr;
+        const ty = task.ty;
+        const expr = self.view.bodies.expr(checked_expr);
+        switch (frame.cursor) {
+            0 => {},
+            // A call lowered at the context type.
+            2 => {
+                const lowered = input.?.callValue();
+                if (!self.sameType(ty, try self.activeTypeFromCell(lowered.ret_ty))) {
+                    Common.invariant("checked call expression lowered at a type different from its context type");
+                }
+                const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
+                const expected_node = try self.activeNodeFromType(ty);
+                const completes_request = try self.resultCompletesRequest(expected_node, ret_node);
+                const contains_generated_private = try self.graph.containsGeneratedPrivate(ret_node);
+                const result_cell: DraftTypeCell = if (completes_request)
+                    lowered.ret_ty
+                else if (contains_generated_private) blk: {
+                    try relateRequestComponent(self.graph, expected_node, ret_node);
+                    break :blk lowered.ret_ty;
+                } else DraftTypeCell.fromGraphNode(try self.relateCheckedNodeToProducedValue(expected_node, ret_node));
+                return loweredExprStep(try self.addExprWithTypeCell(result_cell, lowered.data));
+            },
+            // A dispatch lowered at the context type.
+            3 => return .{ .ret = input.? },
+            // An expression lowered with the context type.
+            else => {
+                const lowered = input.?.exprValue();
+                if (!self.sameType(ty, try self.exprType(lowered))) {
+                    switch (expr.data) {
+                        .lambda, .closure => Common.invariant("checked function expression lowered at a type different from its context type"),
+                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("checked expression lowered at a type different from its call operand type"),
+                    }
+                }
+                return loweredExprStep(lowered);
+            },
+        }
+        switch (expr.data) {
+            .call => |call| if (try self.lowerInspectOnlyCall(
+                expr.ty,
+                call,
+                ty,
+                self.inspectCallDemand(call),
+            )) |rendered| return loweredExprStep(rendered),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+        }
+        if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return loweredExprStep(restored);
+        switch (expr.data) {
+            .runtime_error => {
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .with_type = .{ .expr = checked_expr, .ty = ty } });
+            },
+            .call => |call| {
+                if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| {
+                    return loweredExprStep(lowered);
+                }
+                try self.constrainKnownType(expr.ty, ty);
+                frame.cursor = 2;
+                return requestLowerTask(self, .{ .call = .{
+                    .expr = checked_expr,
+                    .checked_ret_ty = expr.ty,
+                    .call = call,
+                    .expected_ret_node = try self.activeNodeFromType(ty),
+                    .expected_ret_ty = ty,
+                } });
+            },
+            .dispatch_call => |plan| {
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = .{ .sealed = ty } } });
+            },
+            .interpolation => |interpolation| {
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_cell = .{ .sealed = ty } } });
+            },
+            .type_dispatch_call => |plan| {
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = .{ .sealed = ty } } });
+            },
+            .method_eq => |plan| {
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = .{ .sealed = ty } } });
+            },
+            .lookup_local => |lookup| return loweredExprStep(try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty)),
+            .lookup_external => |resolved| return loweredExprStep(try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
+            .lookup_required => |resolved| return loweredExprStep(try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
+            .structural_eq => |eq| {
+                try self.constrainKnownType(expr.ty, ty);
+                const lowered = try self.lowerDirectStructuralEqAtType(eq, ty);
+                if (!self.sameType(ty, try self.exprType(lowered))) {
+                    Common.invariant("checked structural equality lowered at a type different from its context type");
+                }
+                return loweredExprStep(lowered);
+            },
+            .structural_hash => |h| {
+                try self.constrainKnownType(expr.ty, ty);
+                const lowered = try self.lowerDirectStructuralHashAtType(h, ty);
+                if (!self.sameType(ty, try self.exprType(lowered))) {
+                    Common.invariant("checked structural hash lowered at a type different from its context type");
+                }
+                return loweredExprStep(lowered);
+            },
+            .field_access => |field| {
+                // A sealed result does not imply that the receiver is sealed:
+                // it may be a graph-backed local whose open row is constrained
+                // only at this field. Keep the receiver and field relation in
+                // the graph and let normal finalization seal the result.
+                return loweredExprStep(try self.lowerFieldAccessExprAtNode(
+                    checked_expr,
+                    field,
+                    try self.activeNodeFromType(ty),
+                ));
+            },
+            .lambda, .closure => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.constrainKnownType(expr.ty, ty),
+        }
+        frame.cursor = 4;
+        return requestLowerTask(self, .{ .with_type = .{ .expr = checked_expr, .ty = ty } });
+    }
+
+    fn stepExprInner(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        const expr_id = task.expr;
+        const expr = self.view.bodies.expr(expr_id);
+        if (frame.cursor != 0) {
+            self.restoreSourceLocation(&task.saved);
+            return .{ .ret = input.? };
+        }
+        task.saved = try self.saveSourceLocation(expr);
+        if (try self.lowerDivergentExprInContext(expr_id, .uncontextual)) |lowered| return self.exprInnerDone(task, lowered);
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
                 expr.ty,
                 call,
                 try self.primitiveType(.str),
                 self.inspectCallDemand(call),
-            )) |rendered| return rendered,
-            .runtime_error => return try self.lowerExprWithType(expr_id, try self.unitType()),
+            )) |rendered| return self.exprInnerDone(task, rendered),
+            .runtime_error => {
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = try self.unitType() } });
+            },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         switch (expr.data) {
             .call => |call| {
                 if (self.view.hoisted_constants.lookupByExpr(expr_id) != null) {
                     const expr_ty = try self.lowerExprType(expr_id);
-                    if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return restored;
+                    if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
                 }
-                return try self.lowerCallExpr(expr_id, expr.ty, call);
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .call_expr = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call } });
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (self.view.hoisted_constants.lookupByExpr(expr_id) != null) {
             const expr_node = try self.lowerExprTypeNode(expr_id);
-            if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
+            if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
         }
         switch (expr.data) {
             // A literal conversion is the leaf that resolves its checked
@@ -26321,7 +27009,7 @@ const BodyContext = struct {
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 if (checked.literalConversionRootOf(expr.data)) |root_id| {
-                    return try self.lowerLiteralConversionAtNode(expr_id, root_id, expr_node);
+                    return self.exprInnerDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, expr_node));
                 }
                 // Only an unpinned target variable takes the checked literal
                 // default. Openness inside a custom target is not evidence
@@ -26332,11 +27020,12 @@ const BodyContext = struct {
                     // A custom target converts through its checked conversion
                     // plan at this node; the target's own arguments may still
                     // resolve through later relations in this body.
-                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(expr_id, expr_node),
+                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst => return self.exprInnerDone(task, try self.lowerSpecializedLiteralConversion(expr_id, expr_node)),
                     .redirect => Common.invariant("literal type node was not a class root"),
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
-                return try self.lowerExprWithType(expr_id, expr_ty);
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = expr_ty } });
             },
             .str => |segments| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -26349,18 +27038,18 @@ const BodyContext = struct {
                 // a program with reported errors.
                 switch (self.graph.content(expr_node)) {
                     .primitive => |primitive| if (primitive != .str) {
-                        return try self.addExprWithTypeCell(
+                        return self.exprInnerDone(task, try self.addExprWithTypeCell(
                             DraftTypeCell.fromGraphNode(expr_node),
                             .{ .crash = try self.addStringLiteral("invalid string literal") },
-                        );
+                        ));
                     },
                     .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
                 }
                 try self.graph.unify(expr_node, try self.graph.importMono(try self.primitiveType(.str)));
-                return try self.addExprWithTypeCell(
+                return self.exprInnerDone(task, try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(expr_node),
                     try self.lowerStr(segments),
-                );
+                ));
             },
             // Constructor payloads carry the type evidence that completes the
             // constructor node. Lower them first, then seal the whole value at
@@ -26368,80 +27057,1324 @@ const BodyContext = struct {
             // nominal open rows such as `Try.Ok(numeral)`.
             .tag => |tag| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.lowerTagConstructorAtNode(tag, expr_node);
+                return self.exprInnerDone(task, try self.lowerTagConstructorAtNode(tag, expr_node));
             },
             .zero_argument_tag => |tag| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.addConstructorExprAtNode(expr_node, .{ .tag = .{
+                return self.exprInnerDone(task, try self.addConstructorExprAtNode(expr_node, .{ .tag = .{
                     .name = try self.tagName(self.view, tag.name),
                     .payloads = .empty(),
-                } });
+                } }));
             },
             .nominal => |nominal| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.lowerNominalConstructorAtNode(nominal, expr_node);
+                return self.exprInnerDone(task, try self.lowerNominalConstructorAtNode(nominal, expr_node));
             },
             .tuple => |items| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.lowerTupleConstructorAtNode(items, expr_node);
+                return self.exprInnerDone(task, try self.lowerTupleConstructorAtNode(items, expr_node));
             },
             .list => |items| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.lowerListConstructorAtNode(items, expr_node);
+                return self.exprInnerDone(task, try self.lowerListConstructorAtNode(items, expr_node));
             },
             .record => |record| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.lowerRecordConstructorAtNode(expr_id, record, expr_node);
+                return self.exprInnerDone(task, try self.lowerRecordConstructorAtNode(expr_id, record, expr_node));
             },
             .empty_list, .empty_record => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 if (expr.data == .empty_list) {
-                    return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(expr_node), .{ .list = .empty() });
+                    return self.exprInnerDone(task, try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(expr_node), .{ .list = .empty() }));
                 }
                 // `{}` is a record construction that omits every field:
                 // lower it through the record path so the demanded row's
                 // DEFAULTED fields materialize their defaults into the
                 // inline slots (design.md "Defaulted Fields").
-                return try self.lowerRecordExprAtNode(expr_id, .{
+                return self.exprInnerDone(task, try self.lowerRecordExprAtNode(expr_id, .{
                     .fields = @as([]const checked.CheckedRecordExprField, &.{}),
                     .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
                     .ext = @as(?checked.CheckedExprId, null),
-                }, expr_node, &.{});
+                }, expr_node, &.{}));
             },
             .field_access => |field| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.lowerFieldAccessExprAtNode(expr_id, field, expr_node);
+                return self.exprInnerDone(task, try self.lowerFieldAccessExprAtNode(expr_id, field, expr_node));
             },
             .pending, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_node = try self.lowerExprTypeNode(expr_id);
         switch (expr.data) {
             .dispatch_call => |plan| {
-                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
-                return try self.lowerDispatchExprAtType(expr.ty, plan, DraftTypeCell.fromGraphNode(expr_node));
+                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
             .interpolation => |interpolation| {
-                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
-                return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, DraftTypeCell.fromGraphNode(expr_node));
+                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
             .type_dispatch_call => |plan| {
-                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
-                return try self.lowerDispatchExprAtType(expr.ty, plan, DraftTypeCell.fromGraphNode(expr_node));
+                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
             .method_eq => |plan| {
-                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
-                return try self.lowerDispatchExprAtType(expr.ty, plan, DraftTypeCell.fromGraphNode(expr_node));
+                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_ty = try self.lowerExprType(expr_id);
-        if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return restored;
+        if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
         switch (expr.data) {
-            .structural_eq => |eq| return try self.lowerDirectStructuralEq(expr.ty, eq),
-            .structural_hash => |h| return try self.lowerDirectStructuralHash(expr.ty, h),
+            .structural_eq => |eq| return self.exprInnerDone(task, try self.lowerDirectStructuralEq(expr.ty, eq)),
+            .structural_hash => |h| return self.exprInnerDone(task, try self.lowerDirectStructuralHash(expr.ty, h)),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
-        return try self.lowerExprWithType(expr_id, expr_ty);
+        frame.cursor = 1;
+        return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = expr_ty } });
+    }
+
+    fn exprInnerDone(self: *BodyContext, task: anytype, lowered: DraftExprId) LowerStep {
+        self.restoreSourceLocation(&task.saved);
+        return loweredExprStep(lowered);
+    }
+
+    fn withTypeDone(self: *BodyContext, task: *WithTypeTask, lowered: DraftExprId) LowerStep {
+        self.restoreSourceLocation(&task.saved);
+        return loweredExprStep(lowered);
+    }
+
+    fn withTypeData(self: *BodyContext, task: *WithTypeTask, data: BodyExprData) Allocator.Error!LowerStep {
+        const lowered = try self.addExpr(.{ .ty = task.ty, .data = data });
+        return self.withTypeDone(task, lowered);
+    }
+
+    fn stepWithType(self: *BodyContext, frame: *LowerFrame, task: *WithTypeTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const expr_id = task.expr;
+        const ty = task.ty;
+        const expr = self.view.bodies.expr(expr_id);
+        if (frame.cursor != 0) {
+            const child = input.?;
+            return switch (expr.data) {
+                .list => try self.withTypeData(task, .{ .list = child.spanValue() }),
+                .tuple => self.withTypeDone(task, try self.addConstructorExpr(ty, .{ .tuple = child.spanValue() })),
+                .tag => self.withTypeDone(task, try self.addConstructorExpr(ty, .{ .tag = .{
+                    .name = task.tag_name,
+                    .payloads = child.spanValue(),
+                } })),
+                .nominal => self.withTypeDone(task, try self.addExpr(.{ .ty = task.nominal_named, .data = .{ .nominal = child.exprValue() } })),
+                .field_access => |field| try self.withTypeData(task, .{ .field_access = .{
+                    .receiver = child.exprValue(),
+                    .segments = .{ .start = task.field_access_start, .len = @intCast(field.segments.len) },
+                } }),
+                .tuple_access => |access| try self.withTypeData(task, .{ .tuple_access = .{
+                    .tuple = child.exprValue(),
+                    .elem_index = access.elem_index,
+                } }),
+                .expect => try self.withTypeData(task, .{ .expect = child.exprValue() }),
+                .run_low_level => |low_level| try self.withTypeData(task, .{ .low_level = .{ .op = low_level.op, .args = child.spanValue() } }),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .call, .record, .empty_record, .block, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => unreachable,
+            };
+        }
+        task.saved = try self.saveSourceLocation(expr);
+        frame.cursor = 1;
+        const data: BodyExprData = switch (expr.data) {
+            .pending,
+            .anno_only,
+            => Common.invariant("non-runtime checked expression reached Monotype lowering"),
+            .runtime_error => return self.withTypeDone(task, try self.runtimeCrashExpr(ty, "runtime error")),
+            .numeral => |numeral| {
+                if (numeral.conversion_root) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
+                return self.withTypeDone(task, try self.lowerNumeralExpr(expr_id, numeral, ty));
+            },
+            .str_from_quote => |quote| {
+                if (quote.conversion_root) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
+                return self.withTypeDone(task, try self.lowerQuoteExpr(expr_id, quote, ty));
+            },
+            .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
+            .bytes_literal => |str| blk: {
+                const literal = try self.lowerStringLiteral(str);
+                break :blk .{ .bytes_lit = .{
+                    .literal = literal,
+                    .len = @intCast(self.view.bodies.stringLiteral(str).len),
+                    .element = .u8,
+                } };
+            },
+            .empty_list => .{ .list = .empty() },
+            // `{}` is a record construction that omits every field: lower it
+            // through the same path as a non-empty literal so the demanded
+            // row's DEFAULTED fields materialize their defaults into the
+            // inline slots (design.md "Defaulted Fields"). With no defaulted
+            // fields demanded this produces the empty record constructor.
+            .empty_record => return self.withTypeDone(task, try self.lowerRecordExpr(.{
+                .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
+                .ext = @as(?checked.CheckedExprId, null),
+            }, ty, &.{})),
+            .str => |segments| try self.lowerStr(segments),
+            .lookup_local => |lookup| return self.withTypeDone(task, try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty)),
+            .lookup_external => |resolved| return self.withTypeDone(task, try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
+            .lookup_required => |resolved| return self.withTypeDone(task, try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
+            .list => |items| return requestLowerTask(self, .{ .list_span = .{ .exprs = items, .list_ty = ty } }),
+            .tuple => |items| return requestLowerTask(self, try self.spanAtTypesTask(items, self.tupleItemTypes(ty))),
+            .record => |record| return self.withTypeDone(task, try self.lowerRecordExpr(record, ty, &.{})),
+            .tag => |tag| {
+                const name = try self.tagName(self.view, tag.name);
+                task.tag_name = name;
+                return requestLowerTask(self, try self.spanAtTypesTask(tag.args, self.tagPayloadTypes(ty, name)));
+            },
+            .zero_argument_tag => |tag| return self.withTypeDone(task, try self.addConstructorExpr(ty, .{ .tag = .{ .name = try self.tagName(self.view, tag.name), .payloads = .empty() } })),
+            .nominal => |nominal| {
+                const named, const backing_ty = if (self.nominalConstructionLayer(ty)) |layer|
+                    .{ layer.named, layer.backing }
+                else
+                    .{ ty, self.namedBackingType(ty) orelse ty };
+                task.nominal_named = named;
+                if (try self.typeIsProvenUninhabited(backing_ty)) {
+                    const backing = try self.lowerExplicitUninhabitedInvocation(nominal.backing_expr, backing_ty);
+                    return self.withTypeDone(task, try self.addExpr(.{ .ty = named, .data = .{ .nominal = backing } }));
+                }
+                return requestLowerChild(self, nominal.backing_expr, .{ .sealed = backing_ty });
+            },
+            .closure => |closure| return self.withTypeDone(task, try self.lowerClosureAtNode(expr_id, closure, try self.activeNodeFromType(ty))),
+            .lambda => return self.withTypeDone(task, try self.lowerLambdaExprAtNode(expr_id, try self.activeNodeFromType(ty))),
+            .call => Common.invariant("call expression reached ordinary expression lowering after call-site lowering"),
+            .dispatch_call,
+            .interpolation,
+            .type_dispatch_call,
+            .method_eq,
+            => Common.invariant("dispatch expression reached ordinary expression lowering after call-site lowering"),
+            .structural_eq => Common.invariant("structural equality reached ordinary expression lowering after explicit equality lowering"),
+            .structural_hash => Common.invariant("structural hash reached ordinary expression lowering after explicit hash lowering"),
+            .field_access => |field| {
+                if (field.segments.len == 0) Common.invariant("checked field access path had no segments");
+                if (fieldAccessAnySegmentOptional(field.segments)) {
+                    return self.withTypeDone(task, try self.lowerOptionalFieldAccessChain(field, try self.lowerExprType(field.receiver), ty));
+                }
+                const receiver_ty = try self.lowerExprType(field.receiver);
+                const start: u32 = @intCast(self.draft.field_access_segments.items.len);
+                try self.draft.field_access_segments.ensureUnusedCapacity(self.allocator, field.segments.len);
+
+                var prefix_ty = receiver_ty;
+                for (field.segments) |segment| {
+                    const field_name = try self.recordFieldName(self.view, segment.field_name);
+                    prefix_ty = self.recordFieldType(prefix_ty, field_name);
+                    self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
+                }
+                if (@import("builtin").mode == .Debug and !self.sameType(ty, prefix_ty)) {
+                    Common.invariant("Monotype field access path type differed from its final receiver field type");
+                }
+                task.field_access_start = start;
+                return requestLowerChild(self, field.receiver, .{ .sealed = receiver_ty });
+            },
+            .tuple_access => |access| return requestLowerTask(self, .{ .expr = .{ .expr = access.tuple } }),
+            .match_ => |match| return self.withTypeDone(task, try self.lowerMatchExpr(expr_id, match, ty)),
+            .if_ => |if_| return self.withTypeDone(task, try self.lowerIfExpr(expr_id, if_, ty)),
+            .block => |block| try self.lowerBlock(block, ty),
+            .binop,
+            .unary_minus,
+            .unary_not,
+            => Common.invariant("desugared operator expression reached Monotype without checked dispatch or low-level form"),
+            .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
+            .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
+            .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
+            .expect_err => |expect_err| .{ .expect_err = .{
+                .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
+                .region = expr.source_region,
+            } },
+            .expect => |child| if (self.builder.inline_expects == .omit)
+                .unit
+            else
+                return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
+            .break_ => try self.breakCurrentLoopExprData(),
+            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
+            .for_ => |for_| .{ .block = .{
+                .statements = try self.addStmtSpan(&.{try self.addStmt(try self.lowerForStatement(for_))}),
+                .final_expr = try self.addExpr(.{ .ty = ty, .data = .unit }),
+            } },
+            .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
+            .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
+        };
+        return try self.withTypeData(task, data);
+    }
+
+    fn dispatchLowerDone(self: *BodyContext, task: *DispatchLowerTask, lowered: DraftExprId) LowerStep {
+        task.pre_lowered.deinit(self.allocator);
+        task.pre_lowered = .empty;
+        if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+        task.call_ctx = null;
+        task.timing.end();
+        return loweredExprStep(lowered);
+    }
+
+    fn stepDispatchLower(self: *BodyContext, frame: *LowerFrame, task: *DispatchLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const expected_ret_cell = task.expected_ret_cell;
+        const checked_ret_ty = task.checked_ret_ty;
+        const plan_id = task.maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        switch (frame.cursor) {
+            0 => {},
+            // The uninhabited-argument check.
+            1 => {
+                if (input.?.maybeExprValue()) |uninhabited| return self.dispatchLowerDone(task, uninhabited);
+                task.index = 0;
+                return try self.nextDispatchOperand(frame, task, plan);
+            },
+            // An operand lowered at its callable slot.
+            2 => {
+                try task.pre_lowered.append(self.allocator, .{ .index = task.index, .expr = input.?.exprValue() });
+                task.index += 1;
+                return try self.nextDispatchOperand(frame, task, plan);
+            },
+            // A parametric low-level call's operands.
+            3 => {
+                const plan_ret_node = task.callable_ret;
+                const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
+                    DraftTypeCell.fromGraphNode(plan_ret_node)
+                else
+                    expected_ret_cell;
+                const call_expr = try self.addExprWithTypeCell(call_ret_cell, .{ .low_level = .{
+                    .op = task.direct_parametric_low_level.?,
+                    .args = input.?.spanValue(),
+                } });
+                // Result modes consume the graph-backed call type directly
+                // because the return node may still be an unresolved open row
+                // here.
+                return self.dispatchLowerDone(task, try self.applyDispatchResultMode(plan.result_mode, call_expr));
+            },
+            // A closed direct call lowered by its own frame.
+            else => return self.dispatchLowerDone(task, input.?.exprValue()),
+        }
+
+        task.timing = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
+        self.builder.countBodyDiagnostic("dispatch_expressions");
+        task.direct_graph_call = self.dispatchUsesDirectGraphCallee(plan);
+        switch (plan.resolution) {
+            .direct_closed => |direct| {
+                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+                switch (node.target.kind) {
+                    .procedure => |procedure| switch (procedure.runtime_target) {
+                        .low_level => |op| {
+                            frame.cursor = 4;
+                            return requestLowerTask(self, .{ .closed_low_level = .{
+                                .plan = plan,
+                                .op = op,
+                                .expected_ret_cell = expected_ret_cell,
+                            } });
+                        },
+                        .procedure => {
+                            frame.cursor = 4;
+                            return requestLowerTask(self, .{ .closed_procedure = .{
+                                .checked_ret_ty = checked_ret_ty,
+                                .plan = plan,
+                                .evidence_id = direct.evidence,
+                                .procedure = procedure,
+                                .expected_ret_cell = expected_ret_cell,
+                            } });
+                        },
+                        .intrinsic, .graph_participating => {},
+                    },
+                    .local_proc => {},
+                    .structural => {},
+                }
+            },
+            .direct_parametric => |direct| {
+                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+                switch (node.target.kind) {
+                    .procedure => |procedure| switch (procedure.runtime_target) {
+                        .low_level => |op| task.direct_parametric_low_level = op,
+                        .procedure => {},
+                        .intrinsic, .graph_participating => {},
+                    },
+                    .local_proc => {},
+                    .structural => {},
+                }
+            },
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+            .evidence_dependent, .structural, .@"unreachable", .checked_error => {},
+        }
+        const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
+            .callable => |value| value,
+            .crash => |reason| {
+                const message = dispatchCrashMessage(reason);
+                return self.dispatchLowerDone(task, try self.addExprWithTypeCell(expected_ret_cell, .{ .crash = try self.addStringLiteral(message) }));
+            },
+        };
+        const plan_args = callable_plan.operands;
+        task.plan_args = plan_args;
+        const expected_ret_ty: ?Type.TypeId = switch (expected_ret_cell) {
+            .sealed => |ty| ty,
+            .graph_node => null,
+        };
+        const expected_ret_node = try expected_ret_cell.toGraphNode(self.graph);
+
+        const call_ctx = try self.createCallContext();
+        task.call_ctx = call_ctx;
+
+        var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            callable_plan,
+            self,
+            checked_ret_ty,
+            expected_ret_node,
+            .expression_lowering,
+        );
+        const resolution = self.evidenceResolution(plan) orelse
+            Common.invariant("runtime method call had no CheckedCallResolution evidence");
+        switch (resolution) {
+            .target => |initial_lookup| {
+                const relation_lookup = initial_lookup;
+                if (task.direct_parametric_low_level == null and !task.direct_graph_call) {
+                    const target_node = try self.methodTargetNodeFromPlan(relation_lookup, call_ctx, plan.callable_ty);
+                    try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
+                    if (try self.generatedIteratorMethodRequestNode(
+                        relation_lookup,
+                        target_node,
+                        callable_node,
+                        plan_args,
+                    )) |private_node| {
+                        callable_node = private_node;
+                    }
+                }
+                callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
+                    relation_lookup,
+                    callable_node,
+                    plan,
+                    task.direct_graph_call,
+                );
+            },
+            .structural => {},
+        }
+        const callsite_intrinsic = switch (resolution) {
+            .target => |lookup| self.callsiteIntrinsicForMethodTarget(lookup.target),
+            .structural => null,
+        };
+        if (callsite_intrinsic) |intrinsic| {
+            if (plan.result_mode != .value) {
+                Common.invariant("call-site intrinsic dispatch had a non-value result mode");
+            }
+            return self.dispatchLowerDone(task, try self.lowerCallsiteIntrinsicAtCallableNode(
+                intrinsic,
+                plan.expr,
+                plan.callable_ty,
+                .{ .dispatch = plan_args },
+                callable_node,
+                expected_ret_ty,
+            ));
+        }
+        const callable_graph = switch (self.graph.content(callable_node)) {
+            .func => |function| function,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+        };
+        task.callable_node = callable_node;
+        task.callable_args = callable_graph.args;
+        task.callable_ret = callable_graph.ret;
+        for (plan_args, 0..) |operand, index| switch (operand) {
+            .checked_expr => |expr| {
+                try self.relateExprAtNode(expr, callable_graph.args[index]);
+            },
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
+        };
+        for (plan_args, 0..) |operand, index| switch (operand) {
+            .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, callable_graph.args[index]),
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
+        };
+        frame.cursor = 1;
+        return requestLowerTask(self, .{ .uninhabited_dispatch = .{
+            .operands = plan_args,
+            .arg_nodes = callable_graph.args,
+            .ret_cell = expected_ret_cell,
+        } });
+    }
+
+    /// Lower the dispatch's next checked operand at its callable slot, or
+    /// finish the dispatch once every checked operand is lowered.
+    fn nextDispatchOperand(self: *BodyContext, frame: *LowerFrame, task: *DispatchLowerTask, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!LowerStep {
+        while (task.index < task.plan_args.len) : (task.index += 1) {
+            switch (task.plan_args[task.index]) {
+                .checked_expr => |expr| {
+                    frame.cursor = 2;
+                    return requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(task.callable_args[task.index]));
+                },
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => {},
+            }
+        }
+
+        const checked_ret_ty = task.checked_ret_ty;
+        const expected_ret_cell = task.expected_ret_cell;
+        const callable_node = task.callable_node;
+        const call_ctx = task.call_ctx.?;
+        const plan_args = task.plan_args;
+        const pre_lowered = task.pre_lowered.items;
+        const plan_ret_node = task.callable_ret;
+        // `dispatchTarget` raises the "dispatch plan had no method owner"
+        // invariant when the receiver never grounded to a concrete owner and
+        // the result mode is not a structural dispatch. That is only
+        // reachable inside a bare polymorphic function value never called at
+        // a concrete type—e.g. evaluating `run` itself for
+        // `run : a -> a where [a.go : a -> a]`. Checking classified such
+        // dispatches (`unreachable_dispatch`, or a `checked_error` for
+        // reported missing methods); both emit an ordinary Roc runtime crash
+        // and never return a dispatch result. A genuinely reachable ownerless
+        // dispatch was rejected at check time.
+        const resolved = switch (self.evidenceResolution(plan) orelse
+            Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
+            .target => |lookup| lookup,
+            .structural => |structural| return self.dispatchLowerDone(task, switch (structural.derivation) {
+                .equality => try self.lowerStructuralEqualityAtNode(plan, callable_node, self, pre_lowered),
+                .hash => try self.lowerStructuralHashAtNode(plan, callable_node, self, pre_lowered),
+                .parser, .encoder => try self.deferStructuralSerializationAtNode(
+                    plan,
+                    structural,
+                    callable_node,
+                    try call_ctx.instNode(plan.dispatcher_ty),
+                    pre_lowered,
+                ),
+                .map => |map_plan| blk: {
+                    const callable_mono_ty = try call_ctx.resolvedTypeViewForNode(callable_node);
+                    const plan_ret_ty = self.functionShape(callable_mono_ty, "checked structural map plan had a non-function type").ret;
+                    break :blk try self.lowerStructuralMap("map", plan, map_plan, callable_mono_ty, plan_ret_ty, self, pre_lowered);
+                },
+                .map_effectful => |map_plan| blk: {
+                    const callable_mono_ty = try call_ctx.resolvedTypeViewForNode(callable_node);
+                    const plan_ret_ty = self.functionShape(callable_mono_ty, "checked structural map! plan had a non-function type").ret;
+                    break :blk try self.lowerStructuralMap("map!", plan, map_plan, callable_mono_ty, plan_ret_ty, self, pre_lowered);
+                },
+            }),
+        };
+        const checked_result_node = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
+            try self.freshInstNode(checked_ret_ty)
+        else
+            try self.lowerTypeNode(checked_ret_ty);
+        _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node, .exact);
+        if (task.direct_parametric_low_level != null) {
+            try self.prepareDispatchOperandsAtNodes(plan_args, task.callable_args, pre_lowered);
+            frame.cursor = 3;
+            return requestLowerTask(self, .{ .prepared_operands = .{
+                .operands = plan_args,
+                .nodes = task.callable_args,
+                .pre_lowered = pre_lowered,
+            } });
+        }
+        const call_data = if (task.direct_graph_call)
+            try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered)
+        else
+            try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered);
+        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
+            DraftTypeCell.fromGraphNode(plan_ret_node)
+        else
+            expected_ret_cell;
+        const call_expr = try self.addExprWithTypeCell(
+            call_ret_cell,
+            call_data,
+        );
+        return self.dispatchLowerDone(task, try self.applyDispatchResultMode(plan.result_mode, call_expr));
+    }
+
+    fn stepClosedLowLevel(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        const plan = task.plan;
+        const expected_ret_cell = task.expected_ret_cell;
+        if (frame.cursor == 1) {
+            const lowered = switch (input.?.closedOperandsValue()) {
+                .args => |args| args,
+                .uninhabited => |expr| return loweredExprStep(expr),
+            };
+            const call = try self.addExprWithTypeCell(expected_ret_cell, .{ .low_level = .{
+                .op = task.op,
+                .args = lowered,
+            } });
+            return loweredExprStep(try self.applyDispatchResultMode(plan.result_mode, call));
+        }
+        const callable_ty = blk: {
+            var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+            defer timing_scope.end();
+            break :blk try self.lowerType(plan.callable_ty);
+        };
+        const function = self.functionShape(callable_ty, "checked closed direct low-level call had a non-function type");
+        const operands = plan.argsSlice(self.view.static_dispatch_plans);
+        if (operands.len != self.typeStore().span(function.args).len) {
+            Common.invariant("checked closed direct low-level call argument arity differed from its callable type");
+        }
+
+        switch (expected_ret_cell) {
+            .sealed => |expected| if (!self.sameType(expected, function.ret)) {
+                Common.invariant("checked closed direct low-level call result differed from its expected type");
+            },
+            .graph_node => |expected| try relateRequestComponent(
+                self.graph,
+                expected,
+                try self.activeNodeFromType(function.ret),
+            ),
+        }
+
+        const arg_types = self.typeStore().span(function.args);
+        if (operands.len != GuardedList.borrowLen(arg_types)) {
+            Common.invariant("closed dispatch argument arity differed from its sealed callable type");
+        }
+        frame.cursor = 1;
+        return requestLowerTask(self, .{ .closed_operands_at_types = .{
+            .operands = operands,
+            .stable_types = try GuardedList.dupe(self.allocator, Type.TypeId, arg_types),
+            .ret_cell = expected_ret_cell,
+        } });
+    }
+
+    /// `lowerClosedDispatchOperandsAtTypes`: lower each operand at its sealed
+    /// type, or, when an operand's type is proven uninhabited, lower the
+    /// operands before it and then the uninhabited operand as a scrutinee.
+    fn stepClosedOperandsAtTypes(self: *BodyContext, frame: *LowerFrame, task: *ClosedOperandsAtTypesTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const operands = task.operands;
+        const stable_types = task.stable_types;
+        switch (frame.cursor) {
+            0 => {
+                for (stable_types, 0..) |arg_ty, uninhabited_index| {
+                    if (!try self.typeIsProvenUninhabited(arg_ty)) continue;
+                    switch (operands[uninhabited_index]) {
+                        .checked_expr => {},
+                        .generated_interpolation_iter,
+                        .generated_numeral,
+                        .generated_quote,
+                        => Common.invariant("compiler-generated dispatch operand had an uninhabited sealed type"),
+                    }
+                    task.uninhabited_index = uninhabited_index;
+                    task.prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
+                    break;
+                }
+                if (task.uninhabited_index == null) {
+                    task.reserved = try self.reserveExprSpan(operands.len);
+                    task.reserving = true;
+                }
+                frame.cursor = 1;
+            },
+            else => {
+                const lowered = input.?.exprValue();
+                if (task.uninhabited_index != null) {
+                    task.prior[task.index] = lowered;
+                } else {
+                    self.draft.setReservedExprSpanItem(task.reserved, task.index, lowered);
+                }
+                task.index += 1;
+            },
+        }
+
+        const limit = task.uninhabited_index orelse operands.len;
+        if (task.index < limit) {
+            return requestLowerTask(self, .{ .operand_at_type = .{ .operand = operands[task.index], .ty = stable_types[task.index] } });
+        }
+
+        defer {
+            self.allocator.free(task.stable_types);
+            task.stable_types = &.{};
+            self.allocator.free(task.prior);
+            task.prior = &.{};
+        }
+        task.reserving = false;
+        const uninhabited_index = task.uninhabited_index orelse return .{ .ret = .{ .closed_operands = .{ .args = task.reserved.span } } };
+        const checked_arg = operands[uninhabited_index].checked_expr;
+        const arg_ty = stable_types[uninhabited_index];
+        const ret_cell = task.ret_cell;
+        const scrutinee = try self.lowerUninhabitedScrutinee(checked_arg, arg_ty);
+        var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
+        var index = uninhabited_index;
+        while (index > 0) {
+            index -= 1;
+            result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
+                .bind = try self.addPatWithTypeCell(.{ .sealed = stable_types[index] }, .wildcard),
+                .value = task.prior[index],
+                .rest = result,
+            } });
+        }
+        return .{ .ret = .{ .closed_operands = .{ .uninhabited = result } } };
+    }
+
+    fn stepClosedProcedure(self: *BodyContext, frame: *LowerFrame, task: *ClosedProcedureTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const checked_ret_ty = task.checked_ret_ty;
+        const plan = task.plan;
+        const expected_ret_cell = task.expected_ret_cell;
+        const operands = plan.argsSlice(self.view.static_dispatch_plans);
+        if (frame.cursor == 0) {
+            const callable_ty = blk: {
+                var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+                defer timing_scope.end();
+                break :blk try self.lowerType(plan.callable_ty);
+            };
+            const function = self.functionShape(callable_ty, "checked closed direct procedure call had a non-function type");
+            if (operands.len != self.typeStore().span(function.args).len) {
+                Common.invariant("checked closed direct procedure call argument arity differed from its callable type");
+            }
+            try self.constrainTypeToMono(checked_ret_ty, function.ret);
+            switch (expected_ret_cell) {
+                .sealed => |expected| if (!self.sameType(expected, function.ret)) {
+                    Common.invariant("checked closed direct procedure call result differed from its expected type");
+                },
+                .graph_node => |expected| try relateRequestComponent(
+                    self.graph,
+                    expected,
+                    try self.activeNodeFromType(function.ret),
+                ),
+            }
+
+            task.callable_node = try self.activeNodeFromType(callable_ty);
+            frame.cursor = 1;
+            return requestLowerTask(self, .{ .closed_operands_at_node = .{
+                .operands = operands,
+                .callable_node = task.callable_node,
+                .expected_ret_cell = expected_ret_cell,
+            } });
+        }
+        const callable_node = task.callable_node;
+        const lowered = switch (input.?.closedOperandsValue()) {
+            .args => |args| args,
+            .uninhabited => |expr| return loweredExprStep(expr),
+        };
+        const evidence_id = task.evidence_id;
+        const procedure = task.procedure;
+        const evidence_node = self.view.static_dispatch_plans.evidenceNode(evidence_id);
+        const lookup = self.methodLookupForResolvedTarget(evidence_node.target);
+        const direct_key = ClosedDirectCallIdentity{
+            .callable = checkedTypeAddress(self.view, plan.callable_ty),
+            .evidence = evidence_id,
+            .method_scope = self.method_scope.key,
+        };
+        const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
+            if (existing.draft_spec) |raw_spec| {
+                if (raw_spec >= self.draft.template_specs.items.len) {
+                    Common.invariant("closed direct call cache referenced a missing draft specialization");
+                }
+                const spec = &self.draft.template_specs.items[raw_spec];
+                if (spec.state != .deferred and !runtimeDemandGuardFrameSetsEql(
+                    spec.runtime_demand_guard_frames,
+                    try self.runtimeDemandGuardFrameAddresses(),
+                )) {
+                    try self.draft.template_spec_reuses.append(self.allocator, .{
+                        .spec = raw_spec,
+                        .prefix_proof = try self.currentRuntimeImpossibilityProof(null),
+                    });
+                }
+            }
+            break :blk existing.slot;
+        } else blk: {
+            const subst = (try self.dispatchTargetSubstitution(plan)) orelse
+                Common.invariant("closed direct procedure call had no checked substitution");
+            const template = lookup.view.templates.get(procedure.template.template);
+            if (subst.len != template.scheme_vars.len) {
+                Common.invariant("closed direct procedure call substitution length differed from its scheme");
+            }
+            const edge: EdgeEvidence = .{
+                .subst = subst,
+                .vector = try self.deriveEvidenceVector(
+                    templateSchemaIn(lookup.view, &template),
+                    subst,
+                    self.view,
+                    if (self.dispatchTargetContract(plan)) |c| c.entries else null,
+                    .body_lowering,
+                ),
+            };
+            const source_fn_ty = lookup.target.callable_ty;
+            const created = try self.builder.lowerDraftTemplateFromContext(
+                self,
+                procedure.template,
+                source_fn_ty,
+                lookup.view.types.rootKey(source_fn_ty),
+                callable_node,
+                edge,
+                .instantiation,
+                .independent_roots,
+                .inherit,
+            );
+            const draft_spec: ?u32 = switch (created.local) {
+                .draft => |draft_fn| self.draft.template_spec_by_fn.get(draft_fn) orelse
+                    Common.invariant("closed direct call created a draft function without a specialization record"),
+                .final => null,
+            };
+            try self.draft.closed_direct_specializations.put(direct_key, .{
+                .slot = created,
+                .draft_spec = draft_spec,
+            });
+            break :blk created;
+        };
+        const completed_callable_node = try self.draftFnSlotTypeNode(slot, callable_node);
+        const completed_function = try self.graph.functionNodes(completed_callable_node);
+        if (completed_function.args.len != operands.len) {
+            Common.invariant("completed closed direct procedure call changed its argument arity");
+        }
+        const completed_ret_is_private = try self.graph.containsGeneratedPrivate(completed_function.ret);
+        if (completed_ret_is_private) {
+            try relateRequestComponent(
+                self.graph,
+                try expected_ret_cell.toGraphNode(self.graph),
+                completed_function.ret,
+            );
+        }
+        const call_ret_cell = if (completed_ret_is_private)
+            DraftTypeCell.fromGraphNode(completed_function.ret)
+        else
+            expected_ret_cell;
+        const call = try self.addExprWithTypeCell(call_ret_cell, .{ .call_proc = .{
+            .callee = draftProcCalleeForSlot(slot),
+            .args = lowered,
+            .captures = try self.methodTargetCaptureSpan(lookup),
+        } });
+        return loweredExprStep(try self.applyDispatchResultMode(plan.result_mode, call));
+    }
+
+    fn stepClosedOperandsAtNode(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        switch (frame.cursor) {
+            0 => {
+                const function = blk: {
+                    var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+                    defer timing_scope.end();
+                    break :blk try self.graph.functionNodes(task.callable_node);
+                };
+                if (task.operands.len != function.args.len) {
+                    Common.invariant("closed dispatch argument arity differed from its callable type");
+                }
+                task.arg_nodes = function.args;
+                try self.prepareDispatchOperandsAtNodes(task.operands, function.args, &.{});
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .uninhabited_dispatch = .{
+                    .operands = task.operands,
+                    .arg_nodes = function.args,
+                    .ret_cell = task.expected_ret_cell,
+                } });
+            },
+            1 => {
+                if (input.?.maybeExprValue()) |uninhabited| {
+                    return .{ .ret = .{ .closed_operands = .{ .uninhabited = uninhabited } } };
+                }
+                frame.cursor = 2;
+                return requestLowerTask(self, .{ .prepared_operands = .{
+                    .operands = task.operands,
+                    .nodes = task.arg_nodes,
+                    .pre_lowered = &.{},
+                } });
+            },
+            else => return .{ .ret = .{ .closed_operands = .{ .args = input.?.spanValue() } } },
+        }
+    }
+
+    /// `lowerPreparedDispatchOperandsAtNodes`: lower each operand not already
+    /// lowered at its slot node.
+    fn stepPreparedOperands(self: *BodyContext, frame: *LowerFrame, task: *PreparedOperandsTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const operands = task.operands;
+        const nodes = task.nodes;
+        if (frame.cursor == 0) {
+            if (operands.len != nodes.len) Common.invariant("dispatch argument arity differs from function graph node");
+            task.reserved = try self.reserveExprSpan(operands.len);
+            task.reserving = true;
+            frame.cursor = 1;
+        } else {
+            const lowered = input.?.exprValue();
+            self.draft.setReservedExprSpanItem(task.reserved, task.index, lowered);
+            try relateRequestComponent(
+                self.graph,
+                nodes[task.index],
+                try self.exprTypeCell(lowered).toGraphNode(self.graph),
+            );
+            task.index += 1;
+        }
+        while (task.index < operands.len) : (task.index += 1) {
+            if (self.preLoweredOperandAt(task.pre_lowered, task.index)) |pre| {
+                self.draft.setReservedExprSpanItem(task.reserved, task.index, pre);
+                continue;
+            }
+            const operand = operands[task.index];
+            const node = nodes[task.index];
+            return switch (operand) {
+                .checked_expr => |expr| requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(node)),
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => requestLowerTask(self, .{ .operand_at_type = .{ .operand = operand, .ty = try self.activeTypeFromNode(node) } }),
+            };
+        }
+        task.reserving = false;
+        return .{ .ret = .{ .span = task.reserved.span } };
+    }
+
+    fn stepOperandAtType(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor == 1) return .{ .ret = input.? };
+        return switch (task.operand) {
+            .checked_expr => |expr| blk: {
+                frame.cursor = 1;
+                break :blk requestLowerChild(self, expr, .{ .sealed = task.ty });
+            },
+            .generated_interpolation_iter => |expr| loweredExprStep(try self.lowerGeneratedInterpolationIter(expr, task.ty)),
+            .generated_numeral => |literal| loweredExprStep(try self.lowerNumeralValue(literal, task.ty)),
+            .generated_quote => |literal| loweredExprStep(try self.lowerQuoteValue(literal, task.ty)),
+        };
+    }
+
+    /// `lowerDispatchWithUninhabitedArgument`: when an operand's slot is
+    /// proven uninhabited, lower the operands before it, then that operand as
+    /// the scrutinee of a zero-branch match.
+    fn stepUninhabitedDispatch(self: *BodyContext, frame: *LowerFrame, task: *UninhabitedArgumentTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const arg_nodes = task.arg_nodes;
+        const operands = task.operands;
+        if (frame.cursor == 0) {
+            if (operands.len != arg_nodes.len) {
+                Common.invariant("dispatch argument arity differed while lowering an uninhabited invocation");
+            }
+            const uninhabited_index = for (arg_nodes, 0..) |arg_node, index| {
+                if (try self.nodeIsProvenUninhabited(arg_node)) break index;
+            } else return .{ .ret = .{ .maybe_expr = null } };
+            switch (operands[uninhabited_index]) {
+                .checked_expr => {},
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => Common.invariant("compiler-generated dispatch operand had an uninhabited type"),
+            }
+            task.uninhabited_index = uninhabited_index;
+            task.prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
+            frame.cursor = 1;
+        } else {
+            task.prior[task.index] = input.?.exprValue();
+            task.index += 1;
+        }
+
+        if (task.index < task.uninhabited_index) {
+            const prior_node = arg_nodes[task.index];
+            return switch (operands[task.index]) {
+                .checked_expr => |expr| requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(prior_node)),
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => requestLowerTask(self, .{ .operand_at_type = .{ .operand = operands[task.index], .ty = try self.activeTypeFromNode(prior_node) } }),
+            };
+        }
+
+        defer {
+            self.allocator.free(task.prior);
+            task.prior = &.{};
+        }
+        const uninhabited_index = task.uninhabited_index;
+        const arg_cell = DraftTypeCell.fromGraphNode(arg_nodes[uninhabited_index]);
+        const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(operands[uninhabited_index].checked_expr, arg_cell);
+        const ret_cell = task.ret_cell;
+        var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
+        var index = uninhabited_index;
+        while (index > 0) {
+            index -= 1;
+            const prior_cell = DraftTypeCell.fromGraphNode(arg_nodes[index]);
+            result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
+                .bind = try self.addPatWithTypeCell(prior_cell, .wildcard),
+                .value = task.prior[index],
+                .rest = result,
+            } });
+        }
+        return .{ .ret = .{ .maybe_expr = result } };
+    }
+
+    /// `lowerDirectCallWithUninhabitedArgument`: when an argument's slot is
+    /// proven uninhabited, lower the arguments before it through their graph
+    /// cells, then that argument as the scrutinee of a zero-branch match.
+    fn stepUninhabitedCall(self: *BodyContext, frame: *LowerFrame, task: *UninhabitedArgumentTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const arg_nodes = task.arg_nodes;
+        if (frame.cursor == 0) {
+            const uninhabited_index = for (arg_nodes, 0..) |arg_node, index| {
+                if (try self.nodeIsProvenUninhabited(arg_node)) break index;
+            } else return .{ .ret = .{ .maybe_call = null } };
+            task.uninhabited_index = uninhabited_index;
+            task.prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
+            frame.cursor = 1;
+        } else {
+            task.prior[task.index] = input.?.exprValue();
+            task.index += 1;
+        }
+
+        if (task.index < task.uninhabited_index) {
+            return requestLowerChild(self, task.checked_args[task.index], DraftTypeCell.fromGraphNode(arg_nodes[task.index]));
+        }
+
+        defer {
+            self.allocator.free(task.prior);
+            task.prior = &.{};
+        }
+        const uninhabited_index = task.uninhabited_index;
+        const uninhabited_cell = DraftTypeCell.fromGraphNode(arg_nodes[uninhabited_index]);
+        const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(
+            task.checked_args[uninhabited_index],
+            uninhabited_cell,
+        );
+        const ret_cell = task.ret_cell;
+        var result = try self.addExprWithTypeCell(ret_cell, .{ .match_ = .{
+            .scrutinee = scrutinee,
+            .branches = try self.addBranchSpan(&.{}),
+            .comptime_site = null,
+        } });
+        var index = uninhabited_index;
+        while (index > 0) {
+            index -= 1;
+            const arg_cell = DraftTypeCell.fromGraphNode(arg_nodes[index]);
+            result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
+                .bind = try self.addPatWithTypeCell(arg_cell, .wildcard),
+                .value = task.prior[index],
+                .rest = result,
+            } });
+        }
+        return .{ .ret = .{ .maybe_call = .{
+            .ret_ty = ret_cell,
+            .data = try self.exprIdAsDivergentData(result),
+        } } };
+    }
+
+    const SpanMode = enum {
+        /// `lowerExprSpan`: each child at its own expression type node.
+        typed_by_expr,
+        /// `lowerPreparedExprSpanAtNodes`: each child at its prepared node.
+        at_nodes,
+        /// `lowerExprSpanAtTypes`: each child at its sealed type.
+        at_types,
+        /// `lowerListExpr`: each element at the list's element type.
+        list_elements,
+    };
+
+    /// A span task lowering each child at its sealed type, owning a stable
+    /// copy of those types.
+    fn spanAtTypesTask(self: *BodyContext, exprs: []const checked.CheckedExprId, tys: anytype) Allocator.Error!LowerTask {
+        if (exprs.len != GuardedList.borrowLen(tys)) Common.invariant("call argument arity differs from concrete function type");
+        return .{ .span_at_types = .{
+            .exprs = exprs,
+            .types = try GuardedList.dupe(self.allocator, Type.TypeId, tys),
+            .owns_types = true,
+        } };
+    }
+
+    fn stepSpan(self: *BodyContext, frame: *LowerFrame, task: *SpanTask, input: ?LowerResult, mode: SpanMode) Allocator.Error!LowerStep {
+        const exprs = task.exprs;
+        if (frame.cursor == 0) {
+            switch (mode) {
+                .typed_by_expr, .at_types => {},
+                .at_nodes => if (exprs.len != task.nodes.len) Common.invariant("checked call argument count differed from graph function arity"),
+                .list_elements => task.elem_ty = switch (self.shapeContent(task.list_ty)) {
+                    .list => |elem| elem,
+                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("list expression had a non-list monotype"),
+                },
+            }
+            task.reserved = try self.reserveExprSpan(exprs.len);
+            task.reserving = true;
+            frame.cursor = 1;
+        } else {
+            self.draft.setReservedExprSpanItem(task.reserved, task.index, input.?.exprValue());
+            task.index += 1;
+        }
+        while (task.index < exprs.len) {
+            const child = exprs[task.index];
+            const ty = switch (mode) {
+                .typed_by_expr => return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child))),
+                .at_nodes => return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(task.nodes[task.index])),
+                .at_types => task.types[task.index],
+                .list_elements => task.elem_ty,
+            };
+            if (!try self.typeIsProvenUninhabited(ty)) return requestLowerChild(self, child, .{ .sealed = ty });
+            self.draft.setReservedExprSpanItem(task.reserved, task.index, try self.lowerExplicitUninhabitedInvocation(child, ty));
+            task.index += 1;
+        }
+        task.reserving = false;
+        self.releaseSpanTask(task);
+        return .{ .ret = .{ .span = task.reserved.span } };
+    }
+
+    fn releaseSpanTask(self: *BodyContext, task: *SpanTask) void {
+        if (task.reserving) {
+            self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
+            task.reserving = false;
+        }
+        if (task.owns_types) {
+            self.allocator.free(task.types);
+            task.types = &.{};
+            task.owns_types = false;
+        }
+    }
+
+    fn callLowerDone(self: *BodyContext, task: *CallLowerTask, lowered: LoweredCall) LowerStep {
+        if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+        task.call_ctx = null;
+        task.timing.end();
+        return .{ .ret = .{ .call = lowered } };
+    }
+
+    /// `lowerCallAtExpectedNode`
+    fn stepCallLower(self: *BodyContext, frame: *LowerFrame, task: *CallLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const checked_expr = task.expr;
+        const checked_ret_ty = task.checked_ret_ty;
+        const call = task.call;
+        switch (frame.cursor) {
+            0 => {
+                const expected_ret_node = task.expected_ret_node;
+                const expected_ret_ty = task.expected_ret_ty;
+                task.timing = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
+                self.builder.countBodyDiagnostic("call_expressions");
+                if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return self.callLowerDone(task, lowered);
+
+                if (call.direct_target) |target| {
+                    const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                    task.iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
+                    const fn_node = try self.directCallRequestNode(
+                        checked_expr,
+                        target,
+                        call,
+                        checked_ret_ty,
+                        source_fn_ty,
+                        expected_ret_node,
+                    );
+                    const fn_nodes = try self.graph.functionNodes(fn_node);
+                    try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args);
+                    task.fn_node = fn_node;
+                    task.fn_nodes = fn_nodes;
+                    frame.cursor = 1;
+                    return requestLowerTask(self, .{ .uninhabited_call = .{
+                        .checked_args = call.args,
+                        .arg_nodes = fn_nodes.args,
+                        .ret_cell = DraftTypeCell.fromGraphNode(fn_nodes.ret),
+                    } });
+                }
+
+                if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
+                    const fn_data = self.functionShape(fn_ty, "checked call function type was not a function");
+                    try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
+                    if (expected_ret_ty) |expected| {
+                        if (!self.sameType(expected, fn_data.ret)) {
+                            Common.invariant("checked indirect call result type differed from its expected Monotype type");
+                        }
+                    }
+                    task.fn_ty = fn_ty;
+                    frame.cursor = 4;
+                    return requestLowerChild(self, call.func, .{ .sealed = fn_ty });
+                }
+
+                const call_ctx = try self.createCallContext();
+                task.call_ctx = call_ctx;
+                const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
+                    call.source_fn_ty_payload,
+                    self,
+                    checked_ret_ty,
+                    call.args,
+                    expected_ret_node,
+                    null,
+                    false,
+                );
+                const fn_nodes = try self.graph.functionNodes(fn_node);
+                try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
+                task.fn_node = fn_node;
+                task.fn_nodes = fn_nodes;
+                frame.cursor = 6;
+                return requestLowerChild(self, call.func, DraftTypeCell.fromGraphNode(fn_node));
+            },
+            // A direct call's uninhabited-argument check.
+            1 => {
+                if (input.?.maybeCallValue()) |lowered| return self.callLowerDone(task, lowered);
+                const target = call.direct_target.?;
+                const fn_nodes = task.fn_nodes;
+                if (task.iterator_procedure) |procedure| {
+                    if (try self.lowerGeneratedIteratorNextCall(procedure, call.args, fn_nodes)) |lowered| return self.callLowerDone(task, lowered);
+                }
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                if (self.resolvedTargetIsStrInspect(target)) {
+                    frame.cursor = 2;
+                    return requestLowerTask(self, .{ .prepared_span = .{ .exprs = call.args, .nodes = fn_nodes.args } });
+                }
+                const completed = try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, task.fn_node);
+                const callee_fn_nodes = try self.graph.functionNodes(completed.fn_node);
+                if (callee_fn_nodes.args.len != fn_nodes.args.len) {
+                    Common.invariant("completed direct-call specialization changed argument arity");
+                }
+                task.callee = completed.callee;
+                task.callee_ret = callee_fn_nodes.ret;
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .prepared_span = .{ .exprs = call.args, .nodes = fn_nodes.args } });
+            },
+            // `Str.inspect`'s argument.
+            2 => {
+                const args = input.?.spanValue();
+                const target = call.direct_target.?;
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                const source_fn_key = self.view.types.rootKey(source_fn_ty);
+                if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
+                const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, task.fn_node);
+                const captures = try self.directCallCaptureSpan(target);
+                return self.callLowerDone(task, .{
+                    .ret_ty = DraftTypeCell.fromGraphNode(task.fn_nodes.ret),
+                    .data = .{ .call_proc = .{
+                        .callee = .{ .func = callee },
+                        .args = args,
+                        .iterator_procedure = task.iterator_procedure,
+                        .captures = captures,
+                    } },
+                });
+            },
+            // A completed direct call's arguments.
+            3 => {
+                const lowered_args = input.?.spanValue();
+                const captures = try self.directCallCaptureSpan(call.direct_target.?);
+                return self.callLowerDone(task, .{
+                    .ret_ty = DraftTypeCell.fromGraphNode(task.callee_ret),
+                    .data = .{ .call_proc = .{
+                        .callee = .{ .func = task.callee },
+                        .args = lowered_args,
+                        .iterator_procedure = task.iterator_procedure,
+                        .captures = captures,
+                    } },
+                });
+            },
+            // A sealed indirect callee, then its arguments.
+            4 => {
+                task.callee_expr = input.?.exprValue();
+                const fn_data = self.functionShape(task.fn_ty, "checked call function type was not a function");
+                frame.cursor = 5;
+                return requestLowerTask(self, try self.spanAtTypesTask(call.args, self.typeStore().span(fn_data.args)));
+            },
+            5 => {
+                const fn_data = self.functionShape(task.fn_ty, "checked call function type was not a function");
+                return self.callLowerDone(task, .{
+                    .ret_ty = .{ .sealed = fn_data.ret },
+                    .data = .{ .call_value = .{
+                        .callee = task.callee_expr,
+                        .args = input.?.spanValue(),
+                    } },
+                });
+            },
+            // A graph-instantiated indirect callee, then its arguments.
+            6 => {
+                task.callee_expr = input.?.exprValue();
+                frame.cursor = 7;
+                return requestLowerTask(self, .{ .prepared_span = .{ .exprs = call.args, .nodes = task.fn_nodes.args } });
+            },
+            else => return self.callLowerDone(task, .{
+                .ret_ty = DraftTypeCell.fromGraphNode(task.fn_nodes.ret),
+                .data = .{ .call_value = .{
+                    .callee = task.callee_expr,
+                    .args = input.?.spanValue(),
+                } },
+            }),
+        }
+    }
+
+    /// `lowerCallExprAtNode`
+    fn stepCallExprAtNode(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        const checked_expr = task.expr;
+        const expected_node = task.expected_node;
+        const expr = self.view.bodies.expr(checked_expr);
+        const call = switch (expr.data) {
+            .call => |call| call,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("call-at-node lowering received a non-call expression"),
+        };
+        if (frame.cursor == 1) {
+            const call_data = input.?.callValue();
+            return loweredExprStep(try self.finishCallExprAtNode(expected_node, try self.addExprWithTypeCell(call_data.ret_ty, call_data.data)));
+        }
+        const producer_request = if (self.isGeneratedPrivateRootNode(expected_node)) expected_node else null;
+        const lowered = if (try self.lowerInspectOnlyCall(
+            expr.ty,
+            call,
+            try self.primitiveType(.str),
+            self.inspectCallDemand(call),
+        )) |rendered|
+            rendered
+        else if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored|
+            restored
+        else if (if (producer_request) |request|
+            try self.lowerCallsiteIntrinsicCallExprAtNode(checked_expr, expr.ty, call, request)
+        else
+            try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
+            intrinsic
+        else {
+            // Preserve the expected result as an active graph relation. It
+            // may contain unresolved payload cells here, so materializing it
+            // as a Monotype TypeId would emit an incomplete output.
+            frame.cursor = 1;
+            return requestLowerTask(self, .{ .call = .{
+                .expr = checked_expr,
+                .checked_ret_ty = expr.ty,
+                .call = call,
+                .expected_ret_node = producer_request,
+                .expected_ret_ty = null,
+            } });
+        };
+        return loweredExprStep(try self.finishCallExprAtNode(expected_node, lowered));
+    }
+
+    fn finishCallExprAtNode(self: *BodyContext, expected_node: NodeId, lowered: DraftExprId) Allocator.Error!DraftExprId {
+        const lowered_node = try self.exprTypeCell(lowered).toGraphNode(self.graph);
+        const completes_request = try self.resultCompletesRequest(expected_node, lowered_node);
+        const contains_generated_private = try self.graph.containsGeneratedPrivate(lowered_node);
+        const result_node = if (completes_request)
+            lowered_node
+        else if (contains_generated_private) blk: {
+            try relateRequestComponent(
+                self.graph,
+                expected_node,
+                lowered_node,
+            );
+            break :blk lowered_node;
+        } else try self.relateCheckedNodeToProducedValue(expected_node, lowered_node);
+        self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(
+            result_node,
+        );
+        return lowered;
+    }
+
+    /// `lowerCallExpr`
+    fn stepCallExpr(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
+        const checked_expr_id = task.expr;
+        const checked_ret_ty = task.checked_ret_ty;
+        if (frame.cursor == 0) {
+            if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr_id, checked_ret_ty, task.call, null)) |expr| {
+                return loweredExprStep(expr);
+            }
+            frame.cursor = 1;
+            return requestLowerTask(self, .{ .call = .{
+                .expr = checked_expr_id,
+                .checked_ret_ty = checked_ret_ty,
+                .call = task.call,
+                .expected_ret_node = null,
+                .expected_ret_ty = null,
+            } });
+        }
+        const lowered = input.?.callValue();
+        const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
+        const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
+        var result_request_node = checked_ret_node;
+        if (!self.graph.sameClass(ret_node, checked_ret_node)) {
+            const public_ret = if (try self.graph.containsGeneratedPrivate(checked_ret_node))
+                try self.freshInstNode(checked_ret_ty)
+            else
+                checked_ret_node;
+            result_request_node = public_ret;
+            if (!try self.resultCompletesRequest(public_ret, ret_node) or
+                try self.graph.containsGeneratedPrivate(ret_node))
+            {
+                if (try self.graph.containsGeneratedPrivate(ret_node))
+                    try relateRequestComponent(self.graph, public_ret, ret_node)
+                else
+                    _ = try self.relateCheckedNodeToProducedValue(public_ret, ret_node);
+            }
+        }
+        return loweredExprStep(try self.addExprWithTypeCell(
+            try self.producedResultCell(result_request_node, lowered.ret_ty),
+            lowered.data,
+        ));
+    }
+
+    fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
+        return (try self.runLower(.{ .expr = .{ .expr = expr_id } })).exprValue();
+    }
+
+    fn lowerExprInner(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
+        return (try self.runLower(.{ .expr_inner = .{ .expr = expr_id } })).exprValue();
     }
 
     fn lowerReturn(self: *BodyContext, ret: anytype, context: checked.CheckedReturnContext) Allocator.Error!DraftReturn {
@@ -26656,142 +28589,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const expr = self.view.bodies.expr(expr_id);
-        const saved_loc = self.builder.current_loc;
-        defer self.builder.current_loc = saved_loc;
-        const saved_region = self.builder.current_region;
-        defer self.builder.current_region = saved_region;
-        const region = self.sourceRegionForExpr(expr);
-        self.builder.current_loc = try self.sourceLocFor(region);
-        self.builder.current_region = region;
-        const data: BodyExprData = switch (expr.data) {
-            .pending,
-            .anno_only,
-            => Common.invariant("non-runtime checked expression reached Monotype lowering"),
-            .runtime_error => return try self.runtimeCrashExpr(ty, "runtime error"),
-            .numeral => |numeral| {
-                if (numeral.conversion_root) |root_id| return try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty));
-                return try self.lowerNumeralExpr(expr_id, numeral, ty);
-            },
-            .str_from_quote => |quote| {
-                if (quote.conversion_root) |root_id| return try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty));
-                return try self.lowerQuoteExpr(expr_id, quote, ty);
-            },
-            .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
-            .bytes_literal => |str| blk: {
-                const literal = try self.lowerStringLiteral(str);
-                break :blk .{ .bytes_lit = .{
-                    .literal = literal,
-                    .len = @intCast(self.view.bodies.stringLiteral(str).len),
-                    .element = .u8,
-                } };
-            },
-            .empty_list => .{ .list = .empty() },
-            // `{}` is a record construction that omits every field: lower it
-            // through the same path as a non-empty literal so the demanded
-            // row's DEFAULTED fields materialize their defaults into the
-            // inline slots (design.md "Defaulted Fields"). With no defaulted
-            // fields demanded this produces the empty record constructor.
-            .empty_record => return try self.lowerRecordExpr(.{
-                .fields = @as([]const checked.CheckedRecordExprField, &.{}),
-                .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
-                .ext = @as(?checked.CheckedExprId, null),
-            }, ty, &.{}),
-            .str => |segments| try self.lowerStr(segments),
-            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
-            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
-            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
-            .list => |items| .{ .list = try self.lowerListExpr(items, ty) },
-            .tuple => |items| return try self.addConstructorExpr(ty, .{ .tuple = try self.lowerExprSpanAtTypes(items, self.tupleItemTypes(ty)) }),
-            .record => |record| return try self.lowerRecordExpr(record, ty, &.{}),
-            .tag => |tag| {
-                const name = try self.tagName(self.view, tag.name);
-                return try self.addConstructorExpr(ty, .{ .tag = .{
-                    .name = name,
-                    .payloads = try self.lowerExprSpanAtTypes(tag.args, self.tagPayloadTypes(ty, name)),
-                } });
-            },
-            .zero_argument_tag => |tag| return try self.addConstructorExpr(ty, .{ .tag = .{ .name = try self.tagName(self.view, tag.name), .payloads = .empty() } }),
-            .nominal => |nominal| {
-                if (self.nominalConstructionLayer(ty)) |layer| {
-                    const backing = if (try self.typeIsProvenUninhabited(layer.backing))
-                        try self.lowerExplicitUninhabitedInvocation(nominal.backing_expr, layer.backing)
-                    else
-                        try self.lowerExprAtType(nominal.backing_expr, layer.backing);
-                    return try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing } });
-                }
-                const backing_ty = self.namedBackingType(ty) orelse ty;
-                const backing = if (try self.typeIsProvenUninhabited(backing_ty))
-                    try self.lowerExplicitUninhabitedInvocation(nominal.backing_expr, backing_ty)
-                else
-                    try self.lowerExprAtType(nominal.backing_expr, backing_ty);
-                return try self.addExpr(.{ .ty = ty, .data = .{ .nominal = backing } });
-            },
-            .closure => |closure| return try self.lowerClosureAtNode(expr_id, closure, try self.activeNodeFromType(ty)),
-            .lambda => return try self.lowerLambdaExprAtNode(expr_id, try self.activeNodeFromType(ty)),
-            .call => Common.invariant("call expression reached ordinary expression lowering after call-site lowering"),
-            .dispatch_call,
-            .interpolation,
-            .type_dispatch_call,
-            .method_eq,
-            => Common.invariant("dispatch expression reached ordinary expression lowering after call-site lowering"),
-            .structural_eq => Common.invariant("structural equality reached ordinary expression lowering after explicit equality lowering"),
-            .structural_hash => Common.invariant("structural hash reached ordinary expression lowering after explicit hash lowering"),
-            .field_access => |field| field_access: {
-                if (field.segments.len == 0) Common.invariant("checked field access path had no segments");
-                if (fieldAccessAnySegmentOptional(field.segments)) {
-                    return try self.lowerOptionalFieldAccessChain(field, try self.lowerExprType(field.receiver), ty);
-                }
-                const receiver_ty = try self.lowerExprType(field.receiver);
-                const start: u32 = @intCast(self.draft.field_access_segments.items.len);
-                try self.draft.field_access_segments.ensureUnusedCapacity(self.allocator, field.segments.len);
-
-                var prefix_ty = receiver_ty;
-                for (field.segments) |segment| {
-                    const field_name = try self.recordFieldName(self.view, segment.field_name);
-                    prefix_ty = self.recordFieldType(prefix_ty, field_name);
-                    self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
-                }
-                if (@import("builtin").mode == .Debug and !self.sameType(ty, prefix_ty)) {
-                    Common.invariant("Monotype field access path type differed from its final receiver field type");
-                }
-                break :field_access .{ .field_access = .{
-                    .receiver = try self.lowerExprAtType(field.receiver, receiver_ty),
-                    .segments = .{ .start = start, .len = @intCast(field.segments.len) },
-                } };
-            },
-            .tuple_access => |access| .{ .tuple_access = .{
-                .tuple = try self.lowerExpr(access.tuple),
-                .elem_index = access.elem_index,
-            } },
-            .match_ => |match| return try self.lowerMatchExpr(expr_id, match, ty),
-            .if_ => |if_| return try self.lowerIfExpr(expr_id, if_, ty),
-            .block => |block| try self.lowerBlock(block, ty),
-            .binop,
-            .unary_minus,
-            .unary_not,
-            => Common.invariant("desugared operator expression reached Monotype without checked dispatch or low-level form"),
-            .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
-            .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
-            .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
-            .expect_err => |expect_err| .{ .expect_err = .{
-                .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
-                .region = expr.source_region,
-            } },
-            .expect => |child| if (self.builder.inline_expects == .omit)
-                .unit
-            else
-                .{ .expect = try self.lowerExpr(child) },
-            .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
-            .for_ => |for_| .{ .block = .{
-                .statements = try self.addStmtSpan(&.{try self.addStmt(try self.lowerForStatement(for_))}),
-                .final_expr = try self.addExpr(.{ .ty = ty, .data = .unit }),
-            } },
-            .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
-            .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
-        };
-        return try self.addExpr(.{ .ty = ty, .data = data });
+        return (try self.runLower(.{ .with_type = .{ .expr = expr_id, .ty = ty } })).exprValue();
     }
 
     fn requireLoweredExpr(
@@ -27181,33 +28979,7 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
     ) Allocator.Error!DraftExprId {
-        if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
-            return expr;
-        }
-        const lowered = try self.lowerCall(checked_expr_id, checked_ret_ty, call);
-        const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
-        const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
-        var result_request_node = checked_ret_node;
-        if (!self.graph.sameClass(ret_node, checked_ret_node)) {
-            const public_ret = if (try self.graph.containsGeneratedPrivate(checked_ret_node))
-                try self.freshInstNode(checked_ret_ty)
-            else
-                checked_ret_node;
-            result_request_node = public_ret;
-            if (!try self.resultCompletesRequest(public_ret, ret_node) or
-                try self.graph.containsGeneratedPrivate(ret_node))
-            {
-                if (try self.graph.containsGeneratedPrivate(ret_node))
-                    try relateRequestComponent(self.graph, public_ret, ret_node)
-                else
-                    _ = try self.relateCheckedNodeToProducedValue(public_ret, ret_node);
-            }
-        }
-        const expr = try self.addExprWithTypeCell(
-            try self.producedResultCell(result_request_node, lowered.ret_ty),
-            lowered.data,
-        );
-        return expr;
+        return (try self.runLower(.{ .call_expr = .{ .expr = checked_expr_id, .checked_ret_ty = checked_ret_ty, .call = call } })).exprValue();
     }
 
     fn producedResultCell(
@@ -34862,106 +36634,7 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!LoweredCall {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
-        defer timing_scope.end();
-        self.builder.countBodyDiagnostic("call_expressions");
-        if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
-
-        if (call.direct_target) |target| {
-            const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-            const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
-            const fn_node = try self.directCallRequestNode(
-                checked_expr,
-                target,
-                call,
-                checked_ret_ty,
-                source_fn_ty,
-                expected_ret_node,
-            );
-            const fn_nodes = try self.graph.functionNodes(fn_node);
-            try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args);
-            if (try self.lowerDirectCallWithUninhabitedArgument(call.args, fn_nodes)) |lowered| return lowered;
-            if (iterator_procedure) |procedure| {
-                if (try self.lowerGeneratedIteratorNextCall(procedure, call.args, fn_nodes)) |lowered| return lowered;
-            }
-            const source_fn_key = self.view.types.rootKey(source_fn_ty);
-            if (self.resolvedTargetIsStrInspect(target)) {
-                const args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
-                if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
-                const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
-                const captures = try self.directCallCaptureSpan(target);
-                return .{
-                    .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
-                    .data = .{ .call_proc = .{
-                        .callee = .{ .func = callee },
-                        .args = args,
-                        .iterator_procedure = iterator_procedure,
-                        .captures = captures,
-                    } },
-                };
-            }
-            const completed = try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, fn_node);
-            const callee_fn_nodes = try self.graph.functionNodes(completed.fn_node);
-            if (callee_fn_nodes.args.len != fn_nodes.args.len) {
-                Common.invariant("completed direct-call specialization changed argument arity");
-            }
-            const lowered_args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
-            const captures = try self.directCallCaptureSpan(target);
-            return .{
-                .ret_ty = DraftTypeCell.fromGraphNode(callee_fn_nodes.ret),
-                .data = .{ .call_proc = .{
-                    .callee = .{ .func = completed.callee },
-                    .args = lowered_args,
-                    .iterator_procedure = iterator_procedure,
-                    .captures = captures,
-                } },
-            };
-        }
-
-        if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
-            const fn_data = self.functionShape(fn_ty, "checked call function type was not a function");
-            try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
-            if (expected_ret_ty) |expected| {
-                if (!self.sameType(expected, fn_data.ret)) {
-                    Common.invariant("checked indirect call result type differed from its expected Monotype type");
-                }
-            }
-            return .{
-                .ret_ty = .{ .sealed = fn_data.ret },
-                .data = .{ .call_value = .{
-                    .callee = try self.lowerExprAtType(call.func, fn_ty),
-                    .args = try self.lowerExprSpanAtTypes(call.args, self.typeStore().span(fn_data.args)),
-                } },
-            };
-        }
-
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.in_deferred_body = self.in_deferred_body;
-
-        const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
-            call.source_fn_ty_payload,
-            self,
-            checked_ret_ty,
-            call.args,
-            expected_ret_node,
-            null,
-            false,
-        );
-        const fn_nodes = try self.graph.functionNodes(fn_node);
-        try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
-        return .{
-            .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
-            .data = .{ .call_value = .{
-                .callee = try self.lowerExprAtTypeCell(call.func, DraftTypeCell.fromGraphNode(fn_node)),
-                .args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args),
-            } },
-        };
+        return (try self.runLower(.{ .call = .{ .expr = checked_expr, .checked_ret_ty = checked_ret_ty, .call = call, .expected_ret_node = expected_ret_node, .expected_ret_ty = expected_ret_ty } })).callValue();
     }
 
     fn lowerGeneratedIteratorNextCall(
@@ -35014,45 +36687,7 @@ const BodyContext = struct {
         checked_args: []const checked.CheckedExprId,
         fn_nodes: FunctionNodes,
     ) Allocator.Error!?LoweredCall {
-        for (fn_nodes.args, 0..) |arg_node, uninhabited_index| {
-            if (!try self.nodeIsProvenUninhabited(arg_node)) continue;
-
-            const prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
-            defer self.allocator.free(prior);
-            for (0..uninhabited_index) |index| {
-                prior[index] = try self.lowerExprAtTypeCell(
-                    checked_args[index],
-                    DraftTypeCell.fromGraphNode(fn_nodes.args[index]),
-                );
-            }
-
-            const uninhabited_cell = DraftTypeCell.fromGraphNode(arg_node);
-            const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(
-                checked_args[uninhabited_index],
-                uninhabited_cell,
-            );
-            const ret_cell = DraftTypeCell.fromGraphNode(fn_nodes.ret);
-            var result = try self.addExprWithTypeCell(ret_cell, .{ .match_ = .{
-                .scrutinee = scrutinee,
-                .branches = try self.addBranchSpan(&.{}),
-                .comptime_site = null,
-            } });
-            var index = uninhabited_index;
-            while (index > 0) {
-                index -= 1;
-                const arg_cell = DraftTypeCell.fromGraphNode(fn_nodes.args[index]);
-                result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
-                    .bind = try self.addPatWithTypeCell(arg_cell, .wildcard),
-                    .value = prior[index],
-                    .rest = result,
-                } });
-            }
-            return .{
-                .ret_ty = ret_cell,
-                .data = try self.exprIdAsDivergentData(result),
-            };
-        }
-        return null;
+        return (try self.runLower(.{ .uninhabited_call = .{ .checked_args = checked_args, .arg_nodes = fn_nodes.args, .ret_cell = DraftTypeCell.fromGraphNode(fn_nodes.ret) } })).maybeCallValue();
     }
 
     /// Materialize an indirect callee only when a binding use already provides
@@ -39507,19 +41142,7 @@ const BodyContext = struct {
     }
 
     fn lowerExprSpan(self: *BodyContext, checked_exprs: []const checked.CheckedExprId) Allocator.Error!DraftSpan(DraftExprId) {
-        const reserved = try self.reserveExprSpan(checked_exprs.len);
-        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (checked_exprs, 0..) |child, i| {
-            self.draft.setReservedExprSpanItem(
-                reserved,
-                i,
-                try self.lowerExprAtTypeCell(
-                    child,
-                    DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child)),
-                ),
-            );
-        }
-        return reserved.span;
+        return (try self.runLower(.{ .span = .{ .exprs = checked_exprs } })).spanValue();
     }
 
     fn prepareExprSpanAtNodes(
@@ -39535,34 +41158,11 @@ const BodyContext = struct {
         checked_exprs: []const checked.CheckedExprId,
         nodes: []const NodeId,
     ) Allocator.Error!DraftSpan(DraftExprId) {
-        if (checked_exprs.len != nodes.len) Common.invariant("checked call argument count differed from graph function arity");
-        const reserved = try self.reserveExprSpan(checked_exprs.len);
-        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
-            self.draft.setReservedExprSpanItem(
-                reserved,
-                index,
-                try self.lowerExprAtTypeCell(checked_expr, DraftTypeCell.fromGraphNode(node)),
-            );
-        }
-        return reserved.span;
+        return (try self.runLower(.{ .prepared_span = .{ .exprs = checked_exprs, .nodes = nodes } })).spanValue();
     }
 
     fn lowerListExpr(self: *BodyContext, checked_exprs: []const checked.CheckedExprId, ty: Type.TypeId) Allocator.Error!DraftSpan(DraftExprId) {
-        const elem_ty = switch (self.shapeContent(ty)) {
-            .list => |elem| elem,
-            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("list expression had a non-list monotype"),
-        };
-        const reserved = try self.reserveExprSpan(checked_exprs.len);
-        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (checked_exprs, 0..) |child, i| {
-            const lowered = if (try self.typeIsProvenUninhabited(elem_ty))
-                try self.lowerExplicitUninhabitedInvocation(child, elem_ty)
-            else
-                try self.lowerExprAtType(child, elem_ty);
-            self.draft.setReservedExprSpanItem(reserved, i, lowered);
-        }
-        return reserved.span;
+        return (try self.runLower(.{ .list_span = .{ .exprs = checked_exprs, .list_ty = ty } })).spanValue();
     }
 
     fn lowerExprSpanAtTypes(
@@ -39570,19 +41170,7 @@ const BodyContext = struct {
         checked_exprs: []const checked.CheckedExprId,
         tys: anytype,
     ) Allocator.Error!DraftSpan(DraftExprId) {
-        if (checked_exprs.len != GuardedList.borrowLen(tys)) Common.invariant("call argument arity differs from concrete function type");
-        const stable_tys = try GuardedList.dupe(self.allocator, Type.TypeId, tys);
-        defer self.allocator.free(stable_tys);
-        const reserved = try self.reserveExprSpan(checked_exprs.len);
-        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (checked_exprs, stable_tys, 0..) |child, ty, i| {
-            const lowered = if (try self.typeIsProvenUninhabited(ty))
-                try self.lowerExplicitUninhabitedInvocation(child, ty)
-            else
-                try self.lowerExprAtType(child, ty);
-            self.draft.setReservedExprSpanItem(reserved, i, lowered);
-        }
-        return reserved.span;
+        return (try self.runLower(try self.spanAtTypesTask(checked_exprs, tys))).spanValue();
     }
 
     const PreLoweredOperand = struct {
@@ -39661,29 +41249,7 @@ const BodyContext = struct {
         nodes: []const NodeId,
         pre_lowered: []const PreLoweredOperand,
     ) Allocator.Error!DraftSpan(DraftExprId) {
-        if (operands.len != nodes.len) Common.invariant("dispatch argument arity differs from function graph node");
-        const reserved = try self.reserveExprSpan(operands.len);
-        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (operands, nodes, 0..) |operand, node, index| {
-            if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
-                self.draft.setReservedExprSpanItem(reserved, index, pre);
-                continue;
-            }
-            const lowered = switch (operand) {
-                .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => try self.lowerDispatchOperandAtType(operand, try self.activeTypeFromNode(node)),
-            };
-            self.draft.setReservedExprSpanItem(reserved, index, lowered);
-            try relateRequestComponent(
-                self.graph,
-                node,
-                try self.exprTypeCell(lowered).toGraphNode(self.graph),
-            );
-        }
-        return reserved.span;
+        return (try self.runLower(.{ .prepared_operands = .{ .operands = operands, .nodes = nodes, .pre_lowered = pre_lowered } })).spanValue();
     }
 
     fn lowerDispatchOperandAtType(
@@ -39691,12 +41257,7 @@ const BodyContext = struct {
         operand: static_dispatch.StaticDispatchOperand,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        return switch (operand) {
-            .checked_expr => |expr| try self.lowerExprAtType(expr, ty),
-            .generated_interpolation_iter => |expr| try self.lowerGeneratedInterpolationIter(expr, ty),
-            .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
-            .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
-        };
+        return (try self.runLower(.{ .operand_at_type = .{ .operand = operand, .ty = ty } })).exprValue();
     }
 
     fn lowerDispatchOperandAtNode(
@@ -40035,30 +41596,7 @@ const BodyContext = struct {
         demand: LoweringDemand,
         expr_diverges: bool,
     ) Allocator.Error!DraftExprId {
-        const expr = self.view.bodies.expr(checked_expr);
-        const saved_loc = self.builder.current_loc;
-        defer self.builder.current_loc = saved_loc;
-        const saved_region = self.builder.current_region;
-        defer self.builder.current_region = saved_region;
-        const region = self.sourceRegionForExpr(expr);
-        self.builder.current_loc = try self.sourceLocFor(region);
-        self.builder.current_region = region;
-        return switch (cell) {
-            .sealed => |ty| blk: {
-                const lowered = if (expr_diverges)
-                    try self.lowerDivergentExprAtTypeCell(checked_expr, cell)
-                else
-                    try self.lowerExprAtTypeWithDemandInner(checked_expr, ty);
-                break :blk try self.requireLoweredExprAtCell(expr, cell, demand, lowered);
-            },
-            .graph_node => |expected_node| blk: {
-                const lowered = if (expr_diverges)
-                    try self.lowerDivergentExprAtTypeCell(checked_expr, cell)
-                else
-                    try self.lowerExprAtTypeCellInner(checked_expr, cell, expected_node);
-                break :blk try self.requireLoweredExpr(expr, expected_node, demand, lowered);
-            },
-        };
+        return (try self.runLower(.{ .at_type_cell = .{ .expr = checked_expr, .cell = cell, .demand = demand, .diverges = expr_diverges } })).exprValue();
     }
 
     fn lowerExprAtTypeCellInner(
@@ -40067,124 +41605,7 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        return switch (cell) {
-            .sealed => Common.invariant("sealed expression reached graph-cell lowering"),
-            .graph_node => blk: {
-                if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored| {
-                    break :blk restored;
-                }
-                const expr = self.view.bodies.expr(checked_expr);
-                switch (expr.data) {
-                    .lookup_local => |lookup| break :blk try self.lowerLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
-                    .lookup_external => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node),
-                    .lookup_required => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node),
-                    .lambda => break :blk try self.lowerLambdaExprAtNode(checked_expr, expected_node),
-                    .closure => |closure| break :blk try self.lowerClosureAtNode(checked_expr, closure, expected_node),
-                    .field_access => |field| break :blk try self.lowerFieldAccessExprAtNode(checked_expr, field, expected_node),
-                    .tag => |tag| break :blk try self.lowerTagConstructorAtNode(tag, expected_node),
-                    .zero_argument_tag => |tag| break :blk try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
-                        .name = try self.tagName(self.view, tag.name),
-                        .payloads = .empty(),
-                    } }),
-                    .nominal => |nominal| break :blk try self.lowerNominalConstructorAtNode(nominal, expected_node),
-                    .tuple => |items| break :blk try self.lowerTupleConstructorAtNode(items, expected_node),
-                    .list => |items| break :blk try self.lowerListConstructorAtNode(items, expected_node),
-                    .empty_list => break :blk try self.addExprWithTypeCell(
-                        DraftTypeCell.fromGraphNode(expected_node),
-                        .{ .list = .empty() },
-                    ),
-                    // `{}` is a record construction that omits every field:
-                    // lower it through the record path so the demanded row's
-                    // DEFAULTED fields materialize their defaults into the
-                    // inline slots (design.md "Defaulted Fields").
-                    .empty_record => {
-                        break :blk try self.lowerRecordConstructorAtNode(checked_expr, .{
-                            .fields = @as([]const checked.CheckedRecordExprField, &.{}),
-                            .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
-                            .ext = @as(?checked.CheckedExprId, null),
-                        }, expected_node);
-                    },
-                    .record => |record| break :blk try self.lowerRecordConstructorAtNode(checked_expr, record, expected_node),
-                    .call => break :blk try self.lowerCallExprAtNode(checked_expr, expected_node),
-                    .numeral => |numeral| if (numeral.conversion_root) |root_id| {
-                        break :blk try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node);
-                    },
-                    .str_from_quote => |quote| if (quote.conversion_root) |root_id| {
-                        break :blk try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node);
-                    },
-                    .dispatch_call => |plan| {
-                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
-                    },
-                    .interpolation => |interpolation| {
-                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, interpolation.plan, cell);
-                    },
-                    .type_dispatch_call => |plan| {
-                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
-                    },
-                    .method_eq => |plan| {
-                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
-                    },
-                    .block => |block| break :blk try self.lowerBlockAtTypeCell(block, cell),
-                    .match_ => |match| break :blk try self.lowerMatchExprAtTypeCell(checked_expr, match, cell),
-                    .if_ => |if_| break :blk try self.lowerIfExprAtTypeCell(checked_expr, if_, cell),
-                    .runtime_error => break :blk try self.runtimeCrashExprAtCell(cell, "runtime error"),
-                    .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
-                    .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-                }
-                switch (expr.data) {
-                    .tuple_access => |access| {
-                        if (try self.checkedTypeContainsError(expr.ty)) {
-                            break :blk try self.runtimeCrashExprAtCell(cell, "runtime error");
-                        }
-                        if (try self.checkedTypeContainsError(self.view.bodies.expr(access.tuple).ty)) {
-                            break :blk try self.runtimeCrashExprAtCell(cell, "runtime error");
-                        }
-                    },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-                }
-                try relateRequestComponent(
-                    self.graph,
-                    expected_node,
-                    try self.lowerExprTypeNode(checked_expr),
-                );
-                switch (expr.data) {
-                    .tuple_access => |access| {
-                        const tuple_node = try self.lowerExprTypeNode(access.tuple);
-                        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
-                        if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
-                        const item_node = item_nodes[access.elem_index];
-                        try relateRequestComponent(self.graph, expected_node, item_node);
-                        const result_cell = DraftTypeCell.fromGraphNode(
-                            if (try self.graph.containsGeneratedPrivate(item_node)) item_node else expected_node,
-                        );
-                        break :blk try self.addExprWithTypeCell(result_cell, .{ .tuple_access = .{
-                            .tuple = try self.lowerExprAtTypeCell(access.tuple, DraftTypeCell.fromGraphNode(tuple_node)),
-                            .elem_index = access.elem_index,
-                        } });
-                    },
-                    .run_low_level => |low_level| break :blk try self.addExprWithTypeCell(
-                        cell,
-                        .{ .low_level = .{
-                            .op = low_level.op,
-                            .args = try self.lowerExprSpan(low_level.args),
-                        } },
-                    ),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
-                }
-                const lowered = try self.lowerExprInner(checked_expr);
-                try relateRequestComponent(
-                    self.graph,
-                    expected_node,
-                    try self.exprTypeCell(lowered).toGraphNode(self.graph),
-                );
-                self.draft.exprs.items[@intFromEnum(lowered)].ty = cell;
-                break :blk lowered;
-            },
-        };
+        return (try self.runLower(.{ .cell_inner = .{ .expr = checked_expr, .cell = cell, .expected_node = expected_node } })).exprValue();
     }
 
     fn selectExprRepresentationAtNode(
@@ -40204,53 +41625,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        const expr = self.view.bodies.expr(checked_expr);
-        const call = switch (expr.data) {
-            .call => |call| call,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("call-at-node lowering received a non-call expression"),
-        };
-        const producer_request = if (self.isGeneratedPrivateRootNode(expected_node)) expected_node else null;
-        const lowered = if (try self.lowerInspectOnlyCall(
-            expr.ty,
-            call,
-            try self.primitiveType(.str),
-            self.inspectCallDemand(call),
-        )) |rendered|
-            rendered
-        else if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored|
-            restored
-        else if (if (producer_request) |request|
-            try self.lowerCallsiteIntrinsicCallExprAtNode(checked_expr, expr.ty, call, request)
-        else
-            try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
-            intrinsic
-        else lowered: {
-            // Preserve the expected result as an active graph relation. It may
-            // contain unresolved payload cells here, so materializing it as a
-            // Monotype TypeId would emit an incomplete output.
-            const call_data = if (producer_request) |request|
-                try self.lowerCallAtNode(checked_expr, expr.ty, call, request)
-            else
-                try self.lowerCall(checked_expr, expr.ty, call);
-            break :lowered try self.addExprWithTypeCell(call_data.ret_ty, call_data.data);
-        };
-        const lowered_node = try self.exprTypeCell(lowered).toGraphNode(self.graph);
-        const completes_request = try self.resultCompletesRequest(expected_node, lowered_node);
-        const contains_generated_private = try self.graph.containsGeneratedPrivate(lowered_node);
-        const result_node = if (completes_request)
-            lowered_node
-        else if (contains_generated_private) blk: {
-            try relateRequestComponent(
-                self.graph,
-                expected_node,
-                lowered_node,
-            );
-            break :blk lowered_node;
-        } else try self.relateCheckedNodeToProducedValue(expected_node, lowered_node);
-        self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(
-            result_node,
-        );
-        return lowered;
+        return (try self.runLower(.{ .call_expr_at_node = .{ .expr = checked_expr, .expected_node = expected_node } })).exprValue();
     }
 
     fn lowerFieldAccessExprAtNode(
@@ -40307,92 +41682,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const expr = self.view.bodies.expr(checked_expr);
-        switch (expr.data) {
-            .call => |call| if (try self.lowerInspectOnlyCall(
-                expr.ty,
-                call,
-                ty,
-                self.inspectCallDemand(call),
-            )) |rendered| return rendered,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
-        if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return restored;
-        switch (expr.data) {
-            .runtime_error => return try self.lowerExprWithType(checked_expr, ty),
-            .call => |call| {
-                if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| {
-                    return lowered;
-                }
-                try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerCallAtType(checked_expr, expr.ty, call, ty);
-                if (!self.sameType(ty, try self.activeTypeFromCell(lowered.ret_ty))) {
-                    Common.invariant("checked call expression lowered at a type different from its context type");
-                }
-                const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
-                const expected_node = try self.activeNodeFromType(ty);
-                const completes_request = try self.resultCompletesRequest(expected_node, ret_node);
-                const contains_generated_private = try self.graph.containsGeneratedPrivate(ret_node);
-                const result_cell: DraftTypeCell = if (completes_request)
-                    lowered.ret_ty
-                else if (contains_generated_private) blk: {
-                    try relateRequestComponent(self.graph, expected_node, ret_node);
-                    break :blk lowered.ret_ty;
-                } else DraftTypeCell.fromGraphNode(try self.relateCheckedNodeToProducedValue(expected_node, ret_node));
-                const lowered_expr = try self.addExprWithTypeCell(result_cell, lowered.data);
-                return lowered_expr;
-            },
-            .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
-            .interpolation => |interpolation| return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, .{ .sealed = ty }),
-            .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
-            .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
-            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
-            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
-            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
-            .structural_eq => |eq| {
-                try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerDirectStructuralEqAtType(eq, ty);
-                if (!self.sameType(ty, try self.exprType(lowered))) {
-                    Common.invariant("checked structural equality lowered at a type different from its context type");
-                }
-                return lowered;
-            },
-            .structural_hash => |h| {
-                try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerDirectStructuralHashAtType(h, ty);
-                if (!self.sameType(ty, try self.exprType(lowered))) {
-                    Common.invariant("checked structural hash lowered at a type different from its context type");
-                }
-                return lowered;
-            },
-            .field_access => |field| {
-                // A sealed result does not imply that the receiver is sealed:
-                // it may be a graph-backed local whose open row is constrained
-                // only at this field. Keep the receiver and field relation in
-                // the graph and let normal finalization seal the result.
-                return try self.lowerFieldAccessExprAtNode(
-                    checked_expr,
-                    field,
-                    try self.activeNodeFromType(ty),
-                );
-            },
-            .lambda,
-            .closure,
-            => {
-                const lowered = try self.lowerExprWithType(checked_expr, ty);
-                if (!self.sameType(ty, try self.exprType(lowered))) {
-                    Common.invariant("checked function expression lowered at a type different from its context type");
-                }
-                return lowered;
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
-        try self.constrainKnownType(expr.ty, ty);
-        const lowered = try self.lowerExprWithType(checked_expr, ty);
-        if (!self.sameType(ty, try self.exprType(lowered))) {
-            Common.invariant("checked expression lowered at a type different from its call operand type");
-        }
-        return lowered;
+        return (try self.runLower(.{ .type_inner = .{ .expr = checked_expr, .ty = ty } })).exprValue();
     }
 
     fn sameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId) bool {
@@ -42324,233 +43614,7 @@ const BodyContext = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
-        defer timing_scope.end();
-        self.builder.countBodyDiagnostic("dispatch_expressions");
-        const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
-        const direct_graph_call = self.dispatchUsesDirectGraphCallee(plan);
-        switch (plan.resolution) {
-            .direct_closed => |direct| {
-                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
-                switch (node.target.kind) {
-                    .procedure => |procedure| switch (procedure.runtime_target) {
-                        .low_level => |op| return try self.lowerClosedDirectLowLevelDispatch(
-                            checked_ret_ty,
-                            plan,
-                            op,
-                            expected_ret_cell,
-                        ),
-                        .procedure => return try self.lowerClosedDirectProcedureDispatch(
-                            checked_ret_ty,
-                            plan,
-                            direct.evidence,
-                            procedure,
-                            expected_ret_cell,
-                        ),
-                        .intrinsic, .graph_participating => {},
-                    },
-                    .local_proc => {},
-                    .structural => {},
-                }
-            },
-            .direct_parametric => |direct| {
-                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
-                switch (node.target.kind) {
-                    .procedure => |procedure| switch (procedure.runtime_target) {
-                        .low_level => |op| direct_parametric_low_level = op,
-                        .procedure => {},
-                        .intrinsic, .graph_participating => {},
-                    },
-                    .local_proc => {},
-                    .structural => {},
-                }
-            },
-            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
-            .evidence_dependent, .structural, .@"unreachable", .checked_error => {},
-        }
-        const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
-            .callable => |value| value,
-            .crash => |reason| {
-                const message = dispatchCrashMessage(reason);
-                return try self.addExprWithTypeCell(expected_ret_cell, .{ .crash = try self.addStringLiteral(message) });
-            },
-        };
-        const plan_args = callable_plan.operands;
-        const expected_ret_ty: ?Type.TypeId = switch (expected_ret_cell) {
-            .sealed => |ty| ty,
-            .graph_node => null,
-        };
-        const expected_ret_node = try expected_ret_cell.toGraphNode(self.graph);
-
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.in_deferred_body = self.in_deferred_body;
-
-        var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
-            callable_plan,
-            self,
-            checked_ret_ty,
-            expected_ret_node,
-            .expression_lowering,
-        );
-        const resolution = self.evidenceResolution(plan) orelse
-            Common.invariant("runtime method call had no CheckedCallResolution evidence");
-        switch (resolution) {
-            .target => |initial_lookup| {
-                const relation_lookup = initial_lookup;
-                if (direct_parametric_low_level == null and !direct_graph_call) {
-                    const target_node = try self.methodTargetNodeFromPlan(relation_lookup, &call_ctx, plan.callable_ty);
-                    try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
-                    if (try self.generatedIteratorMethodRequestNode(
-                        relation_lookup,
-                        target_node,
-                        callable_node,
-                        plan_args,
-                    )) |private_node| {
-                        callable_node = private_node;
-                    }
-                }
-                callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
-                    relation_lookup,
-                    callable_node,
-                    plan,
-                    direct_graph_call,
-                );
-            },
-            .structural => {},
-        }
-        const callsite_intrinsic = switch (resolution) {
-            .target => |lookup| self.callsiteIntrinsicForMethodTarget(lookup.target),
-            .structural => null,
-        };
-        if (callsite_intrinsic) |intrinsic| {
-            if (plan.result_mode != .value) {
-                Common.invariant("call-site intrinsic dispatch had a non-value result mode");
-            }
-            return try self.lowerCallsiteIntrinsicAtCallableNode(
-                intrinsic,
-                plan.expr,
-                plan.callable_ty,
-                .{ .dispatch = plan_args },
-                callable_node,
-                expected_ret_ty,
-            );
-        }
-        const callable_graph = switch (self.graph.content(callable_node)) {
-            .func => |function| function,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
-        };
-        var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
-        defer pre_lowered.deinit(self.allocator);
-        for (plan_args, 0..) |operand, index| switch (operand) {
-            .checked_expr => |expr| {
-                try self.relateExprAtNode(expr, callable_graph.args[index]);
-            },
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => {},
-        };
-        for (plan_args, 0..) |operand, index| switch (operand) {
-            .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, callable_graph.args[index]),
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => {},
-        };
-        if (try self.lowerDispatchWithUninhabitedArgument(
-            plan_args,
-            callable_graph.args,
-            expected_ret_cell,
-        )) |uninhabited| return uninhabited;
-        for (plan_args, 0..) |operand, index| switch (operand) {
-            .checked_expr => |expr| {
-                const lowered = try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(callable_graph.args[index]));
-                try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
-            },
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => {},
-        };
-        const plan_ret_node = callable_graph.ret;
-        // `dispatchTarget` raises the "dispatch plan had no method owner" invariant
-        // when the receiver never grounded to a concrete owner and the result mode
-        // is not a structural dispatch. That is only reachable inside a bare
-        // polymorphic function value never called at a concrete type—e.g.
-        // evaluating `run` itself for `run : a -> a where [a.go : a -> a]`.
-        // Checking classified such dispatches (`unreachable_dispatch`, or a
-        // `checked_error` for reported missing methods); both emit an ordinary
-        // Roc runtime crash and never return a dispatch result. A genuinely
-        // reachable ownerless dispatch was rejected at check time.
-        const resolved = switch (self.evidenceResolution(plan) orelse
-            Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
-            .target => |lookup| lookup,
-            .structural => |structural| return switch (structural.derivation) {
-                .equality => try self.lowerStructuralEqualityAtNode(plan, callable_node, self, pre_lowered.items),
-                .hash => try self.lowerStructuralHashAtNode(plan, callable_node, self, pre_lowered.items),
-                .parser, .encoder => try self.deferStructuralSerializationAtNode(
-                    plan,
-                    structural,
-                    callable_node,
-                    try call_ctx.instNode(plan.dispatcher_ty),
-                    pre_lowered.items,
-                ),
-                .map => |map_plan| blk: {
-                    const callable_mono_ty = try call_ctx.resolvedTypeViewForNode(callable_node);
-                    const plan_ret_ty = self.functionShape(callable_mono_ty, "checked structural map plan had a non-function type").ret;
-                    break :blk try self.lowerStructuralMap("map", plan, map_plan, callable_mono_ty, plan_ret_ty, self, pre_lowered.items);
-                },
-                .map_effectful => |map_plan| blk: {
-                    const callable_mono_ty = try call_ctx.resolvedTypeViewForNode(callable_node);
-                    const plan_ret_ty = self.functionShape(callable_mono_ty, "checked structural map! plan had a non-function type").ret;
-                    break :blk try self.lowerStructuralMap("map!", plan, map_plan, callable_mono_ty, plan_ret_ty, self, pre_lowered.items);
-                },
-            },
-        };
-        const checked_result_node = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
-            try self.freshInstNode(checked_ret_ty)
-        else
-            try self.lowerTypeNode(checked_ret_ty);
-        _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node, .exact);
-        if (direct_parametric_low_level) |op| {
-            const args = try self.lowerDispatchOperandsAtNodes(
-                plan_args,
-                callable_graph.args,
-                pre_lowered.items,
-            );
-            const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
-                DraftTypeCell.fromGraphNode(plan_ret_node)
-            else
-                expected_ret_cell;
-            const call_expr = try self.addExprWithTypeCell(call_ret_cell, .{ .low_level = .{
-                .op = op,
-                .args = args,
-            } });
-            // Result modes consume the graph-backed call type directly because
-            // the return node may still be an unresolved open row here.
-            return try self.applyDispatchResultMode(plan.result_mode, call_expr);
-        }
-        const call_data = if (direct_graph_call)
-            try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items)
-        else
-            try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
-        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
-            DraftTypeCell.fromGraphNode(plan_ret_node)
-        else
-            expected_ret_cell;
-        const call_expr = try self.addExprWithTypeCell(
-            call_ret_cell,
-            call_data,
-        );
-        return try self.applyDispatchResultMode(plan.result_mode, call_expr);
+        return (try self.runLower(.{ .dispatch = .{ .checked_ret_ty = checked_ret_ty, .maybe_plan = maybe_plan, .expected_ret_cell = expected_ret_cell } })).exprValue();
     }
 
     fn lowerClosedDirectLowLevelDispatch(
@@ -42560,41 +43624,7 @@ const BodyContext = struct {
         op: can.CIR.Expr.LowLevel,
         expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
-        const callable_ty = blk: {
-            var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-            defer timing_scope.end();
-            break :blk try self.lowerType(plan.callable_ty);
-        };
-        const function = self.functionShape(callable_ty, "checked closed direct low-level call had a non-function type");
-        const operands = plan.argsSlice(self.view.static_dispatch_plans);
-        if (operands.len != self.typeStore().span(function.args).len) {
-            Common.invariant("checked closed direct low-level call argument arity differed from its callable type");
-        }
-
-        switch (expected_ret_cell) {
-            .sealed => |expected| if (!self.sameType(expected, function.ret)) {
-                Common.invariant("checked closed direct low-level call result differed from its expected type");
-            },
-            .graph_node => |expected| try relateRequestComponent(
-                self.graph,
-                expected,
-                try self.activeNodeFromType(function.ret),
-            ),
-        }
-
-        const lowered = switch (try self.lowerClosedDispatchOperandsAtTypes(
-            operands,
-            self.typeStore().span(function.args),
-            expected_ret_cell,
-        )) {
-            .args => |args| args,
-            .uninhabited => |expr| return expr,
-        };
-        const call = try self.addExprWithTypeCell(expected_ret_cell, .{ .low_level = .{
-            .op = op,
-            .args = lowered,
-        } });
-        return try self.applyDispatchResultMode(plan.result_mode, call);
+        return (try self.runLower(.{ .closed_low_level = .{ .plan = plan, .op = op, .expected_ret_cell = expected_ret_cell } })).exprValue();
     }
 
     fn lowerClosedDispatchOperandsAtTypes(
@@ -42606,47 +43636,7 @@ const BodyContext = struct {
         if (operands.len != GuardedList.borrowLen(arg_types)) {
             Common.invariant("closed dispatch argument arity differed from its sealed callable type");
         }
-        const stable_types = try GuardedList.dupe(self.allocator, Type.TypeId, arg_types);
-        defer self.allocator.free(stable_types);
-
-        for (stable_types, 0..) |arg_ty, uninhabited_index| {
-            if (!try self.typeIsProvenUninhabited(arg_ty)) continue;
-            const checked_arg = switch (operands[uninhabited_index]) {
-                .checked_expr => |expr| expr,
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => Common.invariant("compiler-generated dispatch operand had an uninhabited sealed type"),
-            };
-            const prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
-            defer self.allocator.free(prior);
-            for (operands[0..uninhabited_index], stable_types[0..uninhabited_index], prior) |operand, ty, *out| {
-                out.* = try self.lowerDispatchOperandAtType(operand, ty);
-            }
-            const scrutinee = try self.lowerUninhabitedScrutinee(checked_arg, arg_ty);
-            var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
-            var index = uninhabited_index;
-            while (index > 0) {
-                index -= 1;
-                result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
-                    .bind = try self.addPatWithTypeCell(.{ .sealed = stable_types[index] }, .wildcard),
-                    .value = prior[index],
-                    .rest = result,
-                } });
-            }
-            return .{ .uninhabited = result };
-        }
-
-        const reserved = try self.reserveExprSpan(operands.len);
-        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (operands, stable_types, 0..) |operand, ty, index| {
-            self.draft.setReservedExprSpanItem(
-                reserved,
-                index,
-                try self.lowerDispatchOperandAtType(operand, ty),
-            );
-        }
-        return .{ .args = reserved.span };
+        return (try self.runLower(.{ .closed_operands_at_types = .{ .operands = operands, .stable_types = try GuardedList.dupe(self.allocator, Type.TypeId, arg_types), .ret_cell = ret_cell } })).closedOperandsValue();
     }
 
     fn lowerClosedDirectProcedureDispatch(
@@ -42657,124 +43647,7 @@ const BodyContext = struct {
         procedure: static_dispatch.ProcedureMethodTarget,
         expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
-        const callable_ty = blk: {
-            var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-            defer timing_scope.end();
-            break :blk try self.lowerType(plan.callable_ty);
-        };
-        const function = self.functionShape(callable_ty, "checked closed direct procedure call had a non-function type");
-        const operands = plan.argsSlice(self.view.static_dispatch_plans);
-        if (operands.len != self.typeStore().span(function.args).len) {
-            Common.invariant("checked closed direct procedure call argument arity differed from its callable type");
-        }
-        try self.constrainTypeToMono(checked_ret_ty, function.ret);
-        switch (expected_ret_cell) {
-            .sealed => |expected| if (!self.sameType(expected, function.ret)) {
-                Common.invariant("checked closed direct procedure call result differed from its expected type");
-            },
-            .graph_node => |expected| try relateRequestComponent(
-                self.graph,
-                expected,
-                try self.activeNodeFromType(function.ret),
-            ),
-        }
-
-        const callable_node = try self.activeNodeFromType(callable_ty);
-        const lowered = switch (try self.lowerClosedDispatchOperandsAtNode(
-            operands,
-            callable_node,
-            expected_ret_cell,
-        )) {
-            .args => |args| args,
-            .uninhabited => |expr| return expr,
-        };
-        const evidence_node = self.view.static_dispatch_plans.evidenceNode(evidence_id);
-        const lookup = self.methodLookupForResolvedTarget(evidence_node.target);
-        const direct_key = ClosedDirectCallIdentity{
-            .callable = checkedTypeAddress(self.view, plan.callable_ty),
-            .evidence = evidence_id,
-            .method_scope = self.method_scope.key,
-        };
-        const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
-            if (existing.draft_spec) |raw_spec| {
-                if (raw_spec >= self.draft.template_specs.items.len) {
-                    Common.invariant("closed direct call cache referenced a missing draft specialization");
-                }
-                const spec = &self.draft.template_specs.items[raw_spec];
-                if (spec.state != .deferred and !runtimeDemandGuardFrameSetsEql(
-                    spec.runtime_demand_guard_frames,
-                    try self.runtimeDemandGuardFrameAddresses(),
-                )) {
-                    try self.draft.template_spec_reuses.append(self.allocator, .{
-                        .spec = raw_spec,
-                        .prefix_proof = try self.currentRuntimeImpossibilityProof(null),
-                    });
-                }
-            }
-            break :blk existing.slot;
-        } else blk: {
-            const subst = (try self.dispatchTargetSubstitution(plan)) orelse
-                Common.invariant("closed direct procedure call had no checked substitution");
-            const template = lookup.view.templates.get(procedure.template.template);
-            if (subst.len != template.scheme_vars.len) {
-                Common.invariant("closed direct procedure call substitution length differed from its scheme");
-            }
-            const edge: EdgeEvidence = .{
-                .subst = subst,
-                .vector = try self.deriveEvidenceVector(
-                    templateSchemaIn(lookup.view, &template),
-                    subst,
-                    self.view,
-                    if (self.dispatchTargetContract(plan)) |c| c.entries else null,
-                    .body_lowering,
-                ),
-            };
-            const source_fn_ty = lookup.target.callable_ty;
-            const created = try self.builder.lowerDraftTemplateFromContext(
-                self,
-                procedure.template,
-                source_fn_ty,
-                lookup.view.types.rootKey(source_fn_ty),
-                callable_node,
-                edge,
-                .instantiation,
-                .independent_roots,
-                .inherit,
-            );
-            const draft_spec: ?u32 = switch (created.local) {
-                .draft => |draft_fn| self.draft.template_spec_by_fn.get(draft_fn) orelse
-                    Common.invariant("closed direct call created a draft function without a specialization record"),
-                .final => null,
-            };
-            try self.draft.closed_direct_specializations.put(direct_key, .{
-                .slot = created,
-                .draft_spec = draft_spec,
-            });
-            break :blk created;
-        };
-        const completed_callable_node = try self.draftFnSlotTypeNode(slot, callable_node);
-        const completed_function = try self.graph.functionNodes(completed_callable_node);
-        if (completed_function.args.len != operands.len) {
-            Common.invariant("completed closed direct procedure call changed its argument arity");
-        }
-        const completed_ret_is_private = try self.graph.containsGeneratedPrivate(completed_function.ret);
-        if (completed_ret_is_private) {
-            try relateRequestComponent(
-                self.graph,
-                try expected_ret_cell.toGraphNode(self.graph),
-                completed_function.ret,
-            );
-        }
-        const call_ret_cell = if (completed_ret_is_private)
-            DraftTypeCell.fromGraphNode(completed_function.ret)
-        else
-            expected_ret_cell;
-        const call = try self.addExprWithTypeCell(call_ret_cell, .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(slot),
-            .args = lowered,
-            .captures = try self.methodTargetCaptureSpan(lookup),
-        } });
-        return try self.applyDispatchResultMode(plan.result_mode, call);
+        return (try self.runLower(.{ .closed_procedure = .{ .checked_ret_ty = checked_ret_ty, .plan = plan, .evidence_id = evidence_id, .procedure = procedure, .expected_ret_cell = expected_ret_cell } })).exprValue();
     }
 
     const ClosedDispatchOperands = union(enum) {
@@ -42788,27 +43661,7 @@ const BodyContext = struct {
         callable_node: NodeId,
         expected_ret_cell: DraftTypeCell,
     ) Allocator.Error!ClosedDispatchOperands {
-        const function = blk: {
-            var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-            defer timing_scope.end();
-            break :blk try self.graph.functionNodes(callable_node);
-        };
-        if (operands.len != function.args.len) {
-            Common.invariant("closed dispatch argument arity differed from its callable type");
-        }
-        try self.prepareDispatchOperandsAtNodes(operands, function.args, &.{});
-        if (try self.lowerDispatchWithUninhabitedArgument(
-            operands,
-            function.args,
-            expected_ret_cell,
-        )) |uninhabited| {
-            return .{ .uninhabited = uninhabited };
-        }
-        return .{ .args = try self.lowerPreparedDispatchOperandsAtNodes(
-            operands,
-            function.args,
-            &.{},
-        ) };
+        return (try self.runLower(.{ .closed_operands_at_node = .{ .operands = operands, .callable_node = callable_node, .expected_ret_cell = expected_ret_cell } })).closedOperandsValue();
     }
 
     fn lowerDispatchWithUninhabitedArgument(
@@ -42817,47 +43670,7 @@ const BodyContext = struct {
         arg_nodes: []const NodeId,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!?DraftExprId {
-        if (operands.len != arg_nodes.len) {
-            Common.invariant("dispatch argument arity differed while lowering an uninhabited invocation");
-        }
-        for (operands, arg_nodes, 0..) |operand, arg_node, uninhabited_index| {
-            if (!try self.nodeIsProvenUninhabited(arg_node)) continue;
-            const checked_arg = switch (operand) {
-                .checked_expr => |expr| expr,
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => Common.invariant("compiler-generated dispatch operand had an uninhabited type"),
-            };
-
-            const prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
-            defer self.allocator.free(prior);
-            for (operands[0..uninhabited_index], arg_nodes[0..uninhabited_index], 0..) |prior_operand, prior_node, index| {
-                prior[index] = switch (prior_operand) {
-                    .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(prior_node)),
-                    .generated_interpolation_iter,
-                    .generated_numeral,
-                    .generated_quote,
-                    => try self.lowerDispatchOperandAtType(prior_operand, try self.activeTypeFromNode(prior_node)),
-                };
-            }
-
-            const arg_cell = DraftTypeCell.fromGraphNode(arg_node);
-            const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(checked_arg, arg_cell);
-            var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
-            var index = uninhabited_index;
-            while (index > 0) {
-                index -= 1;
-                const prior_cell = DraftTypeCell.fromGraphNode(arg_nodes[index]);
-                result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
-                    .bind = try self.addPatWithTypeCell(prior_cell, .wildcard),
-                    .value = prior[index],
-                    .rest = result,
-                } });
-            }
-            return result;
-        }
-        return null;
+        return (try self.runLower(.{ .uninhabited_dispatch = .{ .operands = operands, .arg_nodes = arg_nodes, .ret_cell = ret_cell } })).maybeExprValue();
     }
 
     fn applyDispatchResultMode(
