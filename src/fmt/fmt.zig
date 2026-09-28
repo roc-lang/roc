@@ -55,11 +55,13 @@ pub const Options = struct {
 pub const FormattingResult = struct {
     success: usize,
     failure: usize,
-    /// Only relevant when using `roc fmt --check`
+    /// Owned paths, relative to the supplied base directory (or absolute).
+    /// Only relevant when using `roc fmt --check`.
     unformatted_files: ?std.array_list.Managed([]const u8),
 
     pub fn deinit(self: *@This()) void {
         if (self.unformatted_files) |files| {
+            for (files.items) |path| files.allocator.free(path);
             files.deinit();
         }
     }
@@ -79,13 +81,14 @@ fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
 pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, options: Options, io: std.Io, stderr: *std.Io.Writer) FormatPathError!FormattingResult {
-    // TODO: update this to use the filesystem abstraction
-    // When doing so, add a mock filesystem and some tests.
-
     var success_count: usize = 0;
     var failed_count: usize = 0;
     // Only used for `roc fmt --check`. If we aren't doing check, don't bother allocating
     var unformatted_files = if (check) std.array_list.Managed([]const u8).init(gpa) else null;
+    errdefer if (unformatted_files) |files| {
+        for (files.items) |file_path| files.allocator.free(file_path);
+        files.deinit();
+    };
 
     // First try as a directory.
     if (base_dir.openDir(io, path, .{ .iterate = true })) |const_dir| {
@@ -96,7 +99,10 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
         defer walker.deinit();
         while (try walker.next(io)) |entry| {
             if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
+                if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".roc")) continue;
+                const file_path = try std.fs.path.join(gpa, &.{ path, entry.path });
+                defer gpa.free(file_path);
+                if (formatFilePath(gpa, base_dir, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
                     success_count += 1;
                 } else |err| switch (err) {
                     error.NotRocFile => {},
@@ -298,7 +304,10 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         defer formatted.deinit();
         try formatAstWithOptions(parse_ast.*, &formatted.writer, options);
         if (!std.mem.eql(u8, formatted.written(), module_env.common.source)) {
-            try unformatted_files.?.append(path);
+            const files = unformatted_files.?;
+            const owned_path = try files.allocator.dupe(u8, path);
+            errdefer files.allocator.free(owned_path);
+            try files.append(owned_path);
         }
     } else { // Otherwise actually format it
         const output_file = try base_dir.createFile(io, path, .{});
@@ -4892,6 +4901,65 @@ test "legacy optional marker preserves a comment between colon and marker" {
         "value : {\n\ta ? # keep me\n\t\t: U8,\n}\n",
         result,
     );
+}
+
+test "formatPath check retains full paths after directory traversal" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "d/sub");
+
+    const unformatted = [_][]const u8{ "d/Long.roc", "d/C.roc", "d/sub/Long.roc" };
+    for (unformatted) |path| {
+        try tmp.dir.writeFile(io, .{ .sub_path = path, .data = "x  =  1\n" });
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "d/Formatted.roc", .data = "x = 1\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "d/a.md", .data = "Not Roc" });
+
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    var result = try formatPath(gpa, gpa, tmp.dir, "d", true, .{}, io, &stderr.writer);
+    defer result.deinit();
+    try std.testing.expectEqual(4, result.success);
+    try std.testing.expectEqual(0, result.failure);
+    try std.testing.expectEqualStrings("", stderr.written());
+    const files = result.unformatted_files.?.items;
+    try std.testing.expectEqual(unformatted.len, files.len);
+    for (unformatted) |path| {
+        const expected = try gpa.dupe(u8, path);
+        defer gpa.free(expected);
+        for (expected) |*byte| {
+            if (byte.* == '/') byte.* = std.fs.path.sep;
+        }
+        var matches: usize = 0;
+        for (files) |actual| {
+            if (std.mem.eql(u8, expected, actual)) matches += 1;
+        }
+        try std.testing.expectEqual(1, matches);
+        const contents = try tmp.dir.readFileAlloc(io, path, gpa, .limited(1024));
+        defer gpa.free(contents);
+        try std.testing.expectEqualStrings("x  =  1\n", contents);
+    }
+}
+
+test "formatPath check owns single file paths" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "Long.roc", .data = "x  =  1\n" });
+    var path = "Long.roc".*;
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    var result = try formatPath(gpa, gpa, tmp.dir, &path, true, .{}, io, &stderr.writer);
+    defer result.deinit();
+    @memset(&path, 'X');
+    try std.testing.expectEqual(1, result.success);
+    try std.testing.expectEqual(0, result.failure);
+    const files = result.unformatted_files.?.items;
+    try std.testing.expectEqual(1, files.len);
+    try std.testing.expectEqualStrings("Long.roc", files[0]);
 }
 
 test "formatFilePath migrates a legacy optional field marker" {
