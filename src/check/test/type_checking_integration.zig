@@ -7196,10 +7196,9 @@ test "check type - polarity - try may not flow an unlisted error into the annota
     );
 }
 
-test "check type - polarity - a rejected try keeps the function's result type" {
-    // The rejected `?` owns its diagnostic and becomes a runtime error. The
-    // result it would have flowed into is shared with the body and every
-    // caller, so it keeps the type the body gives it.
+test "check type - polarity - a rejected callback row audit keeps the solved type" {
+    // The callback result now opens. `?` relates its row to the enclosing
+    // result; the audit rejects the unlisted tag but preserves the solved row.
     const source =
         \\run : ({} -> Try(I64, [WrongArity])) -> Try(I64, _)
         \\run = |fn| {
@@ -7210,7 +7209,7 @@ test "check type - polarity - a rejected try keeps the function's result type" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
-    try test_env.assertDefTypeOptions("run", "({} -> Try(I64, [WrongArity])) -> Try(I64, [NotAFunction])", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("run", "({} -> Try(I64, [NotAFunction, WrongArity, ..a])) -> Try(I64, [NotAFunction, WrongArity, ..a])", .{ .allow_type_errors = true });
 }
 
 // record extension in type annotations //
@@ -9050,11 +9049,8 @@ test "check type - polarity - annotated input union stays closed" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - argument position negates through nested functions" {
-    // In `use : ([A] -> Str) -> Str` the callback's own argument sits two
-    // argument positions deep, so its polarity is positive again: `use`
-    // produces the values the callback consumes. The union is implicitly
-    // open, and a callback accepting more tags is fine.
+test "check type - polarity - nested function arguments stay closed" {
+    // Each function establishes its own input position.
     const source =
         \\use : ([A] -> Str) -> Str
         \\use = |callback| callback(A)
@@ -9064,28 +9060,200 @@ test "check type - polarity - argument position negates through nested functions
         \\
         \\result = use(accepts_more)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "Str");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - callback return position stays input" {
-    // The return of a callback taken as an argument is a value the annotated
-    // function consumes (negative position), so it stays closed: a callback
-    // producing extra tags is rejected.
+test "check type - polarity - callback return position is output" {
+    // Ignore the callback so body exhaustiveness cannot close its result row.
     const source =
         \\run : (Str -> [Done]) -> Str
-        \\run = |callback| {
-        \\  match callback("go") {
-        \\    Done => "done"
-        \\  }
-        \\}
+        \\run = |_callback| "done"
         \\
         \\produces_more : Str -> [Done, Extra]
         \\produces_more = |_| Extra
         \\
-        \\bad = run(produces_more)
+        \\result = run(produces_more)
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "Str");
 }
+
+// These fixtures ignore the annotated parameter. No body operation unifies any
+// row or leaf beneath it, so the graph records annotation generation itself.
+test "check type - polarity - alias and direct annotation graphs use function local positions" {
+    const declarations =
+        \\Consumer : [E] -> Str
+        \\Producer(a) : Str -> a
+        \\Identity(a) : a
+        \\Nested(a) : Producer(a)
+        \\Pair : ((Str -> [E]), [F])
+        \\ReversedPair : ([F], (Str -> [E]))
+        \\Fields : { callback : Str -> [E], tag : [F] }
+        \\ReversedFields : { before : [F], callback : Str -> [E] }
+        \\Shared(a) : ((a -> [E(a)]), (Str -> [F(a)]))
+        \\Wrapped : [Wrap(Str -> [E])]
+    ;
+    const Case = struct { alias: []const u8, direct: []const u8, open: []const bool };
+    const cases = [_]Case{
+        .{ .alias = "Consumer", .direct = "([E] -> Str)", .open = &.{false} },
+        .{ .alias = "Producer([E])", .direct = "(Str -> [E])", .open = &.{true} },
+        .{ .alias = "Identity([E])", .direct = "[E]", .open = &.{false} },
+        .{ .alias = "Nested([E])", .direct = "(Str -> [E])", .open = &.{true} },
+        .{ .alias = "Identity(Producer([E]))", .direct = "(Str -> [E])", .open = &.{true} },
+        .{ .alias = "(Producer([E]), Producer([E]))", .direct = "((Str -> [E]), (Str -> [E]))", .open = &.{ true, true } },
+        .{ .alias = "Wrapped", .direct = "[Wrap(Str -> [E])]", .open = &.{ false, true } },
+        .{ .alias = "Pair", .direct = "((Str -> [E]), [F])", .open = &.{ true, false } },
+        .{ .alias = "ReversedPair", .direct = "([F], (Str -> [E]))", .open = &.{ false, true } },
+        .{ .alias = "Fields", .direct = "{ callback : Str -> [E], tag : [F] }", .open = &.{ true, false } },
+        .{ .alias = "ReversedFields", .direct = "{ before : [F], callback : Str -> [E] }", .open = &.{ false, true } },
+        .{ .alias = "Shared(a)", .direct = "((a -> [E(a)]), (Str -> [F(a)]))", .open = &.{ true, true } },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(
+            testing.allocator,
+            "{s}\ndirect : {s} -> Str\ndirect = |_| \"ok\"\naliased : {s} -> Str\naliased = |_| \"ok\"\n",
+            .{ declarations, case.direct, case.alias },
+        );
+        defer testing.allocator.free(source);
+        var env = try TestEnv.init("FunctionLocalPolarity", source);
+        defer env.deinit();
+        try env.assertNoErrors();
+        var direct: PolarityTestGraph = .{};
+        defer direct.deinit();
+        var aliased: PolarityTestGraph = .{};
+        defer aliased.deinit();
+        try direct.collectDef(&env, "direct");
+        try aliased.collectDef(&env, "aliased");
+        try testing.expectEqualSlices(bool, case.open, direct.open.items);
+        try testing.expectEqualSlices(bool, case.open, aliased.open.items);
+        // Compare actual structure, extension content, and repeated-variable
+        // sharing, with only transparent alias wrappers and fresh IDs erased.
+        try testing.expectEqualSlices(u64, direct.nodes.items, aliased.nodes.items);
+    }
+}
+
+test "check type - polarity - mixed inherited and output formal shares its row" {
+    // A shared formal must satisfy both occurrences. Unlike two separately
+    // written [E] literals, these occurrences have exactly one extension:
+    // the inherited occurrence closes it at input uses, and both open at outputs.
+    for ([_][]const u8{ "(a, (Str -> a))", "((Str -> a), a)" }) |backing| {
+        for ([_]bool{ false, true }) |output| {
+            const annotation = if (output) "Str -> Mixed([E])" else "Mixed([E]) -> Str";
+            const source = try std.fmt.allocPrint(
+                testing.allocator,
+                "Mixed(a) : {s}\nvalue : {s}\nvalue = |_| crash \"unused\"\n",
+                .{ backing, annotation },
+            );
+            defer testing.allocator.free(source);
+            var env = try TestEnv.init("MixedFormalPolarity", source);
+            defer env.deinit();
+            try env.assertNoErrors();
+            var graph: PolarityTestGraph = .{};
+            defer graph.deinit();
+            try graph.collectDef(&env, "value");
+            try testing.expectEqualSlices(bool, &.{ output, output }, graph.open.items);
+            try testing.expectEqual(@as(usize, 2), graph.row_extensions.items.len);
+            try testing.expectEqual(graph.row_extensions.items[0], graph.row_extensions.items[1]);
+        }
+    }
+}
+
+const PolarityTestGraph = struct {
+    const Error = std.mem.Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual };
+
+    nodes: std.ArrayList(u64) = .empty,
+    leaves: std.ArrayList(types.Var) = .empty,
+    open: std.ArrayList(bool) = .empty,
+    row_extensions: std.ArrayList(types.Var) = .empty,
+
+    fn deinit(self: *PolarityTestGraph) void {
+        self.nodes.deinit(testing.allocator);
+        self.leaves.deinit(testing.allocator);
+        self.open.deinit(testing.allocator);
+        self.row_extensions.deinit(testing.allocator);
+    }
+
+    fn add(self: *PolarityTestGraph, value: u64) std.mem.Allocator.Error!void {
+        try self.nodes.append(testing.allocator, value);
+    }
+
+    fn collectDef(self: *PolarityTestGraph, env: *TestEnv, name: []const u8) Error!void {
+        for (env.module_env.store.sliceDefs(env.module_env.all_defs)) |idx| {
+            const def = env.module_env.store.getDef(idx);
+            const pattern = env.module_env.store.getPattern(def.pattern);
+            if (pattern != .assign) continue;
+            if (!std.mem.eql(u8, name, env.module_env.getIdentStoreConst().getText(pattern.assign.ident))) continue;
+            return self.collect(&env.module_env.types, ModuleEnv.varFrom(idx));
+        }
+        return error.TestUnexpectedResult;
+    }
+
+    fn collect(self: *PolarityTestGraph, store: *const types.Store, variable: types.Var) Error!void {
+        const resolved = store.resolveVar(variable);
+        const content = resolved.desc.content;
+        if (content == .alias) return self.collect(store, store.getAliasBackingVar(content.alias));
+        try self.add(@intFromEnum(std.meta.activeTag(content)));
+        switch (content) {
+            .flex, .rigid => {
+                var index: usize = 0;
+                while (index < self.leaves.items.len and self.leaves.items[index] != resolved.var_) : (index += 1) {}
+                if (index == self.leaves.items.len) try self.leaves.append(testing.allocator, resolved.var_);
+                try self.add(index);
+                if (content == .flex) {
+                    try testing.expectEqual(@as(usize, 0), content.flex.constraints.len());
+                } else {
+                    try self.add(content.rigid.name.idx);
+                }
+            },
+            .structure => |structure| {
+                try self.add(@intFromEnum(std.meta.activeTag(structure)));
+                switch (structure) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try self.add(func.args.count);
+                        for (store.sliceVars(func.args)) |arg| try self.collect(store, arg);
+                        try self.collect(store, func.ret);
+                        try self.add(func.effect_deps.count);
+                        for (store.sliceVars(func.effect_deps)) |dep| try self.collect(store, dep);
+                    },
+                    .tuple => |tuple| {
+                        try self.add(tuple.elems.count);
+                        for (store.sliceVars(tuple.elems)) |elem| try self.collect(store, elem);
+                    },
+                    .record => |record| {
+                        try self.add(record.fields.count);
+                        for (0..record.fields.count) |i| {
+                            const field = store.getRecordFieldAt(record.fields, @intCast(i));
+                            try self.add(field.name.idx);
+                            try self.collect(store, field.presence.typeVar());
+                        }
+                        try self.collect(store, record.ext);
+                    },
+                    .tag_union => |union_| {
+                        const ext = store.resolveVar(union_.ext).desc.content;
+                        try testing.expect(ext == .flex or (ext == .structure and ext.structure == .empty_tag_union));
+                        try self.open.append(testing.allocator, ext == .flex);
+                        try self.row_extensions.append(testing.allocator, store.resolveVar(union_.ext).var_);
+                        try self.add(union_.tags.count);
+                        for (0..union_.tags.count) |i| {
+                            const tag = store.getTagAt(union_.tags, @intCast(i));
+                            try self.add(tag.name.idx);
+                            try self.add(tag.args.count);
+                            for (store.sliceVars(tag.args)) |arg| try self.collect(store, arg);
+                        }
+                        try self.collect(store, union_.ext);
+                    },
+                    .nominal_type => |nominal| {
+                        try self.add(nominal.ident.ident_idx.idx);
+                        const args = types.Store.getNominalArgsRange(nominal);
+                        try self.add(args.count);
+                        for (store.sliceVars(args)) |arg| try self.collect(store, arg);
+                    },
+                    .empty_record, .empty_tag_union => {},
+                }
+            },
+            .alias, .field_presence, .err => return error.TestUnexpectedResult,
+        }
+    }
+};
 
 test "check type - polarity - alias defers openness to use-site polarity" {
     // `Errs` is written closed. In an output position it is implicitly open
@@ -9151,12 +9319,8 @@ test "check type - polarity - the same row written directly is closed" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - alias reference in an input position composes back to open" {
-    // Composition, not closing: a contravariant formal applied in an INPUT
-    // position negates twice, so the row is an output again and a wider
-    // handler is accepted, exactly as the direct spelling
-    // `(([A, B] -> Str) -> Str)` accepts one. A fix that merely closed every
-    // argument of a contravariant formal would reject this.
+test "check type - polarity - alias reference preserves the function local input position" {
+    // An enclosing argument does not turn the callback's input into an output.
     const source =
         \\Handler(e) : e -> Str
         \\
@@ -9168,12 +9332,12 @@ test "check type - polarity - alias reference in an input position composes back
         \\
         \\out = run(wide)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "out" } }, "Str");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 test "check type - polarity - alias reference still opens a row the declaration puts in an output position" {
     // The feature itself, through the same walk: `Producer(e) : Str -> e`
-    // holds `e` covariantly, so the applied row keeps the reference's polarity
+    // holds `e` in its result, so the applied row is an output independently
     // and stays open for callers.
     const source =
         \\Producer(e) : Str -> e
@@ -9314,17 +9478,9 @@ test "check type - polarity - imported covariant alias closes the applied row to
 }
 
 test "check type - polarity - an unknown formal's row stays closed under a function argument" {
-    // Unknown variance is refused opening at EVERY depth, not just at the
-    // argument's own root, and this pins why that distinction is load-bearing.
-    //
-    // Polarity flips on the way down: a function's parameters negate. So an
-    // unknown formal answered as a closing POLARITY closes only the top row:
-    // one level into a function argument the polarity flips back to positive
-    // and the row opens again. Here `[A]` is the parameter of the function
-    // substituted for `Producer`'s formal, so a polarity-only answer would
-    // open it and accept `mk("s")(C)`, which both the direct spelling and the
-    // pre-rule behaviour reject. Answering with "generate rows as written"
-    // instead is stable under descent.
+    // Imported source arguments retain the existing as-written policy until
+    // alias propagation supplies exact declaration positions. Independently
+    // of that policy, this row is a function input and must remain closed.
     const source_lib =
         \\module [Producer]
         \\

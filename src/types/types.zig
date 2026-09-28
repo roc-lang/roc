@@ -1270,24 +1270,14 @@ pub const TwoStaticDispatchConstraints = struct {
 ///
 /// This is walk state for annotation generation, instantiation, and display—it
 /// is never stored in a type. The root of an annotation is positive
-/// (output), function argument positions negate the surrounding polarity, and
-/// every other position (returns, type application args, record fields, tuple
-/// elems, tag payloads) preserves it.
+/// (output). Each function resets its arguments to negative and its return
+/// to positive, independently of the enclosing position. Type application
+/// args, record fields, tuple elements, and tag payloads inherit position.
 pub const Polarity = enum {
     /// An input (negative) position: a value the annotated thing consumes.
     neg,
     /// An output (positive) position: a value the annotated thing produces.
     pos,
-
-    /// The polarity one level deeper through a function argument position:
-    /// argument positions negate the surrounding polarity, while return
-    /// positions preserve it.
-    pub fn flip(self: Polarity) Polarity {
-        return switch (self) {
-            .neg => .pos,
-            .pos => .neg,
-        };
-    }
 };
 
 /// The ident text of the compiler-internal rigid var used as the extension of

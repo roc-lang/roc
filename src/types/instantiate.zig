@@ -246,9 +246,7 @@ const FuncFrame = struct {
     func: Func,
     kind: enum { pure, effectful, unbound },
     vars_base: u32,
-    /// The polarity surrounding this function. Argument positions negate it;
-    /// the return (and effect-dep) positions restore it. Re-asserted before
-    /// every child request so suspension cannot leave a stale value.
+    /// The polarity surrounding this function, restored when it completes.
     saved_polarity: Polarity,
 };
 
@@ -356,8 +354,8 @@ pub const Instantiator = struct {
     polarity_var_behavior: PolarityVarBehavior = .close,
     /// The polarity of the position currently being instantiated. Starts at
     /// the polarity of the instantiation root (callers using
-    /// `.resolve_by_polarity` set it) and is negated for function argument
-    /// positions as the walk descends—each func frame saves the
+    /// `.resolve_by_polarity` set it). Each function resets arguments to
+    /// negative and its return to positive; each func frame saves the
     /// surrounding polarity and re-asserts the stage-appropriate value
     /// before every child it requests.
     current_polarity: Polarity = .pos,
@@ -439,9 +437,8 @@ pub const Instantiator = struct {
         /// occupies: open (a fresh unnamed flex, exactly what an implicitly
         /// opened output-position union gets) in positive/output positions,
         /// closed (`[]`) in negative/input positions. The walk starts at
-        /// `current_polarity` and negates through function argument
-        /// positions, so polarity composes correctly through functions
-        /// embedded in alias bodies.
+        /// `current_polarity`; embedded functions establish their own input
+        /// arguments and output returns independently of that position.
         resolve_by_polarity,
         /// Like `resolve_by_polarity` for negative positions (closed), but a
         /// marker in a positive position that the result-row widening adapter
@@ -1283,18 +1280,18 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@intFromEnum(frame.func.args.start) + arrived];
-                // Argument positions negate the surrounding polarity. No
+                // Each function establishes its own input position. No
                 // position inside a function is adapter-reachable: the adapter
                 // re-tags the result it is generated for, never a row inside a
                 // function that result contains.
-                self.current_polarity = frame.saved_polarity.flip();
+                self.current_polarity = .neg;
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             if (arrived == args_count) {
-                // The return position preserves the surrounding polarity.
-                self.current_polarity = frame.saved_polarity;
+                // Each function establishes its own output position.
+                self.current_polarity = .pos;
                 self.current_reach = .nested;
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;
@@ -1323,6 +1320,7 @@ pub const Instantiator = struct {
                 .effectful => FlatType{ .fn_effectful = fresh_func },
                 .unbound => FlatType{ .fn_unbound = fresh_func },
             } };
+            self.current_polarity = frame.saved_polarity;
             try self.finishFrame(frame.common, fresh_content);
             return true;
         }

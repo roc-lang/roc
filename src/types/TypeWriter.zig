@@ -86,8 +86,8 @@ import_mapping: ?*const import_mapping_mod.ImportMapping,
 mb_default_source: ?DefaultSourceFn = null,
 default_source_ctx: *const anyopaque = undefined,
 /// The polarity of the position currently being written: `.pos` at the root,
-/// negated through function argument positions. Tag unions in output
-/// positions are implicitly open, so an anonymous extension there (the rigid
+/// reset to negative arguments and a positive return at every function.
+/// Tag unions in output positions are implicitly open, so an anonymous extension there (the rigid
 /// `..` produces, or its instantiated flex) is not displayed (openness is
 /// meaningful—and shown—in input positions and for shared, constrained,
 /// or named extensions). Maintained by the func frame: each `FuncFrame` saves
@@ -201,9 +201,8 @@ const FuncFrame = struct {
     ret: Var,
     arrow: []const u8,
     wrap_in_parens: bool,
-    /// The polarity surrounding this function. Argument positions negate it;
-    /// the return position restores it. Re-asserted before every child
-    /// request so suspension and resumption cannot leave a stale value.
+    /// The enclosing position, restored on completion. Function children
+    /// establish their own positions, re-asserted before every request.
     saved_polarity: types_mod.Polarity,
     idx: u32 = 0,
     stage: enum { args, ret, done } = .args,
@@ -501,9 +500,8 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
             try tmp_writer.writeAll(self.idents.getText(item.constraint.fn_name));
             try tmp_writer.writeAll(" : ");
 
-            // A where-method signature is a function the constrained code
-            // receives (a callback), so it is written at negative polarity:
-            // its arguments open, its return stays closed.
+            // A where-method is received as a callback. Its function children
+            // establish their own input and output positions.
             const saved_polarity = self.polarity;
             self.polarity = .neg;
             try self.writeVar(tmp_writer, item.constraint.fn_var, root_var);
@@ -933,8 +931,8 @@ fn stepFunc(self: *TypeWriter, writer: *ByteWrite, frame: *FuncFrame, root_var: 
                     if (frame.idx > 0) try writer.writeAll(", ");
                     const arg = self.varAt(frame.args, frame.idx);
                     frame.idx += 1;
-                    // Argument positions negate the surrounding polarity.
-                    self.polarity = frame.saved_polarity.flip();
+                    // Each function establishes its own input position.
+                    self.polarity = .neg;
                     if (!try self.requestVar(writer, arg, .FunctionArgument, root_var)) return false;
                     continue;
                 }
@@ -945,12 +943,13 @@ fn stepFunc(self: *TypeWriter, writer: *ByteWrite, frame: *FuncFrame, root_var: 
             .ret => {
                 const ret = frame.ret;
                 frame.stage = .done;
-                // The return position preserves the surrounding polarity.
-                self.polarity = frame.saved_polarity;
+                // Each function establishes its own output position.
+                self.polarity = .pos;
                 if (!try self.requestVar(writer, ret, .FunctionReturn, root_var)) return false;
             },
             .done => {
                 if (frame.wrap_in_parens) try writer.writeAll(")");
+                self.polarity = frame.saved_polarity;
                 self.popSeen();
                 return true;
             },
@@ -2095,4 +2094,28 @@ test "TypeWriter counts occurrences across a spine deeper than any native-stack 
 
     const rendered = try env.writer.writeGet(current, .wrap);
     try testing.expectEqual(@as(usize, depth * 2 + "(a, a)".len), rendered.len);
+}
+
+test "TypeWriter polarity resets at functions and restores sibling positions" {
+    var env = try TestEnv.init(testing.allocator, 32);
+    defer env.deinit();
+    const unit = try env.types.freshFromContent(.{ .structure = .empty_record });
+    var rows: [3]Var = undefined;
+    for ([_][]const u8{ "Input", "Output", "Sibling" }, &rows) |name, *row| {
+        const tags = try env.types.appendTags(&.{.{
+            .name = try env.ident(name),
+            .args = try env.types.appendVars(&.{}),
+        }});
+        const ext = try env.types.fresh();
+        row.* = try env.types.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = ext } } });
+    }
+    const callback = try env.types.freshFromContent(try env.types.mkFuncPure(&.{rows[0]}, rows[1]));
+    for ([_][2]Var{ .{ callback, rows[2] }, .{ rows[2], callback } }) |elems| {
+        const tuple = try env.tuple(&elems);
+        const root = try env.types.freshFromContent(try env.types.mkFuncPure(&.{tuple}, unit));
+        const rendered = try env.writer.writeGet(root, .wrap);
+        try testing.expect(std.mem.find(u8, rendered, "[Input, ..]") != null);
+        try testing.expect(std.mem.find(u8, rendered, "[Output]") != null);
+        try testing.expect(std.mem.find(u8, rendered, "[Sibling, ..]") != null);
+    }
 }

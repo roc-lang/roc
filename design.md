@@ -6750,9 +6750,11 @@ inconsistent shared type variables and unsupported real dispatches still fail.
 ### Polarity: Output-Position Tag Unions Are Implicitly Open
 
 Every type annotation is walked with a POLARITY: the root is positive
-(output), function argument positions negate the surrounding polarity, and
-all other positions (returns, type application args, record fields, tuple
-elems, tag payloads) preserve it. An extensionless tag union with at least one
+(output). Each function establishes its own positions: its arguments are
+negative and its return is positive, independently of the surrounding
+position. Type application arguments, record fields, tuple items, and tag
+payloads inherit their enclosing position. Thus `([E] -> Str) -> Str` keeps
+`[E]` closed, while `(Str -> [E]) -> Str` opens the callback result. An extensionless tag union with at least one
 tag in a positive position is IMPLICITLY OPEN: it is generated with a fresh
 flex extension; `parse : Str -> Try(U8, [InvalidU8])` is one such signature.
 The same union in a negative position stays closed as written. A union with no
@@ -6889,33 +6891,33 @@ declaration stores a marker rigid (`types.polarity_var_text`, an ordinary
 rigid with a reserved name) as the ext of each extensionless union in its
 body, and instantiation resolves every marker by the polarity of the position
 the alias is used in—a fresh flex (recorded for the audit) in positive
-positions, `[]` in negative ones—negating through functions embedded in the
-alias body (`Instantiator.PolarityVarBehavior`). Nominal declaration bodies
-close as written.
+positions, `[]` in negative ones—with each embedded function establishing
+its own input and output positions (`Instantiator.PolarityVarBehavior`).
+Nominal declaration bodies close as written.
 
 A row the reference itself WRITES as a type argument is decided the same way,
 by composition rather than by inheritance. A declaration's formal stands
 wherever the declaration's body puts it, so the argument substituted for it is
-generated at the reference's polarity composed with that formal's VARIANCE
+generated according to the formal's position transfer
 (`Check.applyFormalVariances`): `Handler(e) : e -> Str` holds `e` in an input
 position, so the `[A, B]` of `Handler([A, B])` written as an output is
 generated closed, exactly like the `[A, B] -> Str` the reference stands for,
-and `Handler([A, B])` written as an INPUT negates twice and opens, exactly
-like `([A, B] -> Str) -> Str` does. A formal the body places on both sides is
-invariant: one variable cannot be open on the output side and closed on the
-input side, so its argument is generated closed wherever the reference stands.
-The variance is read off the declaration's own annotation by a bounded walk
-that recurses through nested LOCAL declarations (`Outer(e) : Inner(e)`), so
-the answer composes across a chain; every other shape—a cross-module
-declaration, a compiler-constructed `List`/`Box`/numeric application, a
-reference below the walk's depth bound, a declaration cycle—contributes a
-COVARIANT occurrence, which is the pre-composition answer of inheriting the
-reference's polarity, so an unmodeled shape costs precision and never
-correctness. This is the polarity counterpart of the move
-`GenTypeAnnoCtx.instantiationReach` already makes for adapter reach: without
-it, `Handler([A, B])` opened a row the identical direct spelling closed, and
-the annotation did not constrain the definition at all when the body ignored
-the parameter.
+and `Handler([A, B])` written as an INPUT also stays closed, exactly
+like `([A, B] -> Str) -> Str` does. A formal outside a function inherits the
+reference position (`Identity(e) : e`), whereas a function return forces an
+output position (`Producer(e) : Str -> e`), including at input uses of the
+alias. Combining occurrences preserves opening only where every occurrence
+permits it; an inherited occurrence combined with an output occurrence still
+inherits, and any input occurrence closes the argument. A formal the body
+places on both sides is invariant: one variable cannot be open on the output
+side and closed on the input side, so its argument is generated closed wherever the reference stands.
+The current implementation reads these transfers from a bounded walk through
+local declarations. Existing imported-declaration and bound handling remain
+limitations, described under "Two Syntactic Walks" below; this function-local
+change does not establish full alias transparency. Alias propagation must
+replace those approximations with exact declaration information. Argument
+positions must not depend on a declaration's module, chain length, or traversal
+order.
 
 A WHERE-METHOD signature is a scheme the constrained body instantiates at
 each use, exactly like a call of an annotated function. It is walked like any
@@ -7041,16 +7043,13 @@ module, qualify the reference, change nothing else, and the closed answer must
 survive—which it does only because the importer refuses to open what it cannot
 read.
 
-Unknown is deliberately NOT expressed as a polarity, and that distinction is
-load-bearing rather than stylistic. Polarity FLIPS on the way down: a
-function's parameters negate the surrounding polarity. So answering unknown
-with the closing polarity an invariant formal composes to (`.neg`) closes only
-the argument's own top row, and one level in—inside a function argument—the
-polarity flips back to positive and the row opens again.
-`mk : Lib.Producer([A] -> Str)` is the witness: `[A]` is the parameter of the
-function substituted for the formal, so a polarity-only answer opens it and
-accepts `mk("s")(C)`, which both the direct spelling and a local `Producer`
-reject. An opening behaviour, unlike a polarity, is stable under descent. The
+Unknown is deliberately NOT expressed as a polarity. Every function establishes
+its own output return even beneath a negative surrounding position, whereas
+an opening behaviour remains stable under descent. The existing unknown
+policy therefore disables opening throughout the argument; the follow-up
+alias representation must replace that policy with exact declaration data.
+The existing `Lib.Producer([A] -> Str)` regression still requires `[A]` to
+stay closed, now directly because it is a function argument. The remaining
 cost is the covariant case: `Producer(e) : Str -> e` keeps `Producer([A, B])`
 open for callers when it is declared locally and closes it when it is
 imported. Two kinds of reference are exempt, because their variance is KNOWN
@@ -7059,8 +7058,8 @@ rather than unknown, and both are compiler-owned: a `.builtin` application
 `Try`'s error row in particular is an EXTERNAL reference from every ordinary
 module, so this exemption is what keeps annotated error rows open at all.
 
-The second exemption rests on a property of `Builtin` rather than on a list of
-names, and the property is the thing to preserve: EVERY parameterized
+The existing second exemption rests on a property of `Builtin` rather than on
+a list of names: EVERY parameterized
 declaration in `Builtin` is covariant in each of its formals, or leaves that
 formal unused. That holds today across all twelve of them—`Try(ok, err)`,
 `Dict(k, v)`, `DictData(k, v)`, `Set(item)`, `Iter(item)`, `Stream(item)`,
@@ -7073,8 +7072,10 @@ formals inside a `List((k, v))` payload rather than a function at all. A
 `Builtin` declaration that put a formal in an arrow's ARGUMENT—a
 `Consumer(item) :: { push : item -> {} }`—would be contravariant, and this
 exemption would then answer it covariantly and reopen exactly the hole the
-rule above closes. The exemption is sound because of that property, so adding
-such a declaration means narrowing the exemption rather than relying on it.
+rule above closes. Under function-local positions, inheritance also differs
+from a forced output: `Iter` and `Stream` place their parameters under function
+results. Exact declaration position data must replace this legacy exemption
+as part of alias propagation; mathematical covariance alone is insufficient.
 
 The `Try` walk's stop answer UNDER-OPENS: the opened set becomes
 strictly smaller than the adaptable set, and a use lowering would have

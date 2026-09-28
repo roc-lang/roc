@@ -16965,9 +16965,8 @@ const GenTypeAnnoCtx = union(enum) {
     /// Generate everything at and beneath this position with a different
     /// opening behaviour. Used for an argument substituted for a formal whose
     /// variance is UNKNOWN: opening must be refused at every depth, not just
-    /// at the argument's own root, because polarity FLIPS on the way down (a
-    /// function's parameters negate) and so a closing polarity reopens one
-    /// level in.
+    /// at the argument's own root: a nested function establishes an output
+    /// return even beneath an input position.
     fn withOpening(self: GenTypeAnnoCtx, opening: AnnotationGenCtx.OpeningBehavior) GenTypeAnnoCtx {
         return switch (self) {
             .annotation => |anno_ctx| .{ .annotation = .{
@@ -17765,64 +17764,43 @@ fn annoSkipParens(self: *const Self, anno_idx: CIR.TypeAnno.Idx) CIR.TypeAnno.Id
     return current;
 }
 
-/// Where a type declaration's body places one of its own formals, relative to
-/// the declaration's root.
-///
-/// A reference's argument stands wherever the declaration puts the formal it
-/// is substituted for, so the argument is generated at the reference's
-/// polarity COMPOSED with this—the same position the type spelled out in place
-/// would have. `Handler(e) : e -> Str` puts `e` in an input position, so the
-/// `[A, B]` of `Handler([A, B])` written as an output is generated closed,
-/// exactly like the `[A, B] -> Str` the reference stands for. Without the
-/// composition the argument inherited the REFERENCE's polarity and opened,
-/// and an annotation that the direct spelling enforces was not enforced
-/// through the alias.
-///
-/// This is the polarity counterpart of `instantiationReach`: reach already
-/// re-decides itself inside the referenced declaration, and polarity did not.
-///
-/// A shape the walk does not model contributes a COVARIANT occurrence, which
-/// keeps the reference's own polarity. That default is only sound where the
-/// shape genuinely preserves polarity; a position whose variance is UNKNOWN
-/// must not take it, because covariance is the most permissive answer and
-/// guessing it un-enforces the annotation. Unknown variance is `.invariant`
-/// instead; see `applyDeclKnowledge`.
+/// How occurrences of a declaration formal choose their input/output position.
+/// A function establishes a position; outside functions the reference supplies
+/// it. Multiple occurrences share one argument, which opens only if every
+/// occurrence permits opening at that reference position.
 const FormalVariance = enum {
-    /// The declaration body never names this formal.
     unused,
-    /// Only positions that preserve the reference's polarity, plus every
-    /// position this walk does not model (see above).
+    /// Inherits the alias reference's position.
     covariant,
-    /// Only positions that negate it.
+    /// Occurs only in function results, independently of reference position.
+    output,
+    /// Occurs in a function argument.
     contravariant,
-    /// Both. One variable cannot be open on the output side and closed on the
-    /// input side, so an invariant argument is generated closed whatever the
-    /// reference's own polarity is.
+    /// Shared occurrences require a closed argument.
     invariant,
 
-    /// This formal's variance given one more occurrence's.
     fn join(self: FormalVariance, other: FormalVariance) FormalVariance {
         if (self == .unused) return other;
         if (other == .unused) return self;
         if (self == other) return self;
+        if ((self == .covariant and other == .output) or
+            (self == .output and other == .covariant)) return .covariant;
         return .invariant;
     }
 
-    /// One occurrence standing at `polarity` within the declaration body.
-    fn ofOccurrence(polarity: Polarity) FormalVariance {
-        return switch (polarity) {
-            .pos => .covariant,
+    /// Null means no enclosing function has established a position.
+    fn ofOccurrence(polarity: ?Polarity) FormalVariance {
+        return if (polarity) |position| switch (position) {
+            .pos => .output,
             .neg => .contravariant,
-        };
+        } else .covariant;
     }
 
-    /// The polarity an argument substituted for this formal is generated at,
-    /// given the polarity of the reference itself.
-    fn compose(self: FormalVariance, reference: Polarity) Polarity {
+    fn compose(self: FormalVariance, reference: anytype) @TypeOf(reference) {
         return switch (self) {
             .unused, .covariant => reference,
-            .contravariant => reference.flip(),
-            .invariant => .neg,
+            .output => .pos,
+            .contravariant, .invariant => .neg,
         };
     }
 };
@@ -17849,7 +17827,7 @@ const max_formal_variance_nodes: usize = 2048;
 /// position sits relative to the declaration's own root.
 const FormalVariancePending = struct {
     anno: CIR.TypeAnno.Idx,
-    polarity: Polarity,
+    polarity: ?Polarity,
     /// Set for every position below a reference whose variance this walk
     /// cannot read (`ApplyDeclKnowledge.unknown`). A formal found here is
     /// joined as `.invariant` rather than by its polarity: the declaration on
@@ -18033,10 +18011,9 @@ fn declFormalVariances(
     walk.open_decls_len += 1;
     defer walk.open_decls_len -= 1;
 
-    // A declaration's body root is an output position relative to the
-    // declaration itself, the same convention `generateAnnotationType` starts
-    // an annotation walk with.
-    self.accumulateFormalVariances(body, formals, .pos, out, walk);
+    // A declaration body inherits the reference position until a function
+    // establishes one. Null distinguishes inheritance from an output.
+    self.accumulateFormalVariances(body, formals, null, out, walk);
     return formals.len;
 }
 
@@ -18053,7 +18030,7 @@ fn accumulateFormalVariances(
     self: *const Self,
     root_anno_idx: CIR.TypeAnno.Idx,
     formals: []const CIR.TypeAnno.Idx,
-    root_polarity: Polarity,
+    root_polarity: ?Polarity,
     out: *[max_tracked_alias_formals]FormalVariance,
     walk: *FormalVarianceWalk,
 ) void {
@@ -18106,13 +18083,12 @@ fn accumulateFormalVariances(
                 pending_len += 1;
             },
             .@"fn" => |func| {
-                // The same rule the annotation walk uses: argument positions
-                // negate the surrounding polarity, the return preserves it.
+                // Functions establish positions independently of their surroundings.
                 for (self.cir.store.sliceTypeAnnos(func.args)) |arg_anno_idx| {
-                    pending[pending_len] = .{ .anno = arg_anno_idx, .polarity = here.polarity.flip(), .unknown = here.unknown };
+                    pending[pending_len] = .{ .anno = arg_anno_idx, .polarity = .neg, .unknown = here.unknown };
                     pending_len += 1;
                 }
-                pending[pending_len] = .{ .anno = func.ret, .polarity = here.polarity, .unknown = here.unknown };
+                pending[pending_len] = .{ .anno = func.ret, .polarity = .pos, .unknown = here.unknown };
                 pending_len += 1;
             },
             .tag_union => |tag_union| {
@@ -18679,8 +18655,8 @@ fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
 /// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
 ///
 /// `polarity` is the position of this anno within the annotation being
-/// generated: annotations start at `.pos` (output) and function argument
-/// positions negate it. Extensionless tag unions are implicitly opened in
+/// generated: annotations start at `.pos` (output), and each function resets
+/// arguments to `.neg` and its return to `.pos`. Extensionless tag unions are implicitly opened in
 /// `.pos` positions (see `AnnotationGenCtx.opening`); within type
 /// declarations polarity is unused because the open-vs-closed decision is
 /// deferred to use-site instantiation via polarity vars.
@@ -18967,12 +18943,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             var formal_variances: [max_tracked_alias_formals]FormalVariance = undefined;
             const formal_variances_len = self.applyFormalVariances(a, &formal_variances);
-            // An UNKNOWN variance cannot be expressed as a polarity. Polarity
-            // flips on the way down—a function's parameters negate—so the
-            // closing polarity an invariant formal composes to reopens one
-            // level in, and `Lib.Producer([A] -> Str)` would open the `[A]` it
-            // must keep as written. Refusing to open at every depth is the
-            // answer that stays conservative under descent.
+            // An UNKNOWN position cannot be expressed as a polarity: a
+            // nested function establishes an output return even beneath an
+            // input position. The existing unknown-declaration policy keeps
+            // the entire argument as written until exact declaration data
+            // replaces that policy.
             const variance_unknown = switch (self.applyDeclKnowledge(a)) {
                 .unknown => true,
                 .local, .covariant => false,
@@ -19241,11 +19216,10 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             }
         },
         .@"fn" => |func| {
-            // Argument positions negate the surrounding polarity; the return
-            // position preserves it.
+            // Each function establishes its own input and output positions.
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             for (args_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx.withReach(.nested), polarity.flip());
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx.withReach(.nested), .neg);
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
 
@@ -19265,7 +19239,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // `withReach` is a no-op on `.type_decl` (see `withReach`).
                 .type_decl => ctx.withReach(.nested),
             };
-            try self.generateAnnoTypeInPlace(func.ret, env, ret_ctx, polarity);
+            try self.generateAnnoTypeInPlace(func.ret, env, ret_ctx, .pos);
 
             const fn_type = inner_blk: {
                 if (func.effectful) {

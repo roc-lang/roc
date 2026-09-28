@@ -9,8 +9,8 @@
 //! them without changing what any annotation means.
 //!
 //! The walk mirrors `Check.generateAnnoTypeInPlace`: the root of an annotation
-//! is an output, function arguments negate the surrounding polarity, and every
-//! other position preserves it; a type application's argument is generated at
+//! is an output, each function establishes input arguments and an output
+//! return, and other positions inherit their surroundings; a type application's argument is generated at
 //! the application's polarity composed with the variance of the declaration
 //! formal it is substituted for; a where-method signature opens only the rows
 //! the result-row widening adapter can re-tag. Which annotations qualify at all
@@ -67,13 +67,6 @@ const max_try_alias_depth: usize = 64;
 const Polarity = enum {
     pos,
     neg,
-
-    fn flip(self: Polarity) Polarity {
-        return switch (self) {
-            .pos => .neg,
-            .neg => .pos,
-        };
-    }
 };
 
 /// `Check.GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior`.
@@ -99,6 +92,7 @@ const Ctx = struct {
 const Variance = enum {
     unused,
     covariant,
+    output,
     contravariant,
     invariant,
 
@@ -106,14 +100,16 @@ const Variance = enum {
         if (self == .unused) return other;
         if (other == .unused) return self;
         if (self == other) return self;
+        if ((self == .covariant and other == .output) or
+            (self == .output and other == .covariant)) return .covariant;
         return .invariant;
     }
 
-    fn ofOccurrence(polarity: Polarity) Variance {
-        return switch (polarity) {
-            .pos => .covariant,
+    fn ofOccurrence(polarity: ?Polarity) Variance {
+        return if (polarity) |position| switch (position) {
+            .pos => .output,
             .neg => .contravariant,
-        };
+        } else .covariant;
     }
 };
 
@@ -122,8 +118,8 @@ const Variance = enum {
 const ArgRule = enum {
     /// At the application's own polarity (a covariant or unused formal).
     keep,
-    /// At the flipped polarity (a contravariant formal).
-    flip,
+    /// In a function result, independently of the reference position.
+    pos,
     /// At the negative polarity whatever the application's is (an invariant
     /// formal).
     neg,
@@ -134,15 +130,15 @@ const ArgRule = enum {
     fn ofVariance(variance: Variance) ArgRule {
         return switch (variance) {
             .unused, .covariant => .keep,
-            .contravariant => .flip,
-            .invariant => .neg,
+            .output => .pos,
+            .contravariant, .invariant => .neg,
         };
     }
 
-    fn apply(self: ArgRule, polarity: Polarity) Polarity {
+    fn apply(self: ArgRule, polarity: anytype) @TypeOf(polarity) {
         return switch (self) {
             .keep, .opaque_variance => polarity,
-            .flip => polarity.flip(),
+            .pos => .pos,
             .neg => .neg,
         };
     }
@@ -172,7 +168,7 @@ const VarianceWalk = struct {
 
 /// One position of a declaration body, relative to the declaration's root.
 const VariancePosition = struct {
-    polarity: Polarity,
+    polarity: ?Polarity,
     /// Below a reference whose variance is unknown.
     unknown: bool = false,
     /// How many positions the checker's explicit stack could be holding
@@ -184,7 +180,7 @@ const VariancePosition = struct {
         return .{ .polarity = self.polarity, .unknown = self.unknown, .pending = self.pending + sibling_count };
     }
 
-    fn withPolarity(self: VariancePosition, polarity: Polarity) VariancePosition {
+    fn withPolarity(self: VariancePosition, polarity: ?Polarity) VariancePosition {
         return .{ .polarity = polarity, .unknown = self.unknown, .pending = self.pending };
     }
 };
@@ -411,13 +407,13 @@ pub const OpenRows = struct {
             .parens => |parens| try self.walk(parens.anno, ctx, polarity, occurrences),
             .@"fn" => |func| {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try self.walk(arg, ctx.withReach(.nested), polarity.flip(), occurrences);
+                    try self.walk(arg, ctx.withReach(.nested), .neg, occurrences);
                 }
                 const ret_reach: Reach = switch (ctx.reach) {
                     .signature => .result,
                     .result, .try_row, .nested => .nested,
                 };
-                try self.walk(func.ret, ctx.withReach(ret_reach), polarity, occurrences);
+                try self.walk(func.ret, ctx.withReach(ret_reach), .pos, occurrences);
             },
             .tag_union => |tag_union| {
                 const tags = self.ast.store.typeAnnoSlice(tag_union.tags);
@@ -472,7 +468,7 @@ pub const OpenRows = struct {
                     const reach: Reach = if (try_error_index == arg_index) .try_row else .nested;
                     const arg_ctx = switch (rule) {
                         .opaque_variance => ctx.withReach(reach).withOpening(.as_written),
-                        .keep, .flip, .neg => ctx.withReach(reach),
+                        .keep, .pos, .neg => ctx.withReach(reach),
                     };
                     try self.walk(arg, arg_ctx, rule.apply(polarity), occurrences);
                 }
@@ -602,7 +598,7 @@ pub const OpenRows = struct {
         variance_walk.open_decls_len += 1;
         defer variance_walk.open_decls_len -= 1;
 
-        try self.accumulateFormalVariances(decl.anno, formals, .{ .polarity = .pos }, out, variance_walk);
+        try self.accumulateFormalVariances(decl.anno, formals, .{ .polarity = null }, out, variance_walk);
         return formals.len;
     }
 
@@ -640,9 +636,9 @@ pub const OpenRows = struct {
             .parens => |parens| try self.accumulateFormalVariances(parens.anno, formals, child, out, variance_walk),
             .@"fn" => |func| {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try self.accumulateFormalVariances(arg, formals, child.withPolarity(here.polarity.flip()), out, variance_walk);
+                    try self.accumulateFormalVariances(arg, formals, child.withPolarity(.neg), out, variance_walk);
                 }
-                try self.accumulateFormalVariances(func.ret, formals, child, out, variance_walk);
+                try self.accumulateFormalVariances(func.ret, formals, child.withPolarity(.pos), out, variance_walk);
             },
             .tag_union => |tag_union| {
                 for (self.ast.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
