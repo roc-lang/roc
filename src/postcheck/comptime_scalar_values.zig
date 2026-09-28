@@ -56,8 +56,8 @@ pub const Construction = union(enum) {
     record: []const Construction,
     /// A tag with its payload, when it has one.
     tag: struct {
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?*const Construction,
     },
 };

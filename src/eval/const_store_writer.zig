@@ -1030,7 +1030,7 @@ pub const Writer = struct {
         };
     }
 
-    fn tagPayloadLayout(self: *Writer, layout_idx: layout.Idx, discriminant: u16) layout.Idx {
+    fn tagPayloadLayout(self: *Writer, layout_idx: layout.Idx, discriminant: u32) layout.Idx {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         if (layout_value.tag == .zst) return .zst;
         if (layout_value.tag != .tag_union) writerInvariant("tag payload read had non-tag-union layout");

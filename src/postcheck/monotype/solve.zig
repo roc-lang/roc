@@ -4019,14 +4019,25 @@ pub const InstGraph = struct {
         var only_private = std.ArrayList(InstTag).empty;
         defer only_private.deinit(self.allocator);
 
+        // Each private label's position, so every public label pairs in
+        // constant time.
+        var private_positions: std.AutoHashMapUnmanaged(names.TagNameId, u32) = .empty;
+        defer private_positions.deinit(self.allocator);
+        try private_positions.ensureTotalCapacity(self.allocator, @intCast(flat_private.tags.len));
+        for (flat_private.tags, 0..) |private_tag, index| {
+            const entry = private_positions.getOrPutAssumeCapacity(private_tag.name);
+            if (entry.found_existing) Common.invariant("opaque interface relation received duplicate private tag labels");
+            entry.value_ptr.* = @intCast(index);
+        }
+        const private_shared = try self.allocator.alloc(bool, flat_private.tags.len);
+        defer self.allocator.free(private_shared);
+        @memset(private_shared, false);
+
         for (flat_public.tags) |public_tag| {
-            const wanted = self.tagLabelText(public_tag.name);
-            var matched: ?InstTag = null;
-            for (flat_private.tags) |private_tag| {
-                if (!Ident.textEql(wanted, self.tagLabelText(private_tag.name))) continue;
-                if (matched != null) Common.invariant("opaque interface relation received duplicate private tag labels");
-                matched = private_tag;
-            }
+            const matched: ?InstTag = if (private_positions.get(public_tag.name)) |position| blk: {
+                private_shared[position] = true;
+                break :blk flat_private.tags[position];
+            } else null;
             if (matched) |private_tag| {
                 if (public_tag.payloads.len != private_tag.payloads.len) {
                     Common.invariant("opaque interface relation received one tag at two payload arities");
@@ -4038,15 +4049,7 @@ pub const InstGraph = struct {
                 try only_public.append(self.allocator, public_tag);
             }
         }
-        for (flat_private.tags) |private_tag| {
-            const wanted = self.tagLabelText(private_tag.name);
-            var shared = false;
-            for (flat_public.tags) |public_tag| {
-                if (Ident.textEql(wanted, self.tagLabelText(public_tag.name))) {
-                    shared = true;
-                    break;
-                }
-            }
+        for (flat_private.tags, private_shared) |private_tag, shared| {
             if (!shared) {
                 for (private_tag.payloads) |payload| {
                     if (try self.containsGeneratedPrivate(payload)) {
@@ -4101,14 +4104,25 @@ pub const InstGraph = struct {
         var only_private = std.ArrayList(InstField).empty;
         defer only_private.deinit(self.allocator);
 
+        // Each private label's position, so every public label pairs in
+        // constant time.
+        var private_positions: std.AutoHashMapUnmanaged(names.RecordFieldNameId, u32) = .empty;
+        defer private_positions.deinit(self.allocator);
+        try private_positions.ensureTotalCapacity(self.allocator, @intCast(flat_private.fields.len));
+        for (flat_private.fields, 0..) |private_field, index| {
+            const entry = private_positions.getOrPutAssumeCapacity(private_field.name);
+            if (entry.found_existing) Common.invariant("opaque interface relation received duplicate private record labels");
+            entry.value_ptr.* = @intCast(index);
+        }
+        const private_shared = try self.allocator.alloc(bool, flat_private.fields.len);
+        defer self.allocator.free(private_shared);
+        @memset(private_shared, false);
+
         for (flat_public.fields) |public_field| {
-            const wanted = self.fieldLabelText(public_field.name);
-            var matched: ?InstField = null;
-            for (flat_private.fields) |private_field| {
-                if (!Ident.textEql(wanted, self.fieldLabelText(private_field.name))) continue;
-                if (matched != null) Common.invariant("opaque interface relation received duplicate private record labels");
-                matched = private_field;
-            }
+            const matched: ?InstField = if (private_positions.get(public_field.name)) |position| blk: {
+                private_shared[position] = true;
+                break :blk flat_private.fields[position];
+            } else null;
             if (matched) |private_field| {
                 _ = self.unifyFieldKinds(
                     public_field.kind,
@@ -4127,15 +4141,7 @@ pub const InstGraph = struct {
                 try only_public.append(self.allocator, public_field);
             }
         }
-        for (flat_private.fields) |private_field| {
-            const wanted = self.fieldLabelText(private_field.name);
-            var shared = false;
-            for (flat_public.fields) |public_field| {
-                if (Ident.textEql(wanted, self.fieldLabelText(public_field.name))) {
-                    shared = true;
-                    break;
-                }
-            }
+        for (flat_private.fields, private_shared) |private_field, shared| {
             if (!shared) {
                 if (try self.containsGeneratedPrivate(private_field.ty)) {
                     Common.invariant("opaque interface row widening introduced unmatched generated-private record field");
@@ -4690,14 +4696,25 @@ pub const InstGraph = struct {
     ) Allocator.Error!NodeId {
         const structural = try self.shapeRoot(node, "tag payload", access);
         if (self.content(structural) != .tag_union) Common.invariant("instantiation tag payload read had a non-tag-union node");
+        // A flattened row is sorted by label, so the tag is found by binary
+        // search.
         const row = try self.flattenTagRow(structural);
-        const wanted = self.tagLabelText(name);
-        for (row.tags) |tag| {
-            if (!Ident.textEql(wanted, self.tagLabelText(tag.name))) continue;
-            if (payload_index >= tag.payloads.len) {
-                Common.invariant("instantiation tag payload read index exceeded the checked arity");
+        var low: usize = 0;
+        var high: usize = row.tags.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const tag = row.tags[mid];
+            if (tag.name == name) {
+                if (payload_index >= tag.payloads.len) {
+                    Common.invariant("instantiation tag payload read index exceeded the checked arity");
+                }
+                return self.find(tag.payloads[payload_index]);
             }
-            return self.find(tag.payloads[payload_index]);
+            if (self.name_store.tagLabelTextLessThan(tag.name, name)) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
         }
         Common.invariant("instantiation tag payload read requested an absent checked tag");
     }
@@ -4820,99 +4837,50 @@ pub const InstGraph = struct {
         return self.recordFieldNodeWithAccess(raw_record, name, .runtime_layout, "record constructor");
     }
 
-    /// Return the source value cell of a construction field. Optional and
-    /// generalized fields keep this distinct from their runtime slot so child
-    /// relations connect source-value cells before checked field-kind evidence
-    /// commits a runtime slot.
-    pub fn recordConstructionFieldValueNode(
-        self: *InstGraph,
-        raw_record: NodeId,
-        name: names.RecordFieldNameId,
-    ) Allocator.Error!NodeId {
-        const structural = try self.shapeRoot(raw_record, "record constructor", .runtime_layout);
-        if (self.content(structural) != .record) {
-            Common.invariant("instantiation record constructor had a non-record receiver type");
-        }
-        const row = try self.flattenRecordRow(structural);
-        const wanted = self.fieldLabelText(name);
-        for (row.fields) |field| {
-            if (Ident.textEql(wanted, self.fieldLabelText(field.name))) {
-                return self.find(field.value_ty orelse field.ty);
-            }
-        }
-        Common.invariant("instantiation record constructor requested an absent field value");
-    }
-
-    /// Return checker-originated field-kind evidence after specialization has
+    /// Return checker-originated field-kind evidence for a field of a
+    /// constructor's `recordConstructionNodes`, after specialization has
     /// resolved any generalized presence variable. Construction consumes this
     /// instead of re-reading the generalized checked scheme.
-    pub fn recordConstructionFieldKind(
-        self: *InstGraph,
-        raw_record: NodeId,
-        name: names.RecordFieldNameId,
-    ) Allocator.Error!ResolvedFieldKind {
-        const structural = try self.shapeRoot(raw_record, "record constructor", .runtime_layout);
-        if (self.content(structural) != .record) {
-            Common.invariant("instantiation record constructor had a non-record receiver type");
+    pub fn recordConstructionFieldKindOf(self: *InstGraph, field: InstField) Allocator.Error!ResolvedFieldKind {
+        if (self.resolvedFieldKind(field.kind)) |resolved| return resolved;
+        switch (field.kind) {
+            .undetermined => |id| {
+                // A checked literal/update introduces a required field.
+                // Optional/defaulted caller evidence, when present, has
+                // already constrained this same identity; otherwise the
+                // construction itself is the explicit required evidence.
+                // Required means the runtime slot is exactly the source
+                // value cell, so commit that relation together with the
+                // kind instead of leaving an unrelated placeholder slot.
+                self.constrainUndeterminedFieldKind(id, .required);
+                try self.unify(
+                    field.ty,
+                    field.value_ty orelse
+                        Common.invariant("undetermined constructor field carried no source value type"),
+                );
+                return .required;
+            },
+            .sealed, .required, .optional, .defaulted => Common.invariant("record constructor field kind carried no specialization evidence"),
         }
-        const row = try self.flattenRecordRow(structural);
-        const wanted = self.fieldLabelText(name);
-        for (row.fields) |field| {
-            if (!Ident.textEql(wanted, self.fieldLabelText(field.name))) continue;
-            if (self.resolvedFieldKind(field.kind)) |resolved| return resolved;
-            switch (field.kind) {
-                .undetermined => |id| {
-                    // A checked literal/update introduces a required field.
-                    // Optional/defaulted caller evidence, when present, has
-                    // already constrained this same identity; otherwise the
-                    // construction itself is the explicit required evidence.
-                    // Required means the runtime slot is exactly the source
-                    // value cell, so commit that relation together with the
-                    // kind instead of leaving an unrelated placeholder slot.
-                    self.constrainUndeterminedFieldKind(id, .required);
-                    try self.unify(
-                        field.ty,
-                        field.value_ty orelse
-                            Common.invariant("undetermined constructor field carried no source value type"),
-                    );
-                    return .required;
-                },
-                .sealed, .required, .optional, .defaulted => Common.invariant("record constructor field kind carried no specialization evidence"),
-            }
-        }
-        Common.invariant("instantiation record constructor requested an absent field kind");
     }
 
-    /// Return the already-selected kind for a field omitted by a record
-    /// constructor. Unlike `recordConstructionFieldKind`, omission is not
-    /// evidence that an undetermined field is required: the checker or the
-    /// specialization relation must already have selected optional/defaulted.
-    pub fn recordOmittedFieldKind(
-        self: *InstGraph,
-        raw_record: NodeId,
-        name: names.RecordFieldNameId,
-    ) Allocator.Error!ResolvedFieldKind {
-        const structural = try self.shapeRoot(raw_record, "record constructor", .runtime_layout);
-        if (self.content(structural) != .record) {
-            Common.invariant("instantiation record constructor had a non-record receiver type");
-        }
-        const row = try self.flattenRecordRow(structural);
-        const wanted = self.fieldLabelText(name);
-        for (row.fields) |field| {
-            if (!Ident.textEql(wanted, self.fieldLabelText(field.name))) continue;
-            if (self.resolvedFieldKind(field.kind)) |resolved| return resolved;
-            return switch (field.kind) {
-                .sealed => if (field.default) |default|
-                    .{ .defaulted = default }
-                else if (field.value_ty != null)
-                    .optional
-                else
-                    .required,
-                .undetermined => Common.invariant("omitted record constructor field kind remained undetermined"),
-                .required, .optional, .defaulted => unreachable,
-            };
-        }
-        Common.invariant("instantiation record constructor requested an absent omitted-field kind");
+    /// Return the already-selected kind for a field of a constructor's
+    /// `recordConstructionNodes` that the constructor omits. Unlike
+    /// `recordConstructionFieldKindOf`, omission is not evidence that an
+    /// undetermined field is required: the checker or the specialization
+    /// relation must already have selected optional/defaulted.
+    pub fn recordOmittedFieldKindOf(self: *InstGraph, field: InstField) ResolvedFieldKind {
+        if (self.resolvedFieldKind(field.kind)) |resolved| return resolved;
+        return switch (field.kind) {
+            .sealed => if (field.default) |default|
+                .{ .defaulted = default }
+            else if (field.value_ty != null)
+                .optional
+            else
+                .required,
+            .undetermined => Common.invariant("omitted record constructor field kind remained undetermined"),
+            .required, .optional, .defaulted => unreachable,
+        };
     }
 
     fn recordFieldNodeWithAccess(
@@ -5173,16 +5141,12 @@ pub const InstGraph = struct {
                 if (public_row.fields.len != request_row.fields.len) {
                     Common.invariant("request container join received records with different field counts");
                 }
+                var request_names: std.AutoHashMapUnmanaged(names.RecordFieldNameId, void) = .empty;
+                defer request_names.deinit(self.allocator);
+                try request_names.ensureTotalCapacity(self.allocator, @intCast(request_row.fields.len));
+                for (request_row.fields) |request_field| request_names.putAssumeCapacity(request_field.name, {});
                 for (public_row.fields) |public_field| {
-                    const wanted = self.fieldLabelText(public_field.name);
-                    var found = false;
-                    for (request_row.fields) |request_field| {
-                        if (Ident.textEql(wanted, self.fieldLabelText(request_field.name))) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
+                    if (!request_names.contains(public_field.name)) {
                         Common.invariant("request container join received records with different fields");
                     }
                 }
@@ -5194,18 +5158,10 @@ pub const InstGraph = struct {
                 if (public_row.tags.len != request_row.tags.len) {
                     Common.invariant("request container join received tag unions with different tag counts");
                 }
-                for (public_row.tags) |public_tag| {
-                    const wanted = self.tagLabelText(public_tag.name);
-                    var found = false;
-                    for (request_row.tags) |request_tag| {
-                        if (Ident.textEql(wanted, self.tagLabelText(request_tag.name)) and
-                            public_tag.payloads.len == request_tag.payloads.len)
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
+                // Flattened rows are sorted by label and hold each label once,
+                // so matching rows pair their tags position by position.
+                for (public_row.tags, request_row.tags) |public_tag, request_tag| {
+                    if (public_tag.name != request_tag.name or public_tag.payloads.len != request_tag.payloads.len) {
                         Common.invariant("request container join received tag unions with different tags");
                     }
                 }
@@ -5897,7 +5853,7 @@ pub const InstGraph = struct {
     /// Normalize only a head that a row reader actually consumes. This state
     /// changes neither type meaning nor snapshot dependencies, so recording it
     /// does not invalidate relation stamps or observable graph snapshots.
-    fn sortTagHead(self: *InstGraph, root: NodeId) void {
+    pub fn sortTagHead(self: *InstGraph, root: NodeId) void {
         const row = &self.nodes.items[@intFromEnum(root)].tag_union;
         if (row.tags_sorted) return;
         const tags = row.tags;

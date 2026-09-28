@@ -53,7 +53,7 @@ pub const Plan = struct {
             },
             .struct_ => {
                 const info = layouts.getStructInfo(value);
-                const Field = struct { index: u16, layout_idx: layout.Idx, offset: u32 };
+                const Field = struct { index: u32, layout_idx: layout.Idx, offset: u32 };
                 var fields: std.ArrayList(Field) = .empty;
                 defer fields.deinit(self.allocator);
                 try fields.ensureTotalCapacity(self.allocator, info.fields.len);

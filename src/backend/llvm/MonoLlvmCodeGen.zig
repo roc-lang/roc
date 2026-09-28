@@ -473,8 +473,8 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     const StrFromUtf8LayoutInfo = struct {
-        ok_tag: u16,
-        err_tag: u16,
+        ok_tag: u32,
+        err_tag: u32,
         outer_disc_offset: u32,
         outer_disc_size: u32,
         err_index_offset: u32,
@@ -4197,13 +4197,13 @@ pub const MonoLlvmCodeGen = struct {
             const ptr_ty = try self.ptrType();
             try self.callBoxyVoid(
                 "roc_boxy_drop",
-                &.{ ptr_ty, .i32, ptr_ty, .i8, .i16, .i8 },
+                &.{ ptr_ty, .i32, ptr_ty, .i8, .i32, .i8 },
                 &.{
                     capture,
                     try self.boxyInt(.i32, @intFromEnum(entry.capture_layout)),
                     desc,
                     try self.boxyInt(.i8, @intFromEnum(layout.RcOp.decref)),
-                    try self.boxyInt(.i16, 1),
+                    try self.boxyInt(.i32, 1),
                     try self.boxyInt(.i8, @intFromEnum(RcAtomicity.atomic)),
                 },
             );
@@ -4270,7 +4270,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitTagLiteral(self: *MonoLlvmCodeGen, target: LocalId, discriminant: u16, payload: ?LocalId) Error!void {
+    fn emitTagLiteral(self: *MonoLlvmCodeGen, target: LocalId, discriminant: u32, payload: ?LocalId) Error!void {
         try self.prepareLocalWrite(target);
         if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
         const allocated = try self.allocAggregateTarget(target);
@@ -4306,7 +4306,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitStoreTag(self: *MonoLlvmCodeGen, dest: LocalId, tag_layout: layout.Idx, discriminant: u16, payload: ?LocalId) Error!void {
+    fn emitStoreTag(self: *MonoLlvmCodeGen, dest: LocalId, tag_layout: layout.Idx, discriminant: u32, payload: ?LocalId) Error!void {
         if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
 
         const dst = try self.loadPointer(self.slot(dest).ptr);
@@ -6994,7 +6994,7 @@ pub const MonoLlvmCodeGen = struct {
         source: StrMatchSource,
         start_ptr: LlvmBuilder.Value,
         end_ptr: LlvmBuilder.Value,
-        pending_rc_count: u16,
+        pending_rc_count: u32,
         pending_rc_atomicity: RcAtomicity,
     };
 
@@ -7912,12 +7912,12 @@ pub const MonoLlvmCodeGen = struct {
         return wip.bin(.sub, try self.loadUsize(capture.end_ptr), try self.loadUsize(capture.start_ptr), "") catch return error.OutOfMemory;
     }
 
-    fn noteDeferredStrCaptureIncref(self: *MonoLlvmCodeGen, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn noteDeferredStrCaptureIncref(self: *MonoLlvmCodeGen, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         var capture = self.deferredStrCapture(local) orelse return error.CompilationFailed;
         if (count == 0) return;
         if (capture.pending_rc_count != 0 and capture.pending_rc_atomicity != atomicity) return error.CompilationFailed;
-        const total: u32 = @as(u32, capture.pending_rc_count) + count;
-        if (total > std.math.maxInt(u16)) return error.CompilationFailed;
+        const total: u64 = @as(u64, capture.pending_rc_count) + count;
+        if (total > std.math.maxInt(u32)) return error.OutOfMemory;
         capture.pending_rc_count = @intCast(total);
         capture.pending_rc_atomicity = atomicity;
         self.deferred_str_captures[@intFromEnum(local)] = capture;
@@ -11104,7 +11104,7 @@ pub const MonoLlvmCodeGen = struct {
         helper: lir.LIR.RcHelper,
         op: layout.RcOp,
         local: LocalId,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         switch (helper) {
@@ -11113,13 +11113,13 @@ pub const MonoLlvmCodeGen = struct {
                 const ptr_ty = try self.ptrType();
                 try self.callBoxyVoid(
                     "roc_boxy_drop",
-                    &.{ ptr_ty, .i32, ptr_ty, .i8, .i16, .i8 },
+                    &.{ ptr_ty, .i32, ptr_ty, .i8, .i32, .i8 },
                     &.{
                         try self.boxyValuePtr(local),
                         try self.boxyInt(.i32, @intFromEnum(self.localLayout(local))),
                         try self.resolveBoxyDesc(desc),
                         try self.boxyInt(.i8, @intFromEnum(op)),
-                        try self.boxyInt(.i16, count),
+                        try self.boxyInt(.i32, count),
                         try self.boxyInt(.i8, @intFromEnum(atomicity)),
                     },
                 );
@@ -11131,7 +11131,7 @@ pub const MonoLlvmCodeGen = struct {
     /// wider than this pass their own slot pointer as before.
     const rc_arg_scratch_size = 64;
 
-    fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
 
@@ -11147,7 +11147,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitConcreteRcForLocal(helper_key, local, count, atomicity);
     }
 
-    fn emitConcreteRcForLocal(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn emitConcreteRcForLocal(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
 
@@ -11937,7 +11937,7 @@ pub const MonoLlvmCodeGen = struct {
         return data.discriminant_offset.get(self.layouts().targetUsize());
     }
 
-    fn writeTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, discriminant: u16) Error!void {
+    fn writeTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, discriminant: u32) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const layout_val = self.layoutValue(layout_idx);
@@ -11961,7 +11961,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.normal, store_value, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@max(data.discriminant_size, 1))) catch return error.OutOfMemory;
     }
 
-    fn tagPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, discriminant: u16) layout.Idx {
+    fn tagPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, discriminant: u32) layout.Idx {
         var tag_layout = self.layoutValue(layout_idx);
         if (tag_layout.tag == .box) tag_layout = self.layoutValue(tag_layout.getIdx());
         if (tag_layout.tag != .tag_union) return .zst;
@@ -11977,8 +11977,8 @@ pub const MonoLlvmCodeGen = struct {
         const tu_data = self.layouts().getTagUnionData(ret_layout_val.getTagUnion().idx);
         const variants = self.layouts().getTagUnionVariants(tu_data);
 
-        var ok_disc: ?u16 = null;
-        var err_disc: ?u16 = null;
+        var ok_disc: ?u32 = null;
+        var err_disc: ?u32 = null;
         var err_record_idx: ?layout.StructIdx = null;
         var inner_disc_offset: u32 = 0;
         var inner_disc_size: u32 = 0;
@@ -12130,7 +12130,7 @@ pub const MonoLlvmCodeGen = struct {
         return field.layout;
     }
 
-    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u16, struct_idx: layout.StructIdx } {
+    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u32, struct_idx: layout.StructIdx } {
         const variants = self.layouts().getTagUnionVariants(inner_tu);
         for (0..variants.len) |i| {
             const payload = variants.get(@intCast(i)).payload_layout;
@@ -12431,9 +12431,9 @@ pub const MonoLlvmCodeGen = struct {
                 return builder.structType(.normal, field_types) catch return error.OutOfMemory;
             },
             .integer => {
-                var byte_size: u16 = 0;
+                var byte_size: u32 = 0;
                 for (registers.pieces) |piece| byte_size = @max(byte_size, piece.offset + piece.size);
-                return builder.intType(@as(u24, byte_size) * 8) catch return error.OutOfMemory;
+                return builder.intType(@as(u24, @intCast(byte_size)) * 8) catch return error.OutOfMemory;
             },
             .array => {
                 std.debug.assert(registers.pieces.len > 0);

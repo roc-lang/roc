@@ -940,9 +940,9 @@ const Pass = struct {
 
     /// Bind a field-read target, unifying with earlier reads of the same
     /// field of the same struct value so facts reach every read site.
-    fn bindFieldRead(self: *Pass, target: LocalId, source: LocalId, field_idx: u16) ResourceError!void {
+    fn bindFieldRead(self: *Pass, target: LocalId, source: LocalId, field_idx: u32) ResourceError!void {
         const src_node = (try self.valueOf(source)) orelse return self.bindFresh(target);
-        const key = (@as(u64, self.rootOf(src_node)) << 16) | field_idx;
+        const key = (@as(u64, self.rootOf(src_node)) << 32) | field_idx;
         if (self.field_values.get(key)) |node| {
             try self.bind(target, .{ .node = node });
             return;

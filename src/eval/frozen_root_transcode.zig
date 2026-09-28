@@ -280,19 +280,19 @@ const Builder = struct {
             try self.enqueue(s, self.source_program.layouts.getStructFieldLayoutByOriginalIndex(ss, index), t, self.program.layouts.getStructFieldLayoutByOriginalIndex(ts, index), src.offsetBy(self.source_program.layouts.getStructFieldOffsetByOriginalIndex(ss, index)), dest.offsetBy(self.program.layouts.getStructFieldOffsetByOriginalIndex(ts, index)), .value, .value);
         }
     }
-    fn discriminant(self: *Builder, idx: layout.Idx, src: Destination) u16 {
+    fn discriminant(self: *Builder, idx: layout.Idx, src: Destination) u32 {
         const physical = self.source_program.layouts.getLayout(idx);
         if (physical.tag == .zst) return 0;
         const data = self.source_program.layouts.getTagUnionData(physical.getTagUnion().idx);
-        return @intCast(data.readDiscriminant(self.sourceBytes(src, self.sourceSize(idx)).ptr, self.source_program.layouts.targetUsize()));
+        return data.readDiscriminant(self.sourceBytes(src, self.sourceSize(idx)).ptr, self.source_program.layouts.targetUsize());
     }
-    fn writeDiscriminant(self: *Builder, idx: layout.Idx, dest: Destination, disc: u16) void {
+    fn writeDiscriminant(self: *Builder, idx: layout.Idx, dest: Destination, disc: u32) void {
         const physical = self.program.layouts.getLayout(idx);
         if (physical.tag == .zst) return;
         const data = self.program.layouts.getTagUnionData(physical.getTagUnion().idx);
         data.writeDiscriminant(self.bytes(dest, self.size(idx)).ptr, disc, self.program.layouts.targetUsize());
     }
-    fn payload(_: *Builder, program: *const Program.Result, idx: layout.Idx, disc: u16) layout.Idx {
+    fn payload(_: *Builder, program: *const Program.Result, idx: layout.Idx, disc: u32) layout.Idx {
         const physical = program.layouts.getLayout(idx);
         if (physical.tag == .zst) return .zst;
         const data = program.layouts.getTagUnionData(physical.getTagUnion().idx);

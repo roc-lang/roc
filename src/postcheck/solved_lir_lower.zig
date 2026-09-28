@@ -59,7 +59,7 @@ pub const RuntimeRecordSchema = struct {
 /// Runtime discriminant for a named tag.
 pub const RuntimeTagSchema = struct {
     name: []const u8,
-    discriminant: u16,
+    discriminant: u32,
 };
 
 /// Runtime tag order for a named tag union.
@@ -67,7 +67,7 @@ pub const RuntimeTagUnionSchema = struct {
     type_name: []const u8,
     tags: []const RuntimeTagSchema,
 
-    pub fn tagDiscriminant(self: RuntimeTagUnionSchema, tag_name: []const u8) ?u16 {
+    pub fn tagDiscriminant(self: RuntimeTagUnionSchema, tag_name: []const u8) ?u32 {
         for (self.tags) |tag| {
             if (std.mem.eql(u8, tag.name, tag_name)) return tag.discriminant;
         }
@@ -4418,7 +4418,7 @@ const Lowerer = struct {
         self: *Lowerer,
         value_layout: layout.Idx,
         variant_count: usize,
-        variant_index: u16,
+        variant_index: u32,
         capture_ty: Type.TypeId,
     ) Common.LowerError!layout.Idx {
         const capture_layout = try self.layoutOfType(capture_ty);
@@ -5426,12 +5426,12 @@ const Lowerer = struct {
         fields: []const Type.Field,
         field_layouts: []const layout.Idx,
         return_child: ?usize,
-        indices: collections.DenseMap(Type.names.RecordFieldNameId, u16),
+        indices: collections.DenseMap(Type.names.RecordFieldNameId, u32),
         layout_idx: layout.Idx,
     };
 
     const RecordValue = struct {
-        index: u16,
+        index: u32,
         local: LIR.LocalId,
         expr: Lifted.ExprId,
 
@@ -5444,7 +5444,7 @@ const Lowerer = struct {
         target: LIR.LocalId,
         target_ty: Type.TypeId,
         source_ty: Type.TypeId,
-        source_index: u16,
+        source_index: u32,
     };
 
     const RecordPlan = struct {
@@ -5467,7 +5467,7 @@ const Lowerer = struct {
         if (aggregates.shapes.get(ty)) |shape| return shape;
         const fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFields(ty));
         errdefer self.allocator.free(fields);
-        var indices = collections.DenseMap(Type.names.RecordFieldNameId, u16).init(self.allocator);
+        var indices = collections.DenseMap(Type.names.RecordFieldNameId, u32).init(self.allocator);
         errdefer indices.deinit();
         for (fields, 0..) |field, index| try indices.putNoClobber(field.name, @intCast(index));
         const layout_idx = try self.layoutOfType(ty);
@@ -5800,7 +5800,7 @@ const Lowerer = struct {
         where: LowerSite,
         target: LIR.LocalId,
         ty: Type.TypeId,
-        variant_index: u16,
+        variant_index: u32,
         payload_span: Lifted.Span(Lifted.ExprId),
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
@@ -6191,7 +6191,7 @@ const Lowerer = struct {
             };
         }
 
-        const disc = try self.addLocalForLayout(.u16);
+        const disc = try self.addLocalForLayout(.u32);
         const impossible = try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
         const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = disc,
@@ -6212,10 +6212,10 @@ const Lowerer = struct {
         where: LowerSite,
         target: LIR.LocalId,
         target_info: layout.TagUnionInfo,
-        target_index: u16,
+        target_index: u32,
         source: LIR.LocalId,
         source_info: layout.TagUnionInfo,
-        source_index: u16,
+        source_index: u32,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const target_payload_layout = target_info.variants.get(target_index).payload_layout;
@@ -6266,7 +6266,7 @@ const Lowerer = struct {
         return current;
     }
 
-    fn structFieldByOriginalIndex(fields: layout.StructField.SafeMultiList.Slice, index: u16) ?layout.StructField {
+    fn structFieldByOriginalIndex(fields: layout.StructField.SafeMultiList.Slice, index: u32) ?layout.StructField {
         for (0..fields.len) |i| {
             const field = fields.get(i);
             if (field.index == index) return field;
@@ -6576,7 +6576,7 @@ const Lowerer = struct {
         self: *Lowerer,
         where: LowerSite,
         target: LIR.LocalId,
-        variant_index: u16,
+        variant_index: u32,
         captures: CaptureSpanId,
         capture_operands: anytype,
         capture_ty: ?Type.TypeId,
@@ -7210,7 +7210,7 @@ const Lowerer = struct {
         while (i > 0) {
             i -= 1;
             const variant: Type.FnVariant = variants[i];
-            const variant_index: u16 = @intCast(i);
+            const variant_index: u32 = @intCast(i);
             const branch_done = try self.joinJump(where, done);
             const branch_body = try self.lowerCallableVariantCallInto(where, target, result_ty, callee, variant, variant_index, arg_exprs, branch_done);
             current = try self.discriminantSwitch(where, callee, variant_index, branch_body, current, false);
@@ -7231,7 +7231,7 @@ const Lowerer = struct {
         result_ty: Type.TypeId,
         callee: LIR.LocalId,
         variant: Type.FnVariant,
-        variant_index: u16,
+        variant_index: u32,
         arg_exprs: anytype,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
@@ -7445,7 +7445,7 @@ const Lowerer = struct {
             target_ty: Type.TypeId,
             source: LIR.LocalId,
             source_ty: Type.TypeId,
-            source_field_index: u16,
+            source_field_index: u32,
             storage_layout: ?layout.Idx,
         };
         const reads = try self.allocator.alloc(FieldRead, segments.len - first_segment);
@@ -7507,7 +7507,7 @@ const Lowerer = struct {
     fn lowerTupleAccessInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, tuple: Lifted.ExprId, elem_index: u32, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const tuple_ty = try self.lowerExprContextTy(tuple);
         const tuple_local = try self.addTemp(tuple_ty);
-        const field_index: u16 = @intCast(elem_index);
+        const field_index: u32 = @intCast(elem_index);
         const target_item_tys = self.tupleItemTypes(tuple_ty);
         const source_item_tys = self.tupleItemTypes(self.storageTypeOfLocalOr(tuple_local, tuple_ty));
         if (self.isZstLocal(target)) {
@@ -7860,7 +7860,7 @@ const Lowerer = struct {
         self: *Lowerer,
         where: LowerSite,
         input_try_local: LIR.LocalId,
-        err_variant: u16,
+        err_variant: u32,
         target: Lifted.JoinPointId,
     ) Common.LowerError!LIR.CFStmtId {
         const join_point = self.activeJoinPoint(target);
@@ -7900,7 +7900,7 @@ const Lowerer = struct {
         where: LowerSite,
         local: Mono.LocalId,
         input_try_local: LIR.LocalId,
-        ok_variant: u16,
+        ok_variant: u32,
         ok_payload_ty: Type.TypeId,
         field_name: Type.names.RecordFieldNameId,
         next: LIR.CFStmtId,
@@ -8435,7 +8435,7 @@ const Lowerer = struct {
         pub const LowerError = Common.LowerError;
 
         /// One sub-pattern of a destructuring pattern, at its committed index.
-        pub const SubPat = struct { index: u16, ty: Type.TypeId, pat: Lifted.PatId };
+        pub const SubPat = struct { index: u32, ty: Type.TypeId, pat: Lifted.PatId };
 
         /// Assigns dense u32 ids to structurally-distinct string shapes
         /// (prefix, delimiters, end) so equal string arms merge and captures
@@ -8482,11 +8482,11 @@ const Lowerer = struct {
             return .{ .pattern = info.pattern, .local = info.local };
         }
 
-        pub fn recordDestructCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u16 {
+        pub fn recordDestructCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u32 {
             return @intCast(self.l.solved.lifted.recordDestructSpan(self.l.pat(pat_id).data.record).len);
         }
 
-        pub fn recordDestruct(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId, i: u16) Common.LowerError!SubPat {
+        pub fn recordDestruct(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId, i: u32) Common.LowerError!SubPat {
             const destruct = GuardedList.at(self.l.solved.lifted.recordDestructSpan(self.l.pat(pat_id).data.record), i);
             const index = self.l.recordFieldIndex(ty, destruct.name);
             return .{
@@ -8496,11 +8496,11 @@ const Lowerer = struct {
             };
         }
 
-        pub fn tupleItemCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u16 {
+        pub fn tupleItemCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u32 {
             return @intCast(self.l.solved.lifted.patSpan(self.l.pat(pat_id).data.tuple).len);
         }
 
-        pub fn tupleItem(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId, i: u16) Common.LowerError!SubPat {
+        pub fn tupleItem(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId, i: u32) Common.LowerError!SubPat {
             const items = self.l.solved.lifted.patSpan(self.l.pat(pat_id).data.tuple);
             const item_tys = self.l.tupleItemTypes(ty);
             if (items.len != item_tys.len) Common.invariant("tuple pattern arity differed from target tuple type");
@@ -8512,15 +8512,15 @@ const Lowerer = struct {
             return .{ .index = 0, .ty = try self.l.nominalPatternBackingType(ty, inner), .pat = inner };
         }
 
-        pub fn tagVariant(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) u16 {
+        pub fn tagVariant(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) u32 {
             return self.l.tagIndex(ty, self.l.pat(pat_id).data.tag.name);
         }
 
-        pub fn tagPayloadCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u16 {
+        pub fn tagPayloadCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u32 {
             return @intCast(self.l.solved.lifted.patSpan(self.l.pat(pat_id).data.tag.payloads).len);
         }
 
-        pub fn tagPayload(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId, i: u16) Common.LowerError!SubPat {
+        pub fn tagPayload(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId, i: u32) Common.LowerError!SubPat {
             const tag = self.l.pat(pat_id).data.tag;
             const payloads = self.l.solved.lifted.patSpan(tag.payloads);
             const payload_tys = self.l.tagPayloadTypesByIndex(ty, self.l.tagIndex(ty, tag.name));
@@ -8535,7 +8535,7 @@ const Lowerer = struct {
             return null;
         }
 
-        pub fn callableVariant(_: MatchTreeCtx, _: Lifted.PatId, _: Type.TypeId) u16 {
+        pub fn callableVariant(_: MatchTreeCtx, _: Lifted.PatId, _: Type.TypeId) u32 {
             Common.invariant("callable pattern reached solved match lowering");
         }
 
@@ -8657,7 +8657,7 @@ const Lowerer = struct {
             return true;
         }
 
-        pub fn strCaptureCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u16 {
+        pub fn strCaptureCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u32 {
             const data = self.l.pat(pat_id).data;
             return if (data == .str_pattern)
                 @intCast(self.l.solved.lifted.strPatternStepSpan(data.str_pattern.steps).len)
@@ -8665,7 +8665,7 @@ const Lowerer = struct {
                 0;
         }
 
-        pub fn strCapturePat(self: MatchTreeCtx, pat_id: Lifted.PatId, i: u16) ?Lifted.PatId {
+        pub fn strCapturePat(self: MatchTreeCtx, pat_id: Lifted.PatId, i: u32) ?Lifted.PatId {
             const str = self.l.pat(pat_id).data.str_pattern;
             return GuardedList.at(self.l.solved.lifted.strPatternStepSpan(str.steps), i).capture;
         }
@@ -8702,8 +8702,8 @@ const Lowerer = struct {
             return try self.l.addTemp(ty);
         }
 
-        pub fn lirLocalU16(self: MatchTreeCtx) Common.LowerError!LIR.LocalId {
-            return try self.l.addLocalForLayout(.u16);
+        pub fn lirLocalDiscriminant(self: MatchTreeCtx) Common.LowerError!LIR.LocalId {
+            return try self.l.addLocalForLayout(.u32);
         }
 
         pub fn lirLocalU64(self: MatchTreeCtx) Common.LowerError!LIR.LocalId {
@@ -8722,7 +8722,7 @@ const Lowerer = struct {
             } }, self.where.glue());
         }
 
-        pub fn readField(self: MatchTreeCtx, dest: LIR.LocalId, ty: Type.TypeId, source: LIR.LocalId, index: u16, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        pub fn readField(self: MatchTreeCtx, dest: LIR.LocalId, ty: Type.TypeId, source: LIR.LocalId, index: u32, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
             return try self.l.assignTypedRefRead(
                 self.where,
                 dest,
@@ -8734,7 +8734,7 @@ const Lowerer = struct {
             );
         }
 
-        pub fn readTagPayload(self: MatchTreeCtx, dest: LIR.LocalId, ty: Type.TypeId, source: LIR.LocalId, variant: u16, index: u16, single: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        pub fn readTagPayload(self: MatchTreeCtx, dest: LIR.LocalId, ty: Type.TypeId, source: LIR.LocalId, variant: u32, index: u32, single: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
             if (single) {
                 return try self.l.assignTypedRefRead(
                     self.where,
@@ -8766,7 +8766,7 @@ const Lowerer = struct {
             );
         }
 
-        pub fn readCallablePayload(_: MatchTreeCtx, _: LIR.LocalId, _: Type.TypeId, _: LIR.LocalId, _: u16, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        pub fn readCallablePayload(_: MatchTreeCtx, _: LIR.LocalId, _: Type.TypeId, _: LIR.LocalId, _: u32, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
             Common.invariant("callable pattern reached solved match lowering");
         }
 
@@ -9292,7 +9292,7 @@ const Lowerer = struct {
             const item_local = try self.addTemp(item_ty);
             current = try self.lowerPatternThenAtType(where, item, item_ty, item_local, current, miss, continuation);
             if (!self.isZstLocal(item_local)) {
-                const field_index: u16 = @intCast(i);
+                const field_index: u32 = @intCast(i);
                 current = try self.assignTypedRefRead(
                     where,
                     item_local,
@@ -9667,7 +9667,7 @@ const Lowerer = struct {
         self: *Lowerer,
         where: LowerSite,
         ty: Type.TypeId,
-        variant_index: u16,
+        variant_index: u32,
         payload_span: Lifted.Span(Lifted.PatId),
         source: LIR.LocalId,
         on_match: LIR.CFStmtId,
@@ -9703,7 +9703,7 @@ const Lowerer = struct {
                     );
                     continue;
                 }
-                const payload_index: u16 = @intCast(i);
+                const payload_index: u32 = @intCast(i);
                 current = try self.assignTypedRefRead(
                     where,
                     payload_local,
@@ -9736,7 +9736,7 @@ const Lowerer = struct {
             const item_local = try self.addTemp(item_ty);
             current = try self.bindPatternAtType(where, item, item_ty, item_local, current);
             if (!self.isZstLocal(item_local)) {
-                const field_index: u16 = @intCast(i);
+                const field_index: u32 = @intCast(i);
                 current = try self.assignTypedRefRead(
                     where,
                     item_local,
@@ -9755,7 +9755,7 @@ const Lowerer = struct {
         self: *Lowerer,
         where: LowerSite,
         ty: Type.TypeId,
-        variant_index: u16,
+        variant_index: u32,
         payload_span: Lifted.Span(Lifted.PatId),
         source: LIR.LocalId,
         next: LIR.CFStmtId,
@@ -9789,7 +9789,7 @@ const Lowerer = struct {
                     );
                     continue;
                 }
-                const payload_index: u16 = @intCast(i);
+                const payload_index: u32 = @intCast(i);
                 current = try self.assignTypedRefRead(
                     where,
                     payload_local,
@@ -9899,9 +9899,9 @@ const Lowerer = struct {
     }
 
     fn lowerBoolEqLocalsInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, lhs: LIR.LocalId, rhs: LIR.LocalId, negated: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const lhs_disc = try self.addLocalForLayout(.u16);
-        const rhs_disc = try self.addLocalForLayout(.u16);
-        const compare = try self.lowerPrimitiveEqLocalsInto(where, target, lhs_disc, rhs_disc, .u16, negated, next);
+        const lhs_disc = try self.addLocalForLayout(.u32);
+        const rhs_disc = try self.addLocalForLayout(.u32);
+        const compare = try self.lowerPrimitiveEqLocalsInto(where, target, lhs_disc, rhs_disc, .u32, negated, next);
         const read_rhs = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = rhs_disc,
             .op = .{ .discriminant = .{ .source = rhs } },
@@ -9965,7 +9965,7 @@ const Lowerer = struct {
         lhs: LIR.LocalId,
         rhs: LIR.LocalId,
         field_ty: Type.TypeId,
-        field_index: u16,
+        field_index: u32,
         on_equal: LIR.CFStmtId,
         on_not_equal: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
@@ -10012,8 +10012,8 @@ const Lowerer = struct {
         const success = try self.assignBool(where, target, !negated, next);
         const failed = try self.assignBool(where, target, negated, next);
 
-        const lhs_disc = try self.addLocalForLayout(.u16);
-        const rhs_disc = try self.addLocalForLayout(.u16);
+        const lhs_disc = try self.addLocalForLayout(.u32);
+        const rhs_disc = try self.addLocalForLayout(.u32);
         const same_disc = try self.addLocalForLayout(.bool);
 
         const branches = try self.allocator.alloc(LIR.CFSwitchBranch, tags.len);
@@ -10059,7 +10059,7 @@ const Lowerer = struct {
         lhs: LIR.LocalId,
         rhs: LIR.LocalId,
         tag: Type.Tag,
-        variant_index: u16,
+        variant_index: u32,
         on_equal: LIR.CFStmtId,
         on_not_equal: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
@@ -10074,7 +10074,7 @@ const Lowerer = struct {
             const eq = try self.addLocalForLayout(.bool);
             current = try self.boolSwitchNoContinuation(where, eq, current, on_not_equal);
             current = try self.lowerEqLocalsInto(where, eq, lhs_payload, rhs_payload, payload_ty, false, current);
-            const payload_idx: ?u16 = if (payloads.len == 1) null else @as(u16, @intCast(i));
+            const payload_idx: ?u32 = if (payloads.len == 1) null else @as(u32, @intCast(i));
             if (!self.isZstLocal(rhs_payload)) {
                 current = try self.assignRefRead(
                     where,
@@ -10119,7 +10119,7 @@ const Lowerer = struct {
         if (self.result.store.getLocal(target).layout_idx != .bool) {
             Common.invariant("boolean assignment target was not Bool layout");
         }
-        const discriminant: u16 = if (value) 1 else 0;
+        const discriminant: u32 = if (value) 1 else 0;
         return try self.result.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = discriminant,
@@ -10143,13 +10143,13 @@ const Lowerer = struct {
         self: *Lowerer,
         where: LowerSite,
         source: LIR.LocalId,
-        discriminant: u16,
+        discriminant: u32,
         body: LIR.CFStmtId,
         default: LIR.CFStmtId,
         default_is_cold: bool,
     ) Common.LowerError!LIR.CFStmtId {
         if (self.isZstLocal(source)) return body;
-        const disc_local = try self.addLocalForLayout(.u16);
+        const disc_local = try self.addLocalForLayout(.u32);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = discriminant, .body = body }};
         const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = disc_local,
@@ -10718,7 +10718,7 @@ const Lowerer = struct {
             };
         }
 
-        const disc = try self.addLocalForLayout(.u16);
+        const disc = try self.addLocalForLayout(.u32);
         const impossible = try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
         const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = disc,
@@ -10787,7 +10787,7 @@ const Lowerer = struct {
             };
         }
 
-        const disc = try self.addLocalForLayout(.u16);
+        const disc = try self.addLocalForLayout(.u32);
         const impossible = try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
         const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = disc,
@@ -10810,7 +10810,7 @@ const Lowerer = struct {
         target_variant: Type.FnVariant,
         source: LIR.LocalId,
         source_variant: Type.FnVariant,
-        source_index: u16,
+        source_index: u32,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         if (target_variant.capture_ty == null and source_variant.capture_ty == null) {
@@ -10864,10 +10864,10 @@ const Lowerer = struct {
         where: LowerSite,
         target: LIR.LocalId,
         target_variant: Type.FnVariant,
-        target_index: u16,
+        target_index: u32,
         source: LIR.LocalId,
         source_variant: Type.FnVariant,
-        source_index: u16,
+        source_index: u32,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
@@ -11099,7 +11099,7 @@ const Lowerer = struct {
             };
         }
 
-        const disc = try self.addLocalForLayout(.u16);
+        const disc = try self.addLocalForLayout(.u32);
         const impossible = try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
         const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = disc,
@@ -11120,10 +11120,10 @@ const Lowerer = struct {
         where: LowerSite,
         target: LIR.LocalId,
         target_tag: Type.Tag,
-        target_index: u16,
+        target_index: u32,
         source: LIR.LocalId,
         source_tag: Type.Tag,
-        source_index: u16,
+        source_index: u32,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const target_payload_tys = self.types.span(target_tag.payloads);
@@ -11254,10 +11254,10 @@ const Lowerer = struct {
         self: *Lowerer,
         where: LowerSite,
         target_locals: []LIR.LocalId,
-        target_index: u16,
+        target_index: u32,
         target_ty: Type.TypeId,
         source: LIR.LocalId,
-        source_index: u16,
+        source_index: u32,
         source_ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
@@ -12031,9 +12031,10 @@ const Lowerer = struct {
 
         fn isErasedCallableValueType(self: *LayoutGraphBuilder, ty: Type.TypeId) bool {
             var current = ty;
-            var depth: u8 = 0;
+            var depth: usize = 0;
             while (true) {
-                if (depth == 32) Common.invariant("transparent alias chain exceeded layout lowering limit");
+                // A chain longer than the type store revisits a type.
+                if (depth > self.lowerer.types.typeCount()) Common.invariant("transparent alias chain formed a cycle in layout lowering");
                 depth += 1;
                 switch (self.lowerer.types.get(current)) {
                     .erased_fn => return true,
@@ -12105,12 +12106,12 @@ const Lowerer = struct {
             // Padding spacers carry an index past every named field so they never
             // collide with a named field's original (lexicographic) index, which
             // is what `getStructFieldOffsetByOriginalIndex` looks up.
-            var padding_ordinal: u16 = 0;
+            var padding_ordinal: u32 = 0;
             for (0..entries.len) |i| {
                 const entry = GuardedList.at(entries, i);
                 switch (entry) {
                     .named => |name| {
-                        var lexicographic_index: ?u16 = null;
+                        var lexicographic_index: ?u32 = null;
                         var field_ty: Type.TypeId = undefined;
                         for (0..backing_fields.len) |idx| {
                             const field = GuardedList.at(backing_fields, idx);
@@ -12125,7 +12126,7 @@ const Lowerer = struct {
                         fields[i] = .{ .index = idx, .child = try self.inputForType(field_ty) };
                     },
                     .padding => |ty| {
-                        const pad_index: u16 = @intCast(backing_fields.len + padding_ordinal);
+                        const pad_index: u32 = @intCast(backing_fields.len + padding_ordinal);
                         padding_ordinal += 1;
                         fields[i] = .{ .index = pad_index, .child = try self.inputForType(ty), .is_padding = true };
                     },
@@ -12219,7 +12220,7 @@ const Lowerer = struct {
         };
     }
 
-    fn tagIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId) u16 {
+    fn tagIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId) u32 {
         const tags = self.tagUnionTags(ty);
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
@@ -12228,7 +12229,7 @@ const Lowerer = struct {
         Common.invariant("tag operation referenced tag absent from Lambda Mono type");
     }
 
-    fn tagIndexByText(self: *Lowerer, ty: Type.TypeId, text: []const u8) u16 {
+    fn tagIndexByText(self: *Lowerer, ty: Type.TypeId, text: []const u8) u32 {
         const tags = self.tagUnionTags(ty);
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
@@ -12261,13 +12262,13 @@ const Lowerer = struct {
         return self.listElemType(backing.ty);
     }
 
-    fn tagPayloadTypesByIndex(self: *Lowerer, ty: Type.TypeId, variant_index: u16) Type.StoreSpanBorrow(Type.TypeId, "spans") {
+    fn tagPayloadTypesByIndex(self: *Lowerer, ty: Type.TypeId, variant_index: u32) Type.StoreSpanBorrow(Type.TypeId, "spans") {
         const tags = self.tagUnionTags(ty);
         if (variant_index >= tags.len) Common.invariant("tag operation referenced variant outside Lambda Mono type");
         return self.types.span(GuardedList.at(tags, variant_index).payloads);
     }
 
-    fn singleTagPayloadTypeByIndex(self: *Lowerer, ty: Type.TypeId, variant_index: u16) Type.TypeId {
+    fn singleTagPayloadTypeByIndex(self: *Lowerer, ty: Type.TypeId, variant_index: u32) Type.TypeId {
         const tags = self.tagUnionTags(ty);
         const payloads = self.types.span(GuardedList.at(tags, variant_index).payloads);
         if (payloads.len != 1) Common.invariant("operation expected tag with exactly one payload");
@@ -12296,7 +12297,7 @@ const Lowerer = struct {
         Common.invariant("record operation referenced field absent from Lambda Mono type");
     }
 
-    fn recordFieldIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.RecordFieldNameId) u16 {
+    fn recordFieldIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.RecordFieldNameId) u32 {
         const fields = self.recordFields(ty);
         for (0..fields.len) |index| {
             const field = GuardedList.at(fields, index);
@@ -12305,7 +12306,7 @@ const Lowerer = struct {
         Common.invariant("record operation referenced field absent from Lambda Mono type");
     }
 
-    fn captureFieldIndex(self: *Lowerer, ty: Type.TypeId, symbol: Common.Symbol) u16 {
+    fn captureFieldIndex(self: *Lowerer, ty: Type.TypeId, symbol: Common.Symbol) u32 {
         const content = self.types.get(ty);
         if (content != .capture_record) Common.invariant("capture access expected capture record type");
         const fields = self.types.captureFieldSpan(content.capture_record);
@@ -12316,7 +12317,7 @@ const Lowerer = struct {
         Common.invariant("capture access referenced symbol absent from capture record");
     }
 
-    fn tagUnionPayloadLayout(self: *Lowerer, tag_union_layout_idx: layout.Idx, variant_index: u16) layout.Idx {
+    fn tagUnionPayloadLayout(self: *Lowerer, tag_union_layout_idx: layout.Idx, variant_index: u32) layout.Idx {
         const tag_union_layout = self.result.layouts.getLayout(tag_union_layout_idx);
         return switch (tag_union_layout.tag) {
             .tag_union => blk: {
@@ -12332,7 +12333,7 @@ const Lowerer = struct {
         };
     }
 
-    fn localFieldLayout(self: *Lowerer, source: LIR.LocalId, field_index: u16) layout.Idx {
+    fn localFieldLayout(self: *Lowerer, source: LIR.LocalId, field_index: u32) layout.Idx {
         const source_layout_idx = self.result.store.getLocal(source).layout_idx;
         const source_layout = self.result.layouts.getLayout(source_layout_idx);
         const struct_layout_idx = if (source_layout.tag == .box) source_layout.getIdx() else source_layout_idx;
@@ -12353,7 +12354,7 @@ const Lowerer = struct {
         };
     }
 
-    fn localTagPayloadLayout(self: *Lowerer, source: LIR.LocalId, variant_index: u16, payload_idx: ?u16) layout.Idx {
+    fn localTagPayloadLayout(self: *Lowerer, source: LIR.LocalId, variant_index: u32, payload_idx: ?u32) layout.Idx {
         const payload_layout_idx = self.tagUnionPayloadLayout(self.result.store.getLocal(source).layout_idx, variant_index);
         const index = payload_idx orelse return payload_layout_idx;
         const payload_layout = self.result.layouts.getLayout(payload_layout_idx);

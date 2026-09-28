@@ -795,7 +795,7 @@ const StaticInitializerMachine = struct {
     fn tagPayloadLayout(
         self: *const StaticInitializerMachine,
         union_layout: layout.Idx,
-        variant_index: u16,
+        variant_index: u32,
     ) layout.Idx {
         const outer = self.layoutValue(union_layout);
         const tag_layout = switch (outer.tag) {
@@ -822,8 +822,8 @@ const StaticInitializerMachine = struct {
     fn evalTag(
         self: *StaticInitializerMachine,
         locals: []const ?*SymbolicValue,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload_local: ?lir.LIR.LocalId,
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {

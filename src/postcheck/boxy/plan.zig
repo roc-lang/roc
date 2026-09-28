@@ -209,7 +209,7 @@ pub const TagVariant = struct {
 
 /// Source and representation metadata for one declared aggregate field.
 pub const DeclaredField = struct {
-    index: u16,
+    index: u32,
     source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     is_padding: bool = false,
@@ -301,7 +301,7 @@ pub const TypeRepresentation = struct {
     /// storage convention used for an optional or still-parametric field kind.
     /// The discriminant is explicit so later stages never infer the field's
     /// presence kind from tag names or representation shape.
-    presence_slot_present_discriminant: ?u16 = null,
+    presence_slot_present_discriminant: ?u32 = null,
     /// The source nominal type declared itself opaque: inspect must not
     /// reveal the backing structure.
     inspect_opaque: bool = false,
@@ -3583,7 +3583,7 @@ const Builder = struct {
             .tag_union => {
                 _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_tag_union", shape);
                 try self.appendGeneratedParserTagCallLink(worker, shape, shape);
-                try self.planGeneratedParserTagRow(worker, shape, encoding_type, 0);
+                try self.planGeneratedParserTagRow(worker, shape, encoding_type);
             },
             .nominal => |nominal| {
                 if (nominal.builtin) |builtin| {
@@ -3798,58 +3798,64 @@ const Builder = struct {
     fn planGeneratedParserTagRow(
         self: *Builder,
         worker: WorkerPlanId,
-        row_type: CheckedTypeIdentity,
+        root_row: CheckedTypeIdentity,
         encoding_type: CheckedTypeIdentity,
-        depth: u16,
     ) Allocator.Error!void {
-        if (depth == 1024) boxyPlanInvariant("generated parser tag row exceeded planner limit");
-        const view = self.moduleForId(row_type.module);
-        switch (view.checked_types.payload(row_type.ty)) {
-            .tag_union => |row| {
-                for (row.tags) |tag| {
-                    // Payload boundaries are the format's `ParseTagUnionSpec`
-                    // callbacks, so a variant plans only its payload parsers.
-                    const args = tag.argsSlice(view.checked_types);
-                    for (args) |arg| {
-                        try self.planGeneratedParserShape(worker, typeRef(view, arg), encoding_type);
+        const type_count = self.checkedTypeCount();
+        var row_type = root_row;
+        var depth: usize = 0;
+        while (true) : (depth += 1) {
+            if (depth > type_count) boxyPlanInvariant("generated parser tag row formed a cycle");
+            const view = self.moduleForId(row_type.module);
+            switch (view.checked_types.payload(row_type.ty)) {
+                .tag_union => |row| {
+                    for (row.tags) |tag| {
+                        // Payload boundaries are the format's `ParseTagUnionSpec`
+                        // callbacks, so a variant plans only its payload parsers.
+                        const args = tag.argsSlice(view.checked_types);
+                        for (args) |arg| {
+                            try self.planGeneratedParserShape(worker, typeRef(view, arg), encoding_type);
+                        }
                     }
-                }
-                try self.planGeneratedParserTagRow(worker, typeRef(view, row.ext), encoding_type, depth + 1);
-            },
-            .alias => |alias| try self.planGeneratedParserTagRow(
-                worker,
-                typeRef(view, alias.backing),
-                encoding_type,
-                depth + 1,
-            ),
-            .nominal => |nominal| {
-                const backing = try self.nominalBackingSource(view, nominal);
-                try self.planGeneratedParserTagRow(
-                    worker,
-                    typeRef(backing.view, backing.ty),
-                    encoding_type,
-                    depth + 1,
-                );
-            },
-            .empty_tag_union => {},
-            .flex, .rigid => |variable| {
-                if (variable.row_default != .empty_tag_union) {
-                    boxyPlanInvariant("generated parser tag row had a nonempty open extension");
-                }
-            },
-            .pending => boxyPlanInvariant("pending tag row reached generated parser planning"),
-            .err, .record, .tuple, .function, .empty_record => boxyPlanInvariant("generated parser tag row extension was not a tag row"),
+                    row_type = typeRef(view, row.ext);
+                },
+                .alias => |alias| row_type = typeRef(view, alias.backing),
+                .nominal => |nominal| {
+                    const backing = try self.nominalBackingSource(view, nominal);
+                    row_type = typeRef(backing.view, backing.ty);
+                },
+                .empty_tag_union => return,
+                .flex, .rigid => |variable| {
+                    if (variable.row_default != .empty_tag_union) {
+                        boxyPlanInvariant("generated parser tag row had a nonempty open extension");
+                    }
+                    return;
+                },
+                .pending => boxyPlanInvariant("pending tag row reached generated parser planning"),
+                .err, .record, .tuple, .function, .empty_record => boxyPlanInvariant("generated parser tag row extension was not a tag row"),
+            }
         }
+    }
+
+    /// Checked types across every module the planner reads. A checked-type
+    /// walk longer than this revisits a type.
+    fn checkedTypeCount(self: *Builder) usize {
+        var count = self.root_view.checked_types.payloadCount();
+        for (self.extra_module_views) |view| count += view.checked_types.payloadCount();
+        for (self.imports) |imported| count += moduleViewFromImported(imported).checked_types.payloadCount();
+        for (self.relation_modules) |relation| count += moduleViewFromImported(relation).checked_types.payloadCount();
+        return count;
     }
 
     fn generatedParserRuntimeSchema(
         self: *Builder,
         root_shape: CheckedTypeIdentity,
     ) Allocator.Error!CheckedTypeIdentity {
+        const type_count = self.checkedTypeCount();
         var shape = root_shape;
-        var depth: u16 = 0;
+        var depth: usize = 0;
         while (true) {
-            if (depth == 1024) boxyPlanInvariant("generated parser schema wrapper chain exceeded planner limit");
+            if (depth > type_count) boxyPlanInvariant("generated parser schema wrapper chain formed a cycle");
             depth += 1;
 
             const view = self.moduleForId(shape.module);
@@ -5393,26 +5399,29 @@ const Builder = struct {
             for (backing_children) |child| {
                 if (child.role == .record_field) backing_field_count += 1;
             }
-            if (backing_field_count > std.math.maxInt(u16)) {
+            if (backing_field_count > std.math.maxInt(u32)) {
                 boxyPlanInvariant("stored nominal backing field count exceeded Boxy layout range");
+            }
+            // Each backing field by label, so every declared field resolves in
+            // constant time.
+            var backing_fields: std.AutoHashMapUnmanaged(RecordFieldLabelId, DeclaredField) = .empty;
+            defer backing_fields.deinit(self.allocator);
+            try backing_fields.ensureTotalCapacity(self.allocator, @intCast(backing_field_count));
+            var field_index: u32 = 0;
+            for (backing_children) |child| {
+                if (child.role != .record_field) continue;
+                const entry = backing_fields.getOrPutAssumeCapacity(child.role.record_field);
+                if (entry.found_existing) boxyPlanInvariant("stored nominal backing had a duplicate declared field");
+                entry.value_ptr.* = .{
+                    .index = field_index,
+                    .source_type = child.source_type,
+                    .rep = child.rep,
+                };
+                field_index += 1;
             }
             for (declared_order) |declared| switch (declared) {
                 .named => |name| {
-                    var selected: ?DeclaredField = null;
-                    var field_index: u16 = 0;
-                    for (backing_children) |child| {
-                        if (child.role != .record_field) continue;
-                        if (child.role.record_field == name) {
-                            if (selected != null) boxyPlanInvariant("stored nominal backing had a duplicate declared field");
-                            selected = .{
-                                .index = field_index,
-                                .source_type = child.source_type,
-                                .rep = child.rep,
-                            };
-                        }
-                        field_index += 1;
-                    }
-                    try pending.append(self.allocator, selected orelse
+                    try pending.append(self.allocator, backing_fields.get(name) orelse
                         boxyPlanInvariant("stored nominal declared field was absent from its backing record"));
                 },
                 .padding => |padding_type| {
@@ -5422,7 +5431,7 @@ const Builder = struct {
                         .source_type = self.plan.representations.items[@intFromEnum(padding_rep)].source_type,
                         .rep = padding_rep,
                     });
-                    if (padding_ordinal > std.math.maxInt(u16) - backing_field_count) {
+                    if (padding_ordinal > std.math.maxInt(u32) - backing_field_count) {
                         boxyPlanInvariant("stored nominal declared field count exceeded Boxy layout range");
                     }
                     try pending.append(self.allocator, .{
@@ -6188,7 +6197,7 @@ const Builder = struct {
 
         var pending = std.ArrayList(DeclaredField).empty;
         defer pending.deinit(self.allocator);
-        var padding_ordinal: u16 = 0;
+        var padding_ordinal: u32 = 0;
         for (source.fields) |declared| {
             switch (declared) {
                 .named => |name| {
@@ -6230,8 +6239,8 @@ const Builder = struct {
         self: *Builder,
         backing_view: ModuleView,
         backing_fields: []const checked.CheckedRecordField,
-    ) Allocator.Error![]u16 {
-        const ranks = try self.allocator.alloc(u16, backing_fields.len);
+    ) Allocator.Error![]u32 {
+        const ranks = try self.allocator.alloc(u32, backing_fields.len);
         errdefer self.allocator.free(ranks);
         const names = backing_view.canonical_names orelse {
             for (ranks, 0..) |*rank, index| rank.* = @intCast(index);
@@ -6244,25 +6253,25 @@ const Builder = struct {
             }
         }
 
-        const order = try self.allocator.alloc(u16, backing_fields.len);
+        const order = try self.allocator.alloc(u32, backing_fields.len);
         defer self.allocator.free(order);
         for (order, 0..) |*slot, index| slot.* = @intCast(index);
 
         const SortContext = struct {
             names: *const checked_names.CanonicalNameStore,
             fields: []const checked.CheckedRecordField,
-            fn lessThan(ctx: @This(), lhs: u16, rhs: u16) bool {
+            fn lessThan(ctx: @This(), lhs: u32, rhs: u32) bool {
                 return ctx.names.recordFieldLabelTextLessThan(ctx.fields[lhs].name, ctx.fields[rhs].name);
             }
         };
-        std.mem.sort(u16, order, SortContext{ .names = names, .fields = backing_fields }, SortContext.lessThan);
+        std.mem.sort(u32, order, SortContext{ .names = names, .fields = backing_fields }, SortContext.lessThan);
 
         for (order, 0..) |backing_pos, rank| ranks[backing_pos] = @intCast(rank);
         return ranks;
     }
 
     const NominalBackingField = struct {
-        index: u16,
+        index: u32,
         ty: checked.CheckedTypeId,
     };
 
@@ -14446,9 +14455,9 @@ pub const RepQuery = struct {
         if (worker_kind == .alias or worker_kind == .nominal) return call_rep_id;
 
         var current = call_rep_id;
-        var depth: u16 = 0;
+        var depth: usize = 0;
         while (self.structureBackingRep(current)) |backing| {
-            if (depth == 1024) boxyPlanInvariant("call wrapper chain exceeded boxy planner limit");
+            if (depth > self.plan.representations.items.len) boxyPlanInvariant("call wrapper chain formed a cycle");
             depth += 1;
             var backing_substitutions = self.plan.nominalBackingSubstitutions(self.rep(current).nominal_backing_arg_substitutions);
             while (backing_substitutions.next()) |backing_substitution| {
@@ -14499,9 +14508,9 @@ pub const RepQuery = struct {
     /// non-wrapper is reached.
     pub fn descriptorArgumentIdentityRep(self: RepQuery, rep_id: TypeRepId) TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
+        var depth: usize = 0;
         while (true) {
-            if (depth == 1024) boxyPlanInvariant("descriptor argument wrapper chain exceeded boxy planner limit");
+            if (depth > self.plan.representations.items.len) boxyPlanInvariant("descriptor argument wrapper chain formed a cycle");
             depth += 1;
             if (self.plan.inspectMethodForRep(current) != null) return current;
 
@@ -14517,9 +14526,9 @@ pub const RepQuery = struct {
     /// the nominal identity is preserved.
     pub fn dictionaryArgumentIdentityRep(self: RepQuery, rep_id: TypeRepId) TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
+        var depth: usize = 0;
         while (true) {
-            if (depth == 1024) boxyPlanInvariant("dictionary argument wrapper chain exceeded boxy planner limit");
+            if (depth > self.plan.representations.items.len) boxyPlanInvariant("dictionary argument wrapper chain formed a cycle");
             depth += 1;
 
             if (self.rep(current).kind != .alias) return current;
@@ -14554,9 +14563,9 @@ pub const RepQuery = struct {
     /// and transparent-nominal layers.
     pub fn functionIdentityRep(self: RepQuery, rep_id: TypeRepId) TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
+        var depth: usize = 0;
         while (true) {
-            if (depth == 1024) boxyPlanInvariant("function root alias chain exceeded boxy planner limit");
+            if (depth > self.plan.representations.items.len) boxyPlanInvariant("function root alias chain formed a cycle");
             depth += 1;
 
             const current_rep = self.rep(current);
@@ -14871,9 +14880,9 @@ fn requiredSingleChildOf(plan: *const ProgramPlan, rep_id: TypeRepId, role: Chil
 
 fn checkedFunctionPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
     var current = checked_ty;
-    var depth: u16 = 0;
+    var depth: usize = 0;
     while (true) {
-        if (depth == 1024) boxyPlanInvariant("checked function alias chain exceeded boxy planner limit");
+        if (depth > view.checked_types.payloadCount()) boxyPlanInvariant("checked function alias chain formed a cycle");
         depth += 1;
 
         switch (view.checked_types.payload(current)) {
@@ -16967,7 +16976,7 @@ test "boxy planner preserves optional record field representation and descriptor
     try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
     try std.testing.expect(slot.contains_dynamic);
     try std.testing.expect(slot.descriptor != null);
-    try std.testing.expectEqual(@as(?u16, 1), slot.presence_slot_present_discriminant);
+    try std.testing.expectEqual(@as(?u32, 1), slot.presence_slot_present_discriminant);
     const variants = plan.tagVariantSlice(slot.tag_variants);
     try std.testing.expectEqual(@as(usize, 2), variants.len);
     try std.testing.expectEqual(missing, variants[0].name);
@@ -17019,7 +17028,7 @@ test "boxy planner preserves undetermined record field kind identity in a presen
 
     const slot = plan.representations.items[@intFromEnum(record_children[0].rep)];
     try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
-    try std.testing.expectEqual(@as(?u16, 1), slot.presence_slot_present_discriminant);
+    try std.testing.expectEqual(@as(?u32, 1), slot.presence_slot_present_discriminant);
     try std.testing.expect(slot.descriptor != null);
 }
 
@@ -17561,11 +17570,11 @@ test "boxy planner records nominal declared field order from checked payloads" {
     try std.testing.expectEqual(RepresentationKind{ .nominal = .transparent }, nominal.kind);
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
-    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
+    try std.testing.expectEqual(@as(u32, 0), fields[0].index);
     try std.testing.expect(!fields[0].is_padding);
-    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expectEqual(@as(u32, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
-    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+    try std.testing.expectEqual(@as(u32, 1), fields[2].index);
     try std.testing.expect(!fields[2].is_padding);
 }
 
@@ -17662,11 +17671,11 @@ test "boxy planner resolves local nominal declared order from box payload capabi
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
-    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
-    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expectEqual(@as(u32, 0), fields[0].index);
+    try std.testing.expectEqual(@as(u32, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
     try expectTypeRef(moduleKey(1), @enumFromInt(fixtureTableIndex(0)), fields[1].source_type);
-    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+    try std.testing.expectEqual(@as(u32, 1), fields[2].index);
 }
 
 test "boxy planner records imported box payload capability source modules" {
@@ -17829,12 +17838,12 @@ test "boxy planner records imported box payload capability source modules" {
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
-    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
+    try std.testing.expectEqual(@as(u32, 0), fields[0].index);
     try expectTypeRef(source_key, @enumFromInt(5), fields[0].source_type);
-    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expectEqual(@as(u32, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
     try expectTypeRef(source_key, @enumFromInt(5), fields[1].source_type);
-    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+    try std.testing.expectEqual(@as(u32, 1), fields[2].index);
     try expectTypeRef(source_key, @enumFromInt(1), fields[2].source_type);
 }
 

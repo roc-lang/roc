@@ -142,6 +142,9 @@ const Solver = struct {
     /// solver's lifetime and a row unified against many small rows is
     /// indexed once.
     tag_row_indexes: std.AutoHashMapUnmanaged(u32, TagRowIndex),
+    /// Field positions by name per stored record row, keyed by the row's
+    /// start, so a record's fields each resolve in constant time.
+    record_row_indexes: std.AutoHashMapUnmanaged(u32, RecordRowIndex),
     /// The clone context every callable-free lazy leaf expands in. A
     /// callable-free Monotype has no lambda-set state to solve, so all of its
     /// uses can read one clone; giving each use its own would make every
@@ -265,6 +268,7 @@ const Solver = struct {
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
             .tag_row_indexes = .empty,
+            .record_row_indexes = .empty,
             .shared_leaf_context = null,
             .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
             .clone_map_pool = collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId).init(allocator),
@@ -275,6 +279,9 @@ const Solver = struct {
         var row_indexes = self.tag_row_indexes.valueIterator();
         while (row_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
         self.tag_row_indexes.deinit(self.allocator);
+        var record_indexes = self.record_row_indexes.valueIterator();
+        while (record_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
+        self.record_row_indexes.deinit(self.allocator);
         self.clone_map_pool.deinit();
         self.mono_set_pool.deinit();
         self.solved_position_pool.deinit();
@@ -1649,11 +1656,9 @@ const Solver = struct {
     fn recordField(self: *Solver, ty: Type.TypeVarId, name: Type.names.RecordFieldNameId) Allocator.Error!Type.TypeVarId {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .record) Common.invariant("record field operation had a non-record checked type");
-        for (0..content.record.count()) |index| {
-            const field = self.program.types.fieldItem(content.record, index);
-            if (field.name == name) return field.ty;
-        }
-        Common.invariant("record field was absent from checked record type");
+        const index = (try self.recordRowIndex(content.record)).by_name.get(name) orelse
+            Common.invariant("record field was absent from checked record type");
+        return self.program.types.fieldItem(content.record, index).ty;
     }
 
     fn recordFieldByLabel(self: *Solver, ty: Type.TypeVarId, label: []const u8) Allocator.Error!Type.TypeVarId {
@@ -1669,11 +1674,9 @@ const Solver = struct {
     fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .tag_union) Common.invariant("tag operation had a non-tag-union checked type");
-        for (0..content.tag_union.count()) |index| {
-            const tag = self.program.types.tagItem(content.tag_union, index);
-            if (tag.name == name) return tag.payloads;
-        }
-        Common.invariant("tag was absent from checked tag-union type");
+        const index = (try self.tagRowIndex(content.tag_union)).by_name.get(name) orelse
+            Common.invariant("tag was absent from checked tag-union type");
+        return self.program.types.tagItem(content.tag_union, index).payloads;
     }
 
     fn namedBacking(self: *Solver, ty: Type.TypeVarId) Allocator.Error!?Type.TypeVarId {
@@ -2815,6 +2818,25 @@ const Solver = struct {
         return gop.value_ptr;
     }
 
+    const RecordRowIndex = struct {
+        len: u32,
+        by_name: std.AutoHashMapUnmanaged(Type.names.RecordFieldNameId, usize),
+    };
+
+    fn recordRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const RecordRowIndex {
+        const gop = try self.record_row_indexes.getOrPut(self.allocator, span.start);
+        if (gop.found_existing and gop.value_ptr.len == span.len) return gop.value_ptr;
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len, .by_name = .empty };
+        gop.value_ptr.len = span.len;
+        gop.value_ptr.by_name.clearRetainingCapacity();
+        try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
+        for (0..span.count()) |index| {
+            const entry = gop.value_ptr.by_name.getOrPutAssumeCapacity(self.program.types.fieldItem(span, index).name);
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+        return gop.value_ptr;
+    }
+
     fn mergeTags(
         self: *Solver,
         lhs: Type.Span,
@@ -3415,6 +3437,7 @@ fn solvedTypeDigestTestSolver(
     solver.lifted.names = name_store;
     solver.solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator);
     solver.tag_row_indexes = .empty;
+    solver.record_row_indexes = .empty;
     solver.shared_leaf_context = null;
     return solver;
 }

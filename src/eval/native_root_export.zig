@@ -351,7 +351,7 @@ const Builder = struct {
         }
     }
 
-    fn tagDiscriminant(self: *Builder, job: Job) u16 {
+    fn tagDiscriminant(self: *Builder, job: Job) u32 {
         const physical = self.program.layouts.getLayout(job.layout_idx);
         if (physical.tag == .zst) return 0;
         if (physical.tag != .tag_union) invariant("native tag export had non-tag layout");
@@ -361,7 +361,7 @@ const Builder = struct {
         return @intCast(discriminant);
     }
 
-    fn tagPayload(self: *Builder, idx: layout.Idx, discriminant: u16) layout.Idx {
+    fn tagPayload(self: *Builder, idx: layout.Idx, discriminant: u32) layout.Idx {
         const physical = self.program.layouts.getLayout(idx);
         if (physical.tag == .zst) return .zst;
         const data = self.program.layouts.getTagUnionData(physical.getTagUnion().idx);

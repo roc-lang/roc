@@ -2303,6 +2303,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // roc_builtins_list_with_capacity(out, capacity, alignment, element_width, elements_refcounted, roc_ops)
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(cap_reg);
                     self.codegen.freeGeneral(cap_reg);
@@ -2432,6 +2433,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // roc_builtins_list_append_unsafe(out, list_bytes, list_len, list_cap, element, element_width, roc_ops)
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addMemArg(base_reg, list_offset);
                     try builder.addMemArg(base_reg, list_offset + 8);
@@ -2706,6 +2708,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // roc_builtins_list_map_can_reuse(bytes, len, cap, roc_ops) -> u8
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addMemArg(frame_ptr, list_off);
                     try builder.addMemArg(frame_ptr, list_off + 8);
                     try builder.addMemArg(frame_ptr, list_off + 16);
@@ -2921,6 +2924,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // exact list descriptor to the Boxy runtime instead.
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_a_off);
@@ -2945,6 +2949,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, update_modes, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_a_off);
@@ -2989,6 +2994,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrap(out, list_bytes, list_len, list_cap, start, count, alignment, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_off);
@@ -3034,6 +3040,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrap(out, list_bytes, list_len, list_cap, dest_index, src_index, count, alignment, element_width, elements_refcounted, element_incref, element_decref, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_off);
@@ -3075,6 +3082,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrap(out, list_bytes, list_len, list_cap, start, count, element_width, elements_refcounted, element_incref, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_off);
@@ -3102,6 +3110,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrap(list_bytes, list_len, list_cap, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addMemArg(base_reg, list_off);
                         try builder.addMemArg(base_reg, list_off + 8);
                         try builder.addMemArg(base_reg, list_off + 16);
@@ -3118,6 +3127,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrap(list_bytes, list_len, list_cap, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addMemArg(base_reg, list_off);
                         try builder.addMemArg(base_reg, list_off + 8);
                         try builder.addMemArg(base_reg, list_off + 16);
@@ -3141,6 +3151,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrap(out, list_bytes, list_len, list_cap, value, count, alignment, update_mode, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_off);
@@ -3182,6 +3193,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrap(out, list_bytes, list_len, list_cap, src_bytes, src_len, src_cap, start, len, alignment, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_off);
@@ -3233,6 +3245,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrapListPrepend(out, list_bytes, list_len, list_cap, alignment, element, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_off);
@@ -4062,6 +4075,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(layout_reg);
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(frame_ptr, result_offset);
                     try builder.addMemArg(frame_ptr, a_off);
                     try builder.addMemArg(frame_ptr, a_off + 16);
@@ -4113,6 +4127,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(layout_reg);
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(frame_ptr, result_offset);
                     try builder.addMemArg(frame_ptr, a_off);
                     try builder.addMemArg(frame_ptr, a_off + 16);
@@ -4160,6 +4175,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(layout_reg);
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(frame_ptr, result_offset);
                     try builder.addMemArg(frame_ptr, a_off);
                     try builder.addMemArg(frame_ptr, a_off + 16);
@@ -4250,6 +4266,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     {
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addRegArg(cap_reg);
                         self.codegen.freeGeneral(cap_reg);
@@ -4303,8 +4320,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (ret_layout_val.tag == .tag_union) {
                         const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
                         const variants = ls.getTagUnionVariants(tu_data);
-                        var ok_disc: ?u16 = null;
-                        var err_disc: ?u16 = null;
+                        var ok_disc: ?u32 = null;
+                        var err_disc: ?u32 = null;
                         var err_record_idx: ?layout.StructIdx = null;
                         var inner_disc_offset: u32 = 0;
                         var inner_disc_size: u32 = 0;
@@ -4448,6 +4465,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         // Call C builtin that writes the Roc tag union directly.
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(frame_ptr, result_slot);
                         try builder.addMemArg(frame_ptr, list_off);
                         try builder.addMemArg(frame_ptr, list_off + 8);
@@ -4521,6 +4539,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, null)) |boxy_elem| {
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(base_reg, result_offset + list_field_offset);
                         try builder.addMemArg(base_reg, list_off);
                         try builder.addMemArg(base_reg, list_off + 8);
@@ -4547,6 +4566,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrapListReplace(out_list, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset + list_field_offset);
                         try builder.addMemArg(base_reg, list_off);
@@ -4599,6 +4619,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_off);
                         try builder.addMemArg(base_reg, list_off + 8);
@@ -4619,6 +4640,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(frame_ptr, result_offset);
                         try builder.addMemArg(frame_ptr, list_off);
                         try builder.addMemArg(frame_ptr, list_off + 8);
@@ -4667,6 +4689,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // wrapListSwap(out, list_bytes, list_len, list_cap, alignment, element_width, index_1, index_2, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
 
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addMemArg(base_reg, list_off);
@@ -4688,6 +4711,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(frame_ptr, result_offset);
                         try builder.addMemArg(frame_ptr, list_off);
                         try builder.addMemArg(frame_ptr, list_off + 8);
@@ -5489,6 +5513,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
                     {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addImmArg(@intCast(elem_size));
                         try builder.addImmArg(@intCast(elem_alignment));
                         try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
@@ -5606,6 +5631,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addRegArg(box_reg);
                     try builder.addImmArg(@intCast(elem_size));
                     try builder.addImmArg(@intCast(box_abi.elem_alignment));
@@ -5748,6 +5774,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
                     {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addImmArg(@intCast(elem_size));
                         try builder.addImmArg(@intCast(box_abi.elem_alignment));
                         try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
@@ -5870,6 +5897,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             width: u8,
         ) Allocator.Error!ValueLocation {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(seed_reg);
             try builder.addImmArg(@intCast(domain));
             try builder.addRegArg(value_reg);
@@ -5882,6 +5910,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn callHasherWriteBits(self: *Self, seed_reg: GeneralReg, bits_reg: GeneralReg, comptime is_f32: bool) Allocator.Error!ValueLocation {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(seed_reg);
             try builder.addRegArg(bits_reg);
             try self.callBuiltin(
@@ -5895,6 +5924,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn callHasherWriteU128(self: *Self, seed_reg: GeneralReg, parts: I128Parts, domain: u8) Allocator.Error!ValueLocation {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(seed_reg);
             try builder.addImmArg(@intCast(domain));
             try builder.addRegArg(parts.low);
@@ -7768,6 +7798,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const result_offset = self.codegen.allocStackSlot(16);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addImmArg(op_index);
             try builder.addImmArg(@intFromEnum(arg_kind));
@@ -8200,6 +8231,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(index_reg);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addRegArg(vector.low);
             try builder.addRegArg(vector.high);
@@ -8219,6 +8251,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const list_offset = try self.simdListOffset(GuardedList.at(args, 1));
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addRegArg(vector.low);
             try builder.addRegArg(vector.high);
@@ -8257,6 +8290,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.fragment_context.dict_seed = true;
                     if (self.dict_seed_mode == .comptime_zero) return .{ .immediate_i64 = 0 };
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try self.callBuiltin(&builder, LowLevelBuiltins.hasherOp(.dict_pseudo_seed));
                     return try self.scalarRetReg();
                 },
@@ -8264,6 +8298,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (args.len != 1) unreachable;
                     const seed_reg = try self.hasherStateReg(GuardedList.at(args, 0));
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addRegArg(seed_reg);
                     try self.callBuiltin(&builder, LowLevelBuiltins.hasherOp(.hasher_finish));
                     self.codegen.freeGeneral(seed_reg);
@@ -8315,6 +8350,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addRegArg(seed_reg);
                     try builder.addImmArg(@intCast(@intFromEnum(builtins.hash.HasherDomain.bytes)));
                     try builder.addMemArg(frame_ptr, list_off);
@@ -8329,6 +8365,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const str_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addRegArg(seed_reg);
                     try builder.addMemArg(frame_ptr, str_off);
                     try builder.addMemArg(frame_ptr, str_off + 16);
@@ -8400,6 +8437,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // fn(out, str_bytes, str_len, str_cap, [update_mode,] roc_ops)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addMemArg(frame_ptr, str_off);
             try builder.addMemArg(frame_ptr, str_off + 16);
@@ -8419,6 +8457,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addMemArg(frame_ptr, list_off);
             try builder.addMemArg(frame_ptr, list_off + 8);
@@ -8434,6 +8473,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_list_size);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try self.callBuiltin(&builder, builtin_fn);
 
@@ -8446,6 +8486,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_list_size);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addMemArg(frame_ptr, list_off);
             try builder.addMemArg(frame_ptr, list_off + 8);
@@ -8461,6 +8502,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_list_size);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addMemArg(frame_ptr, first_off);
             try builder.addMemArg(frame_ptr, first_off + 8);
@@ -8480,6 +8522,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_ptr, result_offset);
             try builder.addMemArg(base_ptr, list_off);
             try builder.addMemArg(base_ptr, list_off + 8);
@@ -8498,6 +8541,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // fn(str_bytes, str_len, str_cap) -> scalar - 3 args
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addMemArg(base_ptr, str_off);
             try builder.addMemArg(base_ptr, str_off + 16);
             try builder.addMemArg(base_ptr, str_off + 8);
@@ -8515,6 +8559,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn callStr1U64ToByte(self: *Self, str_off: i32, u64_off: i32, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addMemArg(frame_ptr, str_off);
             try builder.addMemArg(frame_ptr, str_off + 16);
             try builder.addMemArg(frame_ptr, str_off + 8);
@@ -8539,6 +8584,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // fn(a_bytes, a_len, a_cap, b_bytes, b_len, b_cap) -> bool - 6 args
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addMemArg(base_ptr, a_off);
             try builder.addMemArg(base_ptr, a_off + 16);
             try builder.addMemArg(base_ptr, a_off + 8);
@@ -8567,6 +8613,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callStrStaticSmallToScalar(self: *Self, str_off: i32, len_off: i32, word0_off: i32, word1_off: i32, word2_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addMemArg(base_ptr, str_off);
             try builder.addMemArg(base_ptr, str_off + 16);
             try builder.addMemArg(base_ptr, str_off + 8);
@@ -8591,6 +8638,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callStrStaticSmallWordToScalar(self: *Self, str_off: i32, offset_off: i32, active_len_off: i32, word_off: i32, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addMemArg(base_ptr, str_off);
             try builder.addMemArg(base_ptr, str_off + 16);
             try builder.addMemArg(base_ptr, str_off + 8);
@@ -8623,6 +8671,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // fn(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, [update_mode,] roc_ops) -> void
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_ptr, result_offset);
             try builder.addMemArg(base_ptr, a_off);
             try builder.addMemArg(base_ptr, a_off + 16);
@@ -8649,6 +8698,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // fn(out, str_bytes, str_len, str_cap, u64_val, [update_mode,] roc_ops) -> void
             const base_ptr = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_ptr, result_offset);
             try builder.addMemArg(base_ptr, str_off);
             try builder.addMemArg(base_ptr, str_off + 16);
@@ -8664,6 +8714,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addMemArg(frame_ptr, str_off);
             try builder.addMemArg(frame_ptr, str_off + 16);
@@ -8715,6 +8766,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(high_reg);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_offset);
             try builder.addRegArg(low_reg);
             try builder.addRegArg(high_reg);
@@ -8733,6 +8785,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(parts.high);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_offset);
             try builder.addRegArg(parts.low);
             try builder.addRegArg(parts.high);
@@ -8751,6 +8804,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(bits_reg);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_offset);
             try builder.addRegArg(bits_reg);
             try builder.addImmArg(if (is_f32) @as(u8, 1) else @as(u8, 0));
@@ -8828,6 +8882,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -8847,6 +8902,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
                 // alignment, element_width, start, len, elements_refcounted, element_decref, update_mode, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -8914,6 +8970,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (op == .list_sublist_borrowed) {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -8925,6 +8982,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_sublist_borrowed));
             } else if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -8944,6 +9002,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
                 // alignment, element_width, start, len, elements_refcounted, element_decref, update_mode, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -8977,6 +9036,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -8995,6 +9055,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9128,6 +9189,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // alignment, element_width, start, len, elements_refcounted, element_decref, update_mode, roc_ops)
                 const list_dst_offset = result_offset + list_field_offset;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, list_dst_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9313,6 +9375,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addMemArg(base_reg, list_off);
                 try builder.addMemArg(base_reg, list_off + 8);
@@ -9333,6 +9396,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // alignment, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                 const base_reg = frame_ptr;
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addMemArg(base_reg, list_off);
                 try builder.addMemArg(base_reg, list_off + 8);
@@ -9366,6 +9430,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const callable_off = try self.ensureOnStack(callable_loc, 8);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9387,6 +9452,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
             defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addMemArg(frame_ptr, list_off);
             try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9421,6 +9487,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9440,6 +9507,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // wrapListReserve(out, list_bytes, list_len, list_cap, alignment, spare, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9474,6 +9542,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9492,6 +9561,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // wrapListReleaseExcessCapacity(out, list_bytes, list_len, list_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9809,6 +9879,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const proc: u64 = if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64);
             const stmt: u32 = if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addImmArg(@intFromEnum(kind));
             try builder.addImmArg(@intFromEnum(reason));
             try builder.addImmArg(@intFromEnum(local));
@@ -11423,6 +11494,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const stack_offset = self.codegen.allocStackSlot(16);
             const base_reg = frame_ptr;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, stack_offset); // out_low
             try builder.addLeaArg(base_reg, stack_offset + 8); // out_high
             try builder.addRegArg(src_reg); // val
@@ -11434,6 +11506,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Call an exact-width C conversion: fn(low: u64, high: u64) -> f32/f64.
         fn callI128PartsToFloat(self: *Self, parts: I128Parts, builtin_fn: BuiltinFn, width: FloatWidth) Allocator.Error!ValueLocation {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(parts.low);
             try builder.addRegArg(parts.high);
             try self.callBuiltin(&builder, builtin_fn);
@@ -11465,6 +11538,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const stack_offset = self.codegen.allocStackSlot(result_size);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, stack_offset);
             if (src_width == .f32) {
                 try builder.addF32RegArg(freg);
@@ -11484,6 +11558,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const freg = try self.ensureInFloatReg(src_loc, width);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             if (width == .f32) {
                 try builder.addF32RegArg(freg);
             } else {
@@ -11528,6 +11603,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             if (width == .f32) {
                 try builder.addF32MemArg(frame_ptr, lhs_slot);
                 try builder.addF32MemArg(frame_ptr, rhs_slot);
@@ -11584,6 +11660,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const base_reg = frame_ptr;
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addRegArg(parts.low);
                 try builder.addRegArg(parts.high);
@@ -11634,6 +11711,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const base_reg = frame_ptr;
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(src_reg);
                     try builder.addImmArg(@bitCast(min_val));
@@ -11655,6 +11733,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const base_reg = frame_ptr;
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(src_reg);
                     try builder.addImmArg(@bitCast(@as(i64, @bitCast(max_val))));
@@ -11694,6 +11773,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (parse_spec) {
                 .dec => {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addMemArg(base_reg, str_off);
                     try builder.addMemArg(base_reg, str_off + 16);
@@ -11703,6 +11783,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .float => |float| {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addMemArg(base_reg, str_off);
                     try builder.addMemArg(base_reg, str_off + 16);
@@ -11713,6 +11794,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .int => |int| {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addMemArg(base_reg, str_off);
                     try builder.addMemArg(base_reg, str_off + 16);
@@ -11768,6 +11850,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(layout_reg);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             switch (spec.source) {
                 .str => {
@@ -11842,6 +11925,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addRegArg(parts.low);
                         try builder.addRegArg(parts.high);
@@ -11870,6 +11954,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(base_reg, result_offset);
                         if (comptime target.toCpuArch() != .aarch64) {
                             if (src_width == .f32)
@@ -11895,6 +11980,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(base_reg, result_offset);
                         try builder.addRegArg(parts.low);
                         try builder.addRegArg(parts.high);
@@ -11917,6 +12003,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addLeaArg(base_reg, result_offset);
                         if (comptime target.toCpuArch() != .aarch64) {
                             try builder.addF64RegArg(freg);
@@ -11936,6 +12023,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const base_reg = frame_ptr;
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addLeaArg(base_reg, result_offset);
                     try builder.addRegArg(parts.low);
                     try builder.addRegArg(parts.high);
@@ -11958,6 +12046,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_slot); // out_low
             try builder.addLeaArg(base_reg, result_slot + 8); // out_high
             try builder.addRegArg(lhs_parts.low);
@@ -11977,6 +12066,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_slot);
             try builder.addLeaArg(base_reg, result_slot + 8);
             try builder.addRegArg(src_parts.low);
@@ -11996,6 +12086,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_slot);
             try builder.addLeaArg(base_reg, result_slot + 8);
             try builder.addRegArg(lhs_parts.low);
@@ -12019,6 +12110,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_slot); // out_low
             try builder.addLeaArg(base_reg, result_slot + 8); // out_high
             try builder.addRegArg(lhs_parts.low);
@@ -12039,6 +12131,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_slot); // out_low
             try builder.addLeaArg(base_reg, result_slot + 8); // out_high
             try builder.addRegArg(lhs_parts.low);
@@ -12068,6 +12161,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_slot);
             try builder.addLeaArg(base_reg, result_slot + 8);
             try builder.addRegArg(lhs_parts.low);
@@ -12169,6 +12263,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_slot); // out_low
             try builder.addLeaArg(base_reg, result_slot + 8); // out_high
             try builder.addRegArg(lhs_parts.low);
@@ -12195,6 +12290,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_reg = frame_ptr;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(base_reg, result_slot); // out_low
             try builder.addLeaArg(base_reg, result_slot + 8); // out_high
             try builder.addRegArg(lhs_parts.low);
@@ -12239,6 +12335,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const result_slot = self.codegen.allocStackSlot(16);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_slot);
             try builder.addLeaArg(frame_ptr, result_slot + 8);
             try builder.addRegArg(lhs_parts.low);
@@ -13892,7 +13989,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Store a discriminant value at the given offset
-        fn storeDiscriminant(self: *Self, offset: i32, value: u16, disc_size: u8) Allocator.Error!void {
+        fn storeDiscriminant(self: *Self, offset: i32, value: u32, disc_size: u8) Allocator.Error!void {
             if (disc_size == 0) return;
 
             const reg = try self.allocTempGeneral();
@@ -13904,10 +14001,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 switch (disc_size) {
                     1 => try self.codegen.emit.strbRegMemSoff(reg, .FP, offset),
                     2 => try self.codegen.emit.strhRegMemSoff(reg, .FP, offset),
-                    else => {
-                        // 4 or 8 bytes - use standard store
-                        try self.codegen.emitStoreStack(.w64, offset, reg);
-                    },
+                    4 => try self.codegen.emitStoreStack(.w32, offset, reg),
+                    else => try self.codegen.emitStoreStack(.w64, offset, reg),
                 }
             } else {
                 // x86_64 supports all widths
@@ -13923,7 +14018,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(reg);
         }
 
-        fn storeDiscriminantToPtr(self: *Self, ptr_reg: GeneralReg, offset: u32, value: u16, disc_size: u8) Allocator.Error!void {
+        fn storeDiscriminantToPtr(self: *Self, ptr_reg: GeneralReg, offset: u32, value: u32, disc_size: u8) Allocator.Error!void {
             if (disc_size == 0) return;
 
             const reg = try self.allocTempGeneral();
@@ -14136,6 +14231,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const heap_ptr_slot = self.codegen.allocStackSlot(8);
             {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addImmArg(@intCast(elem_size));
                 try builder.addImmArg(@intCast(box_abi.elem_alignment));
                 try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
@@ -14726,7 +14822,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self: *Self,
             helper: RcHelperVariant,
             base_offset: i32,
-            count: u16,
+            count: u32,
         ) Allocator.Error!void {
             const ptr_slot = self.codegen.allocStackSlot(8);
             const ptr_reg = try self.allocTempGeneral();
@@ -14758,7 +14854,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self: *Self,
             helper: RcHelperVariant,
             value_loc: ValueLocation,
-            count: u16,
+            count: u32,
         ) Allocator.Error!void {
             const helper_plan = self.layout_store.rcHelperPlan(helper.key);
             if (helper_plan == .noop) {
@@ -14788,7 +14884,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             atomicity: RcAtomicity,
             value_loc: ValueLocation,
             value_layout: layout.Idx,
-            count: u16,
+            count: u32,
         ) Allocator.Error!void {
             switch (helper) {
                 .concrete => |concrete| try self.emitExplicitRcHelperCallForValue(.{
@@ -14884,6 +14980,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.loadStrDataPtrForRcFromValuePtr(value_ptr_reg, data_ptr_reg);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(data_ptr_reg);
             try builder.addMemArg(frame_ptr, count_slot);
             try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
@@ -14920,6 +15017,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.loadStrDataPtrForRcFromValuePtr(value_ptr_reg, data_ptr_reg);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(data_ptr_reg);
             try builder.addImmArg(1);
             try builder.addImmArg(0);
@@ -14940,6 +15038,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addMemArg(value_ptr_reg, 0);
             try builder.addMemArg(value_ptr_reg, 8);
             try builder.addMemArg(value_ptr_reg, 16);
@@ -14985,6 +15084,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(bytes_reg);
             try builder.addRegArg(len_reg);
             try builder.addRegArg(cap_reg);
@@ -15010,6 +15110,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(payload_reg);
             try builder.addMemArg(frame_ptr, count_slot);
             try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
@@ -15044,6 +15145,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(payload_reg);
             try builder.addImmArg(box_plan.elem_alignment);
             try builder.addRegArg(callback_reg);
@@ -15066,6 +15168,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(payload_reg);
             try builder.addMemArg(frame_ptr, count_slot);
             try self.callBuiltinWithAdapter(&builder, adapter_addr, builtin_fn);
@@ -15085,6 +15188,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(payload_reg);
             try self.callBuiltin(&builder, builtin_fn);
         }
@@ -15273,6 +15377,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, desc_reg, capture_reg, @intCast(desc_field_offset));
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(capture_reg);
             try builder.addImmArg(@intFromEnum(capture_layout));
             try builder.addRegArg(desc_reg);
@@ -16044,6 +16149,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.freeGeneral(null_reg);
             } else {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addImmArg(@intCast(total_data_bytes));
                 try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                 try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
@@ -16126,6 +16232,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const heap_ptr_slot = self.codegen.allocStackSlot(8);
                     {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addImmArg(@intCast(box_abi.elem_size));
                         try builder.addImmArg(@intCast(box_abi.elem_alignment));
                         try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
@@ -16256,6 +16363,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const heap_ptr_slot = self.codegen.allocStackSlot(8);
                 {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addImmArg(@intCast(box_abi.elem_size));
                     try builder.addImmArg(@intCast(box_abi.elem_alignment));
                     try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
@@ -16572,6 +16680,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 false;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addMemArg(frame_ptr, fn_ptr_slot);
             if (ret_size == 0) {
                 try builder.addImmArg(0);
@@ -16677,6 +16786,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 if (self.enable_hot_reload) {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try self.callBuiltin(&builder, .hot_reload_retain_current);
                     try self.emitStore(
                         .w64,
@@ -16772,6 +16882,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addMemArg(frame_ptr, reuse_ptr_slot);
                     try builder.addMemArg(frame_ptr, proc_addr_slot);
                     try builder.addMemArg(frame_ptr, on_drop_slot);
@@ -16790,6 +16901,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addImmArg(@intCast(payload_size));
                 try builder.addImmArg(builtins.erased_callable.payload_alignment);
                 try builder.addImmArg(if (builtins.erased_callable.allocation_has_refcounted_children) 1 else 0);
@@ -16799,6 +16911,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const hot_reload_code_ref_slot: ?i32 = if (self.enable_hot_reload) blk: {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try self.callBuiltin(&builder, .hot_reload_retain_current);
 
                 const slot = self.codegen.allocStackSlot(8);
@@ -16899,6 +17012,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else
                     try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, addr_reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addRegArg(addr_reg);
                 try builder.addImmArg(@intFromEnum(proc_id));
                 try builder.addImmArg(@intFromEnum(worker_ret_layout));
@@ -17034,6 +17148,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const physical = layout.abi.assignPhysicalArgs(arena_state.allocator(), self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
 
             // sret: on x86 the indirect-result pointer is the first integer argument; on
             // aarch64 it is the dedicated x8 register, set just before the call.
@@ -17048,10 +17163,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .none => {},
                     .indirect => |location| switch (location) {
                         .register => |register_index| builder.addLeaArgAt(register_index, frame_ptr, slot_off),
-                        .stack => |stack_offset| builder.addStackLeaArgAt(stack_offset, frame_ptr, slot_off),
+                        .stack => |stack_offset| try builder.addStackLeaArgAt(stack_offset, frame_ptr, slot_off),
                     },
                     .stack_value => |stack_value| {
-                        builder.addStackMemArgAt(
+                        try builder.addStackMemArgAt(
                             stack_value.offset,
                             frame_ptr,
                             slot_off,
@@ -17720,10 +17835,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             if (boxy_fn.paramAbiSizes()) |sizes| {
                 builder.packStackArgsForCAbi(sizes);
-            } else if (builtin.mode == .Debug and Builder.packs_stack_args and builder.stack_arg_count > 0) {
+            } else if (builtin.mode == .Debug and Builder.packs_stack_args and builder.stack_args.items.len > 0) {
                 std.debug.panic(
                     "Dev/codegen invariant violated: {s} overflowed {d} arguments onto the stack without declared parameter ABI sizes",
-                    .{ boxy_fn.symbolName(), builder.stack_arg_count },
+                    .{ boxy_fn.symbolName(), builder.stack_args.items.len },
                 );
             }
             switch (self.generation_mode) {
@@ -17748,6 +17863,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
             self.boxy_runtime_used = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addImmArg(0);
             try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, "roc_boxy_init_embedded", .program), &self.codegen);
         }
@@ -17759,6 +17875,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (desc_ref) {
                 .static => |desc_id| {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addImmArg(@intFromEnum(desc_id));
                     try self.callBoxyBuiltin(&builder, .static_desc);
                     const slot = self.codegen.allocStackSlot(8);
@@ -17772,6 +17889,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dict_method_arg => |projection| {
                     const dict_slot = try self.boxyDictRefToSlot(.{ .local = projection.dict });
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addMemArg(frame_ptr, dict_slot);
                     try builder.addImmArg(projection.method_slot);
                     try builder.addImmArg(@intFromEnum(projection.method));
@@ -17784,6 +17902,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dict_method_hidden => |projection| {
                     const dict_slot = try self.boxyDictRefToSlot(.{ .local = projection.dict });
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addMemArg(frame_ptr, dict_slot);
                     try builder.addImmArg(projection.method_slot);
                     try builder.addImmArg(@intFromEnum(projection.method));
@@ -17872,6 +17991,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (dict_ref) {
                 .static => |dict_id| {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addImmArg(@intFromEnum(dict_id));
                     try self.callBoxyBuiltin(&builder, .static_dict);
                     const slot = self.codegen.allocStackSlot(8);
@@ -17931,6 +18051,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const source_slot = try self.boxyDescRefToSlot(assign.desc);
                 const target_slot = try self.boxyDescRefToSlot(target_desc);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addMemArg(frame_ptr, source_slot);
                 try builder.addMemArg(frame_ptr, target_slot);
                 try self.callBoxyBuiltin(&builder, .tag_residual_desc);
@@ -17942,6 +18063,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 switch (assign.desc) {
                     .static => |desc_id| {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addImmArg(@intFromEnum(desc_id));
                         try self.callBoxyBuiltin(&builder, .static_desc);
                         const slot = self.codegen.allocStackSlot(8);
@@ -17970,6 +18092,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (assign.box_payload_layout) |box_layout| {
                         const base_slot = try self.boxyDescRefToSlot(.{ .local = local });
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addMemArg(frame_ptr, base_slot);
                         try builder.addImmArg(@intFromEnum(box_layout));
                         try self.callBoxyBuiltin(&builder, .box_payload_desc);
@@ -17979,6 +18102,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else if (assign.tag_ext) {
                         const base_slot = try self.boxyDescRefToSlot(.{ .local = local });
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addMemArg(frame_ptr, base_slot);
                         try self.callBoxyBuiltin(&builder, .tag_ext_desc);
                         const slot = self.codegen.allocStackSlot(8);
@@ -17987,6 +18111,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else if (assign.tag_payload) |payload| {
                         const base_slot = try self.boxyDescRefToSlot(.{ .local = local });
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addMemArg(frame_ptr, base_slot);
                         try builder.addImmArg(@intFromEnum(payload.tag_name));
                         try builder.addImmArg(payload.payload_index);
@@ -17997,6 +18122,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else if (assign.nested_index) |idx| {
                         const base_slot = try self.boxyDescRefToSlot(.{ .local = local });
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addMemArg(frame_ptr, base_slot);
                         try builder.addImmArg(@intCast(idx));
                         try self.callBoxyBuiltin(&builder, .nested_desc);
@@ -18029,6 +18155,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addImmArg(@intFromEnum(desc_id));
             if (count == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, ids_slot);
             if (count == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, descs_slot);
@@ -18071,6 +18198,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static => |dict_id| {
                     if (captures.len == 0) {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
                         try builder.addImmArg(@intFromEnum(dict_id));
                         try self.callBoxyBuiltin(&builder, .static_dict);
                         const slot = self.codegen.allocStackSlot(8);
@@ -18096,6 +18224,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(ptr_reg);
                     }
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addImmArg(@intFromEnum(dict_id));
                     try builder.addLeaArg(frame_ptr, ids_slot);
                     try builder.addLeaArg(frame_ptr, values_slot);
@@ -18123,6 +18252,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (payload_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
@@ -18146,6 +18276,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
@@ -18168,6 +18299,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
@@ -18188,6 +18320,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const out_slot = try self.allocBoxyOutSlot(target_layout);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addMemArg(frame_ptr, target_desc_slot);
             try builder.addImmArg(@intFromEnum(assign.tag_name));
@@ -18209,6 +18342,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
@@ -18238,6 +18372,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.zeroStackArea(out_slot, roc_str_size);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
             try builder.addImmArg(@intFromEnum(source_layout));
@@ -18254,6 +18389,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const desc_slot = try self.boxyDescRefToSlot(assign.source_desc);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             if (lhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
             if (rhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
             try builder.addImmArg(@intFromEnum(value_layout));
@@ -18599,6 +18735,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addMemArg(frame_ptr, dict_slot);
@@ -18623,6 +18760,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addLeaArg(frame_ptr, value_slot);
@@ -18642,6 +18780,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addLeaArg(frame_ptr, value_slot);
@@ -18662,6 +18801,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const source_desc_slot = try self.boxyDescRefToSlot(tag_match.source_desc);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
             try builder.addImmArg(@intFromEnum(source_layout));
             try builder.addMemArg(frame_ptr, source_desc_slot);
@@ -18688,13 +18828,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             atomicity: RcAtomicity,
             value_loc: ValueLocation,
             value_layout: layout.Idx,
-            count: u16,
+            count: u32,
         ) Allocator.Error!void {
             const value_size = self.getLayoutSize(value_layout);
             const value_off = try self.ensureValueOnStackForRc(value_loc, value_size);
             const desc_slot = try self.boxyDescRefToSlot(desc_ref);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, value_off);
             try builder.addImmArg(@intFromEnum(value_layout));
             try builder.addMemArg(frame_ptr, desc_slot);
@@ -18779,6 +18920,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const code_ref_slot = self.codegen.allocStackSlot(8);
             {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try self.callBuiltin(&builder, .hot_reload_enter);
             }
             try self.emitStore(.w64, frame_ptr, code_ref_slot, ret_reg_0);
@@ -18787,6 +18929,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitHotReloadLeaveForHostCallable(self: *Self, code_ref_slot: i32) Allocator.Error!void {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addMemArg(frame_ptr, code_ref_slot);
             try self.callBuiltin(&builder, .hot_reload_leave);
         }
@@ -19061,7 +19204,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return field.layout;
         }
 
-        fn findBadUtf8Variant(self: *Self, inner_tu: *const layout.TagUnionData) ?struct { disc: u16, struct_idx: layout.StructIdx } {
+        fn findBadUtf8Variant(self: *Self, inner_tu: *const layout.TagUnionData) ?struct { disc: u32, struct_idx: layout.StructIdx } {
             const variants = self.layout_store.getTagUnionVariants(inner_tu);
             for (0..variants.len) |i| {
                 const payload = variants.get(@intCast(i)).payload_layout;
@@ -21821,6 +21964,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         unreachable;
                     const source_slot = try self.boxyDescRefToSlot(.{ .local = source });
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
                     try builder.addMemArg(frame_ptr, source_slot);
                     switch (param.read) {
                         .call_key, .nested => {
@@ -22613,6 +22757,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     if (self.comptime_hooks) |hooks| {
                                         try self.spillAllVectorLocals();
                                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                                        defer builder.deinit();
                                         try builder.addImmArg(@intCast(@intFromEnum(id)));
                                         try self.callComptimeHook(&builder, hooks, .ensure_static_value);
                                     }
@@ -22873,6 +23018,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             if (expect_stmt.site) |site| {
                                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                                defer builder.deinit();
                                 try builder.addImmArg(@intFromEnum(site));
                                 try builder.addRegArg(cond_reg);
                                 try self.callRuntimeSymbol(&builder, .roc_expect_observed);
@@ -23956,6 +24102,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // symbol(bytes: [*]const u8, len: usize)
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addRegArg(msg_reg);
             try builder.addImmArg(msg_len_val);
             try self.callRuntimeSymbol(&builder, symbol);
@@ -24043,6 +24190,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, str_offset);
             try self.callBuiltin(&builder, .dbg_str);
         }
@@ -24050,12 +24198,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitRocCrashFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, str_offset);
             try self.callBuiltin(&builder, .crash_str);
         }
 
         fn emitRocExpectErrFromStackStr(self: *Self, str_offset: i32, region: base.Region) Allocator.Error!void {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addLeaArg(frame_ptr, str_offset);
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
@@ -24091,6 +24241,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addImmArg(@intCast(@intFromEnum(site)));
             try builder.addImmArg(@intCast(branch_index));
             try self.callComptimeHook(&builder, hooks, .branch_taken);
@@ -24103,6 +24254,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addImmArg(@intCast(@intFromEnum(site)));
             try self.callComptimeHook(&builder, hooks, .exhaustiveness_failed);
         }
@@ -24116,6 +24268,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const loc = self.store.stmtLoc(stmt_id);
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
             try builder.addImmArg(@intCast(loc.file));
@@ -24135,6 +24288,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const loc = self.store.stmtLoc(stmt_id);
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
             try builder.addImmArg(@intCast(loc.file));
@@ -24150,6 +24304,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
             try self.callComptimeHook(&builder, hooks, .call_exit);
         }
 
@@ -24743,6 +24898,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const addr_reg = try self.allocTempGeneral();
                 try self.emitInternalCodeAddress(.{ .boxy_thunk = proc_id }, thunk_offset, addr_reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addImmArg(@intCast(proc_index));
                 try builder.addRegArg(addr_reg);
                 try builder.addImmArg(@intFromEnum(ret_layout));

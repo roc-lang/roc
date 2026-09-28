@@ -263,7 +263,7 @@ const Edge = union(enum) {
     stmt_next: CFStmtId,
     join_body: CFStmtId,
     join_remainder: CFStmtId,
-    switch_branch: struct { stmt: CFStmtId, index: u16 },
+    switch_branch: struct { stmt: CFStmtId, index: u32 },
     switch_default: CFStmtId,
     switch_continuation: CFStmtId,
     boxy_tag_on_match: CFStmtId,

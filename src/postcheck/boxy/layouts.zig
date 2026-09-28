@@ -476,9 +476,9 @@ const Builder = struct {
 
     fn aliasResolvedRep(self: *Builder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
+        var depth: usize = 0;
         while (true) {
-            if (depth == 1024) boxyLayoutInvariant("alias chain exceeded boxy layout limit");
+            if (depth > self.program.representations.items.len) boxyLayoutInvariant("alias chain formed a cycle");
             depth += 1;
             const rep = self.program.representations.items[@intFromEnum(current)];
             if (rep.kind != .alias) return current;
