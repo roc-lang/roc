@@ -11900,7 +11900,17 @@ therefore do not become redundant specialization identities. A plan resolved
 parents for nested local functions by `depth`). A direct plan's evidence node
 records the target's substitution the same way, so a direct target specializes
 under the exact substitution checking applied rather than under a re-derived
-one.
+one. Every evidence node records it, including a node that resolves a
+requirement rather than a call, and a target that evidence selects carries
+that record until it specializes: its scheme context is seeded with the
+recorded substitution before its root is related to the request. Relating the
+root cannot bind a quantified variable that only a constraint callable
+reaches, and when several same-name calls on one receiver share an evidence
+parameter, relating one callable cannot bind the variables only the others
+reach (`x.m() ? |_| Other` discards `m`'s error row). Checking bound all of
+them when it selected the target. The record is consumed, not identity: those
+variables are determined by the selected targets, and the specialization is
+keyed by its completed substitution.
 
 An evidence-dependent dispatch whose checked plan authorizes nested-contract
 reuse consumes the already-materialized contract directly. Its targets and
