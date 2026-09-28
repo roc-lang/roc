@@ -13274,3 +13274,105 @@ test "check type - a deeply nested record annotation reports its mismatch" {
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
 }
+
+test "check type - repeated tag conflict found while generalizing is reported at the value" {
+    // The conflict is found while keying `use`'s generalized scheme, before
+    // the settled row walk runs, and is still located at `use`.
+    const source =
+        \\step : U64 -> Try(U64, [StepFailed])
+        \\step = |n| if n > 3 { Err(StepFailed) } else { Ok(n) }
+        \\
+        \\describe : U64 -> Try(U64, [StepFailed(Str)])
+        \\describe = |n| if n > 3 { Err(StepFailed("too big")) } else { Ok(n) }
+        \\
+        \\apply = |f, n| {
+        \\    _ = step(n)?
+        \\    f(n + 1)
+        \\}
+        \\
+        \\use = |n| apply(describe, n)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+        .line = 12,
+        .start_column = 1,
+        .end_column = 4,
+    });
+}
+
+test "check type - repeated tag conflict found while generalizing a local binding is reported at it" {
+    const source =
+        \\step : U64 -> Try(U64, [StepFailed])
+        \\step = |n| if n > 3 { Err(StepFailed) } else { Ok(n) }
+        \\
+        \\describe : U64 -> Try(U64, [StepFailed(Str)])
+        \\describe = |n| if n > 3 { Err(StepFailed("too big")) } else { Ok(n) }
+        \\
+        \\apply = |f, n| {
+        \\    _ = step(n)?
+        \\    f(n + 1)
+        \\}
+        \\
+        \\use = |n| {
+        \\    run = |m| apply(describe, m)
+        \\    run(n)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+        .line = 13,
+        .start_column = 5,
+        .end_column = 8,
+    });
+}
+
+test "check type - repeated tag conflict found while generalizing a recursive group is reported at its member" {
+    const source =
+        \\step : U64 -> Try(U64, [StepFailed])
+        \\step = |n| if n > 3 { Err(StepFailed) } else { Ok(n) }
+        \\
+        \\describe : U64 -> Try(U64, [StepFailed(Str)])
+        \\describe = |n| if n > 3 { Err(StepFailed("too big")) } else { Ok(n) }
+        \\
+        \\apply = |f, n| {
+        \\    _ = step(n)?
+        \\    f(n + 1)
+        \\}
+        \\
+        \\use = |n| if n == 0 { apply(describe, n) } else { again(n - 1) }
+        \\again = |n| use(n)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+        .line = 12,
+        .start_column = 1,
+        .end_column = 4,
+    });
+}
+
+test "check type - repeated tag conflict found while resolving a method dispatch is reported at the dispatch" {
+    const source =
+        \\step : U64 -> Try(U64, [StepFailed])
+        \\step = |n| if n > 3 { Err(StepFailed) } else { Ok(n) }
+        \\
+        \\describe : U64 -> Try(U64, [StepFailed(Str)])
+        \\describe = |n| if n > 3 { Err(StepFailed("too big")) } else { Ok(n) }
+        \\
+        \\apply = |f, n| {
+        \\    _ = step(n)?
+        \\    f(n + 1)
+        \\}
+        \\
+        \\use = |n| apply(describe, n).map_err(|e| e)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+        .line = 12,
+        .start_column = 11,
+        .end_column = 44,
+    });
+}
