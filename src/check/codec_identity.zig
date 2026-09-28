@@ -119,6 +119,7 @@ const Comparer = struct {
         const left_refs = self.table.evidence_refs[left.start..][0..left.len];
         const right_refs = self.table.evidence_refs[right.start..][0..right.len];
         for (left_refs, right_refs) |a, b| {
+            if (!try self.refs(a.callable_contracts, b.callable_contracts)) return false;
             if (a.runtime_dictionary != b.runtime_dictionary or std.meta.activeTag(a.resolution) != std.meta.activeTag(b.resolution)) return false;
             try self.typesPair(a.dispatcher_ty, b.dispatcher_ty);
             switch (a.resolution) {

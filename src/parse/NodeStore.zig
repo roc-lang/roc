@@ -623,7 +623,7 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = try store.reserveExtraDataStart(15);
+            const ed_start = try store.reserveExtraDataStart(17);
             // Store requires_entries span (start and len)
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
@@ -642,9 +642,11 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             store.extra_data.appendAssumeCapacity(symbol_map_layouts);
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.roc_version));
+            store.extra_data.appendAssumeCapacity(platform.requires_entries.region.start);
+            store.extra_data.appendAssumeCapacity(platform.requires_entries.region.end);
 
             node.data.lhs = ed_start;
-            node.data.rhs = 15;
+            node.data.rhs = 17;
 
             node.region = platform.region;
         },
@@ -1803,7 +1805,7 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
         },
         .platform_header => {
             const ed_start = node.data.lhs;
-            std.debug.assert(node.data.rhs == 15);
+            std.debug.assert(node.data.rhs == 17);
 
             const symbol_map_layouts = store.extra_data.items[ed_start + 12];
             const targets_val = store.extra_data.items[ed_start + 13];
@@ -1815,6 +1817,9 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 .requires_entries = .{ .span = .{
                     .start = store.extra_data.items[ed_start],
                     .len = store.extra_data.items[ed_start + 1],
+                }, .region = .{
+                    .start = store.extra_data.items[ed_start + 15],
+                    .end = store.extra_data.items[ed_start + 16],
                 } },
                 .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
                 .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),

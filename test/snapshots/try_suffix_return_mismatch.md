@@ -473,7 +473,7 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:29:2:29:2
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 29 2) (end 32 4))
+		(region (start 29 13) (end 29 16))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -483,7 +483,7 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:29:2:29:2
 		(document
 			(source-underlines
 				(display (file "try_suffix_return_mismatch.md") (start 29 2) (end 32 4) (annotation dim) (line-text "\tys.map_try(|l| {\n\t\t_x = l.first()?\n\t\t{}\n\t})"))
-				(underline (start 29 13) (end 32 3) (annotation error)))
+				(underline (start 29 13) (end 29 16) (annotation error)))
 			(line-break)
 			(reflow "This argument has the type:")
 			(line-break)
