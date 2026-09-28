@@ -4621,6 +4621,14 @@ runtime-dictionary requirements the checked entry remains a forwarded
 constraint slot: Boxy consumes its explicit slot and callable type in checked
 dictionary order.
 
+Boxy call dictionary substitution consumes the checked scheme's complete slot
+mapping, including receivers reachable only through method constraints. Callable
+argument/result traversal cannot replace that mapping: hidden body requirements
+must forward the caller's dictionary through their exact checked substitution.
+Worker dictionary ABIs include every declared runtime evidence receiver, including
+requirements used only by forwarding calls or constructing nested callables;
+the checked schema supplies that inventory without another body scan.
+
 Boxy dictionary planning consumes those entries one-for-one in dictionary slot
 order. Each planned slot records the selected worker or structural operation,
 the concrete callable type used by its adapter, and fully planned hidden
@@ -10664,7 +10672,16 @@ method's complete result. In particular, taking a constrained function as a
 value preserves its open method-result rows until specialization. After
 materializing a checked edge's complete evidence vector, Monotype relates its
 target and checked structural signatures over that exact substitution before
-specialization identity or interface replay can freeze it.
+classifying unresolved receivers or merging substitution-derived target identities.
+A selected method's signature can bind another requirement's hidden receiver;
+all checked signature relations therefore precede terminal evidence classification,
+independently of requirement order. Checked edges materialize their contracts once
+in the output vector and apply each signature relation once, without the
+compiler-generated edge's requirement fixpoint. Interface-summary input preparation
+retains its unrefined request: cache-miss expansion applies the relations on detached
+substitution cells, and cache hits replay the completed summary. These relations
+must complete before specialization identity or interface replay can freeze their
+output.
 Descendant contexts then use ordinary live bindings; decoding stored evidence
 never attaches graph cells to durable data.
 An initializer template with no requirements derives no method evidence. A use
