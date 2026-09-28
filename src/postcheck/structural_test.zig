@@ -1078,8 +1078,8 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
 
     const nested_body = sourceSliceBetween(
         lower_source,
-        "fn lowerNestedFunctionAtNode(",
-        "fn lowerNestedLambdaTemplateAtNode(",
+        "fn beginNestedLambdaLowering(",
+        "fn beginLambdaLowering(",
     );
     try expectContains(nested_body, "fn_nodes.args.len + capture_entry_guards.len");
     try expectContains(nested_body, "@memcpy(entry_guards[fn_nodes.args.len..], capture_entry_guards)");
@@ -1215,8 +1215,8 @@ test "Monotype materialized success continuations use one root-pattern guard fra
 
     const lambda = sourceSliceBetween(
         lower_source,
-        "fn lowerLambdaArgsAndBodyAtCell(",
-        "fn lowerNestedFunctionAtNode(",
+        "fn beginLambdaLowering(",
+        "fn freeLambdaLoweringArgs(",
     );
     try expectContains(lambda, ".materialized_args = .{");
     try expectNotContains(lambda, "result_producer_guards");
@@ -1305,13 +1305,13 @@ test "Monotype lambda argument patterns retain graph provenance" {
     const lower_source = @embedFile("monotype/lower.zig");
     const lambda_args = sourceSliceBetween(
         lower_source,
-        "fn lowerLambdaArgsAndBodyAtCell(",
-        "const body_loc = self.exprLoc(body);",
+        "fn beginLambdaLowering(",
+        "fn freeLambdaLoweringArgs(",
     );
     try expectContains(lambda_args, "self.lowerShapeFreePatternAtCell(pattern_id, arg_cell)");
     try expectContains(lambda_args, "self.lowerPatternAtNode(pattern_id, arg_node)");
     try expectContains(lambda_args, ".ty = arg_cell");
-    try expectContains(lambda_args, "} }, body_ret_cell);");
+    try expectContains(lambda_args, "} }, body_ret_cell) };");
     try expectNotContains(lambda_args, "activeTypeFromNode(arg_node)");
     try expectNotContains(lambda_args, "activeTypeFromNode(ret_node)");
     try expectNotContains(lambda_args, "lowerPatternAtType(pattern_id");
