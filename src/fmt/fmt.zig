@@ -2667,6 +2667,7 @@ const Formatter = struct {
     fn formatTargetsSection(fmt: *Formatter, targets_idx: AST.TargetsSection.Idx) (Allocator.Error || error{WriteFailed})!void {
         const targets = fmt.ast.store.getTargetsSection(targets_idx);
         const start_indent = fmt.curr_indent;
+        defer fmt.curr_indent = start_indent;
 
         try fmt.pushAll("targets: {");
 
@@ -2675,8 +2676,10 @@ const Formatter = struct {
         // Format inputs_dir: directory directive if present
         if (targets.inputs_dir) |inputs_token| {
             has_content = true;
-            try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
+            // inputs_token is the StringPart in `inputs_dir: "..."`.
+            try fmt.flushCommentsBeforeDiscard(inputs_token - 3);
+            try fmt.ensureNewline();
             try fmt.pushIndent();
             try fmt.pushAll("inputs_dir: ");
             try fmt.push('"');
@@ -2688,14 +2691,19 @@ const Formatter = struct {
         // Format per-target entries
         for (fmt.ast.store.targetEntrySlice(targets.entries)) |entry_idx| {
             has_content = true;
-            try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
+            const entry = fmt.ast.store.getTargetEntry(entry_idx);
+            try fmt.flushCommentsBeforeDiscard(entry.region.start);
+            try fmt.ensureNewline();
             try fmt.pushIndent();
             try fmt.formatTargetEntry(entry_idx);
             try fmt.push(',');
         }
 
-        if (has_content) {
+        fmt.curr_indent = start_indent + 1;
+        const closing_token = fmt.regionClosingToken(targets.region).?;
+        if (has_content or fmt.hasCommentBefore(closing_token)) {
+            try fmt.flushCommentsBeforeDiscard(closing_token);
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent;
             try fmt.pushIndent();
@@ -2734,6 +2742,7 @@ const Formatter = struct {
             return;
         }
         try fmt.push('{');
+        fmt.curr_indent = base_indent + 1;
         for (entries) |entry_idx| {
             const entry = fmt.ast.store.getSymbolMapEntry(entry_idx);
             try fmt.flushCommentsBeforeDiscard(entry.region.start);
@@ -3155,11 +3164,13 @@ const Formatter = struct {
                 try fmt.pushAll("requires {");
                 // Format requires entries with for-clause syntax
                 const entries = fmt.ast.store.requiresEntrySlice(p.requires_entries);
-                if (entries.len > 0) {
-                    try fmt.ensureNewline();
+                const requires_closing = fmt.regionClosingToken(p.requires_entries.region).?;
+                if (entries.len > 0 or fmt.hasCommentBefore(requires_closing)) {
                     fmt.curr_indent = start_indent + 2;
                     for (entries, 0..) |entry_idx, entry_i| {
                         const entry = fmt.ast.store.getRequiresEntry(entry_idx);
+                        try fmt.flushCommentsBeforeDiscard(entry.region.start);
+                        try fmt.ensureNewline();
                         try fmt.pushIndent();
 
                         // Format type aliases: [Model : model] for ...
@@ -3189,8 +3200,9 @@ const Formatter = struct {
                         if (entry_i < entries.len - 1) {
                             try fmt.push(',');
                         }
-                        try fmt.ensureNewline();
                     }
+                    try fmt.flushCommentsBeforeDiscard(requires_closing);
+                    try fmt.ensureNewline();
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
                 }
@@ -6106,6 +6118,82 @@ test "issue 9940: comments in empty collections and blocks are preserved" {
         "empty_record = {\n" ++
         "\t# Keeping this record field disabled\n" ++
         "}\n";
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "issue 11771: comments in populated platform sections" {
+    const expected =
+        "platform \"pf\"\n" ++
+        "\trequires {\n" ++
+        "\t\t# Before requirement.\n" ++
+        "\t\tmain! : List(Str) => Try({}, [Exit(I32), ..]),\n" ++
+        "\n" ++
+        "\t\t## Before another requirement.\n" ++
+        "\t\tother! : {} => {}\n" ++
+        "\t\t# After requirements.\n" ++
+        "\t}\n" ++
+        "\texposes []\n" ++
+        "\tpackages {}\n" ++
+        "\tprovides {\n" ++
+        "\t\t# Before provided symbol.\n" ++
+        "\t\t\"roc_main\": main_for_host!,\n" ++
+        "\n" ++
+        "\t\t## After provided symbol.\n" ++
+        "\t}\n" ++
+        "\thosted {\n" ++
+        "\t\t# Before hosted symbol.\n" ++
+        "\t\t\"host_write\": write!,\n" ++
+        "\t}\n" ++
+        "\ttargets: {\n" ++
+        "\t\t# Before inputs directory.\n" ++
+        "\t\tinputs_dir: \"targets/\",\n" ++
+        "\n" ++
+        "\t\t## Before target.\n" ++
+        "\t\tx64musl: { inputs: [\"libhost.a\", app] },\n" ++
+        "\t\t# After targets.\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, expected, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "issue 11771: inline platform section comments" {
+    const expected =
+        "platform \"pf\"\n" ++
+        "\trequires { # Required callbacks.\n" ++
+        "\t\t[Model : model] for main! : Model => {} # Main callback.\n" ++
+        "\t}\n" ++
+        "\texposes []\n" ++
+        "\tpackages {}\n" ++
+        "\tprovides {\n" ++
+        "\t\t\"roc_main\": main_for_host!, # Host entrypoint.\n" ++
+        "\t}\n" ++
+        "\ttargets: {\n" ++
+        "\t\t# Target without an inputs_dir directive.\n" ++
+        "\t\tx64musl: { inputs: [\"libhost.a\", app] }, # Linux host.\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, expected, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "issue 11771: comments in empty platform sections" {
+    const expected =
+        "platform \"pf\"\n" ++
+        "\trequires {\n" ++
+        "\n" ++
+        "\t\t## Empty requirements.\n" ++
+        "\t}\n" ++
+        "\texposes []\n" ++
+        "\tpackages {}\n" ++
+        "\tprovides {\n" ++
+        "\t\t# Empty provides.\n" ++
+        "\t}\n" ++
+        "\ttargets: {\n" ++
+        "\t\t# Empty targets.\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, expected, false);
+    defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(expected, result);
 }
 
