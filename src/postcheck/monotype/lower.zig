@@ -18676,6 +18676,10 @@ const BodyContext = struct {
     /// One shared request interface per direct call expression of this body;
     /// see `DirectCallRequest`.
     direct_call_requests: std.AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
+    /// Result-type reads of dispatch expressions carrying no expected cell,
+    /// shared by every later such read of the same expression (see
+    /// `sharedDispatchTypeRead`).
+    dispatch_type_reads: std.AutoHashMapUnmanaged(checked.CheckedExprId, NodeId) = .empty,
     /// Exact return cell owned by the active checked lambda specialization.
     /// Source `return` expressions must consume this cell rather than create a
     /// new instantiation of the lambda's checked return type.
@@ -19696,6 +19700,7 @@ const BodyContext = struct {
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
         self.direct_call_requests.deinit(self.allocator);
+        self.dispatch_type_reads.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
@@ -25013,6 +25018,28 @@ const BodyContext = struct {
         };
     }
 
+    /// A dispatch expression's result type is instantiated once per lowered
+    /// body and shared by every later result-type read carrying no expected
+    /// cell, as a direct call's request interface is. A result carrying
+    /// generated-private evidence depends on the read and is never shared.
+    fn sharedDispatchTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?NodeId {
+        const node = self.dispatch_type_reads.get(expr_id) orelse return null;
+        if (try self.graph.containsGeneratedPrivate(node)) return null;
+        return node;
+    }
+
+    fn recordDispatchTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId, node: NodeId) Allocator.Error!void {
+        if (try self.graph.containsGeneratedPrivate(node)) return;
+        try self.dispatch_type_reads.put(self.allocator, expr_id, node);
+    }
+
+    fn isDispatchExpr(expr: checked.CheckedExpr) bool {
+        return switch (expr.data) {
+            .dispatch_call, .interpolation, .type_dispatch_call, .method_eq => true,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+        };
+    }
+
     fn finishTypeNodeLeaf(task: anytype, node: NodeId) EvidenceStep {
         task.timing.end();
         return .{ .ret = .{ .node = node } };
@@ -25020,6 +25047,7 @@ const BodyContext = struct {
 
     fn stepTypeNode(self: *BodyContext, frame: *EvidenceFrame, task: anytype, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
         if (frame.cursor == 1) {
+            if (isDispatchExpr(self.view.bodies.expr(task.expr))) try self.recordDispatchTypeRead(task.expr, input.?.nodeValue());
             task.timing.end();
             return .{ .ret = input.? };
         }
@@ -25027,6 +25055,9 @@ const BodyContext = struct {
         frame.cursor = 1;
         const expr_id = task.expr;
         const expr = self.view.bodies.expr(expr_id);
+        if (isDispatchExpr(expr)) {
+            if (try self.sharedDispatchTypeRead(expr_id)) |node| return finishTypeNodeLeaf(task, node);
+        }
         const next: EvidenceTask = switch (expr.data) {
             .call => |call| .{ .call_result = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = null } },
             .dispatch_call => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
@@ -25071,9 +25102,18 @@ const BodyContext = struct {
                     .fn_node = fn_node,
                 } });
             },
+            // A shared null-expected dispatch result read.
+            4 => {
+                const node = input.?.nodeValue();
+                try self.recordDispatchTypeRead(checked_arg, node);
+                return .{ .ret = .{ .maybe_node = node } };
+            },
             else => return .{ .ret = .{ .maybe_node = input.?.maybeNodeValue() } },
         }
         if (self.checkedExprDivergesInLoweredRuntime(checked_arg)) return .{ .ret = .{ .maybe_node = null } };
+        if (expected_ty == null and isDispatchExpr(expr)) {
+            if (try self.sharedDispatchTypeRead(checked_arg)) |node| return .{ .ret = .{ .maybe_node = node } };
+        }
         const expected_node: ?NodeId = if (expected_ty) |expected| try self.activeNodeFromType(expected) else null;
         switch (expr.data) {
             .call => |call| {
@@ -25092,19 +25132,19 @@ const BodyContext = struct {
                 return evidenceCall(self, .{ .call_result = .{ .expr = checked_arg, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = expected_ty } });
             },
             .dispatch_call => |plan| {
-                frame.cursor = 2;
+                frame.cursor = if (expected_ty == null) 4 else 2;
                 return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
             },
             .interpolation => |interpolation| {
-                frame.cursor = 2;
+                frame.cursor = if (expected_ty == null) 4 else 2;
                 return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = interpolation.plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
             },
             .type_dispatch_call => |plan| {
-                frame.cursor = 2;
+                frame.cursor = if (expected_ty == null) 4 else 2;
                 return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
             },
             .method_eq => |plan| {
-                frame.cursor = 2;
+                frame.cursor = if (expected_ty == null) 4 else 2;
                 return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
             },
             .field_access => |field| {
