@@ -13238,58 +13238,137 @@ const Cloner = struct {
         }
     }
 
-    fn clonePat(self: *Cloner, pat_id: Ast.PatId, mode: BinderCloneMode) Common.LowerError!Ast.PatId {
-        const pat = self.pass.program.getPat(pat_id);
-        const data: Ast.PatData = switch (pat.data) {
-            .bind => |local| .{ .bind = try self.cloneBinder(local, pat.ty, mode) },
-            .wildcard => .wildcard,
-            .as => |as| .{ .as = .{
-                .pattern = try self.clonePat(as.pattern, mode),
-                .local = try self.cloneBinder(as.local, pat.ty, mode),
-            } },
-            .record => |fields| .{ .record = try self.cloneRecordDestructSpan(fields, mode) },
-            .tuple => |items| .{ .tuple = try self.clonePatSpan(items, mode) },
-            .list => |list| .{ .list = .{
-                .patterns = try self.clonePatSpan(list.patterns, mode),
-                .rest = if (list.rest) |rest| .{
-                    .index = rest.index,
-                    .pattern = if (rest.pattern) |rest_pattern| try self.clonePat(rest_pattern, mode) else null,
-                } else null,
-            } },
-            .tag => |tag| .{ .tag = .{
-                .name = tag.name,
-                .payloads = try self.clonePatSpan(tag.payloads, mode),
-            } },
-            .nominal => |backing| .{ .nominal = try self.clonePat(backing, mode) },
-            .int_lit => |value| .{ .int_lit = value },
-            .dec_lit => |value| .{ .dec_lit = value },
-            .frac_f32_lit => |value| .{ .frac_f32_lit = value },
-            .frac_f64_lit => |value| .{ .frac_f64_lit = value },
-            .str_lit => |value| .{ .str_lit = value },
-            .str_pattern => |str| .{ .str_pattern = try self.cloneStrPattern(str, mode) },
+    /// Clone a pattern tree. A pattern is added after its subpatterns, and
+    /// each unfinished pattern waits in a frame on an explicit stack while a
+    /// subpattern is cloned, so pattern nesting never becomes native call
+    /// depth. Subpatterns, binders, and spans are cloned and added in the
+    /// order a direct recursive clone visited them.
+    fn clonePat(self: *Cloner, root: Ast.PatId, mode: BinderCloneMode) Common.LowerError!Ast.PatId {
+        const allocator = self.pass.allocator;
+        const Frame = struct {
+            pat: Ast.PatId,
+            /// The cloned subpatterns so far.
+            children: std.ArrayList(Ast.PatId) = .empty,
+            /// A list pattern's cloned element span, added before its rest.
+            span: ?Ast.Span(Ast.PatId) = null,
         };
-        return try self.pass.program.addPat(.{ .ty = pat.ty, .data = data });
-    }
-
-    fn cloneStrPattern(self: *Cloner, str: Ast.StrPattern, mode: BinderCloneMode) Common.LowerError!Ast.StrPattern {
-        const input_steps = self.pass.program.strPatternStepSpan(str.steps);
-        const output_steps = try self.pass.allocator.alloc(Ast.StrPatternStep, input_steps.len);
-        defer self.pass.allocator.free(output_steps);
-
-        for (0..input_steps.len) |index| {
-            const input_step = GuardedList.at(input_steps, index);
-            const output_step = &output_steps[index];
-            output_step.* = .{
-                .capture = if (input_step.capture) |capture| try self.clonePat(capture, mode) else null,
-                .delimiter = input_step.delimiter,
-            };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.children.deinit(allocator);
+            frames.deinit(allocator);
         }
+        try frames.append(allocator, .{ .pat = root });
+        var input: ?Ast.PatId = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (input) |cloned| try frame.children.append(allocator, cloned);
+            input = null;
+            const pat = self.pass.program.getPat(frame.pat);
+            const done = frame.children.items.len;
+            const next_child: ?Ast.PatId = switch (pat.data) {
+                .as => |as| if (done == 0) as.pattern else null,
+                .nominal => |backing| if (done == 0) backing else null,
+                .record => |fields| blk: {
+                    const destructs = self.pass.program.recordDestructSpan(fields);
+                    break :blk if (done < destructs.len) GuardedList.at(destructs, done).pattern else null;
+                },
+                .tuple => |items| blk: {
+                    const pats = self.pass.program.patSpan(items);
+                    break :blk if (done < pats.len) GuardedList.at(pats, done) else null;
+                },
+                .tag => |tag| blk: {
+                    const pats = self.pass.program.patSpan(tag.payloads);
+                    break :blk if (done < pats.len) GuardedList.at(pats, done) else null;
+                },
+                .list => |list| blk: {
+                    const pats = self.pass.program.patSpan(list.patterns);
+                    if (done < pats.len) break :blk GuardedList.at(pats, done);
+                    if (frame.span == null) frame.span = try self.pass.program.addPatSpan(frame.children.items);
+                    const rest = list.rest orelse break :blk null;
+                    const rest_pattern = rest.pattern orelse break :blk null;
+                    break :blk if (done == pats.len) rest_pattern else null;
+                },
+                .str_pattern => |str| blk: {
+                    const steps = self.pass.program.strPatternStepSpan(str.steps);
+                    var captured: usize = 0;
+                    for (0..steps.len) |index| {
+                        const capture = GuardedList.at(steps, index).capture orelse continue;
+                        if (captured == done) break :blk capture;
+                        captured += 1;
+                    }
+                    break :blk null;
+                },
+                .bind, .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => null,
+            };
+            if (next_child) |child| {
+                try frames.append(allocator, .{ .pat = child });
+                continue;
+            }
 
-        return .{
-            .prefix = str.prefix,
-            .steps = try self.pass.program.addStrPatternStepSpan(output_steps),
-            .end = str.end,
-        };
+            const children = frame.children.items;
+            const data: Ast.PatData = switch (pat.data) {
+                .bind => |local| .{ .bind = try self.cloneBinder(local, pat.ty, mode) },
+                .wildcard => .wildcard,
+                .as => |as| .{ .as = .{
+                    .pattern = children[0],
+                    .local = try self.cloneBinder(as.local, pat.ty, mode),
+                } },
+                .record => |fields| blk: {
+                    const destructs = self.pass.program.recordDestructSpan(fields);
+                    const values = try allocator.alloc(Ast.RecordDestruct, children.len);
+                    defer allocator.free(values);
+                    for (values, children, 0..) |*value, child, index| value.* = .{
+                        .name = GuardedList.at(destructs, index).name,
+                        .pattern = child,
+                    };
+                    break :blk .{ .record = try self.pass.program.addRecordDestructSpan(values) };
+                },
+                .tuple => .{ .tuple = try self.pass.program.addPatSpan(children) },
+                .list => |list| .{ .list = .{
+                    .patterns = frame.span.?,
+                    .rest = if (list.rest) |rest| .{
+                        .index = rest.index,
+                        .pattern = if (rest.pattern != null) children[children.len - 1] else null,
+                    } else null,
+                } },
+                .tag => |tag| .{ .tag = .{
+                    .name = tag.name,
+                    .payloads = try self.pass.program.addPatSpan(children),
+                } },
+                .nominal => .{ .nominal = children[0] },
+                .int_lit => |value| .{ .int_lit = value },
+                .dec_lit => |value| .{ .dec_lit = value },
+                .frac_f32_lit => |value| .{ .frac_f32_lit = value },
+                .frac_f64_lit => |value| .{ .frac_f64_lit = value },
+                .str_lit => |value| .{ .str_lit = value },
+                .str_pattern => |str| blk: {
+                    const input_steps = self.pass.program.strPatternStepSpan(str.steps);
+                    const output_steps = try allocator.alloc(Ast.StrPatternStep, input_steps.len);
+                    defer allocator.free(output_steps);
+                    var captured: usize = 0;
+                    for (output_steps, 0..) |*output_step, index| {
+                        const input_step = GuardedList.at(input_steps, index);
+                        output_step.* = .{
+                            .capture = if (input_step.capture != null) cap: {
+                                captured += 1;
+                                break :cap children[captured - 1];
+                            } else null,
+                            .delimiter = input_step.delimiter,
+                        };
+                    }
+                    break :blk .{ .str_pattern = .{
+                        .prefix = str.prefix,
+                        .steps = try self.pass.program.addStrPatternStepSpan(output_steps),
+                        .end = str.end,
+                    } };
+                },
+            };
+            const cloned = try self.pass.program.addPat(.{ .ty = pat.ty, .data = data });
+            var finished = frames.pop().?;
+            finished.children.deinit(allocator);
+            if (frames.items.len == 0) return cloned;
+            input = cloned;
+        }
     }
 
     /// Total node-visit bound for proving which initializer leaves survive a
@@ -13512,31 +13591,6 @@ const Cloner = struct {
         const stmt_region = self.pass.program.stmtRegion(stmt_id);
         if (!stmt_region.isEmpty()) self.current_region = stmt_region;
         return saved;
-    }
-
-    fn clonePatSpan(self: *Cloner, span: Ast.Span(Ast.PatId), mode: BinderCloneMode) Common.LowerError!Ast.Span(Ast.PatId) {
-        const source = try GuardedList.dupe(self.pass.allocator, Ast.PatId, self.pass.program.patSpan(span));
-        defer self.pass.allocator.free(source);
-
-        const values = try self.pass.allocator.alloc(Ast.PatId, source.len);
-        defer self.pass.allocator.free(values);
-        for (source, 0..) |pat, index| values[index] = try self.clonePat(pat, mode);
-        return try self.pass.program.addPatSpan(values);
-    }
-
-    fn cloneRecordDestructSpan(self: *Cloner, span: Ast.Span(Ast.RecordDestruct), mode: BinderCloneMode) Common.LowerError!Ast.Span(Ast.RecordDestruct) {
-        const source = try GuardedList.dupe(self.pass.allocator, Ast.RecordDestruct, self.pass.program.recordDestructSpan(span));
-        defer self.pass.allocator.free(source);
-
-        const values = try self.pass.allocator.alloc(Ast.RecordDestruct, source.len);
-        defer self.pass.allocator.free(values);
-        for (source, 0..) |field, index| {
-            values[index] = .{
-                .name = field.name,
-                .pattern = try self.clonePat(field.pattern, mode),
-            };
-        }
-        return try self.pass.program.addRecordDestructSpan(values);
     }
 
     fn activeRecursiveFieldTupleReadRoot(self: *Cloner, value: Value) ?Ast.ExprId {

@@ -9,6 +9,7 @@ const base = @import("base");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
+const AnyAll = @import("../any_all.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
@@ -22406,24 +22407,572 @@ const BodyContext = struct {
     fn instNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        self.builder.countBodyDiagnostic("checked_node_requests");
-        const scoped_ty = self.scopedCheckedType(checked_ty);
-        if (try self.scopedNode(scoped_ty)) |existing| {
-            self.builder.countBodyDiagnostic("checked_node_cache_hits");
-            return existing;
+        return (try self.runInst(.{ .node = .{ .checked_ty = checked_ty } })).get(.node);
+    }
+
+    fn instNominalDeclarationBackingNode(
+        self: *BodyContext,
+        source: NominalInstantiationSource,
+        args: []NodeId,
+    ) Allocator.Error!NodeId {
+        return (try self.runInst(.{ .decl_backing = .{ .source = source, .args = args } })).get(.node);
+    }
+
+    // Instantiation //
+    //
+    // A checked type instantiates its component types from inside its own
+    // instantiation. Each such computation suspends as an `InstFrame` on one
+    // heap-backed stack while a component instantiates, so type nesting never
+    // becomes native call depth. Frames issue components in the order a
+    // direct recursive instantiation visited them, so graph nodes, names, and
+    // scopes are created in the same order.
+
+    const InstTask = union(enum) {
+        node: InstNodeTask,
+        slice: InstSliceTask,
+        fields: InstFieldsTask,
+        tags: InstTagsTask,
+        nominal: InstNominalTask,
+        declared_order: InstDeclaredOrderTask,
+        decl_backing: InstDeclBackingTask,
+    };
+
+    const InstResult = union(enum) {
+        node: NodeId,
+        nodes: []NodeId,
+        fields: []InstField,
+        tags: []InstTag,
+        declared_order: []const InstDeclaredField,
+
+        fn get(self: InstResult, comptime tag: std.meta.Tag(InstResult)) @FieldType(InstResult, @tagName(tag)) {
+            return switch (self) {
+                tag => |payload| payload,
+                else => Common.invariant("Monotype instantiation frame received the wrong result kind"),
+            };
         }
-        self.builder.countBodyDiagnostic("checked_node_cache_misses");
-        const map = self.scopedNodeMap(scoped_ty);
-        try map.put(scoped_ty, .{ .building = null });
+    };
+
+    const InstFrame = struct {
+        cursor: u8 = 0,
+        index: usize = 0,
+        task: InstTask,
+    };
+
+    const InstStep = union(enum) {
+        call: InstTask,
+        ret: InstResult,
+    };
+
+    fn runInst(self: *BodyContext, root: InstTask) Allocator.Error!InstResult {
+        var frames: std.ArrayList(InstFrame) = .empty;
+        defer frames.deinit(self.allocator);
         errdefer {
-            const removed = map.remove(scoped_ty);
-            std.debug.assert(removed);
+            // Scopes nest, so the innermost frame releases first.
+            var index = frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                self.releaseInstFrame(&frames.items[index]);
+            }
         }
-        const built = try self.instNodeContent(checked_ty);
-        var entry = map.get(scoped_ty).?;
+        try frames.append(self.allocator, .{ .task = root });
+        var input: ?InstResult = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (try self.stepInst(frame, input)) {
+                .call => |task| {
+                    try frames.append(self.allocator, .{ .task = task });
+                    input = null;
+                },
+                .ret => |result| {
+                    _ = frames.pop();
+                    if (frames.items.len == 0) return result;
+                    input = result;
+                },
+            }
+        }
+    }
+
+    /// Undo what an unfinished frame installed.
+    fn releaseInstFrame(self: *BodyContext, frame: *InstFrame) void {
+        switch (frame.task) {
+            .node => |*task| if (task.reserved) {
+                const removed = self.scopedNodeMap(task.scoped_ty).remove(task.scoped_ty);
+                std.debug.assert(removed);
+            },
+            .decl_backing => |*task| self.leaveDeclBackingScopes(task),
+            .slice, .fields, .tags, .nominal, .declared_order => {},
+        }
+    }
+
+    fn stepInst(self: *BodyContext, frame: *InstFrame, input: ?InstResult) Allocator.Error!InstStep {
+        return switch (frame.task) {
+            .node => |*task| self.stepInstNode(frame, task, input),
+            .slice => |*task| self.stepInstSlice(frame, task, input),
+            .fields => |*task| self.stepInstFields(frame, task, input),
+            .tags => |*task| self.stepInstTags(frame, task, input),
+            .nominal => |*task| self.stepInstNominal(frame, task, input),
+            .declared_order => |*task| self.stepInstDeclaredOrder(frame, task, input),
+            .decl_backing => |*task| self.stepInstDeclBacking(frame, task, input),
+        };
+    }
+
+    fn instNodeStep(checked_ty: checked.CheckedTypeId) InstStep {
+        return .{ .call = .{ .node = .{ .checked_ty = checked_ty } } };
+    }
+
+    fn instSliceStep(checked_tys: []const checked.CheckedTypeId) InstStep {
+        return .{ .call = .{ .slice = .{ .checked_tys = checked_tys } } };
+    }
+
+    const InstNodeTask = struct {
+        checked_ty: checked.CheckedTypeId,
+        scoped_ty: checked.CheckedTypeId = undefined,
+        /// Whether this frame registered `scoped_ty` as building.
+        reserved: bool = false,
+        /// A component instantiated before the last one.
+        first: InstResult = undefined,
+    };
+
+    fn stepInstNode(self: *BodyContext, frame: *InstFrame, task: *InstNodeTask, input: ?InstResult) Allocator.Error!InstStep {
+        if (frame.cursor == 0) {
+            self.builder.countBodyDiagnostic("checked_node_requests");
+            task.scoped_ty = self.scopedCheckedType(task.checked_ty);
+            if (try self.scopedNode(task.scoped_ty)) |existing| {
+                self.builder.countBodyDiagnostic("checked_node_cache_hits");
+                return .{ .ret = .{ .node = existing } };
+            }
+            self.builder.countBodyDiagnostic("checked_node_cache_misses");
+            try self.scopedNodeMap(task.scoped_ty).put(task.scoped_ty, .{ .building = null });
+            task.reserved = true;
+            frame.cursor = 1;
+        }
+        const built: NodeId = switch (checkedPayload(self.view, task.checked_ty)) {
+            .pending => Common.invariant("pending checked type reached Monotype instantiation"),
+            .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
+            .flex, .rigid => |variable| try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
+                variable.numeric_default_phase,
+                variable.row_default,
+            ) }),
+            .empty_record => try self.graph.newNode(.empty_record),
+            .empty_tag_union => try self.graph.newNode(.empty_tag_union),
+            // Aliases are checked views, not value identities. Instantiate
+            // their parameter cells in this scope, then use the explicit
+            // backing cell, just as alias-transparent unification does.
+            .alias => |alias| blk: {
+                if (input != null) frame.index += 1;
+                if (frame.index < alias.args.len) return instNodeStep(alias.args[frame.index]);
+                if (frame.index == alias.args.len) return instNodeStep(alias.backing);
+                break :blk input.?.get(.node);
+            },
+            .record => |record| blk: {
+                if (input == null) return .{ .call = .{ .fields = .{ .fields = record.fields } } };
+                if (frame.cursor == 1) {
+                    task.first = input.?;
+                    frame.cursor = 2;
+                    return instNodeStep(record.ext);
+                }
+                break :blk try self.graph.newNode(.{ .record = .{
+                    .fields = task.first.get(.fields),
+                    .ext = input.?.get(.node),
+                } });
+            },
+            .tuple => |items| blk: {
+                if (input == null) return instSliceStep(items);
+                break :blk try self.graph.newNode(.{ .tuple = input.?.get(.nodes) });
+            },
+            .function => |function| blk: {
+                if (input == null) return instSliceStep(function.args);
+                if (frame.cursor == 1) {
+                    task.first = input.?;
+                    frame.cursor = 2;
+                    return instNodeStep(function.ret);
+                }
+                break :blk try self.graph.newNode(.{ .func = .{
+                    .args = task.first.get(.nodes),
+                    .ret = input.?.get(.node),
+                } });
+            },
+            .tag_union => |tag_union| blk: {
+                if (input == null) return .{ .call = .{ .tags = .{ .tags = tag_union.tags } } };
+                if (frame.cursor == 1) {
+                    task.first = input.?;
+                    frame.cursor = 2;
+                    return instNodeStep(tag_union.ext);
+                }
+                break :blk try self.graph.newNode(.{ .tag_union = .{
+                    .tags = task.first.get(.tags),
+                    .ext = input.?.get(.node),
+                } });
+            },
+            .nominal => |nominal| blk: {
+                if (input == null) return .{ .call = .{ .nominal = .{ .checked_ty = task.checked_ty, .nominal = nominal } } };
+                break :blk input.?.get(.node);
+            },
+        };
+        const map = self.scopedNodeMap(task.scoped_ty);
+        var entry = map.get(task.scoped_ty).?;
         const node = try entry.finish(self.graph, built);
-        try map.put(scoped_ty, entry);
-        return node;
+        try map.put(task.scoped_ty, entry);
+        task.reserved = false;
+        return .{ .ret = .{ .node = node } };
+    }
+
+    const InstSliceTask = struct {
+        checked_tys: []const checked.CheckedTypeId,
+        out: []NodeId = &.{},
+    };
+
+    fn stepInstSlice(self: *BodyContext, frame: *InstFrame, task: *InstSliceTask, input: ?InstResult) Allocator.Error!InstStep {
+        if (frame.cursor == 0) {
+            task.out = try self.graph.arena().alloc(NodeId, task.checked_tys.len);
+            frame.cursor = 1;
+        } else {
+            task.out[frame.index] = input.?.get(.node);
+            frame.index += 1;
+        }
+        if (frame.index < task.checked_tys.len) return instNodeStep(task.checked_tys[frame.index]);
+        return .{ .ret = .{ .nodes = task.out } };
+    }
+
+    const InstFieldsTask = struct {
+        fields: []const checked.CheckedRecordField,
+        out: []InstField = &.{},
+    };
+
+    fn stepInstFields(self: *BodyContext, frame: *InstFrame, task: *InstFieldsTask, input: ?InstResult) Allocator.Error!InstStep {
+        if (frame.cursor == 0) {
+            task.out = try self.graph.arena().alloc(InstField, task.fields.len);
+            frame.cursor = 1;
+        } else {
+            task.out[frame.index] = try self.instField(task.fields[frame.index], input.?.get(.node));
+            frame.index += 1;
+        }
+        if (frame.index < task.fields.len) return instNodeStep(task.fields[frame.index].ty);
+        return .{ .ret = .{ .fields = task.out } };
+    }
+
+    fn instField(self: *BodyContext, field: checked.CheckedRecordField, value_node: NodeId) Allocator.Error!InstField {
+        const name = try self.recordFieldName(self.view, field.name);
+        const default = try self.builder.monoFieldDefault(self.view, field);
+        return switch (field.kind.tag) {
+            .required => .{ .name = name, .ty = value_node, .kind = .required, .default = null },
+            .defaulted => .{
+                .name = name,
+                .ty = value_node,
+                .kind = .{ .defaulted = default orelse Common.invariant("defaulted checked field carried no default identity") },
+                .default = default,
+            },
+            .optional => .{
+                .name = name,
+                .ty = try self.optionalSlotNode(value_node),
+                .value_ty = value_node,
+                .kind = .optional,
+                .default = null,
+            },
+            .undetermined => blk: {
+                const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
+                    Common.invariant("undetermined checked field kind carried no presence variable"));
+                if (self.scopedFieldKind(checked_kind)) |existing| {
+                    try self.graph.unify(existing.value, value_node);
+                    break :blk .{
+                        .name = name,
+                        .ty = existing.slot,
+                        .value_ty = existing.value,
+                        .kind = .{ .undetermined = existing.id },
+                        .default = null,
+                    };
+                }
+                const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                const kind = try self.graph.newUndeterminedFieldKind();
+                self.graph.registerUndeterminedFieldKindCells(kind, slot_node, value_node);
+                const instantiated = InstantiatedFieldKind{
+                    .id = kind,
+                    .slot = slot_node,
+                    .value = value_node,
+                };
+                try self.putScopedFieldKind(checked_kind, instantiated);
+                break :blk .{
+                    .name = name,
+                    .ty = instantiated.slot,
+                    .value_ty = instantiated.value,
+                    .kind = .{ .undetermined = instantiated.id },
+                    .default = null,
+                };
+            },
+            .err => Common.invariant("poisoned checked field kind reached Monotype instantiation"),
+        };
+    }
+
+    const InstTagsTask = struct {
+        tags: []const checked.CheckedTag,
+        out: []InstTag = &.{},
+    };
+
+    fn stepInstTags(self: *BodyContext, frame: *InstFrame, task: *InstTagsTask, input: ?InstResult) Allocator.Error!InstStep {
+        if (frame.cursor == 0) {
+            task.out = try self.graph.arena().alloc(InstTag, task.tags.len);
+            frame.cursor = 1;
+        } else {
+            task.out[frame.index].payloads = input.?.get(.nodes);
+            frame.index += 1;
+        }
+        if (frame.index < task.tags.len) {
+            const tag = task.tags[frame.index];
+            task.out[frame.index] = .{
+                .name = try self.tagName(self.view, tag.name),
+                .checked_name = try self.tagName(self.view, tag.name),
+                .payloads = undefined,
+            };
+            return instSliceStep(tag.argsSlice(self.view.types));
+        }
+        return .{ .ret = .{ .tags = task.out } };
+    }
+
+    const InstNominalTask = struct {
+        checked_ty: checked.CheckedTypeId,
+        nominal: checked.CheckedNominalType,
+        args: []NodeId = &.{},
+        backing: ?InstBacking = null,
+        def: Type.TypeDef = undefined,
+        named_type: Type.NamedType = undefined,
+    };
+
+    /// Cursor states of a nominal instantiation.
+    const InstNominalCursor = struct {
+        const start = 0;
+        const builtin_elem = 1;
+        const args = 2;
+        const backing = 3;
+        const declared_order = 4;
+    };
+
+    fn stepInstNominal(self: *BodyContext, frame: *InstFrame, task: *InstNominalTask, input: ?InstResult) Allocator.Error!InstStep {
+        const nominal = task.nominal;
+        switch (frame.cursor) {
+            InstNominalCursor.start => {
+                switch (nominal.representation) {
+                    .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                        .primitive => |primitive| return .{ .ret = .{ .node = try self.graph.newNode(.{ .primitive = primitive }) } },
+                        .bool_tag_union => {},
+                        .list => {
+                            if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
+                            frame.cursor = InstNominalCursor.builtin_elem;
+                            return instNodeStep(nominal.args[0]);
+                        },
+                        .box => {
+                            if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
+                            frame.cursor = InstNominalCursor.builtin_elem;
+                            return instNodeStep(nominal.args[0]);
+                        },
+                        .try_nominal,
+                        .iterator,
+                        .parse_tag_union_spec,
+                        .fields,
+                        .field,
+                        .dict,
+                        .set,
+                        .crypto_sha256_digest,
+                        .crypto_sha256_hasher,
+                        .crypto_blake3_digest,
+                        .crypto_blake3_hasher,
+                        => {},
+                    },
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
+                }
+                frame.cursor = InstNominalCursor.args;
+                return instSliceStep(nominal.args);
+            },
+            InstNominalCursor.builtin_elem => {
+                const elem = input.?.get(.node);
+                return .{ .ret = .{ .node = try self.graph.newNode(switch (checked.builtinRuntimeEncoding(nominal.representation.builtin)) {
+                    .list => .{ .list = elem },
+                    .box => .{ .box = elem },
+                    .primitive, .bool_tag_union, .try_nominal, .iterator, .parse_tag_union_spec, .fields, .field, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => Common.invariant("builtin nominal element resumed for a builtin without one"),
+                }) } };
+            },
+            InstNominalCursor.args => {
+                task.args = input.?.get(.nodes);
+                switch (nominal.representation) {
+                    .opaque_without_backing => {},
+                    .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => {
+                        const source = self.nominalInstantiationSource(nominal) orelse
+                            Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
+                        frame.cursor = InstNominalCursor.backing;
+                        return .{ .call = .{ .decl_backing = .{ .source = source, .args = task.args } } };
+                    },
+                }
+                return self.instNominalDeclaredOrder(frame, task);
+            },
+            InstNominalCursor.backing => {
+                task.backing = .{
+                    .node = input.?.get(.node),
+                    .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
+                };
+                return self.instNominalDeclaredOrder(frame, task);
+            },
+            else => return .{ .ret = .{ .node = try self.graph.newNode(try self.graph.namedContent(.{
+                .named_type = task.named_type,
+                .def = task.def,
+                .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
+                .builtin_owner = builtinOwner(nominal.builtin),
+                .args = task.args,
+                .backing = task.backing,
+                .declared_order = input.?.get(.declared_order),
+            })) } },
+        }
+    }
+
+    fn instNominalDeclaredOrder(self: *BodyContext, frame: *InstFrame, task: *InstNominalTask) Allocator.Error!InstStep {
+        const nominal = task.nominal;
+        task.def = try self.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl);
+        self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
+        task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty };
+        frame.cursor = InstNominalCursor.declared_order;
+        return .{ .call = .{ .declared_order = .{ .nominal = nominal } } };
+    }
+
+    const InstDeclaredOrderTask = struct {
+        nominal: checked.CheckedNominalType,
+        lookup: Builder.NominalDeclLookup = undefined,
+        entries: []InstDeclaredField = &.{},
+        padding_cursor: usize = 0,
+    };
+
+    fn stepInstDeclaredOrder(self: *BodyContext, frame: *InstFrame, task: *InstDeclaredOrderTask, input: ?InstResult) Allocator.Error!InstStep {
+        if (frame.cursor == 0) {
+            task.lookup = self.builder.nominalDeclarationFor(self.view, task.nominal) orelse {
+                if (!nominalHasDeclarationBacking(task.nominal)) return .{ .ret = .{ .declared_order = &.{} } };
+                Common.invariant("declaration-backed nominal reached Monotype instantiation without declaration data");
+            };
+            const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
+            if (fields.len == 0) return .{ .ret = .{ .declared_order = &.{} } };
+            task.entries = try self.graph.arena().alloc(InstDeclaredField, fields.len);
+            frame.cursor = 1;
+        } else {
+            task.entries[frame.index] = .{ .padding = input.?.get(.node) };
+            frame.index += 1;
+        }
+        const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
+        while (frame.index < fields.len) {
+            switch (fields[frame.index]) {
+                .named => |label| {
+                    task.entries[frame.index] = .{ .named = try self.recordFieldName(task.lookup.view, label) };
+                    frame.index += 1;
+                },
+                .padding => {
+                    const padding_types = task.lookup.padding_field_tys;
+                    if (task.padding_cursor >= padding_types.len) {
+                        Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
+                    }
+                    const checked_ty = padding_types[task.padding_cursor];
+                    task.padding_cursor += 1;
+                    return instNodeStep(self.checkedTypeInCurrentView(task.lookup.view, checked_ty));
+                },
+            }
+        }
+        return .{ .ret = .{ .declared_order = task.entries } };
+    }
+
+    /// Instantiate a nominal instance's backing. A declaration-backed nominal's
+    /// formals and backing share one set of checked roots across every instance
+    /// of the nominal, so the backing instantiates inside a fresh scope seeded
+    /// with this instance's argument nodes: two instances of the same nominal at
+    /// different arguments stay independent.
+    ///
+    /// Termination: the checker's `validateNominalDeclArgumentGrowth` rejects
+    /// any declaration group whose formal-flow graph carries a growing edge
+    /// inside a cycle, and any recursive mention argument holding a variable
+    /// that is no formal of the mentioning declaration. What remains keeps
+    /// the reachable argument tuples finite here: a formal argument resolves
+    /// in the innermost scope to this instance's own argument cell, so the
+    /// recursive lookup hits the placeholder registered below before the
+    /// backing expands; a closed argument memoizes once per instantiation
+    /// context, so nested expansions present the same cell; and a
+    /// formal-wrapping argument only occurs on acyclic flow edges, so the
+    /// fresh cells it mints never feed back into their own declaration.
+    const InstDeclBackingTask = struct {
+        source: NominalInstantiationSource,
+        args: []NodeId,
+        placeholder: NodeId = undefined,
+        /// The view and instantiation context the backing's module replaced.
+        outer: ?struct { view: ModuleView, instantiation: TypeInstantiationContext } = null,
+        scope: ?*InstantiatingNodeMap = null,
+        field_kind_scope: ?*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind) = null,
+        scope_pushed: bool = false,
+        field_kind_scope_pushed: bool = false,
+    };
+
+    fn stepInstDeclBacking(self: *BodyContext, frame: *InstFrame, task: *InstDeclBackingTask, input: ?InstResult) Allocator.Error!InstStep {
+        const source = task.source;
+        if (frame.cursor == 1) {
+            self.leaveDeclBackingScopes(task);
+            try self.graph.unify(task.placeholder, input.?.get(.node));
+            return .{ .ret = .{ .node = task.placeholder } };
+        }
+        const declaration_id: u32 = @intFromEnum(source.declaration.id);
+        if (self.graph.nominalBackingNode(source.view.key.bytes, declaration_id, task.args)) |cached| {
+            self.builder.count("nominal_backing_reuses");
+            return .{ .ret = .{ .node = cached } };
+        }
+        self.builder.count("nominal_backing_instantiations");
+
+        task.placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+        try self.graph.putNominalBackingNode(source.view.key.bytes, declaration_id, task.args, task.placeholder);
+
+        frame.cursor = 1;
+        if (!moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) {
+            task.outer = .{ .view = self.view, .instantiation = self.instantiation };
+            self.view = source.view;
+            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), source.view.key.bytes);
+        }
+
+        const formal_args = source.declaration.formalArgs(self.view.types);
+        if (formal_args.len != task.args.len) {
+            Common.invariant("checked nominal declaration arity differed from nominal type use");
+        }
+        const scope = try self.allocator.create(InstantiatingNodeMap);
+        scope.* = InstantiatingNodeMap.init(self.allocator);
+        task.scope = scope;
+        const field_kind_scope = try self.allocator.create(collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind));
+        field_kind_scope.* = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
+        task.field_kind_scope = field_kind_scope;
+        for (formal_args, task.args) |formal, arg| {
+            try scope.put(self.scopedCheckedType(formal), .{ .node = arg });
+        }
+        try self.instantiation.decl_scopes.append(self.allocator, scope);
+        task.scope_pushed = true;
+        try self.instantiation.field_kind_decl_scopes.append(self.allocator, field_kind_scope);
+        task.field_kind_scope_pushed = true;
+        return instNodeStep(source.declaration.backing);
+    }
+
+    /// Pop and free the declaration scopes `task` pushed, then restore the
+    /// view and instantiation context it replaced.
+    fn leaveDeclBackingScopes(self: *BodyContext, task: *InstDeclBackingTask) void {
+        if (task.field_kind_scope_pushed) {
+            _ = self.instantiation.field_kind_decl_scopes.pop();
+            task.field_kind_scope_pushed = false;
+        }
+        if (task.scope_pushed) {
+            _ = self.instantiation.decl_scopes.pop();
+            task.scope_pushed = false;
+        }
+        if (task.field_kind_scope) |field_kind_scope| {
+            field_kind_scope.deinit();
+            self.allocator.destroy(field_kind_scope);
+            task.field_kind_scope = null;
+        }
+        if (task.scope) |scope| {
+            scope.deinit();
+            self.allocator.destroy(scope);
+            task.scope = null;
+        }
+        if (task.outer) |outer| {
+            self.instantiation.deinit();
+            self.instantiation = outer.instantiation;
+            self.view = outer.view;
+            task.outer = null;
+        }
     }
 
     fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
@@ -22495,105 +23044,6 @@ const BodyContext = struct {
         try scopes[scopes.len - 1].put(checked_ty, field_kind);
     }
 
-    fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
-        const out = try self.graph.arena().alloc(NodeId, checked_tys.len);
-        for (checked_tys, 0..) |checked_ty, index| {
-            out[index] = try self.instNode(checked_ty);
-        }
-        return out;
-    }
-
-    fn instNodeContent(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
-        return switch (checkedPayload(self.view, checked_ty)) {
-            .pending => Common.invariant("pending checked type reached Monotype instantiation"),
-            .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
-            .flex, .rigid => |variable| try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
-                variable.numeric_default_phase,
-                variable.row_default,
-            ) }),
-            .empty_record => try self.graph.newNode(.empty_record),
-            .empty_tag_union => try self.graph.newNode(.empty_tag_union),
-            .alias => |alias| blk: {
-                // Aliases are checked views, not value identities. Instantiate
-                // their parameter cells in this scope, then use the explicit
-                // backing cell, just as alias-transparent unification does.
-                for (alias.args) |arg| _ = try self.instNode(arg);
-                break :blk try self.instNode(alias.backing);
-            },
-            .record => |record| try self.graph.newNode(.{ .record = .{
-                .fields = try self.instFields(record.fields),
-                .ext = try self.instNode(record.ext),
-            } }),
-            .tuple => |items| try self.graph.newNode(.{ .tuple = try self.instNodeSlice(items) }),
-            .function => |function| try self.graph.newNode(.{ .func = .{
-                .args = try self.instNodeSlice(function.args),
-                .ret = try self.instNode(function.ret),
-            } }),
-            .tag_union => |tag_union| try self.graph.newNode(.{ .tag_union = .{
-                .tags = try self.instTags(tag_union.tags),
-                .ext = try self.instNode(tag_union.ext),
-            } }),
-            .nominal => |nominal| try self.instNominalNode(checked_ty, nominal),
-        };
-    }
-
-    fn instFields(self: *BodyContext, fields: []const checked.CheckedRecordField) Allocator.Error![]InstField {
-        const out = try self.graph.arena().alloc(InstField, fields.len);
-        for (fields, 0..) |field, index| {
-            const value_node = try self.instNode(field.ty);
-            const name = try self.recordFieldName(self.view, field.name);
-            const default = try self.builder.monoFieldDefault(self.view, field);
-            out[index] = switch (field.kind.tag) {
-                .required => .{ .name = name, .ty = value_node, .kind = .required, .default = null },
-                .defaulted => .{
-                    .name = name,
-                    .ty = value_node,
-                    .kind = .{ .defaulted = default orelse Common.invariant("defaulted checked field carried no default identity") },
-                    .default = default,
-                },
-                .optional => .{
-                    .name = name,
-                    .ty = try self.optionalSlotNode(value_node),
-                    .value_ty = value_node,
-                    .kind = .optional,
-                    .default = null,
-                },
-                .undetermined => blk: {
-                    const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
-                        Common.invariant("undetermined checked field kind carried no presence variable"));
-                    if (self.scopedFieldKind(checked_kind)) |existing| {
-                        try self.graph.unify(existing.value, value_node);
-                        break :blk .{
-                            .name = name,
-                            .ty = existing.slot,
-                            .value_ty = existing.value,
-                            .kind = .{ .undetermined = existing.id },
-                            .default = null,
-                        };
-                    }
-                    const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-                    const kind = try self.graph.newUndeterminedFieldKind();
-                    self.graph.registerUndeterminedFieldKindCells(kind, slot_node, value_node);
-                    const instantiated = InstantiatedFieldKind{
-                        .id = kind,
-                        .slot = slot_node,
-                        .value = value_node,
-                    };
-                    try self.putScopedFieldKind(checked_kind, instantiated);
-                    break :blk .{
-                        .name = name,
-                        .ty = instantiated.slot,
-                        .value_ty = instantiated.value,
-                        .kind = .{ .undetermined = instantiated.id },
-                        .default = null,
-                    };
-                },
-                .err => Common.invariant("poisoned checked field kind reached Monotype instantiation"),
-            };
-        }
-        return out;
-    }
-
     /// The instantiation-graph node of an optional field's tagged slot: the
     /// closed structural union `[#Missing, #Present(value)]`, matching
     /// `Builder.optionalSlotType` exactly so graph-solved and directly-lowered
@@ -22618,186 +23068,6 @@ const BodyContext = struct {
             .tags = tags,
             .ext = try self.graph.newNode(.empty_tag_union),
         } });
-    }
-
-    fn instTags(self: *BodyContext, tags: []const checked.CheckedTag) Allocator.Error![]InstTag {
-        const out = try self.graph.arena().alloc(InstTag, tags.len);
-        for (tags, 0..) |tag, index| {
-            out[index] = .{
-                .name = try self.tagName(self.view, tag.name),
-                .checked_name = try self.tagName(self.view, tag.name),
-                .payloads = try self.instNodeSlice(tag.argsSlice(self.view.types)),
-            };
-        }
-        return out;
-    }
-
-    fn instNominalNode(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        nominal: checked.CheckedNominalType,
-    ) Allocator.Error!NodeId {
-        switch (nominal.representation) {
-            .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                .primitive => |primitive| return try self.graph.newNode(.{ .primitive = primitive }),
-                .bool_tag_union => {},
-                .list => {
-                    if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
-                    return try self.graph.newNode(.{ .list = try self.instNode(nominal.args[0]) });
-                },
-                .box => {
-                    if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
-                    return try self.graph.newNode(.{ .box = try self.instNode(nominal.args[0]) });
-                },
-                .try_nominal,
-                .iterator,
-                .parse_tag_union_spec,
-                .fields,
-                .field,
-                .dict,
-                .set,
-                .crypto_sha256_digest,
-                .crypto_sha256_hasher,
-                .crypto_blake3_digest,
-                .crypto_blake3_hasher,
-                => {},
-            },
-            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
-        }
-
-        const args = try self.instNodeSlice(nominal.args);
-        const backing_node: ?NodeId = switch (nominal.representation) {
-            .opaque_without_backing => null,
-            .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => try self.instNominalBackingNode(nominal, args),
-        };
-        const backing: ?InstBacking = if (backing_node) |node| .{
-            .node = node,
-            .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
-        } else null;
-        const def = try self.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl);
-        self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), def);
-        return try self.graph.newNode(try self.graph.namedContent(.{
-            .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
-            .def = def,
-            .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
-            .builtin_owner = builtinOwner(nominal.builtin),
-            .args = args,
-            .backing = backing,
-            .declared_order = try self.instDeclaredOrderForNominal(nominal),
-        }));
-    }
-
-    fn instDeclaredOrderForNominal(
-        self: *BodyContext,
-        nominal: checked.CheckedNominalType,
-    ) Allocator.Error![]const InstDeclaredField {
-        const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse {
-            if (!nominalHasDeclarationBacking(nominal)) return &.{};
-            Common.invariant("declaration-backed nominal reached Monotype instantiation without declaration data");
-        };
-        const fields = lookup.declaration.declaredRecordFields(lookup.view.types);
-        if (fields.len == 0) return &.{};
-
-        const entries = try self.graph.arena().alloc(InstDeclaredField, fields.len);
-        const padding_types = lookup.padding_field_tys;
-        var padding_cursor: usize = 0;
-        for (fields, 0..) |field, index| {
-            switch (field) {
-                .named => |label| entries[index] = .{ .named = try self.recordFieldName(lookup.view, label) },
-                .padding => {
-                    if (padding_cursor >= padding_types.len) {
-                        Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
-                    }
-                    const checked_ty = padding_types[padding_cursor];
-                    padding_cursor += 1;
-                    entries[index] = .{ .padding = try self.instNode(self.checkedTypeInCurrentView(lookup.view, checked_ty)) };
-                },
-            }
-        }
-        return entries;
-    }
-
-    /// Instantiate a nominal instance's backing. A declaration-backed nominal's
-    /// formals and backing share one set of checked roots across every instance
-    /// of the nominal, so the backing instantiates inside a fresh scope seeded
-    /// with this instance's argument nodes: two instances of the same nominal at
-    /// different arguments stay independent.
-    ///
-    /// Termination: the checker's `validateNominalDeclArgumentGrowth` rejects
-    /// any declaration group whose formal-flow graph carries a growing edge
-    /// inside a cycle, and any recursive mention argument holding a variable
-    /// that is no formal of the mentioning declaration. What remains keeps
-    /// the reachable argument tuples finite here: a formal argument resolves
-    /// in the innermost scope to this instance's own argument cell, so the
-    /// recursive lookup hits the placeholder registered below before the
-    /// backing expands; a closed argument memoizes once per instantiation
-    /// context, so nested expansions present the same cell; and a
-    /// formal-wrapping argument only occurs on acyclic flow edges, so the
-    /// fresh cells it mints never feed back into their own declaration.
-    fn instNominalBackingNode(
-        self: *BodyContext,
-        nominal: checked.CheckedNominalType,
-        args: []NodeId,
-    ) Allocator.Error!NodeId {
-        const source = self.nominalInstantiationSource(nominal) orelse
-            Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
-        return try self.instNominalDeclarationBackingNode(source, args);
-    }
-
-    fn instNominalDeclarationBackingNode(
-        self: *BodyContext,
-        source: NominalInstantiationSource,
-        args: []NodeId,
-    ) Allocator.Error!NodeId {
-        const declaration_id: u32 = @intFromEnum(source.declaration.id);
-        if (self.graph.nominalBackingNode(source.view.key.bytes, declaration_id, args)) |cached| {
-            self.builder.count("nominal_backing_reuses");
-            return cached;
-        }
-        self.builder.count("nominal_backing_instantiations");
-
-        const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try self.graph.putNominalBackingNode(source.view.key.bytes, declaration_id, args, placeholder);
-
-        const backing = if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) backing: {
-            break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
-        } else backing: {
-            const previous_view = self.view;
-            const previous_instantiation = self.instantiation;
-            self.view = source.view;
-            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), source.view.key.bytes);
-            defer {
-                self.instantiation.deinit();
-                self.instantiation = previous_instantiation;
-                self.view = previous_view;
-            }
-            break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
-        };
-        try self.graph.unify(placeholder, backing);
-        return placeholder;
-    }
-
-    fn instNominalDeclarationBackingNodeInCurrentView(
-        self: *BodyContext,
-        declaration: checked.CheckedNominalDeclaration,
-        args: []NodeId,
-    ) Allocator.Error!NodeId {
-        const formal_args = declaration.formalArgs(self.view.types);
-        if (formal_args.len != args.len) {
-            Common.invariant("checked nominal declaration arity differed from nominal type use");
-        }
-        var scope = InstantiatingNodeMap.init(self.allocator);
-        defer scope.deinit();
-        var field_kind_scope = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
-        defer field_kind_scope.deinit();
-        for (formal_args, args) |formal, arg| {
-            try scope.put(self.scopedCheckedType(formal), .{ .node = arg });
-        }
-        try self.instantiation.decl_scopes.append(self.allocator, &scope);
-        defer _ = self.instantiation.decl_scopes.pop();
-        try self.instantiation.field_kind_decl_scopes.append(self.allocator, &field_kind_scope);
-        defer _ = self.instantiation.field_kind_decl_scopes.pop();
-        return try self.instNode(declaration.backing);
     }
 
     const NominalInstantiationSource = struct {
@@ -26402,6 +26672,7 @@ const BodyContext = struct {
         call_expr_at_node: struct { expr: checked.CheckedExprId, expected_node: NodeId, producer_request: ?NodeId = null },
         /// `lowerCallExpr`
         call_expr: struct { expr: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall },
+        constructor: ConstructorTask,
     };
 
     const WithTypeTask = struct {
@@ -26566,6 +26837,277 @@ const BodyContext = struct {
 
     /// Release what a frame still owns. Idempotent, so a frame that already
     /// released its state on its normal path is unaffected.
+    const CheckedRecordConstruction = @FieldType(checked.CheckedExprData, "record");
+
+    /// A constructor lowered at its graph node: every child is related to its
+    /// slot first, then each lowers at its slot, then the constructor is
+    /// built at the node or, when a child requires one, at an exact value
+    /// witness.
+    const ConstructorTask = struct {
+        kind: union(enum) {
+            tag: @FieldType(@FieldType(checked.CheckedExprData, "tag"), "name"),
+            /// The backing expression.
+            nominal: checked.CheckedExprId,
+            tuple,
+            list,
+            record: struct { expr: checked.CheckedExprId, record: CheckedRecordConstruction },
+        },
+        /// The constructor's graph node; for a nominal, its representation node.
+        node: NodeId,
+        /// A tag's, tuple's, or list's checked children. A nominal's backing
+        /// and a record's extension base and fields live in `kind`.
+        children: []const checked.CheckedExprId,
+        name: names.TagNameId = undefined,
+        /// Each child's slot node. Owned.
+        slots: []NodeId = &.{},
+        /// Each lowered child. Owned.
+        lowered: []DraftExprId = &.{},
+        /// Each lowered child's witness slot; for a list, each child's node.
+        /// Owned.
+        produced: []NodeId = &.{},
+        index: usize = 0,
+        requires_distinct_witness: bool = false,
+        /// A list's selected element witness and the child that chose it.
+        produced_element: ?NodeId = null,
+        selected_index: usize = 0,
+    };
+
+    fn releaseConstructorTask(self: *BodyContext, task: *ConstructorTask) void {
+        self.allocator.free(task.slots);
+        task.slots = &.{};
+        self.allocator.free(task.lowered);
+        task.lowered = &.{};
+        self.allocator.free(task.produced);
+        task.produced = &.{};
+    }
+
+    fn constructorStep(ctx: *BodyContext, task: ConstructorTask) LowerStep {
+        return requestLowerTask(ctx, .{ .constructor = task });
+    }
+
+    fn recordConstructorStep(
+        ctx: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        record: CheckedRecordConstruction,
+        record_node: NodeId,
+    ) LowerStep {
+        return constructorStep(ctx, .{
+            .kind = .{ .record = .{ .expr = checked_expr, .record = record } },
+            .node = record_node,
+            .children = &.{},
+        });
+    }
+
+    fn stepConstructor(self: *BodyContext, frame: *LowerFrame, task: *ConstructorTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor == 0) {
+            try self.beginConstructor(task);
+            frame.cursor = 1;
+        } else {
+            task.lowered[task.index] = input.?.exprValue();
+            try self.constructorChildLowered(task);
+        }
+        while (task.index < task.slots.len) {
+            const slot = task.slots[task.index];
+            const child = self.constructorChild(task, task.index);
+            if (try self.nodeIsProvenUninhabited(slot)) {
+                task.lowered[task.index] = try self.lowerExplicitUninhabitedInvocationAtTypeCell(child, DraftTypeCell.fromGraphNode(slot));
+                try self.constructorChildLowered(task);
+                continue;
+            }
+            return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(slot));
+        }
+        const lowered = try self.finishConstructor(task);
+        self.releaseConstructorTask(task);
+        return loweredExprStep(lowered);
+    }
+
+    fn constructorChild(_: *BodyContext, task: *const ConstructorTask, index: usize) checked.CheckedExprId {
+        return switch (task.kind) {
+            .record => |record| if (record.record.ext) |ext|
+                if (index == 0) ext else record.record.fields[index - 1].value
+            else
+                record.record.fields[index].value,
+            .nominal => |backing| backing,
+            .tag, .tuple, .list => task.children[index],
+        };
+    }
+
+    /// Compute every child's slot, relate each child to its slot, and
+    /// allocate the child results.
+    fn beginConstructor(self: *BodyContext, task: *ConstructorTask) Allocator.Error!void {
+        const child_count = switch (task.kind) {
+            .record => |record| record.record.fields.len + @as(usize, if (record.record.ext != null) 1 else 0),
+            .nominal => 1,
+            .tag, .tuple, .list => task.children.len,
+        };
+        task.slots = try self.allocator.alloc(NodeId, child_count);
+        switch (task.kind) {
+            .tag => |tag_name| {
+                task.name = try self.tagName(self.view, tag_name);
+                for (task.slots, 0..) |*slot, index| {
+                    slot.* = try self.graph.tagConstructionPayloadNode(task.node, task.name, index);
+                }
+            },
+            .nominal => {
+                const representation_node = task.node;
+                if (self.graph.content(representation_node) != .named) {
+                    Common.invariant("nominal constructor had no nominal graph representation");
+                }
+                const named = self.graph.namedNodes(representation_node);
+                task.slots[0] = (named.backing orelse
+                    Common.invariant("nominal constructor graph node had no backing")).node;
+            },
+            .tuple => {
+                const item_nodes = try self.graph.tupleItemNodes(task.node);
+                if (task.children.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
+                @memcpy(task.slots, item_nodes);
+            },
+            .list => @memset(task.slots, try self.graph.listElementNode(task.node)),
+            .record => |record| {
+                var slot_index: usize = 0;
+                if (record.record.ext) |ext| {
+                    task.slots[slot_index] = try self.instNode(self.view.bodies.expr(ext).ty);
+                    slot_index += 1;
+                }
+                for (record.record.fields) |field| {
+                    const mono_field_name = try self.recordFieldName(self.view, field.label);
+                    task.slots[slot_index] = try self.graph.recordConstructionFieldValueNode(task.node, mono_field_name);
+                    slot_index += 1;
+                }
+            },
+        }
+        const children = try self.allocator.alloc(checked.CheckedExprId, child_count);
+        defer self.allocator.free(children);
+        for (children, 0..) |*child, index| child.* = self.constructorChild(task, index);
+        try self.prepareConstructorChildrenAtNodes(children, task.slots);
+        task.lowered = try self.allocator.alloc(DraftExprId, child_count);
+        task.produced = try self.allocator.alloc(NodeId, child_count);
+    }
+
+    /// Record what the child at `task.index` contributes to the
+    /// constructor's value witness, then move to the next child.
+    fn constructorChildLowered(self: *BodyContext, task: *ConstructorTask) Allocator.Error!void {
+        const index = task.index;
+        task.index += 1;
+        const slot = task.slots[index];
+        const child_node = try self.exprTypeCell(task.lowered[index]).toGraphNode(self.graph);
+        const witness = switch (task.kind) {
+            .record => return,
+            .list => {
+                task.produced[index] = child_node;
+                if (task.produced_element) |selected| {
+                    // A list has exactly one element representation, so every
+                    // later child joins the selected witness—including a child
+                    // whose class already matches the checked element slot, which
+                    // otherwise would silently diverge from the selection.
+                    try selectRequestRepresentation(self.graph, selected, child_node);
+                } else {
+                    const witness = try self.constructorChildWitness(
+                        slot,
+                        child_node,
+                        "list graph constructor child differed without explicit representation evidence",
+                    );
+                    if (witness.requires_witness) {
+                        task.produced_element = witness.slot;
+                        task.selected_index = index;
+                    }
+                }
+                return;
+            },
+            .tag => try self.constructorChildWitness(
+                slot,
+                child_node,
+                "tag graph constructor child differed without explicit representation evidence",
+            ),
+            .tuple => try self.constructorChildWitness(
+                slot,
+                child_node,
+                "tuple graph constructor child differed without explicit representation evidence",
+            ),
+            .nominal => try self.constructorChildWitness(
+                slot,
+                child_node,
+                "nominal graph constructor child differed without explicit representation evidence",
+            ),
+        };
+        task.produced[index] = witness.slot;
+        if (witness.requires_witness) task.requires_distinct_witness = true;
+    }
+
+    fn finishConstructor(self: *BodyContext, task: *ConstructorTask) Allocator.Error!DraftExprId {
+        switch (task.kind) {
+            .tag => {
+                const tag_node = task.node;
+                const produced_node = if (task.requires_distinct_witness) blk: {
+                    const structural_node = try self.graph.tagValueNodeWithPayloads(tag_node, task.name, task.produced);
+                    const witness = try self.constructorWitnessWithStructuralNode(tag_node, structural_node);
+                    break :blk try self.relateCheckedNodeToProducedValue(tag_node, witness);
+                } else tag_node;
+                return try self.addConstructorExprAtNode(produced_node, .{ .tag = .{
+                    .name = task.name,
+                    .payloads = try self.addExprSpan(task.lowered),
+                } });
+            },
+            .nominal => {
+                const representation_node = task.node;
+                const produced_node = if (task.requires_distinct_witness) blk: {
+                    const witness_node = try self.graph.namedValueNodeWithBacking(representation_node, task.produced[0]);
+                    break :blk try self.relateCheckedNodeToProducedValue(representation_node, witness_node);
+                } else representation_node;
+                return try self.addExprWithTypeCell(
+                    DraftTypeCell.fromGraphNode(produced_node),
+                    .{ .nominal = task.lowered[0] },
+                );
+            },
+            .tuple => {
+                const tuple_node = task.node;
+                const produced_node = if (task.requires_distinct_witness) blk: {
+                    const structural_node = try self.graph.newNode(.{
+                        .tuple = try self.graph.arena().dupe(NodeId, task.produced),
+                    });
+                    const witness = try self.constructorWitnessWithStructuralNode(tuple_node, structural_node);
+                    break :blk try self.relateCheckedNodeToProducedValue(tuple_node, witness);
+                } else tuple_node;
+                return try self.addConstructorExprAtNode(produced_node, .{ .tuple = try self.addExprSpan(task.lowered) });
+            },
+            .list => {
+                const list_node = task.node;
+                const produced_node = if (task.produced_element) |element_witness| blk: {
+                    // Elements lowered before the selection were only checked against
+                    // the public element slot, so they join the selection here; every
+                    // element is stored at one representation regardless of which
+                    // element chose it.
+                    for (task.produced[0..task.selected_index]) |child_node| {
+                        try selectRequestRepresentation(self.graph, element_witness, child_node);
+                    }
+                    const structural_node = try self.graph.newNode(.{ .list = element_witness });
+                    const witness = try self.constructorWitnessWithStructuralNode(list_node, structural_node);
+                    // Every element is stored at the list's single element
+                    // representation, so each element expression carries the selected
+                    // witness cell rather than the checked-public slot it was
+                    // requested at.
+                    const element_cell = DraftTypeCell.fromGraphNode(element_witness);
+                    for (task.lowered) |element| {
+                        self.draft.exprs.items[@intFromEnum(element)].ty = element_cell;
+                    }
+                    break :blk try self.relateCheckedNodeToProducedValue(list_node, witness);
+                } else list_node;
+                return try self.addExprWithTypeCell(
+                    DraftTypeCell.fromGraphNode(produced_node),
+                    .{ .list = try self.addExprSpan(task.lowered) },
+                );
+            },
+            .record => |record| {
+                const children = try self.allocator.alloc(PreLoweredChild, task.lowered.len);
+                defer self.allocator.free(children);
+                for (children, task.lowered, 0..) |*child, lowered, index| {
+                    child.* = .{ .checked_expr = self.constructorChild(task, index), .expr = lowered };
+                }
+                return try self.lowerRecordExprAtNode(record.expr, record.record, task.node, children);
+            },
+        }
+    }
+
     fn releaseLowerFrame(self: *BodyContext, frame: *LowerFrame) void {
         switch (frame.task) {
             .at_type_cell => |*task| self.restoreSourceLocation(&task.saved),
@@ -26596,6 +27138,7 @@ const BodyContext = struct {
                 task.prior = &.{};
             },
             .span, .prepared_span, .span_at_types, .list_span => |*task| self.releaseSpanTask(task),
+            .constructor => |*task| self.releaseConstructorTask(task),
             .prepared_operands => |*task| {
                 if (task.reserving) self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
                 task.reserving = false;
@@ -26637,6 +27180,7 @@ const BodyContext = struct {
             .call => |*task| self.stepCallLower(frame, task, input),
             .call_expr_at_node => |*task| self.stepCallExprAtNode(frame, task, input),
             .call_expr => |*task| self.stepCallExpr(frame, task, input),
+            .constructor => |*task| self.stepConstructor(frame, task, input),
         };
     }
 
@@ -26755,14 +27299,18 @@ const BodyContext = struct {
             .lambda => return loweredExprStep(try self.lowerLambdaExprAtNode(checked_expr, expected_node)),
             .closure => |closure| return loweredExprStep(try self.lowerClosureAtNode(checked_expr, closure, expected_node)),
             .field_access => |field| return loweredExprStep(try self.lowerFieldAccessExprAtNode(checked_expr, field, expected_node)),
-            .tag => |tag| return loweredExprStep(try self.lowerTagConstructorAtNode(tag, expected_node)),
+            .tag => |tag| return constructorStep(self, .{ .kind = .{ .tag = tag.name }, .node = expected_node, .children = tag.args }),
             .zero_argument_tag => |tag| return loweredExprStep(try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
                 .name = try self.tagName(self.view, tag.name),
                 .payloads = .empty(),
             } })),
-            .nominal => |nominal| return loweredExprStep(try self.lowerNominalConstructorAtNode(nominal, expected_node)),
-            .tuple => |items| return loweredExprStep(try self.lowerTupleConstructorAtNode(items, expected_node)),
-            .list => |items| return loweredExprStep(try self.lowerListConstructorAtNode(items, expected_node)),
+            .nominal => |nominal| return constructorStep(self, .{
+                .kind = .{ .nominal = nominal.backing_expr },
+                .node = self.constructorRepresentationNode(expected_node),
+                .children = &.{},
+            }),
+            .tuple => |items| return constructorStep(self, .{ .kind = .tuple, .node = expected_node, .children = items }),
+            .list => |items| return constructorStep(self, .{ .kind = .list, .node = expected_node, .children = items }),
             .empty_list => return loweredExprStep(try self.addExprWithTypeCell(
                 DraftTypeCell.fromGraphNode(expected_node),
                 .{ .list = .empty() },
@@ -26771,12 +27319,12 @@ const BodyContext = struct {
             // through the record path so the demanded row's DEFAULTED fields
             // materialize their defaults into the inline slots (design.md
             // "Defaulted Fields").
-            .empty_record => return loweredExprStep(try self.lowerRecordConstructorAtNode(checked_expr, .{
-                .fields = @as([]const checked.CheckedRecordExprField, &.{}),
-                .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
-                .ext = @as(?checked.CheckedExprId, null),
-            }, expected_node)),
-            .record => |record| return loweredExprStep(try self.lowerRecordConstructorAtNode(checked_expr, record, expected_node)),
+            .empty_record => return recordConstructorStep(self, checked_expr, .{
+                .fields = &.{},
+                .unsets = &.{},
+                .ext = null,
+            }, expected_node),
+            .record => |record| return recordConstructorStep(self, checked_expr, record, expected_node),
             .call => return requestLowerTask(self, .{ .call_expr_at_node = .{ .expr = checked_expr, .expected_node = expected_node } }),
             .numeral => |numeral| if (numeral.conversion_root) |root_id| {
                 return loweredExprStep(try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node));
@@ -27057,7 +27605,8 @@ const BodyContext = struct {
             // nominal open rows such as `Try.Ok(numeral)`.
             .tag => |tag| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return self.exprInnerDone(task, try self.lowerTagConstructorAtNode(tag, expr_node));
+                frame.cursor = 1;
+                return constructorStep(self, .{ .kind = .{ .tag = tag.name }, .node = expr_node, .children = tag.args });
             },
             .zero_argument_tag => |tag| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -27068,19 +27617,27 @@ const BodyContext = struct {
             },
             .nominal => |nominal| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return self.exprInnerDone(task, try self.lowerNominalConstructorAtNode(nominal, expr_node));
+                frame.cursor = 1;
+                return constructorStep(self, .{
+                    .kind = .{ .nominal = nominal.backing_expr },
+                    .node = self.constructorRepresentationNode(expr_node),
+                    .children = &.{},
+                });
             },
             .tuple => |items| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return self.exprInnerDone(task, try self.lowerTupleConstructorAtNode(items, expr_node));
+                frame.cursor = 1;
+                return constructorStep(self, .{ .kind = .tuple, .node = expr_node, .children = items });
             },
             .list => |items| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return self.exprInnerDone(task, try self.lowerListConstructorAtNode(items, expr_node));
+                frame.cursor = 1;
+                return constructorStep(self, .{ .kind = .list, .node = expr_node, .children = items });
             },
             .record => |record| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return self.exprInnerDone(task, try self.lowerRecordConstructorAtNode(expr_id, record, expr_node));
+                frame.cursor = 1;
+                return recordConstructorStep(self, expr_id, record, expr_node);
             },
             .empty_list, .empty_record => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -28667,42 +29224,8 @@ const BodyContext = struct {
         const active = try self.allocator.alloc(bool, self.draft.impossibility_proofs.items.len);
         defer self.allocator.free(active);
         @memset(active, false);
-        return try self.activeImpossibilityProofHoldsInner(proof, memo, active);
-    }
-
-    fn activeImpossibilityProofHoldsInner(
-        self: *BodyContext,
-        proof_id: RuntimeImpossibilityProofId,
-        memo: []?bool,
-        active: []bool,
-    ) Allocator.Error!bool {
-        const index = @intFromEnum(proof_id);
-        if (index >= self.draft.impossibility_proofs.items.len) {
-            Common.invariant("runtime impossibility proof referenced a missing active proof node");
-        }
-        if (memo[index]) |result| return result;
-        if (active[index]) Common.invariant("active runtime impossibility proof graph contained a cycle");
-        active[index] = true;
-        defer active[index] = false;
-        const result = switch (self.draft.impossibility_proofs.items[index]) {
-            .node => |node| try self.nodeIsProvenUninhabited(node),
-            .never => false,
-            .always => true,
-            .pending => Common.invariant("runtime impossibility proof reservation was not filled during deferred preparation"),
-            .forward => |child| try self.activeImpossibilityProofHoldsInner(child, memo, active),
-            .any => |span| blk: {
-                for (self.impossibilityProofSpan(span)) |child|
-                    if (try self.activeImpossibilityProofHoldsInner(child, memo, active)) break :blk true;
-                break :blk false;
-            },
-            .all => |span| blk: {
-                for (self.impossibilityProofSpan(span)) |child|
-                    if (!try self.activeImpossibilityProofHoldsInner(child, memo, active)) break :blk false;
-                break :blk true;
-            },
-        };
-        memo[index] = result;
-        return result;
+        var scan = ImpossibilityProofScan{ .body = self, .memo = memo, .active = active };
+        return try ImpossibilityProofScan.Evaluation.run(self.allocator, &scan, proof);
     }
 
     const UninhabitedBackingAccess = enum {
@@ -28715,61 +29238,8 @@ const BodyContext = struct {
         node: NodeId,
         backing_access: UninhabitedBackingAccess,
     ) Allocator.Error!bool {
-        const root = self.graph.rootNode(node);
-        const root_index = @intFromEnum(root);
-        if (self.inhabitation_visiting.bit_length <= root_index) {
-            try self.inhabitation_visiting.resize(self.allocator, root_index + 1, false);
-        }
-        if (self.inhabitation_visiting.isSet(root_index)) return false;
-        self.inhabitation_visiting.set(root_index);
-        defer self.inhabitation_visiting.unset(root_index);
-
-        return switch (self.graph.content(root)) {
-            .redirect => |target| self.nodeIsProvenUninhabitedInner(target, backing_access),
-            .empty_tag_union => true,
-            .named => |named| if (named.backing) |backing|
-                if (backing.use == .inspectable or backing_access == .runtime_layout)
-                    self.nodeIsProvenUninhabitedInner(backing.node, backing_access)
-                else
-                    false
-            else
-                false,
-            .box => |payload| self.nodeIsProvenUninhabitedInner(payload, backing_access),
-            .tuple => |elems| blk: {
-                for (elems) |elem| {
-                    if (try self.nodeIsProvenUninhabitedInner(elem, backing_access)) break :blk true;
-                }
-                break :blk false;
-            },
-            .record => |record| blk: {
-                for (record.fields) |field| {
-                    if (try self.nodeIsProvenUninhabitedInner(field.ty, backing_access)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => |tag_union| blk: {
-                if (!try self.nodeIsProvenUninhabitedInner(tag_union.ext, backing_access)) break :blk false;
-                for (tag_union.tags) |tag| {
-                    var tag_is_inhabited = true;
-                    for (tag.payloads) |payload| {
-                        if (try self.nodeIsProvenUninhabitedInner(payload, backing_access)) {
-                            tag_is_inhabited = false;
-                            break;
-                        }
-                    }
-                    if (tag_is_inhabited) break :blk false;
-                }
-                break :blk true;
-            },
-            .unresolved,
-            .primitive,
-            .list,
-            .func,
-            .empty_record,
-            .erased,
-            .zst,
-            => false,
-        };
+        var scan = NodeUninhabitedScan{ .body = self, .backing_access = backing_access };
+        return try NodeUninhabitedScan.Evaluation.run(self.allocator, &scan, node);
     }
 
     fn typeIsProvenUninhabited(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
@@ -28779,123 +29249,19 @@ const BodyContext = struct {
         // inhabitation must not import it back into the active graph; deferred
         // inspect generation runs after relation production is frozen.
         if (self.draft.uninhabited_type_cache.get(ty)) |cached| return cached;
-        var visiting = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer visiting.deinit();
-        const result = try self.typeIsProvenUninhabitedInner(ty, &visiting);
+        var scan = TypeUninhabitedScan{
+            .body = self,
+            .visiting = collections.DenseMap(Type.TypeId, void).init(self.allocator),
+        };
+        defer scan.visiting.deinit();
+        const result = try TypeUninhabitedScan.Evaluation.run(self.allocator, &scan, ty);
         try self.draft.uninhabited_type_cache.put(ty, result);
         return result;
     }
 
-    fn typeIsProvenUninhabitedInner(
-        self: *BodyContext,
-        ty: Type.TypeId,
-        visiting: *collections.DenseMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        if (visiting.contains(ty)) return false;
-        try visiting.put(ty, {});
-        defer _ = visiting.remove(ty);
-
-        const types_ = self.typeStore();
-        return switch (types_.get(ty)) {
-            .named => |named| if (named.backing) |backing|
-                backing.use == .inspectable and
-                    try self.typeIsProvenUninhabitedInner(backing.ty, visiting)
-            else
-                false,
-            .box => |elem_ty| self.typeIsProvenUninhabitedInner(elem_ty, visiting),
-            .tuple => |items| blk: {
-                const item_types = types_.span(items);
-                for (0..GuardedList.borrowLen(item_types)) |index| {
-                    if (try self.typeIsProvenUninhabitedInner(GuardedList.at(item_types, index), visiting)) {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .record => |fields| blk: {
-                const field_span = types_.fieldSpan(fields);
-                for (0..GuardedList.borrowLen(field_span)) |index| {
-                    const field = GuardedList.at(field_span, index);
-                    if (try self.typeIsProvenUninhabitedInner(field.ty, visiting)) {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .tag_union => |tags| blk: {
-                const tag_span = types_.tagSpan(tags);
-                for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
-                    const tag = GuardedList.at(tag_span, tag_index);
-                    const payloads = types_.span(tag.payloads);
-                    var tag_is_inhabited = true;
-                    for (0..GuardedList.borrowLen(payloads)) |payload_index| {
-                        if (try self.typeIsProvenUninhabitedInner(GuardedList.at(payloads, payload_index), visiting)) {
-                            tag_is_inhabited = false;
-                            break;
-                        }
-                    }
-                    if (tag_is_inhabited) break :blk false;
-                }
-                break :blk true;
-            },
-            .primitive, .list, .func, .erased, .zst => false,
-        };
-    }
-
     fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
-        const pattern = self.view.bodies.pattern(pattern_id);
-        if (try self.nodeIsProvenUninhabited(try self.instNode(pattern.ty))) return true;
-        return switch (pattern.data) {
-            .as => |as| self.checkedPatternIsProvenUninhabited(as.pattern),
-            .applied_tag => |tag| blk: {
-                for (tag.args) |arg| {
-                    if (try self.checkedPatternIsProvenUninhabited(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-            .nominal => |nominal| self.checkedPatternIsProvenUninhabited(nominal.backing_pattern),
-            .record_destructure => |destructs| blk: {
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required, .sub_pattern, .rest => |child| child,
-                    };
-                    if (try self.checkedPatternIsProvenUninhabited(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .list => |list| blk: {
-                for (list.patterns) |child| {
-                    if (try self.checkedPatternIsProvenUninhabited(child)) break :blk true;
-                }
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| {
-                        if (try self.checkedPatternIsProvenUninhabited(rest_pattern)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .tuple => |items| blk: {
-                for (items) |child| {
-                    if (try self.checkedPatternIsProvenUninhabited(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .str_interpolation => |str| blk: {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| {
-                        if (try self.checkedPatternIsProvenUninhabited(capture)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .pending,
-            .assign,
-            .numeral_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => false,
-        };
+        var scan = PatternUninhabitedScan{ .body = self };
+        return try PatternUninhabitedScan.Evaluation.run(self.allocator, &scan, pattern_id);
     }
 
     fn lowerDbgMessage(self: *BodyContext, child: checked.CheckedExprId) Allocator.Error!DraftExprId {
@@ -41006,18 +41372,6 @@ const BodyContext = struct {
         return runtime_boundary;
     }
 
-    fn lowerConstructorChildAtCell(
-        self: *BodyContext,
-        child: checked.CheckedExprId,
-        cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        const node = try cell.toGraphNode(self.graph);
-        if (try self.nodeIsProvenUninhabited(node)) {
-            return try self.lowerExplicitUninhabitedInvocationAtTypeCell(child, cell);
-        }
-        return try self.lowerExprAtTypeCell(child, cell);
-    }
-
     /// What one constructor child contributes to its container's value
     /// witness.
     const ConstructorChildWitness = struct {
@@ -41296,9 +41650,8 @@ const BodyContext = struct {
             Common.invariant("generated interpolation iterator step function was not zero-argument");
         }
 
-        return try self.lowerInterpolationIterFromIndex(
+        return try self.lowerInterpolationIter(
             interpolation,
-            0,
             expr_id,
             ty,
             backing_ty,
@@ -41308,10 +41661,12 @@ const BodyContext = struct {
         );
     }
 
-    fn lowerInterpolationIterFromIndex(
+    /// The iterator over `interpolation`'s parts. Each part's iterator binds
+    /// the iterator over the parts after it, so the lengths lower from the
+    /// front and the steps from the back.
+    fn lowerInterpolationIter(
         self: *BodyContext,
         interpolation: checked.CheckedInterpolation,
-        index: usize,
         source_expr_id: checked.CheckedExprId,
         iter_ty: Type.TypeId,
         backing_ty: Type.TypeId,
@@ -41319,43 +41674,41 @@ const BodyContext = struct {
         step_fn_ty: Type.TypeId,
         step_ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const remaining = interpolation.parts.len - index;
-        const len_expr = try self.lowerInterpolationLenIfKnown(remaining, len_ty);
-
-        if (index == interpolation.parts.len) {
-            const step_expr = try self.lowerInterpolationDoneStep(interpolation.step_fn_ty, source_expr_id, index, step_fn_ty, step_ret_ty);
-            return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        const part_count = interpolation.parts.len;
+        const len_exprs = try self.allocator.alloc(DraftExprId, part_count + 1);
+        defer self.allocator.free(len_exprs);
+        for (len_exprs, 0..) |*len_expr, index| {
+            len_expr.* = try self.lowerInterpolationLenIfKnown(part_count - index, len_ty);
         }
 
-        const rest_expr = try self.lowerInterpolationIterFromIndex(
-            interpolation,
-            index + 1,
-            source_expr_id,
-            iter_ty,
-            backing_ty,
-            len_ty,
-            step_fn_ty,
-            step_ret_ty,
-        );
-        const rest_local = try self.addLocal(self.builder.symbols.fresh(), iter_ty);
-        const rest_pat = try self.bindPat(rest_local, iter_ty);
-        const rest_ref = try self.localExpr(rest_local, iter_ty);
-        const step_expr = try self.lowerInterpolationOneStep(
-            interpolation,
-            index,
-            source_expr_id,
-            rest_ref,
-            iter_ty,
-            interpolation.step_fn_ty,
-            step_fn_ty,
-            step_ret_ty,
-        );
-        const iter_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
-        return try self.addExpr(.{ .ty = iter_ty, .data = .{ .let_ = .{
-            .bind = rest_pat,
-            .value = rest_expr,
-            .rest = iter_expr,
-        } } });
+        const done_step = try self.lowerInterpolationDoneStep(interpolation.step_fn_ty, source_expr_id, part_count, step_fn_ty, step_ret_ty);
+        var iter_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_exprs[part_count], done_step);
+
+        var index = part_count;
+        while (index > 0) {
+            index -= 1;
+            const rest_expr = iter_expr;
+            const rest_local = try self.addLocal(self.builder.symbols.fresh(), iter_ty);
+            const rest_pat = try self.bindPat(rest_local, iter_ty);
+            const rest_ref = try self.localExpr(rest_local, iter_ty);
+            const step_expr = try self.lowerInterpolationOneStep(
+                interpolation,
+                index,
+                source_expr_id,
+                rest_ref,
+                iter_ty,
+                interpolation.step_fn_ty,
+                step_fn_ty,
+                step_ret_ty,
+            );
+            const record_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_exprs[index], step_expr);
+            iter_expr = try self.addExpr(.{ .ty = iter_ty, .data = .{ .let_ = .{
+                .bind = rest_pat,
+                .value = rest_expr,
+                .rest = record_expr,
+            } } });
+        }
+        return iter_expr;
     }
 
     fn lowerInterpolationIterRecord(
@@ -43055,223 +43408,6 @@ const BodyContext = struct {
             } });
         }
         return record_expr;
-    }
-
-    fn lowerTagConstructorAtNode(
-        self: *BodyContext,
-        tag: anytype,
-        tag_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const name = try self.tagName(self.view, tag.name);
-        const payload_nodes = try self.allocator.alloc(NodeId, tag.args.len);
-        defer self.allocator.free(payload_nodes);
-        for (tag.args, 0..) |_, index| {
-            payload_nodes[index] = try self.graph.tagConstructionPayloadNode(tag_node, name, index);
-        }
-        try self.prepareConstructorChildrenAtNodes(tag.args, payload_nodes);
-        const lowered = try self.allocator.alloc(DraftExprId, tag.args.len);
-        defer self.allocator.free(lowered);
-        const produced_payloads = try self.allocator.alloc(NodeId, tag.args.len);
-        defer self.allocator.free(produced_payloads);
-        var requires_distinct_witness = false;
-        for (tag.args, payload_nodes, 0..) |arg, payload_node, index| {
-            lowered[index] = try self.lowerConstructorChildAtCell(
-                arg,
-                DraftTypeCell.fromGraphNode(payload_node),
-            );
-            const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
-            const witness = try self.constructorChildWitness(
-                payload_node,
-                child_node,
-                "tag graph constructor child differed without explicit representation evidence",
-            );
-            produced_payloads[index] = witness.slot;
-            if (witness.requires_witness) requires_distinct_witness = true;
-        }
-        const produced_node = if (requires_distinct_witness) blk: {
-            const structural_node = try self.graph.tagValueNodeWithPayloads(tag_node, name, produced_payloads);
-            const witness = try self.constructorWitnessWithStructuralNode(tag_node, structural_node);
-            break :blk try self.relateCheckedNodeToProducedValue(tag_node, witness);
-        } else tag_node;
-        return try self.addConstructorExprAtNode(produced_node, .{ .tag = .{
-            .name = name,
-            .payloads = try self.addExprSpan(lowered),
-        } });
-    }
-
-    fn lowerNominalConstructorAtNode(
-        self: *BodyContext,
-        nominal: anytype,
-        nominal_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const representation_node = self.constructorRepresentationNode(nominal_node);
-        if (self.graph.content(representation_node) != .named) {
-            Common.invariant("nominal constructor had no nominal graph representation");
-        }
-        const named = self.graph.namedNodes(representation_node);
-        const backing_node = (named.backing orelse
-            Common.invariant("nominal constructor graph node had no backing")).node;
-        try self.prepareConstructorChildrenAtNodes(&.{nominal.backing_expr}, &.{backing_node});
-        const backing = try self.lowerConstructorChildAtCell(
-            nominal.backing_expr,
-            DraftTypeCell.fromGraphNode(backing_node),
-        );
-        const child_node = try self.exprTypeCell(backing).toGraphNode(self.graph);
-        const backing_witness = try self.constructorChildWitness(
-            backing_node,
-            child_node,
-            "nominal graph constructor child differed without explicit representation evidence",
-        );
-        const produced_node = if (backing_witness.requires_witness) blk: {
-            const witness_node = try self.graph.namedValueNodeWithBacking(representation_node, backing_witness.slot);
-            break :blk try self.relateCheckedNodeToProducedValue(representation_node, witness_node);
-        } else representation_node;
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(produced_node),
-            .{ .nominal = backing },
-        );
-    }
-
-    fn lowerTupleConstructorAtNode(
-        self: *BodyContext,
-        items: []const checked.CheckedExprId,
-        tuple_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
-        if (items.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
-        try self.prepareConstructorChildrenAtNodes(items, item_nodes);
-        const lowered = try self.allocator.alloc(DraftExprId, items.len);
-        defer self.allocator.free(lowered);
-        const produced_items = try self.allocator.alloc(NodeId, items.len);
-        defer self.allocator.free(produced_items);
-        var requires_distinct_witness = false;
-        for (items, item_nodes, 0..) |item, item_node, index| {
-            lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(item_node));
-            const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
-            const witness = try self.constructorChildWitness(
-                item_node,
-                child_node,
-                "tuple graph constructor child differed without explicit representation evidence",
-            );
-            produced_items[index] = witness.slot;
-            if (witness.requires_witness) requires_distinct_witness = true;
-        }
-        const produced_node = if (requires_distinct_witness) blk: {
-            const structural_node = try self.graph.newNode(.{
-                .tuple = try self.graph.arena().dupe(NodeId, produced_items),
-            });
-            const witness = try self.constructorWitnessWithStructuralNode(tuple_node, structural_node);
-            break :blk try self.relateCheckedNodeToProducedValue(tuple_node, witness);
-        } else tuple_node;
-        return try self.addConstructorExprAtNode(produced_node, .{ .tuple = try self.addExprSpan(lowered) });
-    }
-
-    fn lowerListConstructorAtNode(
-        self: *BodyContext,
-        items: []const checked.CheckedExprId,
-        list_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const element_node = try self.graph.listElementNode(list_node);
-        const item_nodes = try self.allocator.alloc(NodeId, items.len);
-        defer self.allocator.free(item_nodes);
-        @memset(item_nodes, element_node);
-        try self.prepareConstructorChildrenAtNodes(items, item_nodes);
-        const lowered = try self.allocator.alloc(DraftExprId, items.len);
-        defer self.allocator.free(lowered);
-        var produced_element: ?NodeId = null;
-        var selected_index: usize = 0;
-        const child_nodes = try self.allocator.alloc(NodeId, items.len);
-        defer self.allocator.free(child_nodes);
-        for (items, 0..) |item, index| {
-            lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(element_node));
-            const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
-            child_nodes[index] = child_node;
-            if (produced_element) |selected| {
-                // A list has exactly one element representation, so every
-                // later child joins the selected witness—including a child
-                // whose class already matches the checked element slot, which
-                // otherwise would silently diverge from the selection.
-                try selectRequestRepresentation(self.graph, selected, child_node);
-            } else {
-                const witness = try self.constructorChildWitness(
-                    element_node,
-                    child_node,
-                    "list graph constructor child differed without explicit representation evidence",
-                );
-                if (witness.requires_witness) {
-                    produced_element = witness.slot;
-                    selected_index = index;
-                }
-            }
-        }
-        const produced_node = if (produced_element) |element_witness| blk: {
-            // Elements lowered before the selection were only checked against
-            // the public element slot, so they join the selection here; every
-            // element is stored at one representation regardless of which
-            // element chose it.
-            for (child_nodes[0..selected_index]) |child_node| {
-                try selectRequestRepresentation(self.graph, element_witness, child_node);
-            }
-            const structural_node = try self.graph.newNode(.{ .list = element_witness });
-            const witness = try self.constructorWitnessWithStructuralNode(list_node, structural_node);
-            // Every element is stored at the list's single element
-            // representation, so each element expression carries the selected
-            // witness cell rather than the checked-public slot it was
-            // requested at.
-            const element_cell = DraftTypeCell.fromGraphNode(element_witness);
-            for (lowered) |element| {
-                self.draft.exprs.items[@intFromEnum(element)].ty = element_cell;
-            }
-            break :blk try self.relateCheckedNodeToProducedValue(list_node, witness);
-        } else list_node;
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(produced_node),
-            .{ .list = try self.addExprSpan(lowered) },
-        );
-    }
-
-    fn lowerRecordConstructorAtNode(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        record: anytype,
-        record_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        var children = std.ArrayList(PreLoweredChild).empty;
-        defer children.deinit(self.allocator);
-        const child_count = record.fields.len + @as(usize, if (record.ext != null) 1 else 0);
-        const child_exprs = try self.allocator.alloc(checked.CheckedExprId, child_count);
-        defer self.allocator.free(child_exprs);
-        const child_nodes = try self.allocator.alloc(NodeId, child_count);
-        defer self.allocator.free(child_nodes);
-        var child_index: usize = 0;
-        if (record.ext) |ext| {
-            child_exprs[child_index] = ext;
-            child_nodes[child_index] = try self.instNode(self.view.bodies.expr(ext).ty);
-            child_index += 1;
-        }
-        for (record.fields) |field| {
-            child_exprs[child_index] = field.value;
-            const mono_field_name = try self.recordFieldName(self.view, field.label);
-            child_nodes[child_index] = try self.graph.recordConstructionFieldValueNode(record_node, mono_field_name);
-            child_index += 1;
-        }
-        try self.prepareConstructorChildrenAtNodes(child_exprs, child_nodes);
-        child_index = 0;
-        if (record.ext) |ext| {
-            try children.append(self.allocator, .{
-                .checked_expr = ext,
-                .expr = try self.lowerConstructorChildAtCell(ext, DraftTypeCell.fromGraphNode(child_nodes[child_index])),
-            });
-            child_index += 1;
-        }
-        for (record.fields) |field| {
-            try children.append(self.allocator, .{
-                .checked_expr = field.value,
-                .expr = try self.lowerConstructorChildAtCell(field.value, DraftTypeCell.fromGraphNode(child_nodes[child_index])),
-            });
-            child_index += 1;
-        }
-        return try self.lowerRecordExprAtNode(checked_expr, record, record_node, children.items);
     }
 
     fn omittedRecordFieldDefault(
@@ -62044,6 +62180,222 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
         } },
     };
 }
+
+/// Decides whether a graph node is proven uninhabited. A node on the active
+/// path is not.
+const NodeUninhabitedScan = struct {
+    body: *BodyContext,
+    backing_access: BodyContext.UninhabitedBackingAccess,
+
+    const Evaluation = AnyAll.Evaluation(NodeId, NodeUninhabitedScan);
+
+    pub fn enter(self: *NodeUninhabitedScan, items: Evaluation.Items, node: NodeId) Allocator.Error!Evaluation.Expansion {
+        const body = self.body;
+        const root = body.graph.rootNode(node);
+        const root_index = @intFromEnum(root);
+        if (body.inhabitation_visiting.bit_length <= root_index) {
+            try body.inhabitation_visiting.resize(body.allocator, root_index + 1, false);
+        }
+        if (body.inhabitation_visiting.isSet(root_index)) return .{ .value = false };
+
+        const expansion: Evaluation.Expansion = switch (body.graph.content(root)) {
+            .redirect => |target| blk: {
+                try items.add(target);
+                break :blk .{ .group = .any };
+            },
+            .empty_tag_union => .{ .value = true },
+            .named => |named| blk: {
+                const backing = named.backing orelse break :blk .{ .value = false };
+                if (backing.use != .inspectable and self.backing_access != .runtime_layout) break :blk .{ .value = false };
+                try items.add(backing.node);
+                break :blk .{ .group = .any };
+            },
+            .box => |payload| blk: {
+                try items.add(payload);
+                break :blk .{ .group = .any };
+            },
+            .tuple => |elems| blk: {
+                for (elems) |elem| try items.add(elem);
+                break :blk .{ .group = .any };
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| try items.add(field.ty);
+                break :blk .{ .group = .any };
+            },
+            // Uninhabited when its extension is and every tag has an
+            // uninhabited payload.
+            .tag_union => |tag_union| blk: {
+                try items.add(tag_union.ext);
+                for (tag_union.tags) |tag| {
+                    try items.group(.any, tag.payloads.len);
+                    for (tag.payloads) |payload| try items.add(payload);
+                }
+                break :blk .{ .group = .all };
+            },
+            .unresolved,
+            .primitive,
+            .list,
+            .func,
+            .empty_record,
+            .erased,
+            .zst,
+            => .{ .value = false },
+        };
+        if (expansion == .group) body.inhabitation_visiting.set(root_index);
+        return expansion;
+    }
+
+    pub fn exit(self: *NodeUninhabitedScan, node: NodeId, _: ?bool) void {
+        self.body.inhabitation_visiting.unset(@intFromEnum(self.body.graph.rootNode(node)));
+    }
+};
+
+/// Decides whether a sealed Monotype type is proven uninhabited. A type on
+/// the active path is not.
+const TypeUninhabitedScan = struct {
+    body: *BodyContext,
+    visiting: collections.DenseMap(Type.TypeId, void),
+
+    const Evaluation = AnyAll.Evaluation(Type.TypeId, TypeUninhabitedScan);
+
+    pub fn enter(self: *TypeUninhabitedScan, items: Evaluation.Items, ty: Type.TypeId) Allocator.Error!Evaluation.Expansion {
+        if (self.visiting.contains(ty)) return .{ .value = false };
+        const types_ = self.body.typeStore();
+        const expansion: Evaluation.Expansion = switch (types_.get(ty)) {
+            .named => |named| blk: {
+                const backing = named.backing orelse break :blk .{ .value = false };
+                if (backing.use != .inspectable) break :blk .{ .value = false };
+                try items.add(backing.ty);
+                break :blk .{ .group = .any };
+            },
+            .box => |elem_ty| blk: {
+                try items.add(elem_ty);
+                break :blk .{ .group = .any };
+            },
+            .tuple => |elems| blk: {
+                const item_types = types_.span(elems);
+                for (0..GuardedList.borrowLen(item_types)) |index| try items.add(GuardedList.at(item_types, index));
+                break :blk .{ .group = .any };
+            },
+            .record => |fields| blk: {
+                const field_span = types_.fieldSpan(fields);
+                for (0..GuardedList.borrowLen(field_span)) |index| try items.add(GuardedList.at(field_span, index).ty);
+                break :blk .{ .group = .any };
+            },
+            // Uninhabited when every tag has an uninhabited payload.
+            .tag_union => |tags| blk: {
+                const tag_span = types_.tagSpan(tags);
+                for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
+                    const payloads = types_.span(GuardedList.at(tag_span, tag_index).payloads);
+                    const payload_count = GuardedList.borrowLen(payloads);
+                    try items.group(.any, payload_count);
+                    for (0..payload_count) |payload_index| try items.add(GuardedList.at(payloads, payload_index));
+                }
+                break :blk .{ .group = .all };
+            },
+            .primitive, .list, .func, .erased, .zst => .{ .value = false },
+        };
+        if (expansion == .group) try self.visiting.put(ty, {});
+        return expansion;
+    }
+
+    pub fn exit(self: *TypeUninhabitedScan, ty: Type.TypeId, _: ?bool) void {
+        _ = self.visiting.remove(ty);
+    }
+};
+
+/// Decides whether a runtime impossibility proof holds, memoizing each
+/// proof node's result.
+const ImpossibilityProofScan = struct {
+    body: *BodyContext,
+    memo: []?bool,
+    active: []bool,
+
+    const Evaluation = AnyAll.Evaluation(RuntimeImpossibilityProofId, ImpossibilityProofScan);
+
+    pub fn enter(self: *ImpossibilityProofScan, items: Evaluation.Items, proof_id: RuntimeImpossibilityProofId) Allocator.Error!Evaluation.Expansion {
+        const body = self.body;
+        const index = @intFromEnum(proof_id);
+        if (index >= body.draft.impossibility_proofs.items.len) {
+            Common.invariant("runtime impossibility proof referenced a missing active proof node");
+        }
+        if (self.memo[index]) |result| return .{ .value = result };
+        if (self.active[index]) Common.invariant("active runtime impossibility proof graph contained a cycle");
+        const expansion: Evaluation.Expansion = switch (body.draft.impossibility_proofs.items[index]) {
+            .node => |node| .{ .value = try body.nodeIsProvenUninhabited(node) },
+            .never => .{ .value = false },
+            .always => .{ .value = true },
+            .pending => Common.invariant("runtime impossibility proof reservation was not filled during deferred preparation"),
+            .forward => |child| blk: {
+                try items.add(child);
+                break :blk .{ .group = .any };
+            },
+            .any => |span| blk: {
+                for (body.impossibilityProofSpan(span)) |child| try items.add(child);
+                break :blk .{ .group = .any };
+            },
+            .all => |span| blk: {
+                for (body.impossibilityProofSpan(span)) |child| try items.add(child);
+                break :blk .{ .group = .all };
+            },
+        };
+        switch (expansion) {
+            .value => |result| self.memo[index] = result,
+            .group => self.active[index] = true,
+        }
+        return expansion;
+    }
+
+    pub fn exit(self: *ImpossibilityProofScan, proof_id: RuntimeImpossibilityProofId, result: ?bool) void {
+        const index = @intFromEnum(proof_id);
+        self.active[index] = false;
+        if (result) |value| self.memo[index] = value;
+    }
+};
+
+/// Decides whether a checked pattern is proven uninhabited: its own type is,
+/// or one of its subpatterns is.
+const PatternUninhabitedScan = struct {
+    body: *BodyContext,
+
+    const Evaluation = AnyAll.Evaluation(checked.CheckedPatternId, PatternUninhabitedScan);
+
+    pub fn enter(self: *PatternUninhabitedScan, items: Evaluation.Items, pattern_id: checked.CheckedPatternId) Allocator.Error!Evaluation.Expansion {
+        const body = self.body;
+        const pattern = body.view.bodies.pattern(pattern_id);
+        if (try body.nodeIsProvenUninhabited(try body.instNode(pattern.ty))) return .{ .value = true };
+        switch (pattern.data) {
+            .as => |as| try items.add(as.pattern),
+            .applied_tag => |tag| for (tag.args) |arg| try items.add(arg),
+            .nominal => |nominal| try items.add(nominal.backing_pattern),
+            .record_destructure => |destructs| for (destructs) |destruct| {
+                try items.add(switch (destruct.kind) {
+                    .required, .sub_pattern, .rest => |child| child,
+                });
+            },
+            .list => |list| {
+                for (list.patterns) |child| try items.add(child);
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| try items.add(rest_pattern);
+                }
+            },
+            .tuple => |children| for (children) |child| try items.add(child),
+            .str_interpolation => |str| for (str.steps) |step| {
+                if (step.capture) |capture| try items.add(capture);
+            },
+            .pending,
+            .assign,
+            .numeral_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => return .{ .value = false },
+        }
+        return .{ .group = .any };
+    }
+
+    pub fn exit(_: *PatternUninhabitedScan, _: checked.CheckedPatternId, _: ?bool) void {}
+};
 
 fn instRecordFieldLessThan(
     name_store: *const names.NameStore,

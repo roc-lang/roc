@@ -479,68 +479,7 @@ const Lowerer = struct {
     }
 
     fn ensureOwnFnSpec(self: *Lowerer, fn_id: Lifted.FnId, abi: CaptureAbi) Allocator.Error!Ast.FnId {
-        const solved_fn_ty = self.solved.types.root(self.solved.fn_tys[@intFromEnum(fn_id)]);
-        switch (self.solved.types.rootContent(solved_fn_ty)) {
-            .func => {},
-            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("Lambda Mono function table contains a non-function type"),
-        }
-        return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, try self.ownCaptureSpanForFn(fn_id));
-    }
-
-    fn ensureFnSpec(
-        self: *Lowerer,
-        source: Lifted.FnId,
-        solved_fn_ty: SolvedType.TypeVarId,
-        abi: CaptureAbi,
-        captures: CaptureSpanId,
-    ) Allocator.Error!Ast.FnId {
-        const capture_items = self.captureSpan(captures);
-        const root_fn_ty = self.solved.types.root(solved_fn_ty);
-        const spec = FnSpec{
-            .source = source,
-            .solved_fn_ty = root_fn_ty,
-            .abi = abi,
-            .captures = captures,
-            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures),
-        };
-
-        const result = try self.fn_spec_map.getOrPut(spec);
-        if (result.found_existing) return result.value_ptr.*;
-
-        const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fnCount())));
-        const source_fn = self.solved.lifted.fns[@intFromEnum(source)];
-        const symbol = self.symbols.fresh();
-        try self.program.fns.append(self.allocator, undefined);
-        try self.fn_specs.append(self.allocator, spec);
-        try self.fn_written.append(self.allocator, false);
-        if (self.debug_specialization_identities) |identities| {
-            try identities.append(self.allocator, .{
-                .source = spec.source,
-                .solved_fn_ty = spec.solved_fn_ty,
-                .abi = spec.abi,
-                .captures_source = spec.captures.source,
-                .captures_start = specializationIdentityCaptureStart(spec.captures),
-                .captures_len = spec.captures.len,
-            });
-        }
-        result.value_ptr.* = fn_id;
-        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
-            try self.program.setProcDebugName(symbol, name);
-        }
-
-        const ret_ty = try self.lowerType(switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
-            .func => |func| func.ret,
-            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("Lambda Mono function table contains a non-function type"),
-        });
-
-        self.program.setFn(fn_id, .{
-            .symbol = symbol,
-            .source = source_fn.source,
-            .args = .empty(),
-            .body = .hosted,
-            .ret = ret_ty,
-        });
-        return fn_id;
+        return (try self.runFrames(try self.ownFnSpecTask(fn_id, abi))).get(.fn_id);
     }
 
     fn sourceFnForSymbol(self: *Lowerer, symbol: Common.Symbol) Lifted.FnId {
@@ -623,22 +562,427 @@ const Lowerer = struct {
         return ty;
     }
 
-    fn lowerExpr(self: *Lowerer, expr_id: Lifted.ExprId) Allocator.Error!Ast.ExprId {
-        const index = @intFromEnum(expr_id);
-        if (self.expr_map[index]) |cached| return cached;
+    // Lowering //
+    //
+    // Lowering an expression, statement, pattern, or type lowers its parts
+    // from inside its own lowering. Every such computation suspends as a
+    // `Frame` on one heap-backed stack while a part lowers, so nesting never
+    // becomes native call depth. A frame issues its parts in the order a
+    // direct recursive lowering evaluated them, so every id is allocated in
+    // the same order.
 
+    const Task = union(enum) {
+        expr: ExprTask,
+        stmt: StmtTask,
+        pat: PatTask,
+        /// A sequence of parts, each lowered in order.
+        seq: SeqTask,
+        callable_value: CallableValueTask,
+        direct_call_args: DirectCallArgsTask,
+        value_call: ValueCallTask,
+        capture_record_expr: CaptureRecordExprTask,
+        /// A local's type lowered, then the local itself.
+        typed_local: TypedLocalTask,
+        type_var: TypeVarTask,
+        fn_spec: FnSpecTask,
+        capture_record_type: CaptureRecordTypeTask,
+        members: MembersTask,
+        declared_order: DeclaredOrderTask,
+    };
+
+    const Result = union(enum) {
+        expr: Ast.ExprId,
+        comptime_site: Ast.ComptimeSiteId,
+        pat: Ast.PatId,
+        stmt: Ast.StmtId,
+        ty: Type.TypeId,
+        fn_id: Ast.FnId,
+        local: Ast.LocalId,
+        type_span: Type.Span,
+        expr_span: Ast.Span(Ast.ExprId),
+        pat_span: Ast.Span(Ast.PatId),
+        stmt_span: Ast.Span(Ast.StmtId),
+        field_span: Ast.Span(Ast.FieldExpr),
+        destruct_span: Ast.Span(Ast.RecordDestruct),
+        branch_span: Ast.Span(Ast.Branch),
+        if_branch_span: Ast.Span(Ast.IfBranch),
+        typed_local_span: Ast.Span(Ast.TypedLocal),
+        str_pattern: Ast.StrPattern,
+        data: Ast.ExprData,
+        /// Owned by the lowerer's allocator.
+        slice: []Ast.ExprId,
+
+        fn get(self: Result, comptime tag: std.meta.Tag(Result)) @FieldType(Result, @tagName(tag)) {
+            return switch (self) {
+                tag => |payload| payload,
+                else => Common.invariant("Lambda Mono lowering frame received the wrong result kind"),
+            };
+        }
+    };
+
+    const Frame = struct {
+        cursor: u8 = 0,
+        index: usize = 0,
+        task: Task,
+    };
+
+    const Step = union(enum) {
+        call: Task,
+        ret: Result,
+    };
+
+    fn runFrames(self: *Lowerer, root: Task) Allocator.Error!Result {
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(self.allocator);
+        errdefer for (frames.items) |*frame| self.releaseFrame(frame);
+        try frames.append(self.allocator, .{ .task = root });
+        var input: ?Result = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (try self.stepFrame(frame, input)) {
+                .call => |task| {
+                    try frames.append(self.allocator, .{ .task = task });
+                    input = null;
+                },
+                .ret => |result| {
+                    var finished = frames.pop().?;
+                    self.releaseFrame(&finished);
+                    if (frames.items.len == 0) return result;
+                    input = result;
+                },
+            }
+        }
+    }
+
+    /// Free what a frame still owns.
+    fn releaseFrame(self: *Lowerer, frame: *Frame) void {
+        switch (frame.task) {
+            .expr => |*task| task.parts.deinit(self.allocator),
+            .stmt => |*task| task.parts.deinit(self.allocator),
+            .pat => |*task| task.parts.deinit(self.allocator),
+            .seq => |*task| task.results.deinit(self.allocator),
+            .direct_call_args => |*task| {
+                self.allocator.free(task.args);
+                task.args = &.{};
+            },
+            .value_call => |*task| {
+                self.allocator.free(task.args);
+                task.args = &.{};
+            },
+            .capture_record_expr => |*task| task.values.deinit(self.allocator),
+            .type_var => |*task| {
+                task.tys.deinit(self.allocator);
+                task.fields.deinit(self.allocator);
+                task.tags.deinit(self.allocator);
+            },
+            .capture_record_type => |*task| task.fields.deinit(self.allocator),
+            .members => |*task| task.variants.deinit(self.allocator),
+            .declared_order => |*task| task.lowered.deinit(self.allocator),
+            .callable_value, .typed_local, .fn_spec => {},
+        }
+    }
+
+    fn stepFrame(self: *Lowerer, frame: *Frame, input: ?Result) Allocator.Error!Step {
+        return switch (frame.task) {
+            .expr => |*task| self.stepExpr(frame, task, input),
+            .stmt => |*task| self.stepStmt(frame, task, input),
+            .pat => |*task| self.stepPat(frame, task, input),
+            .seq => |*task| self.stepSeq(frame, task, input),
+            .callable_value => |*task| self.stepCallableValue(frame, task, input),
+            .direct_call_args => |*task| self.stepDirectCallArgs(frame, task, input),
+            .value_call => |*task| self.stepValueCall(frame, task, input),
+            .capture_record_expr => |*task| self.stepCaptureRecordExpr(frame, task, input),
+            .typed_local => |*task| {
+                if (frame.cursor == 0) {
+                    if (task.known_ty) |ty| return .{ .ret = .{ .local = try self.localFor(task.local, ty) } };
+                    frame.cursor = 1;
+                    return .{ .call = .{ .type_var = .{ .var_id = self.solved.local_tys[@intFromEnum(task.local)] } } };
+                }
+                return .{ .ret = .{ .local = try self.localFor(task.local, input.?.ty) } };
+            },
+            .type_var => |*task| self.stepTypeVar(frame, task, input),
+            .fn_spec => |*task| self.stepFnSpec(frame, task, input),
+            .capture_record_type => |*task| self.stepCaptureRecordType(frame, task, input),
+            .members => |*task| self.stepMembers(frame, task, input),
+            .declared_order => |*task| self.stepDeclaredOrder(frame, task, input),
+        };
+    }
+
+    // Wrappers for callers outside the lowering frames.
+
+    fn lowerExpr(self: *Lowerer, expr_id: Lifted.ExprId) Allocator.Error!Ast.ExprId {
+        return (try self.runFrames(.{ .expr = .{ .expr_id = expr_id } })).get(.expr);
+    }
+
+    fn lowerType(self: *Lowerer, solved_ty: SolvedType.TypeVarId) Allocator.Error!Type.TypeId {
+        return (try self.runFrames(.{ .type_var = .{ .var_id = solved_ty } })).get(.ty);
+    }
+
+    /// The function specialization `ensureOwnFnSpec` selects, as a task.
+    fn ownFnSpecTask(self: *Lowerer, fn_id: Lifted.FnId, abi: CaptureAbi) Allocator.Error!Task {
+        const solved_fn_ty = self.solved.types.root(self.solved.fn_tys[@intFromEnum(fn_id)]);
+        switch (self.solved.types.rootContent(solved_fn_ty)) {
+            .func => {},
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("Lambda Mono function table contains a non-function type"),
+        }
+        return .{ .fn_spec = .{ .source = fn_id, .solved_fn_ty = solved_fn_ty, .abi = abi, .captures = try self.ownCaptureSpanForFn(fn_id) } };
+    }
+
+    /// One part a node lowers, in evaluation order.
+    const Part = union(enum) {
+        expr: Lifted.ExprId,
+        stmt: Lifted.StmtId,
+        pat: Lifted.PatId,
+        ty: SolvedType.TypeVarId,
+        /// A local's type, then the local.
+        local: Lifted.LocalId,
+        /// A local lowered at an already-lowered type.
+        local_at: struct { local: Lifted.LocalId, ty: Type.TypeId },
+        comptime_site: Lifted.ComptimeSiteId,
+        expr_span: Lifted.Span(Lifted.ExprId),
+        field_span: Lifted.Span(Lifted.FieldExpr),
+        pat_span: Lifted.Span(Lifted.PatId),
+        stmt_span: Lifted.Span(Lifted.StmtId),
+        typed_local_span: Lifted.Span(Lifted.TypedLocal),
+        destruct_span: Lifted.Span(Lifted.RecordDestruct),
+        branch_span: Lifted.Span(Lifted.Branch),
+        if_branch_span: Lifted.Span(Lifted.IfBranch),
+        str_pattern: Lifted.StrPattern,
+        own_fn_spec: Lifted.FnId,
+        callable_value: CallableValueTask,
+        direct_call_args: struct { fn_id: Lifted.FnId, args: Lifted.Span(Lifted.ExprId), captures: Lifted.Span(Lifted.CaptureOperand) },
+        value_call: struct { ty: Type.TypeId, callee: Lifted.ExprId, args: Lifted.Span(Lifted.ExprId) },
+    };
+
+    /// The parts one node lowers, in order.
+    const Plan = struct {
+        buf: [6]Part = undefined,
+        len: u8 = 0,
+
+        fn add(self: *Plan, part: Part) void {
+            self.buf[self.len] = part;
+            self.len += 1;
+        }
+
+        fn slice(self: *const Plan) []const Part {
+            return self.buf[0..self.len];
+        }
+    };
+
+    /// Lower `part` at once when it needs no frame, appending its result to
+    /// `results`; otherwise the task that lowers it.
+    fn partTask(self: *Lowerer, part: Part, results: *std.ArrayList(Result)) Allocator.Error!?Task {
+        return switch (part) {
+            .comptime_site => |site| {
+                try results.append(self.allocator, .{ .comptime_site = try self.lowerComptimeSite(site) });
+                return null;
+            },
+            .local_at => |local| {
+                try results.append(self.allocator, .{ .local = try self.localFor(local.local, local.ty) });
+                return null;
+            },
+            .expr => |expr_id| .{ .expr = .{ .expr_id = expr_id } },
+            .stmt => |stmt_id| .{ .stmt = .{ .stmt_id = stmt_id } },
+            .pat => |pat_id| .{ .pat = .{ .pat_id = pat_id } },
+            .ty => |ty| .{ .type_var = .{ .var_id = ty } },
+            .local => |local| .{ .typed_local = .{ .local = local } },
+            .expr_span => |span| .{ .seq = .{ .kind = .{ .exprs = span } } },
+            .field_span => |span| .{ .seq = .{ .kind = .{ .fields = span } } },
+            .pat_span => |span| .{ .seq = .{ .kind = .{ .pats = span } } },
+            .stmt_span => |span| .{ .seq = .{ .kind = .{ .stmts = span } } },
+            .typed_local_span => |span| .{ .seq = .{ .kind = .{ .typed_locals = span } } },
+            .destruct_span => |span| .{ .seq = .{ .kind = .{ .destructs = span } } },
+            .branch_span => |span| .{ .seq = .{ .kind = .{ .branches = span } } },
+            .if_branch_span => |span| .{ .seq = .{ .kind = .{ .if_branches = span } } },
+            .str_pattern => |str| .{ .seq = .{ .kind = .{ .str_pattern = str } } },
+            .own_fn_spec => |fn_id| try self.ownFnSpecTask(fn_id, .finite),
+            .callable_value => |callable| .{ .callable_value = callable },
+            .direct_call_args => |call| .{ .direct_call_args = .{ .fn_id = call.fn_id, .args_span = call.args, .captures_span = call.captures } },
+            .value_call => |call| .{ .value_call = .{ .ty = call.ty, .callee = call.callee, .args_span = call.args } },
+        };
+    }
+
+    /// Issue the next of `plan`, recording each result in `parts`; null
+    /// once all are lowered.
+    fn nextPart(self: *Lowerer, parts: *std.ArrayList(Result), plan: []const Part, input: ?Result) Allocator.Error!?Step {
+        if (input) |result| try parts.append(self.allocator, result);
+        while (parts.items.len < plan.len) {
+            if (try self.partTask(plan[parts.items.len], parts)) |task| return .{ .call = task };
+        }
+        return null;
+    }
+
+    const ExprTask = struct {
+        expr_id: Lifted.ExprId,
+        saved_loc: base.SourceLoc = undefined,
+        saved_region: base.Region = undefined,
+        ty: Type.TypeId = undefined,
+        plan: Plan = .{},
+        parts: std.ArrayList(Result) = .empty,
+    };
+
+    fn stepExpr(self: *Lowerer, frame: *Frame, task: *ExprTask, input: ?Result) Allocator.Error!Step {
+        const index = @intFromEnum(task.expr_id);
         const expr = self.solved.lifted.exprs[index];
-        const saved_loc = self.program.current_loc;
-        defer self.program.current_loc = saved_loc;
-        const saved_region = self.program.current_region;
-        defer self.program.current_region = saved_region;
-        const expr_loc = self.solved.lifted.exprLoc(expr_id);
-        if (expr_loc.hasLocation()) self.program.current_loc = expr_loc;
-        const expr_region = self.solved.lifted.exprRegion(expr_id);
-        if (!expr_region.isEmpty()) self.program.current_region = expr_region;
-        const ty = try self.lowerExprTy(expr_id);
-        const data: Ast.ExprData = switch (expr.data) {
-            .local => |local| try self.lowerLocalExpr(local, ty),
+        switch (frame.cursor) {
+            0 => {
+                if (self.expr_map[index]) |cached| return .{ .ret = .{ .expr = cached } };
+                task.saved_loc = self.program.current_loc;
+                task.saved_region = self.program.current_region;
+                const expr_loc = self.solved.lifted.exprLoc(task.expr_id);
+                if (expr_loc.hasLocation()) self.program.current_loc = expr_loc;
+                const expr_region = self.solved.lifted.exprRegion(task.expr_id);
+                if (!expr_region.isEmpty()) self.program.current_region = expr_region;
+                frame.cursor = 1;
+                return .{ .call = .{ .type_var = .{ .var_id = self.solved.expr_tys[index] } } };
+            },
+            1 => {
+                task.ty = input.?.get(.ty);
+                try self.planExprParts(task, expr);
+                frame.cursor = 2;
+                if (try self.nextPart(&task.parts, task.plan.slice(), null)) |step| return step;
+            },
+            else => if (try self.nextPart(&task.parts, task.plan.slice(), input)) |step| return step,
+        }
+        const data = try self.buildExprData(task, expr);
+        const lowered = try self.program.addExpr(.{ .ty = task.ty, .data = data });
+        self.expr_map[index] = lowered;
+        self.program.current_loc = task.saved_loc;
+        self.program.current_region = task.saved_region;
+        return .{ .ret = .{ .expr = lowered } };
+    }
+
+    fn planExprParts(self: *Lowerer, task: *ExprTask, expr: Lifted.Expr) Allocator.Error!void {
+        const plan = &task.plan;
+        switch (expr.data) {
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .inline_expects_enabled,
+            .@"unreachable",
+            .uninitialized,
+            .crash,
+            => {},
+            .comptime_value => |value| plan.add(.{ .expr = value.initializer }),
+            .static_data_candidate => |candidate| plan.add(.{ .expr = candidate.runtime_expr }),
+            .typed_boundary => |boundary| plan.add(.{ .expr = boundary.value }),
+            .uninitialized_payload => |payload| plan.add(.{ .local = payload.condition }),
+            .list, .tuple => |items| plan.add(.{ .expr_span = items }),
+            .record => |fields| plan.add(.{ .field_span = fields }),
+            .record_update => |update| {
+                plan.add(.{ .expr = update.base });
+                plan.add(.{ .field_span = update.fields });
+            },
+            .tag => |tag| plan.add(.{ .expr_span = tag.payloads }),
+            .nominal => |backing| plan.add(.{ .expr = backing }),
+            .let_ => |let_| {
+                plan.add(.{ .pat = let_.bind });
+                plan.add(.{ .expr = let_.value });
+                plan.add(.{ .expr = let_.rest });
+                if (let_.comptime_site) |site| plan.add(.{ .comptime_site = site });
+            },
+            .lambda,
+            .def_ref,
+            .fn_def,
+            => Common.invariant("pre-lift function expression reached Lambda Mono"),
+            .fn_ref => |fn_ref| plan.add(.{ .callable_value = .{
+                .expr_id = task.expr_id,
+                .fn_id = fn_ref.fn_id,
+                .captures_span = fn_ref.captures,
+                .ty = task.ty,
+            } }),
+            .call_value => |call| plan.add(.{ .value_call = .{ .ty = task.ty, .callee = call.callee, .args = call.args } }),
+            .call_proc => |call| switch (Lifted.directCallee(call)) {
+                .local => |callee| {
+                    plan.add(.{ .own_fn_spec = callee });
+                    plan.add(.{ .direct_call_args = .{ .fn_id = callee, .args = call.args, .captures = call.captures } });
+                },
+            },
+            .low_level => |call| plan.add(.{ .expr_span = call.args }),
+            .field_access => |field| plan.add(.{ .expr = field.receiver }),
+            .tuple_access => |access| plan.add(.{ .expr = access.tuple }),
+            .structural_eq => |eq| {
+                plan.add(.{ .expr = eq.lhs });
+                plan.add(.{ .expr = eq.rhs });
+            },
+            .structural_hash => |h| {
+                plan.add(.{ .expr = h.value });
+                plan.add(.{ .expr = h.hasher });
+            },
+            .match_ => |match| {
+                if (self.folded_matches.get(match.scrutinee)) |folded_body| {
+                    plan.add(.{ .expr = folded_body });
+                } else {
+                    plan.add(.{ .expr = match.scrutinee });
+                    plan.add(.{ .branch_span = match.branches });
+                    if (match.comptime_site) |site| plan.add(.{ .comptime_site = site });
+                }
+            },
+            .if_ => |if_| {
+                plan.add(.{ .if_branch_span = if_.branches });
+                plan.add(.{ .expr = if_.final_else });
+            },
+            .if_initialized_payload => |payload_switch| {
+                plan.add(.{ .expr = payload_switch.cond });
+                plan.add(.{ .local = payload_switch.payload });
+                plan.add(.{ .expr = payload_switch.initialized });
+                plan.add(.{ .expr = payload_switch.uninitialized });
+            },
+            .try_sequence => |sequence| {
+                plan.add(.{ .expr = sequence.try_expr });
+                plan.add(.{ .local = sequence.ok_local });
+                plan.add(.{ .expr = sequence.ok_body });
+            },
+            .try_record_sequence => |sequence| {
+                plan.add(.{ .expr = sequence.try_expr });
+                plan.add(.{ .local = sequence.value_local });
+                plan.add(.{ .local = sequence.rest_local });
+                plan.add(.{ .expr = sequence.ok_body });
+            },
+            .block => |block| {
+                plan.add(.{ .stmt_span = block.statements });
+                plan.add(.{ .expr = block.final_expr });
+            },
+            .loop_ => |loop| {
+                plan.add(.{ .typed_local_span = loop.params });
+                plan.add(.{ .expr_span = loop.initial_values });
+                plan.add(.{ .expr = loop.body });
+            },
+            .break_ => |maybe| if (maybe) |value| plan.add(.{ .expr = value }),
+            .continue_ => |continue_| plan.add(.{ .expr_span = continue_.values }),
+            .join_point => |join_point| {
+                plan.add(.{ .typed_local_span = join_point.params });
+                plan.add(.{ .typed_local_span = join_point.retained });
+                plan.add(.{ .expr = join_point.body });
+                plan.add(.{ .expr = join_point.remainder });
+            },
+            .jump => |jump| {
+                plan.add(.{ .expr_span = jump.args });
+                plan.add(.{ .typed_local_span = jump.loop_params });
+                plan.add(.{ .expr_span = jump.loop_values });
+            },
+            .return_ => |ret| plan.add(.{ .expr = ret.value }),
+            .comptime_branch_taken => |taken| {
+                plan.add(.{ .comptime_site = taken.site });
+                plan.add(.{ .expr = taken.body });
+            },
+            .comptime_exhaustiveness_failed => |site| plan.add(.{ .comptime_site = site }),
+            .dbg => |child| plan.add(.{ .expr = child }),
+            .expect_err => |expect_err| plan.add(.{ .expr = expect_err.msg }),
+            .literal_rejected => |rejected| plan.add(.{ .expr = rejected.msg }),
+            .expect => |child| if (self.inline_expects != .omit) plan.add(.{ .expr = child }),
+        }
+    }
+
+    fn buildExprData(self: *Lowerer, task: *ExprTask, expr: Lifted.Expr) Allocator.Error!Ast.ExprData {
+        const parts = task.parts.items;
+        return switch (expr.data) {
+            .local => |local| try self.lowerLocalExpr(local, task.ty),
             .unit => .unit,
             .int_lit => |value| .{ .int_lit = value },
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
@@ -649,290 +993,605 @@ const Lowerer = struct {
             .inline_expects_enabled => .{ .inline_expects_enabled = {} },
             .comptime_value => |value| .{ .comptime_value = .{
                 .root = value.root,
-                .initializer = try self.lowerExpr(value.initializer),
+                .initializer = parts[0].get(.expr),
             } },
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .static_data = candidate.static_data,
                 .storage = candidate.storage,
-                .runtime_expr = try self.lowerExpr(candidate.runtime_expr),
+                .runtime_expr = parts[0].get(.expr),
             } },
-            .typed_boundary => |boundary| .{ .typed_boundary = .{
-                .value = try self.lowerExpr(boundary.value),
-            } },
+            .typed_boundary => .{ .typed_boundary = .{ .value = parts[0].get(.expr) } },
             .@"unreachable" => .@"unreachable",
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
-                .condition = try self.localFor(payload.condition, try self.lowerType(self.solved.local_tys[@intFromEnum(payload.condition)])),
+                .condition = parts[0].get(.local),
                 .mask = payload.mask,
             } },
-            .list => |items| .{ .list = try self.lowerExprSpan(items) },
-            .tuple => |items| .{ .tuple = try self.lowerExprSpan(items) },
-            .record => |fields| .{ .record = try self.lowerFieldExprSpan(fields) },
-            .record_update => |update| .{ .record_update = .{
-                .base = try self.lowerExpr(update.base),
-                .fields = try self.lowerFieldExprSpan(update.fields),
+            .list => .{ .list = parts[0].get(.expr_span) },
+            .tuple => .{ .tuple = parts[0].get(.expr_span) },
+            .record => .{ .record = parts[0].get(.field_span) },
+            .record_update => .{ .record_update = .{
+                .base = parts[0].get(.expr),
+                .fields = parts[1].get(.field_span),
             } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
-                .payloads = try self.lowerExprSpan(tag.payloads),
+                .payloads = parts[0].get(.expr_span),
             } },
-            .nominal => |backing| .{ .nominal = try self.lowerExpr(backing) },
+            .nominal => .{ .nominal = parts[0].get(.expr) },
             .let_ => |let_| .{ .let_ = .{
-                .bind = try self.lowerPat(let_.bind),
-                .value = try self.lowerExpr(let_.value),
-                .rest = try self.lowerExpr(let_.rest),
-                .comptime_site = if (let_.comptime_site) |site| try self.lowerComptimeSite(site) else null,
+                .bind = parts[0].get(.pat),
+                .value = parts[1].get(.expr),
+                .rest = parts[2].get(.expr),
+                .comptime_site = if (let_.comptime_site != null) parts[3].get(.comptime_site) else null,
             } },
             .lambda,
             .def_ref,
             .fn_def,
             => Common.invariant("pre-lift function expression reached Lambda Mono"),
-            .fn_ref => |fn_ref| try self.lowerCallableValue(expr_id, fn_ref.fn_id, fn_ref.captures, ty),
-            .call_value => |call| try self.lowerValueCall(ty, call),
-            .call_proc => |call| blk: {
-                break :blk switch (Lifted.directCallee(call)) {
-                    .local => |callee| .{ .direct_call = .{
-                        .target = .{ .local = try self.ensureOwnFnSpec(callee, .finite) },
-                        .args = try self.lowerDirectCallArgs(callee, call.args, call.captures),
-                        .is_cold = call.is_cold,
-                    } },
-                };
-            },
+            .fn_ref => parts[0].get(.data),
+            .call_value => parts[0].get(.data),
+            .call_proc => |call| .{ .direct_call = .{
+                .target = .{ .local = parts[0].get(.fn_id) },
+                .args = parts[1].get(.expr_span),
+                .is_cold = call.is_cold,
+            } },
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
-                .args = try self.lowerExprSpan(call.args),
+                .args = parts[0].get(.expr_span),
             } },
             .field_access => |field| .{ .field_access = .{
-                .receiver = try self.lowerExpr(field.receiver),
+                .receiver = parts[0].get(.expr),
                 .segments = self.lowerFieldAccessSegmentSpan(field.segments),
             } },
             .tuple_access => |access| .{ .tuple_access = .{
-                .tuple = try self.lowerExpr(access.tuple),
+                .tuple = parts[0].get(.expr),
                 .elem_index = access.elem_index,
             } },
             .structural_eq => |eq| .{ .structural_eq = .{
-                .lhs = try self.lowerExpr(eq.lhs),
-                .rhs = try self.lowerExpr(eq.rhs),
+                .lhs = parts[0].get(.expr),
+                .rhs = parts[1].get(.expr),
                 .negated = eq.negated,
             } },
-            .structural_hash => |h| .{ .structural_hash = .{
-                .value = try self.lowerExpr(h.value),
-                .hasher = try self.lowerExpr(h.hasher),
+            .structural_hash => .{ .structural_hash = .{
+                .value = parts[0].get(.expr),
+                .hasher = parts[1].get(.expr),
             } },
-            .match_ => |match| blk: {
-                if (self.folded_matches.get(match.scrutinee)) |folded_body| {
-                    break :blk .{ .block = .{
-                        .statements = .empty(),
-                        .final_expr = try self.lowerExpr(folded_body),
-                    } };
-                }
-                break :blk .{ .match_ = .{
-                    .scrutinee = try self.lowerExpr(match.scrutinee),
-                    .branches = try self.lowerBranchSpan(match.branches),
-                    .comptime_site = if (match.comptime_site) |site| try self.lowerComptimeSite(site) else null,
-                } };
-            },
-            .if_ => |if_| .{ .if_ = .{
-                .branches = try self.lowerIfBranchSpan(if_.branches),
-                .final_else = try self.lowerExpr(if_.final_else),
+            .match_ => |match| if (self.folded_matches.get(match.scrutinee) != null)
+                .{ .block = .{
+                    .statements = .empty(),
+                    .final_expr = parts[0].get(.expr),
+                } }
+            else
+                .{ .match_ = .{
+                    .scrutinee = parts[0].get(.expr),
+                    .branches = parts[1].get(.branch_span),
+                    .comptime_site = if (match.comptime_site != null) parts[2].get(.comptime_site) else null,
+                } },
+            .if_ => .{ .if_ = .{
+                .branches = parts[0].get(.if_branch_span),
+                .final_else = parts[1].get(.expr),
             } },
             .if_initialized_payload => |payload_switch| .{ .if_initialized_payload = .{
-                .cond = try self.lowerExpr(payload_switch.cond),
+                .cond = parts[0].get(.expr),
                 .cond_mask = payload_switch.cond_mask,
-                .payload = try self.localFor(payload_switch.payload, try self.lowerType(self.solved.local_tys[@intFromEnum(payload_switch.payload)])),
+                .payload = parts[1].get(.local),
                 .uninitialized_is_cold = payload_switch.uninitialized_is_cold,
-                .initialized = try self.lowerExpr(payload_switch.initialized),
-                .uninitialized = try self.lowerExpr(payload_switch.uninitialized),
+                .initialized = parts[2].get(.expr),
+                .uninitialized = parts[3].get(.expr),
             } },
             .try_sequence => |sequence| .{ .try_sequence = .{
-                .try_expr = try self.lowerExpr(sequence.try_expr),
-                .ok_local = try self.localFor(sequence.ok_local, try self.lowerType(self.solved.local_tys[@intFromEnum(sequence.ok_local)])),
+                .try_expr = parts[0].get(.expr),
+                .ok_local = parts[1].get(.local),
                 .err_is_cold = sequence.err_is_cold,
                 .err_target = sequence.err_target,
-                .ok_body = try self.lowerExpr(sequence.ok_body),
+                .ok_body = parts[2].get(.expr),
             } },
             .try_record_sequence => |sequence| .{ .try_record_sequence = .{
-                .try_expr = try self.lowerExpr(sequence.try_expr),
-                .value_local = try self.localFor(sequence.value_local, try self.lowerType(self.solved.local_tys[@intFromEnum(sequence.value_local)])),
+                .try_expr = parts[0].get(.expr),
+                .value_local = parts[1].get(.local),
                 .value_field = sequence.value_field,
-                .rest_local = try self.localFor(sequence.rest_local, try self.lowerType(self.solved.local_tys[@intFromEnum(sequence.rest_local)])),
+                .rest_local = parts[2].get(.local),
                 .rest_field = sequence.rest_field,
                 .err_is_cold = sequence.err_is_cold,
                 .err_target = sequence.err_target,
-                .ok_body = try self.lowerExpr(sequence.ok_body),
+                .ok_body = parts[3].get(.expr),
             } },
-            .block => |block| .{ .block = .{
-                .statements = try self.lowerStmtSpan(block.statements),
-                .final_expr = try self.lowerExpr(block.final_expr),
+            .block => .{ .block = .{
+                .statements = parts[0].get(.stmt_span),
+                .final_expr = parts[1].get(.expr),
             } },
-            .loop_ => |loop| .{ .loop_ = .{
-                .params = try self.lowerTypedLocalSpan(loop.params),
-                .initial_values = try self.lowerExprSpan(loop.initial_values),
-                .body = try self.lowerExpr(loop.body),
+            .loop_ => .{ .loop_ = .{
+                .params = parts[0].get(.typed_local_span),
+                .initial_values = parts[1].get(.expr_span),
+                .body = parts[2].get(.expr),
             } },
-            .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.lowerExpr(value) else null },
-            .continue_ => |continue_| .{ .continue_ = .{ .values = try self.lowerExprSpan(continue_.values) } },
+            .break_ => |maybe| .{ .break_ = if (maybe != null) parts[0].get(.expr) else null },
+            .continue_ => .{ .continue_ = .{ .values = parts[0].get(.expr_span) } },
             .join_point => |join_point| .{ .join_point = .{
                 .id = join_point.id,
-                .params = try self.lowerTypedLocalSpan(join_point.params),
-                .retained = try self.lowerTypedLocalSpan(join_point.retained),
-                .body = try self.lowerExpr(join_point.body),
-                .remainder = try self.lowerExpr(join_point.remainder),
+                .params = parts[0].get(.typed_local_span),
+                .retained = parts[1].get(.typed_local_span),
+                .body = parts[2].get(.expr),
+                .remainder = parts[3].get(.expr),
             } },
             .jump => |jump| .{ .jump = .{
                 .target = jump.target,
-                .args = try self.lowerExprSpan(jump.args),
-                .loop_params = try self.lowerTypedLocalSpan(jump.loop_params),
-                .loop_values = try self.lowerExprSpan(jump.loop_values),
+                .args = parts[0].get(.expr_span),
+                .loop_params = parts[1].get(.typed_local_span),
+                .loop_values = parts[2].get(.expr_span),
             } },
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
+            .return_ => .{ .return_ = parts[0].get(.expr) },
             .crash => |msg| .{ .crash = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
-                .site = try self.lowerComptimeSite(taken.site),
+                .site = parts[0].get(.comptime_site),
                 .branch_index = taken.branch_index,
-                .body = try self.lowerExpr(taken.body),
+                .body = parts[1].get(.expr),
             } },
-            .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = try self.lowerComptimeSite(site) },
-            .dbg => |child| .{ .dbg = try self.lowerExpr(child) },
+            .comptime_exhaustiveness_failed => .{ .comptime_exhaustiveness_failed = parts[0].get(.comptime_site) },
+            .dbg => .{ .dbg = parts[0].get(.expr) },
             .expect_err => |expect_err| .{ .expect_err = .{
-                .msg = try self.lowerExpr(expect_err.msg),
+                .msg = parts[0].get(.expr),
                 .region = expect_err.region,
             } },
             .literal_rejected => |rejected| .{ .literal_rejected = .{
-                .msg = try self.lowerExpr(rejected.msg),
+                .msg = parts[0].get(.expr),
                 .site = rejected.site,
             } },
-            .expect => |child| if (self.inline_expects == .omit)
+            .expect => if (self.inline_expects == .omit)
                 .unit
             else
-                .{ .expect = try self.lowerExpr(child) },
+                .{ .expect = parts[0].get(.expr) },
         };
-
-        const lowered = try self.program.addExpr(.{ .ty = ty, .data = data });
-        self.expr_map[index] = lowered;
-        return lowered;
     }
 
-    fn lowerLocalExpr(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.ExprData {
-        if (self.captures.get(local)) |capture| {
-            return .{ .capture_access = .{
-                .record = capture.record,
-                .symbol = capture.symbol,
-            } };
+    const StmtTask = struct {
+        stmt_id: Lifted.StmtId,
+        saved_loc: base.SourceLoc = undefined,
+        saved_region: base.Region = undefined,
+        plan: Plan = .{},
+        parts: std.ArrayList(Result) = .empty,
+    };
+
+    fn stepStmt(self: *Lowerer, frame: *Frame, task: *StmtTask, input: ?Result) Allocator.Error!Step {
+        const index = @intFromEnum(task.stmt_id);
+        const stmt = self.solved.lifted.stmts[index];
+        if (frame.cursor == 0) {
+            if (self.stmt_map[index]) |cached| return .{ .ret = .{ .stmt = cached } };
+            task.saved_loc = self.program.current_loc;
+            task.saved_region = self.program.current_region;
+            const stmt_loc = self.solved.lifted.stmtLoc(task.stmt_id);
+            if (stmt_loc.hasLocation()) self.program.current_loc = stmt_loc;
+            const stmt_region = self.solved.lifted.stmtRegion(task.stmt_id);
+            if (!stmt_region.isEmpty()) self.program.current_region = stmt_region;
+            switch (stmt) {
+                .uninitialized => |pat| task.plan.add(.{ .pat = pat }),
+                .let_ => |let_| {
+                    task.plan.add(.{ .pat = let_.pat });
+                    task.plan.add(.{ .expr = let_.value });
+                    if (let_.comptime_site) |site| task.plan.add(.{ .comptime_site = site });
+                },
+                .expr, .dbg => |expr| task.plan.add(.{ .expr = expr }),
+                .expect => |expr| if (self.inline_expects != .omit) task.plan.add(.{ .expr = expr }),
+                .return_ => |ret| task.plan.add(.{ .expr = ret.value }),
+                .crash => {},
+            }
+            frame.cursor = 1;
+            if (try self.nextPart(&task.parts, task.plan.slice(), null)) |step| return step;
+        } else if (try self.nextPart(&task.parts, task.plan.slice(), input)) |step| return step;
+        const parts = task.parts.items;
+        const lowered_stmt: Ast.Stmt = switch (stmt) {
+            .uninitialized => .{ .uninitialized = parts[0].get(.pat) },
+            .let_ => |let_| .{ .let_ = .{
+                .pat = parts[0].get(.pat),
+                .value = parts[1].get(.expr),
+                .recursive = let_.recursive,
+                .comptime_site = if (let_.comptime_site != null) parts[2].get(.comptime_site) else null,
+            } },
+            .expr => .{ .expr = parts[0].get(.expr) },
+            .expect => if (self.inline_expects == .omit)
+                .{ .expr = try self.unitExpr() }
+            else
+                .{ .expect = parts[0].get(.expr) },
+            .dbg => .{ .dbg = parts[0].get(.expr) },
+            .return_ => .{ .return_ = parts[0].get(.expr) },
+            .crash => |msg| .{ .crash = msg },
+        };
+        const lowered = try self.program.addStmt(lowered_stmt);
+        self.stmt_map[index] = lowered;
+        self.program.current_loc = task.saved_loc;
+        self.program.current_region = task.saved_region;
+        return .{ .ret = .{ .stmt = lowered } };
+    }
+
+    const PatTask = struct {
+        pat_id: Lifted.PatId,
+        ty: Type.TypeId = undefined,
+        plan: Plan = .{},
+        parts: std.ArrayList(Result) = .empty,
+    };
+
+    fn stepPat(self: *Lowerer, frame: *Frame, task: *PatTask, input: ?Result) Allocator.Error!Step {
+        const index = @intFromEnum(task.pat_id);
+        const pat = self.solved.lifted.pats[index];
+        switch (frame.cursor) {
+            0 => {
+                if (self.pat_map[index]) |cached| return .{ .ret = .{ .pat = cached } };
+                frame.cursor = 1;
+                return .{ .call = .{ .type_var = .{ .var_id = self.solved.pat_tys[index] } } };
+            },
+            1 => {
+                task.ty = input.?.get(.ty);
+                const plan = &task.plan;
+                switch (pat.data) {
+                    .bind => |local| plan.add(.{ .local_at = .{ .local = local, .ty = task.ty } }),
+                    .as => |as| {
+                        plan.add(.{ .pat = as.pattern });
+                        plan.add(.{ .local_at = .{ .local = as.local, .ty = task.ty } });
+                    },
+                    .record => |fields| plan.add(.{ .destruct_span = fields }),
+                    .tuple => |items| plan.add(.{ .pat_span = items }),
+                    .list => |list| {
+                        plan.add(.{ .pat_span = list.patterns });
+                        if (list.rest) |rest| if (rest.pattern) |rest_pattern| plan.add(.{ .pat = rest_pattern });
+                    },
+                    .tag => |tag| plan.add(.{ .pat_span = tag.payloads }),
+                    .nominal => |backing| plan.add(.{ .pat = backing }),
+                    .str_pattern => |str| plan.add(.{ .str_pattern = str }),
+                    .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => {},
+                }
+                frame.cursor = 2;
+                if (try self.nextPart(&task.parts, task.plan.slice(), null)) |step| return step;
+            },
+            else => if (try self.nextPart(&task.parts, task.plan.slice(), input)) |step| return step,
         }
-        return .{ .local = try self.localFor(local, ty) };
+        const parts = task.parts.items;
+        const data: Ast.PatData = switch (pat.data) {
+            .bind => .{ .bind = parts[0].get(.local) },
+            .wildcard => .wildcard,
+            .as => .{ .as = .{
+                .pattern = parts[0].get(.pat),
+                .local = parts[1].get(.local),
+            } },
+            .record => .{ .record = parts[0].get(.destruct_span) },
+            .tuple => .{ .tuple = parts[0].get(.pat_span) },
+            .list => |list| .{ .list = .{
+                .patterns = parts[0].get(.pat_span),
+                .rest = if (list.rest) |rest| .{
+                    .index = rest.index,
+                    .pattern = if (rest.pattern != null) parts[1].get(.pat) else null,
+                } else null,
+            } },
+            .tag => |tag| .{ .tag = .{
+                .name = tag.name,
+                .payloads = parts[0].get(.pat_span),
+            } },
+            .nominal => .{ .nominal = parts[0].get(.pat) },
+            .int_lit => |value| .{ .int_lit = value },
+            .dec_lit => |value| .{ .dec_lit = value },
+            .frac_f32_lit => |value| .{ .frac_f32_lit = value },
+            .frac_f64_lit => |value| .{ .frac_f64_lit = value },
+            .str_lit => |value| .{ .str_lit = value },
+            .str_pattern => .{ .str_pattern = parts[0].get(.str_pattern) },
+        };
+        const lowered = try self.program.addPat(.{ .ty = task.ty, .data = data });
+        self.pat_map[index] = lowered;
+        return .{ .ret = .{ .pat = lowered } };
     }
 
-    fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Allocator.Error!Ast.ComptimeSiteId {
-        const index = @intFromEnum(site);
-        if (self.comptime_site_map[index]) |existing| return existing;
+    /// A span of parts lowered in order, then added as one span.
+    const SeqTask = struct {
+        kind: union(enum) {
+            exprs: Lifted.Span(Lifted.ExprId),
+            /// The lowered expressions returned as an owned slice.
+            expr_slice: Lifted.Span(Lifted.ExprId),
+            fields: Lifted.Span(Lifted.FieldExpr),
+            pats: Lifted.Span(Lifted.PatId),
+            stmts: Lifted.Span(Lifted.StmtId),
+            typed_locals: Lifted.Span(Lifted.TypedLocal),
+            destructs: Lifted.Span(Lifted.RecordDestruct),
+            branches: Lifted.Span(Lifted.Branch),
+            if_branches: Lifted.Span(Lifted.IfBranch),
+            str_pattern: Lifted.StrPattern,
+        },
+        results: std.ArrayList(Result) = .empty,
+    };
 
-        const source = self.solved.lifted.comptimeSite(site);
-        const lowered = try self.program.addComptimeSite(source.kind, source.owner, source.region, source.checked_site, source.branch_regions);
-        self.comptime_site_map[index] = lowered;
-        return lowered;
+    /// The parts one element of a sequence lowers.
+    fn seqElementParts(self: *Lowerer, task: *SeqTask, index: usize, out: *Plan) void {
+        const lifted = self.solved.lifted;
+        switch (task.kind) {
+            .exprs, .expr_slice => |span| out.add(.{ .expr = GuardedList.at(lifted.exprSpan(span), index) }),
+            .fields => |span| out.add(.{ .expr = GuardedList.at(lifted.fieldExprSpan(span), index).value }),
+            .pats => |span| out.add(.{ .pat = GuardedList.at(lifted.patSpan(span), index) }),
+            .stmts => |span| out.add(.{ .stmt = GuardedList.at(lifted.stmtSpan(span), index) }),
+            .typed_locals => |span| {
+                const item = GuardedList.at(lifted.typedLocalSpan(span), index);
+                if (self.local_map[@intFromEnum(item.local)]) |mapped| {
+                    out.add(.{ .local_at = .{ .local = item.local, .ty = self.program.getLocal(mapped).ty } });
+                } else {
+                    out.add(.{ .local = item.local });
+                }
+            },
+            .destructs => |span| out.add(.{ .pat = GuardedList.at(lifted.recordDestructSpan(span), index).pattern }),
+            .branches => |span| {
+                const branch = GuardedList.at(lifted.branchSpan(span), index);
+                out.add(.{ .pat = branch.pat });
+                out.add(.{ .stmt_span = branch.bindings });
+                if (branch.guard) |guard| out.add(.{ .expr = guard });
+                out.add(.{ .expr = branch.body });
+            },
+            .if_branches => |span| {
+                const branch = GuardedList.at(lifted.ifBranchSpan(span), index);
+                out.add(.{ .expr = branch.cond });
+                out.add(.{ .expr = branch.body });
+            },
+            .str_pattern => |str| if (GuardedList.at(lifted.strPatternStepSpan(str.steps), index).capture) |capture| {
+                out.add(.{ .pat = capture });
+            },
+        }
     }
 
-    fn lowerCallableValue(
-        self: *Lowerer,
+    fn seqLen(self: *Lowerer, task: *SeqTask) usize {
+        const lifted = self.solved.lifted;
+        return switch (task.kind) {
+            .exprs, .expr_slice => |span| lifted.exprSpan(span).len,
+            .fields => |span| lifted.fieldExprSpan(span).len,
+            .pats => |span| lifted.patSpan(span).len,
+            .stmts => |span| lifted.stmtSpan(span).len,
+            .typed_locals => |span| lifted.typedLocalSpan(span).len,
+            .destructs => |span| lifted.recordDestructSpan(span).len,
+            .branches => |span| lifted.branchSpan(span).len,
+            .if_branches => |span| lifted.ifBranchSpan(span).len,
+            .str_pattern => |str| lifted.strPatternStepSpan(str.steps).len,
+        };
+    }
+
+    fn stepSeq(self: *Lowerer, frame: *Frame, task: *SeqTask, input: ?Result) Allocator.Error!Step {
+        if (input) |result| try task.results.append(self.allocator, result);
+        const len = self.seqLen(task);
+        // `frame.index` is the element whose parts are lowering; `cursor`
+        // counts that element's parts already issued.
+        while (frame.index < len) {
+            var element: Plan = .{};
+            self.seqElementParts(task, frame.index, &element);
+            const parts = element.slice();
+            while (frame.cursor < parts.len) {
+                const part = parts[frame.cursor];
+                frame.cursor += 1;
+                if (try self.partTask(part, &task.results)) |child| return .{ .call = child };
+            }
+            frame.index += 1;
+            frame.cursor = 0;
+        }
+        return .{ .ret = try self.finishSeq(task) };
+    }
+
+    fn finishSeq(self: *Lowerer, task: *SeqTask) Allocator.Error!Result {
+        const lifted = self.solved.lifted;
+        const results = task.results.items;
+        switch (task.kind) {
+            .exprs, .expr_slice => {
+                const lowered = try self.allocator.alloc(Ast.ExprId, results.len);
+                for (lowered, results) |*out, result| out.* = result.get(.expr);
+                if (task.kind == .expr_slice) return .{ .slice = lowered };
+                defer self.allocator.free(lowered);
+                return .{ .expr_span = try self.program.addExprSpan(lowered) };
+            },
+            .fields => |span| {
+                const lowered = try self.allocator.alloc(Ast.FieldExpr, results.len);
+                defer self.allocator.free(lowered);
+                const fields = lifted.fieldExprSpan(span);
+                for (lowered, results, 0..) |*out, result, i| out.* = .{ .name = GuardedList.at(fields, i).name, .value = result.get(.expr) };
+                return .{ .field_span = try self.program.addFieldExprSpan(lowered) };
+            },
+            .pats => {
+                const lowered = try self.allocator.alloc(Ast.PatId, results.len);
+                defer self.allocator.free(lowered);
+                for (lowered, results) |*out, result| out.* = result.get(.pat);
+                return .{ .pat_span = try self.program.addPatSpan(lowered) };
+            },
+            .stmts => {
+                const lowered = try self.allocator.alloc(Ast.StmtId, results.len);
+                defer self.allocator.free(lowered);
+                for (lowered, results) |*out, result| out.* = result.get(.stmt);
+                return .{ .stmt_span = try self.program.addStmtSpan(lowered) };
+            },
+            .typed_locals => {
+                const lowered = try self.allocator.alloc(Ast.TypedLocal, results.len);
+                defer self.allocator.free(lowered);
+                for (lowered, results) |*out, result| {
+                    const local = result.get(.local);
+                    out.* = .{ .local = local, .ty = self.program.getLocal(local).ty };
+                }
+                return .{ .typed_local_span = try self.program.addTypedLocalSpan(lowered) };
+            },
+            .destructs => |span| {
+                const lowered = try self.allocator.alloc(Ast.RecordDestruct, results.len);
+                defer self.allocator.free(lowered);
+                const destructs = lifted.recordDestructSpan(span);
+                for (lowered, results, 0..) |*out, result, i| out.* = .{ .name = GuardedList.at(destructs, i).name, .pattern = result.get(.pat) };
+                return .{ .destruct_span = try self.program.addRecordDestructSpan(lowered) };
+            },
+            .branches => |span| {
+                const branches = lifted.branchSpan(span);
+                const lowered = try self.allocator.alloc(Ast.Branch, branches.len);
+                defer self.allocator.free(lowered);
+                var position: usize = 0;
+                for (lowered, 0..) |*out, i| {
+                    const branch = GuardedList.at(branches, i);
+                    out.* = .{
+                        .pat = results[position].get(.pat),
+                        .bindings = results[position + 1].get(.stmt_span),
+                        .guard = if (branch.guard != null) results[position + 2].get(.expr) else null,
+                        .body = results[position + 2 + @intFromBool(branch.guard != null)].get(.expr),
+                    };
+                    position += 3 + @as(usize, @intFromBool(branch.guard != null));
+                }
+                return .{ .branch_span = try self.program.addBranchSpan(lowered) };
+            },
+            .if_branches => {
+                const lowered = try self.allocator.alloc(Ast.IfBranch, results.len / 2);
+                defer self.allocator.free(lowered);
+                for (lowered, 0..) |*out, i| out.* = .{
+                    .cond = results[2 * i].get(.expr),
+                    .body = results[2 * i + 1].get(.expr),
+                };
+                return .{ .if_branch_span = try self.program.addIfBranchSpan(lowered) };
+            },
+            .str_pattern => |str| {
+                const input_steps = lifted.strPatternStepSpan(str.steps);
+                const steps = try self.allocator.alloc(Ast.StrPatternStep, input_steps.len);
+                defer self.allocator.free(steps);
+                var position: usize = 0;
+                for (steps, 0..) |*out, i| {
+                    const step = GuardedList.at(input_steps, i);
+                    out.* = .{
+                        .capture = if (step.capture != null) blk: {
+                            position += 1;
+                            break :blk results[position - 1].get(.pat);
+                        } else null,
+                        .delimiter = step.delimiter,
+                    };
+                }
+                return .{ .str_pattern = .{
+                    .prefix = str.prefix,
+                    .steps = try self.program.addStrPatternStepSpan(steps),
+                    .end = str.end,
+                } };
+            },
+        }
+    }
+
+    const TypedLocalTask = struct {
+        local: Lifted.LocalId,
+        known_ty: ?Type.TypeId = null,
+    };
+
+    const CallableValueTask = struct {
         expr_id: Lifted.ExprId,
         fn_id: Lifted.FnId,
         captures_span: Lifted.Span(Lifted.CaptureOperand),
         ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprData {
-        const captures = self.memberCapturesForExpr(expr_id, fn_id);
-        const capture_operands = self.solved.lifted.captureOperandSpan(captures_span);
-        if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(fn_id)].captures).len != capture_operands.len) {
-            Common.invariant("function reference capture operand count differed from lifted function captures");
+        variant: Type.FnVariant = undefined,
+    };
+
+    fn stepCallableValue(self: *Lowerer, frame: *Frame, task: *CallableValueTask, input: ?Result) Allocator.Error!Step {
+        const ty_content = self.program.types.get(task.ty);
+        if (frame.cursor == 0) {
+            const captures = self.memberCapturesForExpr(task.expr_id, task.fn_id);
+            const capture_operands = self.solved.lifted.captureOperandSpan(task.captures_span);
+            if (self.solved.lifted.typedLocalSpan(self.solved.lifted.fns[@intFromEnum(task.fn_id)].captures).len != capture_operands.len) {
+                Common.invariant("function reference capture operand count differed from lifted function captures");
+            }
+            const variants = switch (ty_content) {
+                .callable => |variants| variants,
+                .erased_fn => |erased| erased.members,
+                .primitive, .named, .record, .capture_record, .tuple, .tag_union, .list, .box, .erased_capture_ptr, .zst => Common.invariant("function value lowered to non-callable Lambda Mono type"),
+            };
+            const fn_symbol = self.solved.lifted.fns[@intFromEnum(task.fn_id)].symbol;
+            const variant_span = self.program.types.fnVariantSpan(variants);
+            const found = for (0..variant_span.len) |index| {
+                const variant = GuardedList.at(variant_span, index);
+                if (variant.source == fn_symbol) break variant;
+            } else switch (ty_content) {
+                .callable => Common.invariant("finite callable type did not contain referenced function"),
+                else => Common.invariant("erased callable type did not contain referenced function"),
+            };
+            task.variant = found;
+            if (found.capture_ty) |capture_ty| {
+                frame.cursor = 1;
+                return .{ .call = .{ .capture_record_expr = .{ .capture_span = captures, .operands_span = task.captures_span, .capture_ty = capture_ty } } };
+            }
         }
-        return switch (self.program.types.get(ty)) {
-            .callable => |variants| blk: {
-                const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
-                const variant_span = self.program.types.fnVariantSpan(variants);
-                for (0..variant_span.len) |index| {
-                    const variant = GuardedList.at(variant_span, index);
-                    if (variant.source != fn_symbol) continue;
-                    break :blk .{ .callable = .{
-                        .ty = ty,
-                        .variant = variant.id,
-                        .payload = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecordFromExprs(captures, capture_operands, capture_ty) else null,
-                    } };
-                }
-                Common.invariant("finite callable type did not contain referenced function");
-            },
-            .erased_fn => |erased| blk: {
-                const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
-                const variant_span = self.program.types.fnVariantSpan(erased.members);
-                for (0..variant_span.len) |index| {
-                    const variant = GuardedList.at(variant_span, index);
-                    if (variant.source != fn_symbol) continue;
-                    break :blk .{ .packed_erased_fn = .{
-                        .target = variant.target,
-                        .capture = if (variant.capture_ty) |capture_ty| try self.buildCaptureRecordFromExprs(captures, capture_operands, capture_ty) else null,
-                    } };
-                }
-                Common.invariant("erased callable type did not contain referenced function");
-            },
-            .primitive, .named, .record, .capture_record, .tuple, .tag_union, .list, .box, .erased_capture_ptr, .zst => Common.invariant("function value lowered to non-callable Lambda Mono type"),
-        };
+        const payload: ?Ast.ExprId = if (frame.cursor == 1) input.?.get(.expr) else null;
+        return .{ .ret = .{ .data = if (ty_content == .erased_fn)
+            .{ .packed_erased_fn = .{
+                .target = task.variant.target,
+                .capture = payload,
+            } }
+        else
+            .{ .callable = .{
+                .ty = task.ty,
+                .variant = task.variant.id,
+                .payload = payload,
+            } } } };
     }
 
-    fn memberCapturesForExpr(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId) CaptureSpanId {
-        const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
-        const expr_ty = self.solved.expr_tys[@intFromEnum(expr_id)];
-        const callable = switch (self.solved.types.rootContent(expr_ty)) {
-            .func => |func| func.callable,
-            .lambda_set, .erased => expr_ty,
-            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .mono => Common.invariant("function reference expression had no callable Lambda Solved type"),
-        };
-        const members = switch (self.solved.types.rootContent(callable)) {
-            .lambda_set => |members| members,
-            .erased => |erased| erased.members,
-            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .zst, .mono => Common.invariant("function reference callable slot was unresolved before Lambda Mono"),
-        };
-        for (self.solved.types.memberSpan(members)) |member| {
-            if (member.lambda == fn_symbol) return CaptureSpanId.fromSolved(member.captures);
-        }
-        Common.invariant("function reference callable slot did not contain referenced function");
-    }
-
-    fn lowerDirectCallArgs(
-        self: *Lowerer,
+    const DirectCallArgsTask = struct {
         fn_id: Lifted.FnId,
         args_span: Lifted.Span(Lifted.ExprId),
-        capture_operands_span: Lifted.Span(Lifted.CaptureOperand),
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(args_span));
-        defer self.allocator.free(args);
+        captures_span: Lifted.Span(Lifted.CaptureOperand),
+        /// Owned.
+        args: []Ast.ExprId = &.{},
+        captures: CaptureSpanId = undefined,
+    };
 
-        const captures = try self.capturesForFn(fn_id);
-        const capture_items = self.captureSpan(captures);
-        if (capture_items.len != 0) {
-            const capture_operands = self.solved.lifted.captureOperandSpan(capture_operands_span);
-            if (capture_operands.len != capture_items.len) Common.invariant("direct call capture operand count differed from callee capture count");
-            const target_fn = try self.ensureOwnFnSpec(fn_id, .finite);
-            const capture_ty = self.fn_specs.items[@intFromEnum(target_fn)].capture_ty orelse
-                Common.invariant("capturing direct call target had no capture record type");
-            const call_args = try self.allocator.alloc(Ast.ExprId, args.len + 1);
-            defer self.allocator.free(call_args);
-            @memcpy(call_args[0..args.len], args);
-            call_args[args.len] = try self.buildCaptureRecordFromExprs(captures, capture_operands, capture_ty);
-            return try self.program.addExprSpan(call_args);
+    fn stepDirectCallArgs(self: *Lowerer, frame: *Frame, task: *DirectCallArgsTask, input: ?Result) Allocator.Error!Step {
+        switch (frame.cursor) {
+            0 => {
+                frame.cursor = 1;
+                return .{ .call = .{ .seq = .{ .kind = .{ .expr_slice = task.args_span } } } };
+            },
+            1 => {
+                task.args = input.?.get(.slice);
+                task.captures = try self.capturesForFn(task.fn_id);
+                const capture_items = self.captureSpan(task.captures);
+                if (capture_items.len != 0) {
+                    const capture_operands = self.solved.lifted.captureOperandSpan(task.captures_span);
+                    if (capture_operands.len != capture_items.len) Common.invariant("direct call capture operand count differed from callee capture count");
+                    frame.cursor = 2;
+                    return .{ .call = try self.ownFnSpecTask(task.fn_id, .finite) };
+                }
+                if (self.solved.lifted.captureOperandSpan(task.captures_span).len != 0) {
+                    Common.invariant("direct call carried capture operands for a capture-free callee");
+                }
+                return .{ .ret = .{ .expr_span = try self.program.addExprSpan(task.args) } };
+            },
+            2 => {
+                const target_fn = input.?.get(.fn_id);
+                const capture_ty = self.fn_specs.items[@intFromEnum(target_fn)].capture_ty orelse
+                    Common.invariant("capturing direct call target had no capture record type");
+                frame.cursor = 3;
+                return .{ .call = .{ .capture_record_expr = .{ .capture_span = task.captures, .operands_span = task.captures_span, .capture_ty = capture_ty } } };
+            },
+            else => {
+                const call_args = try self.allocator.alloc(Ast.ExprId, task.args.len + 1);
+                defer self.allocator.free(call_args);
+                @memcpy(call_args[0..task.args.len], task.args);
+                call_args[task.args.len] = input.?.get(.expr);
+                return .{ .ret = .{ .expr_span = try self.program.addExprSpan(call_args) } };
+            },
         }
-        if (self.solved.lifted.captureOperandSpan(capture_operands_span).len != 0) {
-            Common.invariant("direct call carried capture operands for a capture-free callee");
-        }
-
-        return try self.program.addExprSpan(args);
     }
 
-    fn lowerValueCall(self: *Lowerer, ty: Type.TypeId, call: anytype) Allocator.Error!Ast.ExprData {
-        const callee = try self.lowerExpr(call.callee);
-        const callee_ty = self.program.getExpr(callee).ty;
-        const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(call.args));
-        defer self.allocator.free(args);
+    const ValueCallTask = struct {
+        ty: Type.TypeId,
+        callee: Lifted.ExprId,
+        args_span: Lifted.Span(Lifted.ExprId),
+        callee_expr: Ast.ExprId = undefined,
+        /// Owned.
+        args: []Ast.ExprId = &.{},
+    };
 
-        return switch (self.program.types.get(callee_ty)) {
+    fn stepValueCall(self: *Lowerer, frame: *Frame, task: *ValueCallTask, input: ?Result) Allocator.Error!Step {
+        switch (frame.cursor) {
+            0 => {
+                frame.cursor = 1;
+                return .{ .call = .{ .expr = .{ .expr_id = task.callee } } };
+            },
+            1 => {
+                task.callee_expr = input.?.get(.expr);
+                frame.cursor = 2;
+                return .{ .call = .{ .seq = .{ .kind = .{ .expr_slice = task.args_span } } } };
+            },
+            else => task.args = input.?.get(.slice),
+        }
+        const callee = task.callee_expr;
+        const ty = task.ty;
+        const args = task.args;
+        const callee_ty = self.program.getExpr(callee).ty;
+        return .{ .ret = .{ .data = switch (self.program.types.get(callee_ty)) {
             .callable => |variants| blk: {
                 const branches = try self.allocator.alloc(Ast.Branch, variants.len);
                 defer self.allocator.free(branches);
@@ -989,147 +1648,437 @@ const Lowerer = struct {
                 .args = try self.program.addExprSpan(args),
             } },
             .primitive, .named, .record, .capture_record, .tuple, .tag_union, .list, .box, .erased_capture_ptr, .zst => Common.invariant("value call callee had no callable Lambda Mono representation"),
-        };
+        } } };
     }
 
-    fn buildCaptureRecordFromExprs(
-        self: *Lowerer,
+    const CaptureRecordExprTask = struct {
         capture_span: CaptureSpanId,
-        capture_operands: anytype,
+        operands_span: Lifted.Span(Lifted.CaptureOperand),
         capture_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const captures = try GuardedList.dupe(
-            self.allocator,
-            SolvedType.Capture,
-            self.captureSpan(capture_span),
-        );
-        defer self.allocator.free(captures);
-        const fields = switch (self.program.types.get(capture_ty)) {
-            .capture_record => |field_span| try GuardedList.dupe(
-                self.allocator,
-                Type.CaptureField,
-                self.program.types.captureFieldSpan(field_span),
-            ),
-            .primitive, .named, .record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("callable capture payload was not a capture record"),
+        values: std.ArrayList(Ast.ExprId) = .empty,
+    };
+
+    fn stepCaptureRecordExpr(self: *Lowerer, frame: *Frame, task: *CaptureRecordExprTask, input: ?Result) Allocator.Error!Step {
+        const captures = self.captureSpan(task.capture_span);
+        const capture_operands = self.solved.lifted.captureOperandSpan(task.operands_span);
+        if (frame.cursor == 0) {
+            const fields = switch (self.program.types.get(task.capture_ty)) {
+                .capture_record => |field_span| self.program.types.captureFieldSpan(field_span),
+                .primitive, .named, .record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("callable capture payload was not a capture record"),
+            };
+            if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
+            if (captures.len != capture_operands.len) {
+                Common.invariant("function reference capture operand count differed from lifted function captures");
+            }
+
+            // Member captures, capture-record fields, and keyed operands are all in
+            // ascending CaptureId order, so the join is an exact indexed walk.
+            for (0..captures.len) |i| {
+                const capture = captures[i];
+                const field = GuardedList.at(fields, i);
+                const operand = GuardedList.at(capture_operands, i);
+                if (capture.capture_id != field.capture_id) {
+                    Common.invariant("callable capture payload fields differed from captured locals");
+                }
+                const capture_id = capture.capture_id orelse Common.invariant("member capture had no CaptureId");
+                if (operand.id != capture_id) {
+                    Common.invariant("capture operand CaptureId did not match its member capture slot");
+                }
+            }
+            frame.cursor = 1;
+        } else {
+            try task.values.append(self.allocator, input.?.get(.expr));
+        }
+        if (task.values.items.len < capture_operands.len) {
+            return .{ .call = .{ .expr = .{ .expr_id = GuardedList.at(capture_operands, task.values.items.len).value } } };
+        }
+        return .{ .ret = .{ .expr = try self.program.addExpr(.{
+            .ty = task.capture_ty,
+            .data = .{ .capture_record = try self.program.addExprSpan(task.values.items) },
+        }) } };
+    }
+
+    const TypeVarTask = struct {
+        var_id: SolvedType.TypeVarId,
+        root: SolvedType.TypeVarId = undefined,
+        reserved: Type.TypeId = undefined,
+        /// The erased callable whose members are lowering; null for a
+        /// finite lambda set.
+        erased: ?@FieldType(SolvedType.Content, "erased") = null,
+        tys: std.ArrayList(Type.TypeId) = .empty,
+        fields: std.ArrayList(Type.Field) = .empty,
+        tags: std.ArrayList(Type.Tag) = .empty,
+        field_ty: Type.TypeId = undefined,
+        args: Type.Span = undefined,
+        backing: Type.TypeId = undefined,
+    };
+
+    /// Cursor states of a type lowering.
+    const TypeVarCursor = struct {
+        const start = 0;
+        const callable = 1;
+        const children = 2;
+        /// A record field's value type, after its type.
+        const field_value = 3;
+        const named_backing = 4;
+        const named_declared_order = 5;
+    };
+
+    fn typeVarStep(var_id: SolvedType.TypeVarId) Step {
+        return .{ .call = .{ .type_var = .{ .var_id = var_id } } };
+    }
+
+    fn finishTypeVar(self: *Lowerer, task: *TypeVarTask, content: Type.Content) Step {
+        self.program.types.set(task.reserved, content);
+        return .{ .ret = .{ .ty = task.reserved } };
+    }
+
+    fn stepTypeVar(self: *Lowerer, frame: *Frame, task: *TypeVarTask, input: ?Result) Allocator.Error!Step {
+        const solved_types = self.solved.types;
+        switch (frame.cursor) {
+            TypeVarCursor.start => {
+                task.root = solved_types.root(task.var_id);
+                if (self.type_map.get(task.root)) |cached| return .{ .ret = .{ .ty = cached } };
+                const content = solved_types.get(task.root);
+                task.reserved = try self.program.types.add(.zst);
+                try self.type_map.put(task.root, task.reserved);
+                switch (content) {
+                    .func => |func| {
+                        frame.cursor = TypeVarCursor.callable;
+                        return switch (solved_types.rootContent(func.callable)) {
+                            .lambda_set => |members| .{ .call = .{ .members = .{ .members = members, .abi = .finite, .solved_fn_ty = task.root } } },
+                            .erased => |erased| {
+                                task.erased = erased;
+                                return .{ .call = .{ .members = .{ .members = erased.members, .abi = .erased, .solved_fn_ty = task.root } } };
+                            },
+                            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .zst, .mono => Common.invariant("function callable slot was unresolved before Lambda Mono"),
+                        };
+                    },
+                    .link => Common.invariant("Lambda Mono type lowering saw an unresolved Lambda Solved link"),
+                    .unbound, .forall => Common.invariant("Lambda Mono type lowering saw an unresolved Lambda Solved type"),
+                    .mono => Common.invariant("Lambda Mono type lowering saw an unfinalized lazy Monotype leaf"),
+                    .primitive => |primitive| return self.finishTypeVar(task, .{ .primitive = primitive }),
+                    .zst => return self.finishTypeVar(task, .zst),
+                    .erased => |erased| {
+                        task.erased = erased;
+                        frame.cursor = TypeVarCursor.callable;
+                        return .{ .call = .{ .members = .{ .members = erased.members, .abi = .erased, .solved_fn_ty = null } } };
+                    },
+                    .lambda_set => |members| {
+                        frame.cursor = TypeVarCursor.callable;
+                        return .{ .call = .{ .members = .{ .members = members, .abi = .finite, .solved_fn_ty = null } } };
+                    },
+                    .list, .box, .tuple, .record, .tag_union, .named => frame.cursor = TypeVarCursor.children,
+                }
+            },
+            TypeVarCursor.callable => {
+                const members = input.?.get(.type_span);
+                return self.finishTypeVar(task, if (task.erased) |erased|
+                    .{ .erased_fn = .{ .source_fn_ty = erased.source_fn_ty, .members = members } }
+                else
+                    .{ .callable = members });
+            },
+            TypeVarCursor.children => {
+                const lowered = input.?.get(.ty);
+                switch (solved_types.get(task.root)) {
+                    .list, .box, .tuple, .named, .tag_union => try task.tys.append(self.allocator, lowered),
+                    .record => |fields| {
+                        const field = solved_types.fieldSpan(fields)[frame.index];
+                        if (field.value_ty) |value_ty| {
+                            task.field_ty = lowered;
+                            frame.cursor = TypeVarCursor.field_value;
+                            return typeVarStep(value_ty);
+                        }
+                        try task.fields.append(self.allocator, .{ .name = field.name, .ty = lowered, .value_ty = null, .default = field.default });
+                        frame.index += 1;
+                    },
+                    .link, .unbound, .forall, .primitive, .lambda_set, .erased, .func, .zst, .mono => Common.invariant("Lambda Mono type lowering resumed a type without children"),
+                }
+            },
+            TypeVarCursor.field_value => {
+                const field = solved_types.fieldSpan(solved_types.get(task.root).record)[frame.index];
+                try task.fields.append(self.allocator, .{ .name = field.name, .ty = task.field_ty, .value_ty = input.?.get(.ty), .default = field.default });
+                frame.index += 1;
+                frame.cursor = TypeVarCursor.children;
+            },
+            TypeVarCursor.named_backing => {
+                task.backing = input.?.get(.ty);
+                frame.cursor = TypeVarCursor.named_declared_order;
+                return .{ .call = .{ .declared_order = .{ .span = solved_types.get(task.root).named.declared_order } } };
+            },
+            else => {
+                const named = solved_types.get(task.root).named;
+                return self.finishTypeVar(task, .{ .named = .{
+                    .named_type = named.named_type,
+                    .def = named.def,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .args = task.args,
+                    .backing = if (named.backing) |backing| .{
+                        .ty = task.backing,
+                        .use = backing.use,
+                        .authority = backing.authority,
+                    } else null,
+                    .declared_order = input.?.get(.type_span),
+                } });
+            },
+        }
+        switch (solved_types.get(task.root)) {
+            .list => |elem| {
+                if (task.tys.items.len == 0) return typeVarStep(elem);
+                return self.finishTypeVar(task, .{ .list = task.tys.items[0] });
+            },
+            .box => |elem| {
+                if (task.tys.items.len == 0) return typeVarStep(elem);
+                return self.finishTypeVar(task, .{ .box = task.tys.items[0] });
+            },
+            .tuple => |items| {
+                const solved_items = solved_types.span(items);
+                if (task.tys.items.len < solved_items.len) return typeVarStep(solved_items[task.tys.items.len]);
+                return self.finishTypeVar(task, .{ .tuple = try self.program.types.addSpan(task.tys.items) });
+            },
+            .record => |fields| {
+                const solved_fields = solved_types.fieldSpan(fields);
+                if (frame.index < solved_fields.len) return typeVarStep(solved_fields[frame.index].ty);
+                return self.finishTypeVar(task, .{ .record = try self.program.types.addFields(task.fields.items) });
+            },
+            .tag_union => |tags| {
+                const solved_tags = solved_types.tagSpan(tags);
+                while (frame.index < solved_tags.len) {
+                    const tag = solved_tags[frame.index];
+                    const payloads = solved_types.span(tag.payloads);
+                    if (task.tys.items.len < payloads.len) return typeVarStep(payloads[task.tys.items.len]);
+                    try task.tags.append(self.allocator, .{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = try self.program.types.addSpan(task.tys.items),
+                    });
+                    task.tys.clearRetainingCapacity();
+                    frame.index += 1;
+                }
+                return self.finishTypeVar(task, .{ .tag_union = try self.program.types.addTags(task.tags.items) });
+            },
+            .named => |named| {
+                const args = solved_types.span(named.args);
+                if (task.tys.items.len < args.len) return typeVarStep(args[task.tys.items.len]);
+                task.args = try self.program.types.addSpan(task.tys.items);
+                if (named.backing) |backing| {
+                    frame.cursor = TypeVarCursor.named_backing;
+                    return typeVarStep(backing.ty);
+                }
+                frame.cursor = TypeVarCursor.named_declared_order;
+                return .{ .call = .{ .declared_order = .{ .span = named.declared_order } } };
+            },
+            .link, .unbound, .forall, .primitive, .lambda_set, .erased, .func, .zst, .mono => Common.invariant("Lambda Mono type lowering resumed a type without children"),
+        }
+    }
+
+    const FnSpecTask = struct {
+        source: Lifted.FnId,
+        solved_fn_ty: SolvedType.TypeVarId,
+        abi: CaptureAbi,
+        captures: CaptureSpanId,
+        spec: FnSpec = undefined,
+        fn_id: Ast.FnId = undefined,
+        symbol: Common.Symbol = undefined,
+    };
+
+    fn stepFnSpec(self: *Lowerer, frame: *Frame, task: *FnSpecTask, input: ?Result) Allocator.Error!Step {
+        switch (frame.cursor) {
+            0 => {
+                frame.cursor = 1;
+                if (self.captureSpan(task.captures).len != 0) {
+                    return .{ .call = .{ .capture_record_type = .{ .captures = task.captures } } };
+                }
+            },
+            1 => {},
+            else => {
+                const ret_ty = input.?.get(.ty);
+                const source_fn = self.solved.lifted.fns[@intFromEnum(task.source)];
+                self.program.setFn(task.fn_id, .{
+                    .symbol = task.symbol,
+                    .source = source_fn.source,
+                    .args = .empty(),
+                    .body = .hosted,
+                    .ret = ret_ty,
+                });
+                return .{ .ret = .{ .fn_id = task.fn_id } };
+            },
+        }
+        const root_fn_ty = self.solved.types.root(task.solved_fn_ty);
+        task.spec = FnSpec{
+            .source = task.source,
+            .solved_fn_ty = root_fn_ty,
+            .abi = task.abi,
+            .captures = task.captures,
+            .capture_ty = if (input) |capture_record| capture_record.get(.ty) else null,
         };
-        defer self.allocator.free(fields);
-        if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
-        if (captures.len != capture_operands.len) {
-            Common.invariant("function reference capture operand count differed from lifted function captures");
+
+        const result = try self.fn_spec_map.getOrPut(task.spec);
+        if (result.found_existing) return .{ .ret = .{ .fn_id = result.value_ptr.* } };
+
+        task.fn_id = @enumFromInt(@as(u32, @intCast(self.program.fnCount())));
+        const source_fn = self.solved.lifted.fns[@intFromEnum(task.source)];
+        task.symbol = self.symbols.fresh();
+        try self.program.fns.append(self.allocator, undefined);
+        try self.fn_specs.append(self.allocator, task.spec);
+        try self.fn_written.append(self.allocator, false);
+        if (self.debug_specialization_identities) |identities| {
+            try identities.append(self.allocator, .{
+                .source = task.spec.source,
+                .solved_fn_ty = task.spec.solved_fn_ty,
+                .abi = task.spec.abi,
+                .captures_source = task.spec.captures.source,
+                .captures_start = specializationIdentityCaptureStart(task.spec.captures),
+                .captures_len = task.spec.captures.len,
+            });
+        }
+        result.value_ptr.* = task.fn_id;
+        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+            try self.program.setProcDebugName(task.symbol, name);
         }
 
-        // Member captures, capture-record fields, and keyed operands are all in
-        // ascending CaptureId order, so the join is an exact indexed walk.
-        const values = try self.allocator.alloc(Ast.ExprId, captures.len);
-        defer self.allocator.free(values);
-        for (0..captures.len) |i| {
-            const capture = captures[i];
-            const field = fields[i];
-            const operand = GuardedList.at(capture_operands, i);
-            if (capture.capture_id != field.capture_id) {
-                Common.invariant("callable capture payload fields differed from captured locals");
-            }
-            const capture_id = capture.capture_id orelse Common.invariant("member capture had no CaptureId");
-            if (operand.id != capture_id) {
-                Common.invariant("capture operand CaptureId did not match its member capture slot");
-            }
-            values[i] = try self.lowerExpr(operand.value);
-        }
-        return try self.program.addExpr(.{
-            .ty = capture_ty,
-            .data = .{ .capture_record = try self.program.addExprSpan(values) },
+        frame.cursor = 2;
+        return typeVarStep(switch (self.solved.types.rootContent(task.spec.solved_fn_ty)) {
+            .func => |func| func.ret,
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("Lambda Mono function table contains a non-function type"),
         });
     }
 
-    fn lowerPat(self: *Lowerer, pat_id: Lifted.PatId) Allocator.Error!Ast.PatId {
-        const index = @intFromEnum(pat_id);
-        if (self.pat_map[index]) |cached| return cached;
-        const pat = self.solved.lifted.pats[index];
-        const ty = try self.lowerTypeForSolvedPat(pat_id);
-        const data: Ast.PatData = switch (pat.data) {
-            .bind => |local| .{ .bind = try self.localFor(local, ty) },
-            .wildcard => .wildcard,
-            .as => |as| .{ .as = .{
-                .pattern = try self.lowerPat(as.pattern),
-                .local = try self.localFor(as.local, ty),
-            } },
-            .record => |fields| .{ .record = try self.lowerRecordDestructSpan(fields) },
-            .tuple => |items| .{ .tuple = try self.lowerPatSpan(items) },
-            .list => |list| .{ .list = .{
-                .patterns = try self.lowerPatSpan(list.patterns),
-                .rest = if (list.rest) |rest| .{
-                    .index = rest.index,
-                    .pattern = if (rest.pattern) |rest_pattern| try self.lowerPat(rest_pattern) else null,
-                } else null,
-            } },
-            .tag => |tag| .{ .tag = .{
-                .name = tag.name,
-                .payloads = try self.lowerPatSpan(tag.payloads),
-            } },
-            .nominal => |backing| .{ .nominal = try self.lowerPat(backing) },
-            .int_lit => |value| .{ .int_lit = value },
-            .dec_lit => |value| .{ .dec_lit = value },
-            .frac_f32_lit => |value| .{ .frac_f32_lit = value },
-            .frac_f64_lit => |value| .{ .frac_f64_lit = value },
-            .str_lit => |value| .{ .str_lit = value },
-            .str_pattern => |str| .{ .str_pattern = try self.lowerStrPattern(str) },
-        };
-        const lowered = try self.program.addPat(.{ .ty = ty, .data = data });
-        self.pat_map[index] = lowered;
-        return lowered;
-    }
+    const CaptureRecordTypeTask = struct {
+        captures: CaptureSpanId,
+        ty: Type.TypeId = undefined,
+        fields: std.ArrayList(Type.CaptureField) = .empty,
+    };
 
-    fn lowerStrPattern(self: *Lowerer, str: Lifted.StrPattern) Allocator.Error!Ast.StrPattern {
-        const input_steps = self.solved.lifted.strPatternStepSpan(str.steps);
-        const steps = try self.allocator.alloc(Ast.StrPatternStep, input_steps.len);
-        defer self.allocator.free(steps);
+    fn stepCaptureRecordType(self: *Lowerer, frame: *Frame, task: *CaptureRecordTypeTask, input: ?Result) Allocator.Error!Step {
+        if (frame.cursor == 0) {
+            if (self.capture_types.get(task.captures)) |existing| return .{ .ret = .{ .ty = existing } };
 
-        for (0..input_steps.len) |i| {
-            const step = GuardedList.at(input_steps, i);
-            steps[i] = .{
-                .capture = if (step.capture) |capture| try self.lowerPat(capture) else null,
-                .delimiter = step.delimiter,
-            };
+            // A capture may contain a callable whose lambda set refers back to
+            // this span. Reserve the record before descending into its fields.
+            task.ty = try self.program.types.add(.zst);
+            try self.capture_types.put(task.captures, task.ty);
+            frame.cursor = 1;
+        } else {
+            const capture = self.captureSpan(task.captures)[task.fields.items.len];
+            const capture_ty = input.?.get(.ty);
+            try task.fields.append(self.allocator, .{
+                .symbol = capture.symbol,
+                .binder = capture.binder,
+                .capture_id = capture.capture_id,
+                .checked_capture_id = capture.checked_capture_id,
+                .ty = capture_ty,
+                .storage_ty = capture_ty,
+            });
         }
-
-        return .{
-            .prefix = str.prefix,
-            .steps = try self.program.addStrPatternStepSpan(steps),
-            .end = str.end,
-        };
+        const capture_items = self.captureSpan(task.captures);
+        if (task.fields.items.len < capture_items.len) return typeVarStep(capture_items[task.fields.items.len].ty);
+        self.program.types.set(task.ty, .{ .capture_record = try self.program.types.addCaptureFields(task.fields.items) });
+        return .{ .ret = .{ .ty = task.ty } };
     }
 
-    fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId) Allocator.Error!Ast.StmtId {
-        const index = @intFromEnum(stmt_id);
-        if (self.stmt_map[index]) |cached| return cached;
-        const saved_loc = self.program.current_loc;
-        defer self.program.current_loc = saved_loc;
-        const saved_region = self.program.current_region;
-        defer self.program.current_region = saved_region;
-        const stmt_loc = self.solved.lifted.stmtLoc(stmt_id);
-        if (stmt_loc.hasLocation()) self.program.current_loc = stmt_loc;
-        const stmt_region = self.solved.lifted.stmtRegion(stmt_id);
-        if (!stmt_region.isEmpty()) self.program.current_region = stmt_region;
-        const lowered_stmt: Ast.Stmt = switch (self.solved.lifted.stmts[index]) {
-            .uninitialized => |pat| .{ .uninitialized = try self.lowerPat(pat) },
-            .let_ => |let_| .{ .let_ = .{
-                .pat = try self.lowerPat(let_.pat),
-                .value = try self.lowerExpr(let_.value),
-                .recursive = let_.recursive,
-                .comptime_site = if (let_.comptime_site) |site| try self.lowerComptimeSite(site) else null,
-            } },
-            .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
-            .expect => |expr| if (self.inline_expects == .omit)
-                .{ .expr = try self.unitExpr() }
-            else
-                .{ .expect = try self.lowerExpr(expr) },
-            .dbg => |expr| .{ .dbg = try self.lowerExpr(expr) },
-            .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
-            .crash => |msg| .{ .crash = msg },
-        };
-        const lowered = try self.program.addStmt(lowered_stmt);
-        self.stmt_map[index] = lowered;
+    const MembersTask = struct {
+        members: SolvedType.Span,
+        abi: CaptureAbi,
+        /// The function type every member is specialized at; null lowers
+        /// each member at its own function type.
+        solved_fn_ty: ?SolvedType.TypeVarId,
+        variants: std.ArrayList(Type.FnVariant) = .empty,
+    };
+
+    fn stepMembers(self: *Lowerer, frame: *Frame, task: *MembersTask, input: ?Result) Allocator.Error!Step {
+        const solved_members = self.solved.types.memberSpan(task.members);
+        if (frame.cursor == 0) {
+            frame.cursor = 1;
+        } else {
+            const member = solved_members[task.variants.items.len];
+            const target = input.?.get(.fn_id);
+            try task.variants.append(self.allocator, .{
+                .id = undefined, // assigned by addFnVariants before the variant is stored
+                .source = member.lambda,
+                .target = target,
+                .capture_ty = self.fn_specs.items[@intFromEnum(target)].capture_ty,
+            });
+        }
+        if (task.variants.items.len < solved_members.len) {
+            const member = solved_members[task.variants.items.len];
+            const source = self.sourceFnForSymbol(member.lambda);
+            return .{ .call = .{ .fn_spec = .{
+                .source = source,
+                .solved_fn_ty = if (task.solved_fn_ty) |fn_ty|
+                    self.solved.types.root(fn_ty)
+                else
+                    self.solved.types.root(self.solved.fn_tys[@intFromEnum(source)]),
+                .abi = task.abi,
+                .captures = CaptureSpanId.fromSolved(member.captures),
+            } } };
+        }
+        return .{ .ret = .{ .type_span = try self.program.types.addFnVariants(task.variants.items) } };
+    }
+
+    /// Re-materializes a nominal record's declared field order from the Lambda
+    /// Solved store into the Lambda Mono store. Named entries copy the shared
+    /// field-name id; padding entries re-lower their reserved type.
+    const DeclaredOrderTask = struct {
+        span: SolvedType.Span,
+        lowered: std.ArrayList(Type.DeclaredField) = .empty,
+    };
+
+    fn stepDeclaredOrder(self: *Lowerer, frame: *Frame, task: *DeclaredOrderTask, input: ?Result) Allocator.Error!Step {
+        const source = self.solved.types.declaredFieldSpan(task.span);
+        if (frame.cursor == 0) {
+            if (source.len == 0) return .{ .ret = .{ .type_span = Type.Span.empty() } };
+            frame.cursor = 1;
+        } else {
+            try task.lowered.append(self.allocator, .{ .padding = input.?.get(.ty) });
+        }
+        while (task.lowered.items.len < source.len) {
+            switch (source[task.lowered.items.len]) {
+                .named => |name| try task.lowered.append(self.allocator, .{ .named = name }),
+                .padding => |ty| return typeVarStep(ty),
+            }
+        }
+        return .{ .ret = .{ .type_span = try self.program.types.addDeclaredFields(task.lowered.items) } };
+    }
+
+    fn lowerLocalExpr(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.ExprData {
+        if (self.captures.get(local)) |capture| {
+            return .{ .capture_access = .{
+                .record = capture.record,
+                .symbol = capture.symbol,
+            } };
+        }
+        return .{ .local = try self.localFor(local, ty) };
+    }
+
+    fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Allocator.Error!Ast.ComptimeSiteId {
+        const index = @intFromEnum(site);
+        if (self.comptime_site_map[index]) |existing| return existing;
+
+        const source = self.solved.lifted.comptimeSite(site);
+        const lowered = try self.program.addComptimeSite(source.kind, source.owner, source.region, source.checked_site, source.branch_regions);
+        self.comptime_site_map[index] = lowered;
         return lowered;
+    }
+
+    fn memberCapturesForExpr(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId) CaptureSpanId {
+        const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
+        const expr_ty = self.solved.expr_tys[@intFromEnum(expr_id)];
+        const callable = switch (self.solved.types.rootContent(expr_ty)) {
+            .func => |func| func.callable,
+            .lambda_set, .erased => expr_ty,
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .mono => Common.invariant("function reference expression had no callable Lambda Solved type"),
+        };
+        const members = switch (self.solved.types.rootContent(callable)) {
+            .lambda_set => |members| members,
+            .erased => |erased| erased.members,
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .zst, .mono => Common.invariant("function reference callable slot was unresolved before Lambda Mono"),
+        };
+        for (self.solved.types.memberSpan(members)) |member| {
+            if (member.lambda == fn_symbol) return CaptureSpanId.fromSolved(member.captures);
+        }
+        Common.invariant("function reference callable slot did not contain referenced function");
     }
 
     fn unitExpr(self: *Lowerer) Allocator.Error!Ast.ExprId {
@@ -1146,220 +2095,6 @@ const Lowerer = struct {
         return ty;
     }
 
-    fn lowerExprTy(self: *Lowerer, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeId {
-        return try self.lowerType(self.solved.expr_tys[@intFromEnum(expr_id)]);
-    }
-
-    fn lowerTypeForSolvedPat(self: *Lowerer, pat_id: Lifted.PatId) Allocator.Error!Type.TypeId {
-        return try self.lowerType(self.solved.pat_tys[@intFromEnum(pat_id)]);
-    }
-
-    fn lowerType(self: *Lowerer, solved_ty: SolvedType.TypeVarId) Allocator.Error!Type.TypeId {
-        const root = self.solved.types.root(solved_ty);
-        if (self.type_map.get(root)) |cached| return cached;
-
-        const content = self.solved.types.get(root);
-        if (content == .func) {
-            const reserved = try self.program.types.add(.zst);
-            try self.type_map.put(root, reserved);
-            errdefer {
-                if (self.type_map.get(root) == reserved) _ = self.type_map.remove(root);
-            }
-            self.program.types.set(reserved, try self.lowerCallableForFn(content.func.callable, root));
-            return reserved;
-        }
-
-        const reserved = try self.program.types.add(.zst);
-        try self.type_map.put(root, reserved);
-        self.program.types.set(reserved, try self.lowerTypeContent(content));
-        return reserved;
-    }
-
-    fn lowerTypeContent(self: *Lowerer, content: SolvedType.Content) Allocator.Error!Type.Content {
-        return switch (content) {
-            .link => Common.invariant("Lambda Mono type lowering saw an unresolved Lambda Solved link"),
-            .unbound, .forall => Common.invariant("Lambda Mono type lowering saw an unresolved Lambda Solved type"),
-            .mono => Common.invariant("Lambda Mono type lowering saw an unfinalized lazy Monotype leaf"),
-            .primitive => |primitive| .{ .primitive = primitive },
-            .zst => .zst,
-            .erased => |erased| .{ .erased_fn = .{
-                .source_fn_ty = erased.source_fn_ty,
-                .members = try self.lowerFnMembersFromOwnTypes(erased.members, .erased),
-            } },
-            .func => Common.invariant("function type reached content lowering without its call signature"),
-            .list => |elem| .{ .list = try self.lowerType(elem) },
-            .box => |elem| .{ .box = try self.lowerType(elem) },
-            .tuple => |items| blk: {
-                const lowered = try self.lowerTypeSpan(self.solved.types.span(items));
-                defer self.allocator.free(lowered);
-                break :blk .{ .tuple = try self.program.types.addSpan(lowered) };
-            },
-            .record => |fields| blk: {
-                const lowered = try self.allocator.alloc(Type.Field, fields.len);
-                defer self.allocator.free(lowered);
-                for (self.solved.types.fieldSpan(fields), 0..) |field, i| {
-                    lowered[i] = .{
-                        .name = field.name,
-                        .ty = try self.lowerType(field.ty),
-                        .value_ty = if (field.value_ty) |value_ty| try self.lowerType(value_ty) else null,
-                        .default = field.default,
-                    };
-                }
-                break :blk .{ .record = try self.program.types.addFields(lowered) };
-            },
-            .tag_union => |tags| blk: {
-                const lowered = try self.allocator.alloc(Type.Tag, tags.len);
-                defer self.allocator.free(lowered);
-                for (self.solved.types.tagSpan(tags), 0..) |tag, i| {
-                    const payloads = try self.lowerTypeSpan(self.solved.types.span(tag.payloads));
-                    defer self.allocator.free(payloads);
-                    lowered[i] = .{
-                        .name = tag.name,
-                        .checked_name = tag.checked_name,
-                        .payloads = try self.program.types.addSpan(payloads),
-                    };
-                }
-                break :blk .{ .tag_union = try self.program.types.addTags(lowered) };
-            },
-            .named => |named| blk: {
-                const args = try self.lowerTypeSpan(self.solved.types.span(named.args));
-                defer self.allocator.free(args);
-                break :blk .{ .named = .{
-                    .named_type = named.named_type,
-                    .def = named.def,
-                    .kind = named.kind,
-                    .builtin_owner = named.builtin_owner,
-                    .args = try self.program.types.addSpan(args),
-                    .backing = if (named.backing) |backing| .{
-                        .ty = try self.lowerType(backing.ty),
-                        .use = backing.use,
-                        .authority = backing.authority,
-                    } else null,
-                    .declared_order = try self.lowerDeclaredOrder(named.declared_order),
-                } };
-            },
-            .lambda_set => |members| .{ .callable = try self.lowerFnMembersFromOwnTypes(members, .finite) },
-        };
-    }
-
-    fn lowerCallableForFn(
-        self: *Lowerer,
-        callable: SolvedType.TypeVarId,
-        solved_fn_ty: SolvedType.TypeVarId,
-    ) Allocator.Error!Type.Content {
-        return switch (self.solved.types.rootContent(callable)) {
-            .lambda_set => |members| .{ .callable = try self.lowerFnMembers(members, .finite, solved_fn_ty) },
-            .erased => |erased| .{ .erased_fn = .{
-                .source_fn_ty = erased.source_fn_ty,
-                .members = try self.lowerFnMembers(erased.members, .erased, solved_fn_ty),
-            } },
-            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .zst, .mono => Common.invariant("function callable slot was unresolved before Lambda Mono"),
-        };
-    }
-
-    /// Re-materializes a nominal record's declared field order from the Lambda
-    /// Solved store into the Lambda Mono store. Named entries copy the shared
-    /// field-name id; padding entries re-lower their reserved type.
-    fn lowerDeclaredOrder(self: *Lowerer, span: SolvedType.Span) Allocator.Error!Type.Span {
-        const source = self.solved.types.declaredFieldSpan(span);
-        if (source.len == 0) return Type.Span.empty();
-        const lowered = try self.allocator.alloc(Type.DeclaredField, source.len);
-        defer self.allocator.free(lowered);
-        for (source, 0..) |entry, i| {
-            lowered[i] = switch (entry) {
-                .named => |name| .{ .named = name },
-                .padding => |ty| .{ .padding = try self.lowerType(ty) },
-            };
-        }
-        return try self.program.types.addDeclaredFields(lowered);
-    }
-
-    fn lowerFnMembers(
-        self: *Lowerer,
-        members: SolvedType.Span,
-        abi: CaptureAbi,
-        solved_fn_ty: SolvedType.TypeVarId,
-    ) Allocator.Error!Type.Span {
-        const solved_members = self.solved.types.memberSpan(members);
-        const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
-        defer self.allocator.free(variants);
-        const root_fn_ty = self.solved.types.root(solved_fn_ty);
-        for (solved_members, 0..) |member, i| {
-            const source = self.sourceFnForSymbol(member.lambda);
-            const target = try self.ensureFnSpec(
-                source,
-                root_fn_ty,
-                abi,
-                CaptureSpanId.fromSolved(member.captures),
-            );
-            variants[i] = .{
-                .id = undefined, // assigned by addFnVariants before the variant is stored
-                .source = member.lambda,
-                .target = target,
-                .capture_ty = self.fn_specs.items[@intFromEnum(target)].capture_ty,
-            };
-        }
-        return try self.program.types.addFnVariants(variants);
-    }
-
-    fn lowerFnMembersFromOwnTypes(self: *Lowerer, members: SolvedType.Span, abi: CaptureAbi) Allocator.Error!Type.Span {
-        const solved_members = self.solved.types.memberSpan(members);
-        const variants = try self.allocator.alloc(Type.FnVariant, solved_members.len);
-        defer self.allocator.free(variants);
-        for (solved_members, 0..) |member, i| {
-            const source = self.sourceFnForSymbol(member.lambda);
-            const target = try self.ensureFnSpec(
-                source,
-                self.solved.types.root(self.solved.fn_tys[@intFromEnum(source)]),
-                abi,
-                CaptureSpanId.fromSolved(member.captures),
-            );
-            variants[i] = .{
-                .id = undefined, // assigned by addFnVariants before the variant is stored
-                .source = member.lambda,
-                .target = target,
-                .capture_ty = self.fn_specs.items[@intFromEnum(target)].capture_ty,
-            };
-        }
-        return try self.program.types.addFnVariants(variants);
-    }
-
-    fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Allocator.Error!Type.TypeId {
-        if (self.capture_types.get(captures)) |existing| return existing;
-
-        // A capture may contain a callable whose lambda set refers back to
-        // this span. Reserve the record before descending into its fields.
-        const ty = try self.program.types.add(.zst);
-        try self.capture_types.put(captures, ty);
-        errdefer {
-            if (self.capture_types.get(captures) == ty) _ = self.capture_types.remove(captures);
-        }
-
-        const capture_items = self.captureSpan(captures);
-        const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
-        defer self.allocator.free(fields);
-        for (capture_items, 0..) |capture, i| {
-            const capture_ty = try self.lowerType(capture.ty);
-            fields[i] = .{
-                .symbol = capture.symbol,
-                .binder = capture.binder,
-                .capture_id = capture.capture_id,
-                .checked_capture_id = capture.checked_capture_id,
-                .ty = capture_ty,
-                .storage_ty = capture_ty,
-            };
-        }
-        self.program.types.set(ty, .{ .capture_record = try self.program.types.addCaptureFields(fields) });
-        return ty;
-    }
-
-    fn lowerTypeSpan(self: *Lowerer, items: []const SolvedType.TypeVarId) Allocator.Error![]Type.TypeId {
-        const lowered = try self.allocator.alloc(Type.TypeId, items.len);
-        errdefer self.allocator.free(lowered);
-        for (items, 0..) |item, i| lowered[i] = try self.lowerType(item);
-        return lowered;
-    }
-
     fn localFor(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.LocalId {
         const index = @intFromEnum(local);
         if (self.local_map[index]) |existing| return existing;
@@ -1370,125 +2105,12 @@ const Lowerer = struct {
         return lowered;
     }
 
-    fn lowerExprSpan(self: *Lowerer, span: Lifted.Span(Lifted.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const lowered = try self.lowerExprSlice(self.solved.lifted.exprSpan(span));
-        defer self.allocator.free(lowered);
-        return try self.program.addExprSpan(lowered);
-    }
-
-    fn lowerExprSlice(self: *Lowerer, exprs: anytype) Allocator.Error![]Ast.ExprId {
-        const lowered = try self.allocator.alloc(Ast.ExprId, exprs.len);
-        errdefer self.allocator.free(lowered);
-        for (0..exprs.len) |i| {
-            lowered[i] = try self.lowerExpr(GuardedList.at(exprs, i));
-        }
-        return lowered;
-    }
-
-    fn lowerPatSpan(self: *Lowerer, span: Lifted.Span(Lifted.PatId)) Allocator.Error!Ast.Span(Ast.PatId) {
-        const input_items = self.solved.lifted.patSpan(span);
-        const lowered = try self.allocator.alloc(Ast.PatId, input_items.len);
-        defer self.allocator.free(lowered);
-        for (0..input_items.len) |i| {
-            lowered[i] = try self.lowerPat(GuardedList.at(input_items, i));
-        }
-        return try self.program.addPatSpan(lowered);
-    }
-
-    fn lowerStmtSpan(self: *Lowerer, span: Lifted.Span(Lifted.StmtId)) Allocator.Error!Ast.Span(Ast.StmtId) {
-        const input_items = self.solved.lifted.stmtSpan(span);
-        const lowered = try self.allocator.alloc(Ast.StmtId, input_items.len);
-        defer self.allocator.free(lowered);
-        for (0..input_items.len) |i| {
-            lowered[i] = try self.lowerStmt(GuardedList.at(input_items, i));
-        }
-        return try self.program.addStmtSpan(lowered);
-    }
-
-    fn lowerTypedLocalSpan(self: *Lowerer, span: Lifted.Span(Lifted.TypedLocal)) Allocator.Error!Ast.Span(Ast.TypedLocal) {
-        const input_items = self.solved.lifted.typedLocalSpan(span);
-        const lowered = try self.allocator.alloc(Ast.TypedLocal, input_items.len);
-        defer self.allocator.free(lowered);
-        for (0..input_items.len) |i| {
-            const item = GuardedList.at(input_items, i);
-            const lifted_local = self.solved.lifted.locals[@intFromEnum(item.local)];
-            const ty = try self.lowerTypeByLiftedLocal(lifted_local.id);
-            lowered[i] = .{ .local = try self.localFor(item.local, ty), .ty = ty };
-        }
-        return try self.program.addTypedLocalSpan(lowered);
-    }
-
-    fn lowerTypeByLiftedLocal(self: *Lowerer, local: Lifted.LocalId) Allocator.Error!Type.TypeId {
-        const mapped = self.local_map[@intFromEnum(local)] orelse {
-            return try self.lowerType(self.solved.local_tys[@intFromEnum(local)]);
-        };
-        return self.program.getLocal(mapped).ty;
-    }
-
-    fn lowerFieldExprSpan(self: *Lowerer, span: Lifted.Span(Lifted.FieldExpr)) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const input_items = self.solved.lifted.fieldExprSpan(span);
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, input_items.len);
-        defer self.allocator.free(lowered);
-        for (0..input_items.len) |i| {
-            const field = GuardedList.at(input_items, i);
-            lowered[i] = .{
-                .name = field.name,
-                .value = try self.lowerExpr(field.value),
-            };
-        }
-        return try self.program.addFieldExprSpan(lowered);
-    }
-
     fn lowerFieldAccessSegmentSpan(
         _: *Lowerer,
         span: Lifted.Span(Lifted.FieldAccessSegment),
     ) Ast.Span(Ast.FieldAccessSegment) {
         if (span.len == 0) Common.invariant("field access path had no segments");
         return .{ .start = span.start, .len = span.len };
-    }
-
-    fn lowerRecordDestructSpan(self: *Lowerer, span: Lifted.Span(Lifted.RecordDestruct)) Allocator.Error!Ast.Span(Ast.RecordDestruct) {
-        const input_items = self.solved.lifted.recordDestructSpan(span);
-        const lowered = try self.allocator.alloc(Ast.RecordDestruct, input_items.len);
-        defer self.allocator.free(lowered);
-        for (0..input_items.len) |i| {
-            const field = GuardedList.at(input_items, i);
-            lowered[i] = .{
-                .name = field.name,
-                .pattern = try self.lowerPat(field.pattern),
-            };
-        }
-        return try self.program.addRecordDestructSpan(lowered);
-    }
-
-    fn lowerBranchSpan(self: *Lowerer, span: Lifted.Span(Lifted.Branch)) Allocator.Error!Ast.Span(Ast.Branch) {
-        const input_items = self.solved.lifted.branchSpan(span);
-        const lowered = try self.allocator.alloc(Ast.Branch, input_items.len);
-        defer self.allocator.free(lowered);
-        for (0..input_items.len) |i| {
-            const branch = GuardedList.at(input_items, i);
-            lowered[i] = .{
-                .pat = try self.lowerPat(branch.pat),
-                .bindings = try self.lowerStmtSpan(branch.bindings),
-                .guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null,
-                .body = try self.lowerExpr(branch.body),
-            };
-        }
-        return try self.program.addBranchSpan(lowered);
-    }
-
-    fn lowerIfBranchSpan(self: *Lowerer, span: Lifted.Span(Lifted.IfBranch)) Allocator.Error!Ast.Span(Ast.IfBranch) {
-        const input_items = self.solved.lifted.ifBranchSpan(span);
-        const lowered = try self.allocator.alloc(Ast.IfBranch, input_items.len);
-        defer self.allocator.free(lowered);
-        for (0..input_items.len) |i| {
-            const branch = GuardedList.at(input_items, i);
-            lowered[i] = .{
-                .cond = try self.lowerExpr(branch.cond),
-                .body = try self.lowerExpr(branch.body),
-            };
-        }
-        return try self.program.addIfBranchSpan(lowered);
     }
 };
 

@@ -10,6 +10,7 @@ const check = @import("check");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
+const AnyAll = @import("../any_all.zig");
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
@@ -598,12 +599,37 @@ pub const Store = struct {
         context: anytype,
         comptime fill: fn (@TypeOf(context), TypeId) std.mem.Allocator.Error!Content,
     ) std.mem.Allocator.Error!TypeId {
+        const slot = try self.beginRecursive();
+        errdefer self.abortRecursive(slot);
+        const content = try fill(context, slot.ty);
+        self.finishRecursive(slot, content);
+        return slot.ty;
+    }
+
+    /// A recursive type reserved by `beginRecursive` whose content is not yet
+    /// installed.
+    pub const RecursiveSlot = struct {
+        mark: Mark,
+        ty: TypeId,
+    };
+
+    /// Reserve one recursive type whose content its builder computes later,
+    /// then installs with `finishRecursive` or discards with
+    /// `abortRecursive`. `addRecursive` is this protocol for a builder that
+    /// computes the content in one call.
+    pub fn beginRecursive(self: *Store) std.mem.Allocator.Error!RecursiveSlot {
         const mark_ = self.mark();
         errdefer self.restore(mark_);
-        const reserved = try self.reserveSlot();
-        const content = try fill(context, reserved);
-        self.fillReservedSlot(reserved, content);
-        return reserved;
+        return .{ .mark = mark_, .ty = try self.reserveSlot() };
+    }
+
+    pub fn finishRecursive(self: *Store, slot: RecursiveSlot, content: Content) void {
+        self.fillReservedSlot(slot.ty, content);
+    }
+
+    /// Discard `slot` and everything added to the store after it.
+    pub fn abortRecursive(self: *Store, slot: RecursiveSlot) void {
+        self.restore(slot.mark);
     }
 
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
@@ -3552,136 +3578,205 @@ pub const TypeMatchMode = enum {
     declared_variable_slots_match_any,
 };
 
+/// Whether two types match in `mode`: the conjunction of every check their
+/// structures reach, in order, stopping at the first that fails. A pair
+/// already compared, or being compared, is assumed to match. Evaluated on
+/// explicit stacks, so type nesting never becomes native call depth.
 fn typeViewEql(
-    type_view: anytype,
+    type_view: Store.View,
     allocator: std.mem.Allocator,
     name_store: *const names.NameStore,
     lhs: TypeId,
     rhs: TypeId,
     mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
-    var visited = std.AutoHashMap(u64, void).init(allocator);
-    defer visited.deinit();
-    return try typeViewEqlInner(type_view, name_store, lhs, rhs, &visited, mode);
+    var scan = TypeViewEqlScan{
+        .type_view = type_view,
+        .name_store = name_store,
+        .mode = mode,
+        .visited = std.AutoHashMap(u64, void).init(allocator),
+    };
+    defer scan.visited.deinit();
+    return try TypeViewEqlScan.Eval.run(allocator, &scan, .{ .pair = .{ .lhs = lhs, .rhs = rhs } });
 }
 
-fn typeViewEqlInner(
-    type_view: anytype,
+const TypeViewEqlScan = struct {
+    type_view: Store.View,
     name_store: *const names.NameStore,
-    raw_lhs: TypeId,
-    raw_rhs: TypeId,
-    visited: *std.AutoHashMap(u64, void),
     mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    if (raw_lhs == raw_rhs) return true;
+    visited: std.AutoHashMap(u64, void),
 
-    const lhs_content = type_view.get(raw_lhs);
-    if (lhs_content == .named and lhs_content.named.kind == .alias) {
-        if (lhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, visited, mode);
+    const Eval = AnyAll.Evaluation(Leaf, TypeViewEqlScan);
+
+    /// A pair of types to compare, or a check already decided.
+    const Leaf = union(enum) {
+        pair: struct { lhs: TypeId, rhs: TypeId },
+        decided: bool,
+    };
+
+    pub fn enter(scan: *TypeViewEqlScan, items: Eval.Items, leaf: Leaf) std.mem.Allocator.Error!Eval.Expansion {
+        const type_view = scan.type_view;
+        const name_store = scan.name_store;
+        var raw_lhs, var raw_rhs = switch (leaf) {
+            .decided => |value| return .{ .value = value },
+            .pair => |pair| .{ pair.lhs, pair.rhs },
+        };
+        if (raw_lhs == raw_rhs) return .{ .value = true };
+
+        // Transparent aliases compare through their backings.
+        var lhs_content = type_view.get(raw_lhs);
+        var rhs_content = type_view.get(raw_rhs);
+        while (true) {
+            if (lhs_content == .named and lhs_content.named.kind == .alias) {
+                if (lhs_content.named.backing) |backing| {
+                    raw_lhs = backing.ty;
+                    if (raw_lhs == raw_rhs) return .{ .value = true };
+                    lhs_content = type_view.get(raw_lhs);
+                    continue;
+                }
+            }
+            if (rhs_content == .named and rhs_content.named.kind == .alias) {
+                if (rhs_content.named.backing) |backing| {
+                    raw_rhs = backing.ty;
+                    if (raw_lhs == raw_rhs) return .{ .value = true };
+                    rhs_content = type_view.get(raw_rhs);
+                    continue;
+                }
+            }
+            break;
         }
+
+        if (scan.mode == .declared_variable_slots_match_any and
+            lhs_content == .tag_union and
+            type_view.tagSpan(lhs_content.tag_union).len == 0)
+        {
+            return .{ .value = true };
+        }
+
+        // An asymmetric mode reaches the same pair from both directions with
+        // different meanings, so it keeps the two orderings apart.
+        const pair_key = switch (scan.mode) {
+            .exact => typePairKey(raw_lhs, raw_rhs),
+            .declared_variable_slots_match_any => orderedTypePairKey(raw_lhs, raw_rhs),
+        };
+        const gop = try scan.visited.getOrPut(pair_key);
+        if (gop.found_existing) return .{ .value = true };
+
+        if (std.meta.activeTag(lhs_content) != std.meta.activeTag(rhs_content)) return .{ .value = false };
+
+        switch (lhs_content) {
+            .primitive => |lhs| return .{ .value = lhs == rhs_content.primitive },
+            .erased => |lhs| return .{ .value = std.mem.eql(u8, lhs.bytes[0..], rhs_content.erased.bytes[0..]) },
+            .zst => return .{ .value = true },
+            .named => |lhs| if (!try scan.addNamedChecks(items, lhs, rhs_content.named)) return .{ .value = false },
+            .record => |lhs| {
+                const lhs_fields = type_view.fieldSpan(lhs);
+                const rhs_fields = type_view.fieldSpan(rhs_content.record);
+                if (lhs_fields.len != rhs_fields.len) return .{ .value = false };
+                for (lhs_fields, rhs_fields) |lhs_field, rhs_field| {
+                    if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name)) or
+                        !fieldDefaultEql(name_store, lhs_field.default, rhs_field.default) or
+                        lhs_field.kind_state != rhs_field.kind_state or
+                        (lhs_field.value_ty == null) != (rhs_field.value_ty == null))
+                    {
+                        try items.add(.{ .decided = false });
+                        break;
+                    }
+                    if (lhs_field.value_ty) |lhs_value_ty| try addPair(items, lhs_value_ty, rhs_field.value_ty.?);
+                    try addPair(items, lhs_field.ty, rhs_field.ty);
+                }
+            },
+            .tuple => |lhs| if (!try scan.addSpanPairs(items, lhs, rhs_content.tuple)) return .{ .value = false },
+            .tag_union => |lhs| {
+                const lhs_tags = type_view.tagSpan(lhs);
+                const rhs_tags = type_view.tagSpan(rhs_content.tag_union);
+                if (lhs_tags.len != rhs_tags.len) return .{ .value = false };
+                for (lhs_tags, rhs_tags) |lhs_tag, rhs_tag| {
+                    if (!std.mem.eql(u8, name_store.tagLabelText(lhs_tag.name), name_store.tagLabelText(rhs_tag.name)) or
+                        !try scan.addSpanPairs(items, lhs_tag.payloads, rhs_tag.payloads))
+                    {
+                        try items.add(.{ .decided = false });
+                        break;
+                    }
+                }
+            },
+            .list => |lhs| try addPair(items, lhs, rhs_content.list),
+            .box => |lhs| try addPair(items, lhs, rhs_content.box),
+            .func => |lhs| {
+                if (!try scan.addSpanPairs(items, lhs.args, rhs_content.func.args)) return .{ .value = false };
+                try addPair(items, lhs.ret, rhs_content.func.ret);
+            },
+        }
+        return .{ .group = .all };
     }
 
-    const rhs_content = type_view.get(raw_rhs);
-    if (rhs_content == .named and rhs_content.named.kind == .alias) {
-        if (rhs_content.named.backing) |backing| {
-            return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, visited, mode);
-        }
+    pub fn exit(_: *TypeViewEqlScan, _: Leaf, _: ?bool) void {}
+
+    fn addPair(items: Eval.Items, lhs: TypeId, rhs: TypeId) std.mem.Allocator.Error!void {
+        try items.add(.{ .pair = .{ .lhs = lhs, .rhs = rhs } });
     }
 
-    if (mode == .declared_variable_slots_match_any and
-        lhs_content == .tag_union and
-        type_view.tagSpan(lhs_content.tag_union).len == 0)
-    {
+    /// List the pairs of two type spans; false when their lengths differ.
+    fn addSpanPairs(scan: *TypeViewEqlScan, items: Eval.Items, lhs_span: Span, rhs_span: Span) std.mem.Allocator.Error!bool {
+        const lhs = scan.type_view.span(lhs_span);
+        const rhs = scan.type_view.span(rhs_span);
+        if (lhs.len != rhs.len) return false;
+        for (lhs, rhs) |lhs_ty, rhs_ty| try addPair(items, lhs_ty, rhs_ty);
         return true;
     }
 
-    // An asymmetric mode reaches the same pair from both directions with
-    // different meanings, so it keeps the two orderings apart.
-    const pair = switch (mode) {
-        .exact => typePairKey(raw_lhs, raw_rhs),
-        .declared_variable_slots_match_any => orderedTypePairKey(raw_lhs, raw_rhs),
-    };
-    const gop = try visited.getOrPut(pair);
-    if (gop.found_existing) return true;
+    /// List the checks of two named types after their own identity checks;
+    /// false when those fail.
+    fn addNamedChecks(scan: *TypeViewEqlScan, items: Eval.Items, lhs: anytype, rhs: anytype) std.mem.Allocator.Error!bool {
+        const name_store = scan.name_store;
+        if (lhs.kind != rhs.kind) return false;
+        if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
+        if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
+        if (lhs.def.source_decl != rhs.def.source_decl) return false;
+        if (lhs.def.source_decl == null and
+            !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
+        {
+            return false;
+        }
+        if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
+        if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
+        if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
+        if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
+        if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
+        if (lhs.builtin_owner != rhs.builtin_owner) return false;
+        if (!try scan.addSpanPairs(items, lhs.args, rhs.args)) return false;
 
-    if (std.meta.activeTag(lhs_content) != std.meta.activeTag(rhs_content)) return false;
+        if (lhs.kind == .alias) {
+            const lhs_backing = lhs.backing orelse {
+                try items.add(.{ .decided = rhs.backing == null });
+                return true;
+            };
+            const rhs_backing = rhs.backing orelse {
+                try items.add(.{ .decided = false });
+                return true;
+            };
+            try addPair(items, lhs_backing.ty, rhs_backing.ty);
+            return true;
+        }
 
-    return switch (lhs_content) {
-        .primitive => |lhs| lhs == rhs_content.primitive,
-        .named => |lhs| try namedTypeViewEql(type_view, name_store, lhs, rhs_content.named, visited, mode),
-        .record => |lhs| try fieldSpanViewEql(type_view, name_store, lhs, rhs_content.record, visited, mode),
-        .tuple => |lhs| try typeSpanViewEql(type_view, name_store, lhs, rhs_content.tuple, visited, mode),
-        .tag_union => |lhs| try tagSpanViewEql(type_view, name_store, lhs, rhs_content.tag_union, visited, mode),
-        .list => |lhs| try typeViewEqlInner(type_view, name_store, lhs, rhs_content.list, visited, mode),
-        .box => |lhs| try typeViewEqlInner(type_view, name_store, lhs, rhs_content.box, visited, mode),
-        .func => |lhs| blk: {
-            const rhs = rhs_content.func;
-            if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) break :blk false;
-            break :blk try typeViewEqlInner(type_view, name_store, lhs.ret, rhs.ret, visited, mode);
-        },
-        .erased => |lhs| std.mem.eql(u8, lhs.bytes[0..], rhs_content.erased.bytes[0..]),
-        .zst => true,
-    };
-}
-
-fn namedTypeViewEql(
-    type_view: anytype,
-    name_store: *const names.NameStore,
-    lhs: anytype,
-    rhs: anytype,
-    visited: *std.AutoHashMap(u64, void),
-    mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    if (lhs.kind != rhs.kind) return false;
-    if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
-    if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
-    if (lhs.def.source_decl != rhs.def.source_decl) return false;
-    if (lhs.def.source_decl == null and
-        !std.mem.eql(u8, name_store.typeNameText(lhs.def.type_name), name_store.typeNameText(rhs.def.type_name)))
-    {
-        return false;
+        if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
+            const lhs_backing = lhs.backing orelse {
+                try items.add(.{ .decided = false });
+                return true;
+            };
+            const rhs_backing = rhs.backing orelse {
+                try items.add(.{ .decided = false });
+                return true;
+            };
+            if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) {
+                try items.add(.{ .decided = false });
+                return true;
+            }
+            try addPair(items, lhs_backing.ty, rhs_backing.ty);
+        }
+        return true;
     }
-    if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
-    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
-    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
-    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
-    if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
-    if (lhs.builtin_owner != rhs.builtin_owner) return false;
-    if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) return false;
-
-    if (lhs.kind == .alias) {
-        const lhs_backing = lhs.backing orelse return rhs.backing == null;
-        const rhs_backing = rhs.backing orelse return false;
-        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited, mode);
-    }
-
-    if (specializationUsesBacking(lhs.backing) or specializationUsesBacking(rhs.backing)) {
-        const lhs_backing = lhs.backing orelse return false;
-        const rhs_backing = rhs.backing orelse return false;
-        if (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority) return false;
-        return try typeViewEqlInner(type_view, name_store, lhs_backing.ty, rhs_backing.ty, visited, mode);
-    }
-
-    return true;
-}
-
-fn typeSpanViewEql(
-    type_view: anytype,
-    name_store: *const names.NameStore,
-    lhs_span: Span,
-    rhs_span: Span,
-    visited: *std.AutoHashMap(u64, void),
-    mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    const lhs = type_view.span(lhs_span);
-    const rhs = type_view.span(rhs_span);
-    if (lhs.len != rhs.len) return false;
-    for (lhs, rhs) |lhs_ty, rhs_ty| {
-        if (!try typeViewEqlInner(type_view, name_store, lhs_ty, rhs_ty, visited, mode)) return false;
-    }
-    return true;
-}
+};
 
 fn fieldDefaultEql(name_store: *const names.NameStore, lhs: ?FieldDefault, rhs: ?FieldDefault) bool {
     const lhs_default = lhs orelse return rhs == null;
@@ -3701,48 +3796,6 @@ pub fn writeFieldDefaultDigest(name_store: *const names.NameStore, hasher: *Type
     } else {
         writeBytes(hasher, "field-no-default");
     }
-}
-
-fn fieldSpanViewEql(
-    type_view: anytype,
-    name_store: *const names.NameStore,
-    lhs_span: Span,
-    rhs_span: Span,
-    visited: *std.AutoHashMap(u64, void),
-    mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    const lhs = type_view.fieldSpan(lhs_span);
-    const rhs = type_view.fieldSpan(rhs_span);
-    if (lhs.len != rhs.len) return false;
-    for (lhs, rhs) |lhs_field, rhs_field| {
-        if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
-        if (!fieldDefaultEql(name_store, lhs_field.default, rhs_field.default)) return false;
-        if (lhs_field.kind_state != rhs_field.kind_state) return false;
-        if ((lhs_field.value_ty == null) != (rhs_field.value_ty == null)) return false;
-        if (lhs_field.value_ty) |lhs_value_ty| {
-            if (!try typeViewEqlInner(type_view, name_store, lhs_value_ty, rhs_field.value_ty.?, visited, mode)) return false;
-        }
-        if (!try typeViewEqlInner(type_view, name_store, lhs_field.ty, rhs_field.ty, visited, mode)) return false;
-    }
-    return true;
-}
-
-fn tagSpanViewEql(
-    type_view: anytype,
-    name_store: *const names.NameStore,
-    lhs_span: Span,
-    rhs_span: Span,
-    visited: *std.AutoHashMap(u64, void),
-    mode: TypeMatchMode,
-) std.mem.Allocator.Error!bool {
-    const lhs = type_view.tagSpan(lhs_span);
-    const rhs = type_view.tagSpan(rhs_span);
-    if (lhs.len != rhs.len) return false;
-    for (lhs, rhs) |lhs_tag, rhs_tag| {
-        if (!std.mem.eql(u8, name_store.tagLabelText(lhs_tag.name), name_store.tagLabelText(rhs_tag.name))) return false;
-        if (!try typeSpanViewEql(type_view, name_store, lhs_tag.payloads, rhs_tag.payloads, visited, mode)) return false;
-    }
-    return true;
 }
 
 /// Order-preserving pair key, for a match mode whose two sides mean different

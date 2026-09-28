@@ -353,7 +353,8 @@ pub fn Compiler(comptime Ctx: type) type {
             /// Irrefutable structure (binds, wildcards, as-patterns, records,
             /// tuples, nominal wrappers, and rest-only list patterns)
             /// disappears here; only patterns that require a test remain as
-            /// columns.
+            /// columns. Patterns expand in preorder on an explicit stack, so
+            /// pattern nesting never becomes native call depth.
             fn normalize(
                 self: *Builder,
                 occ: OccId,
@@ -362,55 +363,66 @@ pub fn Compiler(comptime Ctx: type) type {
                 cols: *std.ArrayList(Col),
                 binds: *std.ArrayList(Bind),
             ) Ctx.LowerError!void {
-                self.stats.pattern_nodes += 1;
-                switch (self.ctx.patKind(pat)) {
-                    .bind => try binds.append(self.arena, .{ .occ = occ, .ty = ty, .local = self.ctx.bindLocal(pat) }),
-                    .wildcard => {},
-                    .as_pattern => {
-                        const info = self.ctx.asInfo(pat);
-                        try binds.append(self.arena, .{ .occ = occ, .ty = ty, .local = info.local });
-                        try self.normalize(occ, ty, info.pattern, cols, binds);
-                    },
-                    .record => {
-                        const count = self.ctx.recordDestructCount(pat);
-                        var i: u16 = 0;
-                        while (i < count) : (i += 1) {
-                            const sub = try self.ctx.recordDestruct(pat, ty, i);
-                            const child = try self.intern(occ, .{ .field = sub.index }, sub.ty);
-                            try self.normalize(child, sub.ty, sub.pat, cols, binds);
-                        }
-                    },
-                    .tuple => {
-                        const count = self.ctx.tupleItemCount(pat);
-                        var i: u16 = 0;
-                        while (i < count) : (i += 1) {
-                            const sub = try self.ctx.tupleItem(pat, ty, i);
-                            const child = try self.intern(occ, .{ .field = sub.index }, sub.ty);
-                            try self.normalize(child, sub.ty, sub.pat, cols, binds);
-                        }
-                    },
-                    .nominal => {
-                        const sub = try self.ctx.nominalInner(pat, ty);
-                        const child = try self.intern(occ, .nominal_backing, sub.ty);
-                        try self.normalize(child, sub.ty, sub.pat, cols, binds);
-                    },
-                    .list => {
-                        const view = self.ctx.listView(pat);
-                        if (view.fixed_count == 0) {
-                            if (view.rest) |rest| {
-                                // `[..]` / `[.. as r]`: irrefutable; the rest
-                                // IS the whole scrutinee list.
-                                if (rest.pattern) |rest_pat| {
-                                    try self.normalize(occ, ty, rest_pat, cols, binds);
+                const Pending = union(enum) {
+                    pattern: struct { occ: OccId, ty: TypeId, pat: PatId },
+                    /// The next field of a record or tuple pattern, whose
+                    /// occurrence is interned when it is reached.
+                    field: struct { occ: OccId, ty: TypeId, pat: PatId, index: u16 },
+                };
+                var pending: std.ArrayList(Pending) = .empty;
+                try pending.append(self.arena, .{ .pattern = .{ .occ = occ, .ty = ty, .pat = pat } });
+                while (pending.pop()) |item| {
+                    const current = switch (item) {
+                        .pattern => |current| current,
+                        .field => |field| {
+                            const is_record = self.ctx.patKind(field.pat) == .record;
+                            const count = if (is_record) self.ctx.recordDestructCount(field.pat) else self.ctx.tupleItemCount(field.pat);
+                            if (field.index == count) continue;
+                            const sub = if (is_record)
+                                try self.ctx.recordDestruct(field.pat, field.ty, field.index)
+                            else
+                                try self.ctx.tupleItem(field.pat, field.ty, field.index);
+                            const child = try self.intern(field.occ, .{ .field = sub.index }, sub.ty);
+                            var next = field;
+                            next.index += 1;
+                            try pending.append(self.arena, .{ .field = next });
+                            try pending.append(self.arena, .{ .pattern = .{ .occ = child, .ty = sub.ty, .pat = sub.pat } });
+                            continue;
+                        },
+                    };
+                    self.stats.pattern_nodes += 1;
+                    switch (self.ctx.patKind(current.pat)) {
+                        .bind => try binds.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .local = self.ctx.bindLocal(current.pat) }),
+                        .wildcard => {},
+                        .as_pattern => {
+                            const info = self.ctx.asInfo(current.pat);
+                            try binds.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .local = info.local });
+                            try pending.append(self.arena, .{ .pattern = .{ .occ = current.occ, .ty = current.ty, .pat = info.pattern } });
+                        },
+                        .record, .tuple => try pending.append(self.arena, .{ .field = .{ .occ = current.occ, .ty = current.ty, .pat = current.pat, .index = 0 } }),
+                        .nominal => {
+                            const sub = try self.ctx.nominalInner(current.pat, current.ty);
+                            const child = try self.intern(current.occ, .nominal_backing, sub.ty);
+                            try pending.append(self.arena, .{ .pattern = .{ .occ = child, .ty = sub.ty, .pat = sub.pat } });
+                        },
+                        .list => {
+                            const view = self.ctx.listView(current.pat);
+                            if (view.fixed_count == 0) {
+                                if (view.rest) |rest| {
+                                    // `[..]` / `[.. as r]`: irrefutable; the rest
+                                    // IS the whole scrutinee list.
+                                    if (rest.pattern) |rest_pat| {
+                                        try pending.append(self.arena, .{ .pattern = .{ .occ = current.occ, .ty = current.ty, .pat = rest_pat } });
+                                    }
+                                    continue;
                                 }
-                                return;
                             }
-                        }
-                        try cols.append(self.arena, .{ .occ = occ, .ty = ty, .pat = pat });
-                    },
-                    .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => {
-                        try cols.append(self.arena, .{ .occ = occ, .ty = ty, .pat = pat });
-                    },
+                            try cols.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .pat = current.pat });
+                        },
+                        .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => {
+                            try cols.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .pat = current.pat });
+                        },
+                    }
                 }
             }
 
@@ -685,18 +697,140 @@ pub fn Compiler(comptime Ctx: type) type {
 
             /// Compile `rows` against `miss`. Rows are consumed front-to-back
             /// as segments (leaf/guard runs, test groups, single rest-row
-            /// length checks); segments compose bottom-up so the recursion
-            /// depth tracks pattern nesting, not branch count.
+            /// length checks); segments compose bottom-up. A test's arms and a
+            /// rest row's remainder compile as nested row sets; every
+            /// unfinished row set, test, and rest row waits in a
+            /// `CompileFrame` on an explicit stack, so pattern nesting never
+            /// becomes native call depth.
             fn compile(self: *Builder, rows: []const Row, miss: Miss) Ctx.LowerError!*Tree {
-                const segments = try self.partition(rows);
-                var acc: ?*Tree = null;
-                var i = segments.len;
-                while (i > 0) {
-                    i -= 1;
-                    const seg = segments[i];
-                    acc = try self.buildSegment(seg.kind, rows[seg.start..seg.end], acc, miss);
+                var frames: std.ArrayList(CompileFrame) = .empty;
+                try frames.append(self.arena, try self.rowsFrame(rows, miss));
+                var input: ?*Tree = null;
+                while (true) {
+                    const frame = &frames.items[frames.items.len - 1];
+                    const step = try self.stepCompile(frame, input);
+                    input = null;
+                    switch (step) {
+                        .push => |child| try frames.append(self.arena, child),
+                        .ret => |tree| {
+                            _ = frames.pop();
+                            if (frames.items.len == 0) return tree;
+                            input = tree;
+                        },
+                    }
                 }
-                return acc orelse try self.missTree(miss);
+            }
+
+            const CompileFrame = union(enum) {
+                /// Segments of one row set, built last to first.
+                rows: struct {
+                    rows: []const Row,
+                    miss: Miss,
+                    segments: []const Segment,
+                    /// Segments not yet built, counting down.
+                    remaining: usize,
+                    acc: ?*Tree = null,
+                },
+                /// A rest-pattern list row whose remainder compiles as a
+                /// nested row set.
+                rest_row: struct {
+                    col: Col,
+                    min_len: u32,
+                    /// The specialized row, compiled against `then_miss`.
+                    spec: []const Row,
+                    then_miss: Miss,
+                    /// The exit the remainder continues at when rows follow.
+                    exit_id: ?u32,
+                    miss: Miss,
+                },
+                /// A test group whose arms compile as nested row sets.
+                group: struct {
+                    occ: OccId,
+                    occ_ty: TypeId,
+                    kind: TestKind,
+                    arms: []Arm,
+                    arm_rows: []std.ArrayList(Row),
+                    exit_id: u32,
+                    below: ?*Tree,
+                    miss: Miss,
+                    index: usize = 0,
+                },
+            };
+
+            const CompileStep = union(enum) {
+                push: CompileFrame,
+                ret: *Tree,
+            };
+
+            fn rowsFrame(self: *Builder, rows: []const Row, miss: Miss) Ctx.LowerError!CompileFrame {
+                const segments = try self.partition(rows);
+                return .{ .rows = .{ .rows = rows, .miss = miss, .segments = segments, .remaining = segments.len } };
+            }
+
+            fn stepCompile(self: *Builder, frame: *CompileFrame, input: ?*Tree) Ctx.LowerError!CompileStep {
+                switch (frame.*) {
+                    .rows => |*task| {
+                        if (input) |built| task.acc = built;
+                        while (task.remaining > 0) {
+                            task.remaining -= 1;
+                            const seg = task.segments[task.remaining];
+                            const seg_rows = task.rows[seg.start..seg.end];
+                            switch (seg.kind) {
+                                .leaves => task.acc = try self.buildLeaves(seg_rows, task.acc, task.miss),
+                                .rest_row => |info| return .{ .push = try self.restRowFrame(info.occ, seg_rows[0], task.acc, task.miss) },
+                                .group => |info| return .{ .push = try self.groupFrame(info.occ, info.ty, info.kind, seg_rows, task.acc, task.miss) },
+                            }
+                        }
+                        return .{ .ret = task.acc orelse try self.missTree(task.miss) };
+                    },
+                    .rest_row => |task| {
+                        const then = input orelse return .{ .push = try self.rowsFrame(task.spec, task.then_miss) };
+                        const otherwise = try self.missTree(if (task.exit_id) |exit_id| .{ .exit_ = exit_id } else task.miss);
+                        const node = try self.mk(.{ .len_check = .{
+                            .occ = task.col.occ,
+                            .ty = task.col.ty,
+                            .min_len = task.min_len,
+                            .then = then,
+                            .otherwise = otherwise,
+                        } });
+                        const exit_id = task.exit_id orelse return .{ .ret = node };
+                        return .{ .ret = try self.wrapExit(exit_id, node) };
+                    },
+                    .group => |*task| {
+                        if (input) |subtree| {
+                            task.arms[task.index].subtree = subtree;
+                            task.index += 1;
+                        }
+                        const have_below = task.below != null;
+                        if (task.index < task.arms.len) {
+                            return .{ .push = try self.rowsFrame(task.arm_rows[task.index].items, if (have_below) .{ .exit_ = task.exit_id } else task.miss) };
+                        }
+                        const arms = task.arms;
+                        const exhaustive = switch (task.kind) {
+                            .tag => if (self.ctx.tagVariantCount(task.occ_ty)) |count| arms.len == count else false,
+                            .callable => if (self.ctx.callableVariantCount(task.occ_ty)) |count| arms.len == count else false,
+                            .int_switch, .eq_chain, .str_set, .list_len => false,
+                        };
+
+                        const default: ?*Tree = if (exhaustive) null else if (have_below)
+                            try self.missTree(.{ .exit_ = task.exit_id })
+                        else
+                            try self.missTree(task.miss);
+
+                        const node = try self.mk(.{ .test_ = .{
+                            .occ = task.occ,
+                            .ty = task.occ_ty,
+                            .kind = task.kind,
+                            .arms = arms,
+                            .default = default,
+                            .exhaustive = exhaustive,
+                        } });
+
+                        if (!have_below) return .{ .ret = node };
+                        self.exits.items[task.exit_id].cont = task.below.?;
+                        return .{ .ret = try self.wrapExit(task.exit_id, node) };
+                    },
+                }
             }
 
             const Segment = struct {
@@ -752,75 +886,58 @@ pub fn Compiler(comptime Ctx: type) type {
                 return segments.items;
             }
 
-            /// Build one segment. `below` is the already-compiled tree for
-            /// the rows after this segment (null when this segment is last),
-            /// and `miss` is where matching continues when the whole
+            /// Build a run of leaf and guard rows in front of `below`, the
+            /// already-compiled tree for the rows after them (null when they
+            /// are last); `miss` is where matching continues when the whole
             /// remainder is exhausted.
-            fn buildSegment(self: *Builder, seg_kind: SegmentKind, rows: []const Row, below: ?*Tree, miss: Miss) Ctx.LowerError!*Tree {
-                switch (seg_kind) {
-                    .leaves => {
-                        var acc = below;
-                        var i = rows.len;
-                        while (i > 0) {
-                            i -= 1;
-                            const row = rows[i];
-                            if (row.guard) |guard| {
-                                const otherwise = acc orelse try self.missTree(miss);
-                                acc = try self.mk(.{ .guard = .{
-                                    .binds = row.binds,
-                                    .bindings = row.bindings,
-                                    .guard = guard,
-                                    .body = row.body,
-                                    .branch_index = row.branch_index,
-                                    .otherwise = otherwise,
-                                } });
-                            } else {
-                                acc = try self.mk(.{ .leaf = .{
-                                    .binds = row.binds,
-                                    .bindings = row.bindings,
-                                    .body = row.body,
-                                    .branch_index = row.branch_index,
-                                } });
-                            }
-                        }
-                        return acc.?;
-                    },
-                    .rest_row => |info| return try self.buildRestRow(info.occ, rows[0], below, miss),
-                    .group => |info| return try self.buildGroup(info.occ, info.ty, info.kind, rows, below, miss),
+            fn buildLeaves(self: *Builder, rows: []const Row, below: ?*Tree, miss: Miss) Ctx.LowerError!*Tree {
+                var acc = below;
+                var i = rows.len;
+                while (i > 0) {
+                    i -= 1;
+                    const row = rows[i];
+                    if (row.guard) |guard| {
+                        const otherwise = acc orelse try self.missTree(miss);
+                        acc = try self.mk(.{ .guard = .{
+                            .binds = row.binds,
+                            .bindings = row.bindings,
+                            .guard = guard,
+                            .body = row.body,
+                            .branch_index = row.branch_index,
+                            .otherwise = otherwise,
+                        } });
+                    } else {
+                        acc = try self.mk(.{ .leaf = .{
+                            .binds = row.binds,
+                            .bindings = row.bindings,
+                            .body = row.body,
+                            .branch_index = row.branch_index,
+                        } });
+                    }
                 }
+                return acc.?;
             }
 
-            fn buildRestRow(self: *Builder, occ: OccId, row: Row, below: ?*Tree, miss: Miss) Ctx.LowerError!*Tree {
+            fn restRowFrame(self: *Builder, occ: OccId, row: Row, below: ?*Tree, miss: Miss) Ctx.LowerError!CompileFrame {
                 const col = colAt(row, occ).?;
                 const view = self.ctx.listView(col.pat);
                 std.debug.assert(view.rest != null);
 
+                var exit_id: ?u32 = null;
                 if (below) |cont| {
-                    const exit_id: u32 = @intCast(self.exits.items.len);
+                    exit_id = @intCast(self.exits.items.len);
                     try self.exits.append(self.arena, .{ .cont = cont, .refs = 0 });
-                    const spec = try self.specListRestRow(row, col);
-                    const then = try self.compile(&.{spec}, .{ .exit_ = exit_id });
-                    const otherwise = try self.missTree(.{ .exit_ = exit_id });
-                    const node = try self.mk(.{ .len_check = .{
-                        .occ = col.occ,
-                        .ty = col.ty,
-                        .min_len = view.fixed_count,
-                        .then = then,
-                        .otherwise = otherwise,
-                    } });
-                    return try self.wrapExit(exit_id, node);
                 }
-
-                const spec = try self.specListRestRow(row, col);
-                const then = try self.compile(&.{spec}, miss);
-                const otherwise = try self.missTree(miss);
-                return try self.mk(.{ .len_check = .{
-                    .occ = col.occ,
-                    .ty = col.ty,
+                const spec = try self.arena.alloc(Row, 1);
+                spec[0] = try self.specListRestRow(row, col);
+                return .{ .rest_row = .{
+                    .col = col,
                     .min_len = view.fixed_count,
-                    .then = then,
-                    .otherwise = otherwise,
-                } });
+                    .spec = spec,
+                    .then_miss = if (exit_id) |id| .{ .exit_ = id } else miss,
+                    .exit_id = exit_id,
+                    .miss = miss,
+                } };
             }
 
             /// Wrap `inner` in an exit join when its continuation is
@@ -851,7 +968,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return try self.mk(.{ .exit_join = .{ .id = exit_id, .cont = state.cont, .inner = inner } });
             }
 
-            fn buildGroup(self: *Builder, occ: OccId, occ_ty: TypeId, kind: TestKind, rows: []const Row, below: ?*Tree, miss: Miss) Ctx.LowerError!*Tree {
+            fn groupFrame(self: *Builder, occ: OccId, occ_ty: TypeId, kind: TestKind, rows: []const Row, below: ?*Tree, miss: Miss) Ctx.LowerError!CompileFrame {
                 // Arm collection preserves first-appearance order; rows with
                 // the same constructor identity merge into one arm in source
                 // order, which is what makes guard fallthrough inside an arm
@@ -883,42 +1000,27 @@ pub fn Compiler(comptime Ctx: type) type {
 
                 const exit_id: u32 = @intCast(self.exits.items.len);
                 try self.exits.append(self.arena, .{ .cont = undefined, .refs = 0 });
-                const have_below = below != null;
-                const arm_miss: Miss = if (have_below) .{ .exit_ = exit_id } else miss;
 
+                // Arm subtrees fill in as each arm's rows compile.
                 const arms = try self.arena.alloc(Arm, arm_keys.items.len);
-                for (arms, arm_keys.items, arm_examples.items, arm_rows.items) |*arm, key, example, rows_list| {
+                for (arms, arm_keys.items, arm_examples.items) |*arm, key, example| {
                     arm.* = .{
                         .key = key,
                         .example = example.pat,
                         .example_ty = example.ty,
-                        .subtree = try self.compile(rows_list.items, arm_miss),
+                        .subtree = undefined,
                     };
                 }
-
-                const exhaustive = switch (kind) {
-                    .tag => if (self.ctx.tagVariantCount(occ_ty)) |count| arms.len == count else false,
-                    .callable => if (self.ctx.callableVariantCount(occ_ty)) |count| arms.len == count else false,
-                    .int_switch, .eq_chain, .str_set, .list_len => false,
-                };
-
-                const default: ?*Tree = if (exhaustive) null else if (have_below)
-                    try self.missTree(.{ .exit_ = exit_id })
-                else
-                    try self.missTree(miss);
-
-                const node = try self.mk(.{ .test_ = .{
+                return .{ .group = .{
                     .occ = occ,
-                    .ty = occ_ty,
+                    .occ_ty = occ_ty,
                     .kind = kind,
                     .arms = arms,
-                    .default = default,
-                    .exhaustive = exhaustive,
-                } });
-
-                if (!have_below) return node;
-                self.exits.items[exit_id].cont = below.?;
-                return try self.wrapExit(exit_id, node);
+                    .arm_rows = arm_rows.items,
+                    .exit_id = exit_id,
+                    .below = below,
+                    .miss = miss,
+                } };
             }
         };
 

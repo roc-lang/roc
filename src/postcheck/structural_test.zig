@@ -1062,7 +1062,12 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
     );
     try expectContains(deferred_guard, "self.nodeIsProvenUninhabited(boundary.value_node)");
     try expectContains(deferred_guard, "self.activeImpossibilityProofHolds(boundary.impossibility_proof)");
-    try expectContains(deferred_guard, "active runtime impossibility proof graph contained a cycle");
+    const proof_scan = sourceSliceBetween(
+        lower_source,
+        "const ImpossibilityProofScan = struct {",
+        "const PatternUninhabitedScan = struct {",
+    );
+    try expectContains(proof_scan, "active runtime impossibility proof graph contained a cycle");
 
     const template_body = sourceSliceBetween(
         lower_source,
@@ -1117,9 +1122,15 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn checkedPatternIsProvenUninhabited(",
     );
     try expectContains(durable_inhabitation, "self.draft.uninhabited_type_cache.get(ty)");
-    try expectContains(durable_inhabitation, "const types_ = self.typeStore()");
-    try expectContains(durable_inhabitation, "defer _ = visiting.remove(ty)");
     try expectNotContains(durable_inhabitation, "activeNodeFromType");
+    const durable_scan = sourceSliceBetween(
+        lower_source,
+        "const TypeUninhabitedScan = struct {",
+        "const ImpossibilityProofScan = struct {",
+    );
+    try expectContains(durable_scan, "const types_ = self.body.typeStore()");
+    try expectContains(durable_scan, "_ = self.visiting.remove(ty)");
+    try expectNotContains(durable_scan, "activeNodeFromType");
     const inspect_call = sourceSliceBetween(
         lower_source,
         "fn inspectCall(self: *BodyContext",
