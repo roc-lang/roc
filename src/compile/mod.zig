@@ -210,6 +210,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11392_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11393_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11418_test.zig"));
+    std.testing.refAllDecls(@import("test/compile_time_value_paths_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11441_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11444_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11471_test.zig"));

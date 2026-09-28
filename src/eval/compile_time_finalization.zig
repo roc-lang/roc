@@ -476,7 +476,8 @@ fn transcodeCompletedSlots(
         };
         allocator.free(converted);
     }
-    return .{ .allocator = allocator, .exports = try exports.toOwnedSlice(allocator) };
+    // Roots evaluated separately freeze their equal backings separately.
+    return .{ .allocator = allocator, .exports = try static_data_exports.mergeIdenticalNodes(allocator, try exports.toOwnedSlice(allocator)) };
 }
 
 fn frozenSlotSymbol(symbols: []const ?static_data_exports.StaticDataSymbolId, slot: lir.LIR.StaticDataId) static_data_exports.StaticDataSymbolId {
@@ -3222,7 +3223,7 @@ const StaticSlotEnvironment = struct {
             all.items[index] = cloned[0];
             all.appendSliceAssumeCapacity(cloned[1..]);
         }
-        return .{ .allocator = self.allocator, .exports = try all.toOwnedSlice(self.allocator) };
+        return .{ .allocator = self.allocator, .exports = try static_data_exports.mergeIdenticalNodes(self.allocator, try all.toOwnedSlice(self.allocator)) };
     }
 
     fn deinit(self: *StaticSlotEnvironment) void {
