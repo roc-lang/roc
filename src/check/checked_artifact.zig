@@ -1698,103 +1698,119 @@ fn checkedTypeIsConcreteCompileTimeRoot(
 ) Allocator.Error!bool {
     var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer active.deinit();
-    return try checkedTypeIsConcreteCompileTimeRootInner(.value_graph, checked_types, root, &active);
+    var scan = ConcreteRootScan{ .checked_types = checked_types, .active = &active };
+    return ConcreteRootScan.Eval.run(allocator, &scan, .{ .ty = .{ .walk = .value_graph, .id = root } });
 }
 
-fn checkedTypeIsConcreteCompileTimeRootInner(
-    comptime walk: ConcreteRootWalk,
+/// Whether a checked type is concrete enough to be a compile-time root. A
+/// type reached again while it is still being walked (a recursive type)
+/// counts as concrete.
+const ConcreteRootScan = struct {
     checked_types: *const CheckedTypeStore,
-    root: CheckedTypeId,
+    /// The types on the path currently being walked.
     active: *collections.DenseMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    if (active.contains(root)) return true;
-    try active.put(root, {});
-    defer _ = active.remove(root);
 
-    const index = @intFromEnum(root);
-    if (index >= checked_types.payloads.items.len) {
-        checkedArtifactInvariant("compile-time root checked type id is out of range", .{});
-    }
-    return switch (checked_types.payload(@enumFromInt(index))) {
-        .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
-        .err => false,
-        .flex => false,
-        .rigid => walk == .decl_template,
-        .empty_record,
-        .empty_tag_union,
-        => true,
-        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, alias.args, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, alias.backing, active),
-        .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, record.fields, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, record.ext, active),
-        .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, items, active),
-        .nominal => |nominal| blk: {
-            if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, nominal.args, active)) break :blk false;
-            switch (nominal.representation) {
-                .builtin => |builtin_type| switch (builtinRuntimeEncoding(builtin_type)) {
-                    .primitive,
-                    .list,
-                    .box,
-                    .dict,
-                    .set,
-                    .parse_tag_union_spec,
-                    .fields,
-                    .field,
-                    => break :blk true,
-                    .bool_tag_union,
-                    .try_nominal,
-                    .iterator,
-                    .crypto_sha256_digest,
-                    .crypto_sha256_hasher,
-                    .crypto_blake3_digest,
-                    .crypto_blake3_hasher,
-                    => {},
-                },
-                .opaque_without_backing => break :blk true,
-                .local_declaration,
-                .imported_declaration,
-                .local_box_payload_capability,
-                .imported_box_payload_capability,
-                => {},
-            }
-            const backing = checked_types.nominalBackingTemplateForPayload(nominal) orelse break :blk true;
-            // Declaration formals stand for the args checked above, so they
-            // count as concrete while walking the backing template.
-            break :blk try checkedTypeIsConcreteCompileTimeRootInner(.decl_template, checked_types, backing, active);
-        },
-        // A function scheme is a concrete compile-time root exactly when its
-        // args and return contain no identity variables.
-        .function => |function| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, function.args, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, function.ret, active),
-        .tag_union => |tag_union| (try checkedTagsAreConcreteCompileTimeRoots(walk, checked_types, tag_union.tags, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, tag_union.ext, active),
+    const Leaf = union(enum) {
+        ty: struct { walk: ConcreteRootWalk, id: CheckedTypeId },
+        decided: bool,
     };
-}
+    const Eval = collections.AnyAll.Evaluation(Leaf, ConcreteRootScan);
 
-fn checkedTypeSpanIsConcreteCompileTimeRoot(
-    comptime walk: ConcreteRootWalk,
-    checked_types: *const CheckedTypeStore,
-    items: []const CheckedTypeId,
-    active: *collections.DenseMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (items) |item| {
-        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, item, active)) return false;
+    fn addSpan(items: Eval.Items, walk: ConcreteRootWalk, ids: []const CheckedTypeId) Allocator.Error!void {
+        for (ids) |id| try items.add(.{ .ty = .{ .walk = walk, .id = id } });
     }
-    return true;
-}
 
-fn checkedFieldTypesAreConcreteCompileTimeRoots(
-    comptime walk: ConcreteRootWalk,
-    checked_types: *const CheckedTypeStore,
-    fields: []const CheckedRecordField,
-    active: *collections.DenseMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (fields) |field| {
-        if (field.kind.tag == .undetermined) return false;
-        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, field.ty, active)) return false;
+    pub fn enter(scan: *ConcreteRootScan, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
+        const checked_types = scan.checked_types;
+        const ty = switch (leaf) {
+            .decided => |value| return .{ .value = value },
+            .ty => |ty| ty,
+        };
+        const walk = ty.walk;
+        if (scan.active.contains(ty.id)) return .{ .value = true };
+
+        const index = @intFromEnum(ty.id);
+        if (index >= checked_types.payloads.items.len) {
+            checkedArtifactInvariant("compile-time root checked type id is out of range", .{});
+        }
+        switch (checked_types.payload(@enumFromInt(index))) {
+            .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
+            .err => return .{ .value = false },
+            .flex => return .{ .value = false },
+            .rigid => return .{ .value = walk == .decl_template },
+            .empty_record,
+            .empty_tag_union,
+            => return .{ .value = true },
+            .alias => |alias| {
+                try addSpan(items, walk, alias.args);
+                try items.add(.{ .ty = .{ .walk = walk, .id = alias.backing } });
+            },
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (field.kind.tag == .undetermined) {
+                        try items.add(.{ .decided = false });
+                        break;
+                    }
+                    try items.add(.{ .ty = .{ .walk = walk, .id = field.ty } });
+                } else try items.add(.{ .ty = .{ .walk = walk, .id = record.ext } });
+            },
+            .tuple => |items_ids| try addSpan(items, walk, items_ids),
+            .nominal => |nominal| {
+                try addSpan(items, walk, nominal.args);
+                const needs_backing = switch (nominal.representation) {
+                    .builtin => |builtin_type| switch (builtinRuntimeEncoding(builtin_type)) {
+                        .primitive,
+                        .list,
+                        .box,
+                        .dict,
+                        .set,
+                        .parse_tag_union_spec,
+                        .fields,
+                        .field,
+                        => false,
+                        .bool_tag_union,
+                        .try_nominal,
+                        .iterator,
+                        .crypto_sha256_digest,
+                        .crypto_sha256_hasher,
+                        .crypto_blake3_digest,
+                        .crypto_blake3_hasher,
+                        => true,
+                    },
+                    .opaque_without_backing => false,
+                    .local_declaration,
+                    .imported_declaration,
+                    .local_box_payload_capability,
+                    .imported_box_payload_capability,
+                    => true,
+                };
+                if (needs_backing) {
+                    // Declaration formals stand for the args checked above, so they
+                    // count as concrete while walking the backing template.
+                    if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
+                        try items.add(.{ .ty = .{ .walk = .decl_template, .id = backing } });
+                    }
+                }
+            },
+            // A function scheme is a concrete compile-time root exactly when its
+            // args and return contain no identity variables.
+            .function => |function| {
+                try addSpan(items, walk, function.args);
+                try items.add(.{ .ty = .{ .walk = walk, .id = function.ret } });
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| try addSpan(items, walk, tag.argsSlice(checked_types));
+                try items.add(.{ .ty = .{ .walk = walk, .id = tag_union.ext } });
+            },
+        }
+        try scan.active.put(ty.id, {});
+        return .{ .group = .all };
     }
-    return true;
-}
+
+    pub fn exit(scan: *ConcreteRootScan, leaf: Leaf, _: ?bool) Allocator.Error!void {
+        _ = scan.active.remove(leaf.ty.id);
+    }
+};
 
 test "compile-time roots reject undetermined record field kinds" {
     const allocator = std.testing.allocator;
@@ -1844,18 +1860,6 @@ test "compile-time data roots with reachable callables require producer type evi
 
     try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, false, root));
     try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, true, root));
-}
-
-fn checkedTagsAreConcreteCompileTimeRoots(
-    comptime walk: ConcreteRootWalk,
-    checked_types: *const CheckedTypeStore,
-    tags: []const CheckedTag,
-    active: *collections.DenseMap(CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (tags) |tag| {
-        if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, tag.argsSlice(checked_types), active)) return false;
-    }
-    return true;
 }
 
 const CheckedTypeErrorTraversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, CheckedTypeErrorScan);
@@ -22705,48 +22709,47 @@ const NestedProcSiteBuilder = struct {
         for (frame.bindings.items) |binding| try self.captureType(binding.ty);
     }
 
-    fn captureType(self: *NestedProcSiteBuilder, ty: CheckedTypeId) Allocator.Error!void {
-        if (self.capture_depth == 0 or !self.checked_types.rootContainsIdentityVariables(ty)) return;
-        const frame = &self.capture_frames.items[self.capture_depth - 1];
-        if ((try frame.visited.getOrPut(ty)).found_existing) return;
-        if (self.lexical_bindings.get(ty)) |binding| {
-            try frame.bindings.append(self.allocator, binding);
-            return;
-        }
-        switch (self.checked_types.payload(ty)) {
-            .pending => checkedArtifactInvariant("pending type in nested procedure binding inventory", .{}),
-            .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
-            .alias => |alias| {
-                for (alias.args) |arg| try self.captureType(arg);
-                try self.captureType(alias.backing);
-            },
-            .record => |record| {
-                try self.captureFields(record.fields);
-                try self.captureType(record.ext);
-            },
-            .tuple => |items| for (items) |item| {
-                try self.captureType(item);
-            },
-            .nominal => |nominal| for (nominal.args) |arg| {
-                try self.captureType(arg);
-            },
-            .function => |function| {
-                for (function.args) |arg| try self.captureType(arg);
-                try self.captureType(function.ret);
-            },
-            .tag_union => |tags| {
-                for (tags.tags) |tag| for (tag.argsSlice(self.checked_types)) |arg| {
-                    try self.captureType(arg);
-                };
-                try self.captureType(tags.ext);
-            },
-        }
-    }
-
-    fn captureFields(self: *NestedProcSiteBuilder, fields: []const CheckedRecordField) Allocator.Error!void {
-        for (fields) |field| {
-            if (field.kind.undeterminedVariable()) |variable| try self.captureType(variable);
-            try self.captureType(field.ty);
+    fn captureType(self: *NestedProcSiteBuilder, root: CheckedTypeId) Allocator.Error!void {
+        if (self.capture_depth == 0) return;
+        var pending: std.ArrayList(CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            if (!self.checked_types.rootContainsIdentityVariables(ty)) continue;
+            const frame = &self.capture_frames.items[self.capture_depth - 1];
+            if ((try frame.visited.getOrPut(ty)).found_existing) continue;
+            if (self.lexical_bindings.get(ty)) |binding| {
+                try frame.bindings.append(self.allocator, binding);
+                continue;
+            }
+            // Visit children in order: push them, then reverse the run.
+            const start = pending.items.len;
+            switch (self.checked_types.payload(ty)) {
+                .pending => checkedArtifactInvariant("pending type in nested procedure binding inventory", .{}),
+                .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+                .alias => |alias| {
+                    try pending.appendSlice(self.allocator, alias.args);
+                    try pending.append(self.allocator, alias.backing);
+                },
+                .record => |record| {
+                    for (record.fields) |field| {
+                        if (field.kind.undeterminedVariable()) |variable| try pending.append(self.allocator, variable);
+                        try pending.append(self.allocator, field.ty);
+                    }
+                    try pending.append(self.allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .nominal => |nominal| try pending.appendSlice(self.allocator, nominal.args),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |tags| {
+                    for (tags.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(self.checked_types));
+                    try pending.append(self.allocator, tags.ext);
+                },
+            }
+            std.mem.reverse(CheckedTypeId, pending.items[start..]);
         }
     }
 

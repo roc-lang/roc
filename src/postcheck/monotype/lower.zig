@@ -22274,77 +22274,41 @@ const BodyContext = struct {
         return try self.instNode(checked_ty);
     }
 
-    fn checkedTypeContainsError(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
+    fn checkedTypeContainsError(self: *BodyContext, root: checked.CheckedTypeId) Allocator.Error!bool {
         var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
-        return try self.checkedTypeContainsErrorInner(checked_ty, &visited);
-    }
-
-    fn checkedTypeContainsErrorInner(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        visited: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        if (visited.contains(checked_ty)) return false;
-        try visited.put(checked_ty, {});
-
-        return switch (checkedPayload(self.view, checked_ty)) {
-            .pending => Common.invariant("pending checked type reached Monotype error scan"),
-            .err => true,
-            .flex, .rigid, .empty_record, .empty_tag_union => false,
-            .alias => |alias| blk: {
-                if (try self.checkedTypeContainsErrorInner(alias.backing, visited)) break :blk true;
-                break :blk try self.checkedTypeSpanContainsError(alias.args, visited);
-            },
-            .record => |record| blk: {
-                if (try self.checkedRecordFieldsContainError(record.fields, visited)) break :blk true;
-                break :blk try self.checkedTypeContainsErrorInner(record.ext, visited);
-            },
-            .tuple => |items| try self.checkedTypeSpanContainsError(items, visited),
-            .nominal => |nominal| blk: {
-                if (try self.checkedTypeSpanContainsError(nominal.args, visited)) break :blk true;
-                break :blk try self.checkedTypeSpanContainsError(nominal.padding_field_types, visited);
-            },
-            .function => |function| blk: {
-                if (try self.checkedTypeSpanContainsError(function.args, visited)) break :blk true;
-                break :blk try self.checkedTypeContainsErrorInner(function.ret, visited);
-            },
-            .tag_union => |tag_union| blk: {
-                if (try self.checkedTagsContainError(tag_union.tags, visited)) break :blk true;
-                break :blk try self.checkedTypeContainsErrorInner(tag_union.ext, visited);
-            },
-        };
-    }
-
-    fn checkedTypeSpanContainsError(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-        visited: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (checked_tys) |ty| {
-            if (try self.checkedTypeContainsErrorInner(ty, visited)) return true;
-        }
-        return false;
-    }
-
-    fn checkedRecordFieldsContainError(
-        self: *BodyContext,
-        fields: []const checked.CheckedRecordField,
-        visited: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (fields) |field| {
-            if (try self.checkedTypeContainsErrorInner(field.ty, visited)) return true;
-        }
-        return false;
-    }
-
-    fn checkedTagsContainError(
-        self: *BodyContext,
-        tags: []const checked.CheckedTag,
-        visited: *collections.DenseMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (tags) |tag| {
-            if (try self.checkedTypeSpanContainsError(tag.argsSlice(self.view.types), visited)) return true;
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |checked_ty| {
+            if (visited.contains(checked_ty)) continue;
+            try visited.put(checked_ty, {});
+            switch (checkedPayload(self.view, checked_ty)) {
+                .pending => Common.invariant("pending checked type reached Monotype error scan"),
+                .err => return true,
+                .flex, .rigid, .empty_record, .empty_tag_union => {},
+                .alias => |alias| {
+                    try pending.append(self.allocator, alias.backing);
+                    try pending.appendSlice(self.allocator, alias.args);
+                },
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(self.allocator, field.ty);
+                    try pending.append(self.allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .nominal => |nominal| {
+                    try pending.appendSlice(self.allocator, nominal.args);
+                    try pending.appendSlice(self.allocator, nominal.padding_field_types);
+                },
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(self.view.types));
+                    try pending.append(self.allocator, tag_union.ext);
+                },
+            }
         }
         return false;
     }
