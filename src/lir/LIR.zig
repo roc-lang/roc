@@ -1082,6 +1082,14 @@ pub const CFStmt = union(enum) {
     assign_literal: struct {
         target: LocalId,
         value: LiteralValue,
+        /// For a read of a compile-time list of copies of one value, held as
+        /// static data in `value`: the argument-free procedure that builds
+        /// the same list fresh. ARC chooses one form per read—the static
+        /// datum when nothing the value reaches needs it unique, the fresh
+        /// build when its birth lets ARC prove a mutating consumer's
+        /// argument unique—and clears this, so no consumer after ARC sees
+        /// it set.
+        fresh_alternative: ?LirProcSpecId = null,
         next: CFStmtId,
     },
     assign_call: struct {

@@ -971,11 +971,16 @@ with: a frozen descriptor's capacity word is its length, so the freezer
 keeps each empty list's evaluated capacity on the root's export, keyed by
 its byte offset within the image, and the runtime rebuilds the request so
 the first append goes in place. A list with items keeps its slot however
-uniform its contents: rebuilding a table of copies at every read would
-allocate at every read, while a mutating consumer of a static list gets its
-fresh unique copy from copy-on-first-mutation at the one allocation a
-rebuild would have spent, so the constructions are the scalars, the empty
-string, the empty list, and records, tuples and tags of those. A non-empty
+uniform its contents, so the constructions are the scalars, the empty
+string, the empty list, and records, tuples and tags of those. A list of
+copies of one construction—what `List.repeat` and a constant fill loop
+complete to—additionally names, on each read, the argument-free procedure
+that builds the same list fresh (`assign_literal.fresh_alternative`), and
+ARC chooses one form per read (see "Fresh forms of static lists" under ARC
+Borrow Inference): a read whose value only ever gets read keeps the static
+datum and allocates nothing, while a read whose value an in-place operation
+would otherwise copy on first write is born fresh, so the write is proven
+unique and the copy never happens. Neither form is visible after ARC. A non-empty
 list with spare capacity freezes to its items alone; only the capacity of
 an empty list survives. Identical nodes of one frozen image are one symbol:
 two evaluations of the same constant expression, such as two `List.repeat`
@@ -14739,6 +14744,36 @@ solution, because the all-owned assignment satisfies all constraints; the
 solver outputs the least one. There is no failure path and no recovery path.
 An occurrence the solver leaves owned is emitted as a move or an `incref`,
 exactly as all-owned insertion would emit it.
+
+### Fresh forms of static lists
+
+A read of a compile-time list of copies lowers as its static-data slot and
+also names the argument-free procedure that would build the list fresh. The
+static datum has the static count, so it is never born unique: a mutating
+consumer copies it on first write, at the one allocation a fresh build would
+have spent, plus the copy. The fresh build allocates on every execution of the
+read, which a read whose value is only ever read has no use for. Which form a
+read takes is therefore a question of where its value reaches, and the
+uniqueness analysis answers it.
+
+Every such read is a candidate birth. Alongside the born bit and its parameter
+conditions, the settlement carries each local's *origins*: the candidates its
+born value derives from, flowing over the same pure aliases, join edges and
+returned-argument call edges the birth flows over. A value that would carry an
+origin into a field store, a per-field call edge or a return is not born
+there instead: origins do not leave the procedure that read the value, and a
+callee or a container never learns of a candidate. A candidate is *needed*
+when a value derived from it meets a runtime uniqueness check its birth
+answers—an argument position an operation may check, or an argument passed to
+a callee position the callee's seed mask names, which a variant would seed—
+while born with no other holder. Needed candidates take the fresh form, every
+other candidate stays the static datum, and a local whose origins include a
+candidate that stays static is not unique, whatever its born bit says
+(`unique_origins_ok`). Emission materializes a needed read as a call to the
+fresh procedure and any other as the static literal; no `fresh_alternative`
+survives ARC, which the certifier checks, and the fresh procedures no read
+chose leave with the reachability pass that follows ARC. Callee seed-mask
+changes re-analyze callers, since a caller's decisions read them.
 
 ### Vocabulary
 
