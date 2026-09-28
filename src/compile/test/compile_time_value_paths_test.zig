@@ -382,3 +382,41 @@ test "a compile-time table consumed through an uninlined builtin wrapper is stil
         try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
     }
 }
+
+test "a compile-time table re-bound from a helper's returned record field each iteration is built fresh" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table : List(U32)
+        \\table = List.repeat(0.U32, 1000)
+        \\step : List(U32), U64 -> { table : List(U32), sum : U64 }
+        \\step = |t, i| { table: List.append(t, i.to_u32_wrap()), sum: i }
+        \\main! = |args| {
+        \\    var $t = table
+        \\    var $i = 0
+        \\    while $i < List.len(args) {
+        \\        r = step($t, $i)
+        \\        $t = r.table
+        \\        $i = $i + 1
+        \\    }
+        \\    Echo.line!(Str.inspect(List.get($t, 0)))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The loop variable is the read's value on entry and the helper's
+        // returned field on every later iteration; the origin follows the
+        // value through the call, the record and the take, so the value
+        // the helper's append checks is born of the read, and the read
+        // takes its fresh form.
+        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+    }
+}

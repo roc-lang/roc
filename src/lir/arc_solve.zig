@@ -3805,9 +3805,11 @@ pub const Uniqueness = struct {
     candidates: []LIR.CFStmtId,
     /// Per local, `origin_words` words: bit `c` set => the local's born
     /// value derives from candidate `c`, through the same pure aliases, join
-    /// edges and returned-argument call edges the birth flows through. A
-    /// value that would carry an origin through a field store, a field read
-    /// or a return is not born there instead.
+    /// edges, field stores and takes, and call edges the birth flows
+    /// through; a stored field's origins live in `field_conds`. Origins
+    /// never leave the procedure: a returned value or field that derives
+    /// from a candidate is not a unique return, since the caller cannot see
+    /// which form the read takes.
     origins: []u64,
     origin_words: usize,
     /// Bit `c` set => some runtime uniqueness check in the analyzed
@@ -3855,10 +3857,14 @@ pub const Uniqueness = struct {
 };
 
 /// Conditions on per-field unique origins: a container with any field input
-/// owns sixty-four parameter masks, one per field, at `base[container]`.
+/// owns sixty-four parameter masks, one per field, at `base[container]`,
+/// and, when the analyzed statements hold candidate reads, sixty-four
+/// candidate bitsets of `origin_words` words each at the same base.
 pub const FieldConds = struct {
     base: []u32,
     conds: []arc_sig.ParamMask,
+    origins: []u64 = &.{},
+    origin_words: usize = 0,
 
     pub fn get(self: FieldConds, container: u32, field: u32) arc_sig.ParamMask {
         const base = self.base[container];
@@ -3866,9 +3872,34 @@ pub const FieldConds = struct {
         return self.conds[base + field];
     }
 
+    /// The candidates the container's stored field derives from; empty
+    /// when the container tracks no fields or no candidate exists.
+    pub fn originsOf(self: FieldConds, container: u32, field: u32) []const u64 {
+        const base = self.base[container];
+        if (base == no_local or self.origin_words == 0) return &.{};
+        return self.origins[(base + field) * self.origin_words ..][0..self.origin_words];
+    }
+
+    /// The fields of the container whose stored values derive from a
+    /// candidate read.
+    pub fn fieldsWithOrigins(self: FieldConds, container: u32) u64 {
+        if (self.base[container] == no_local or self.origin_words == 0) return 0;
+        var mask: u64 = 0;
+        for (0..64) |field| {
+            for (self.originsOf(container, @intCast(field))) |word| {
+                if (word != 0) {
+                    mask |= @as(u64, 1) << @as(u6, @intCast(field));
+                    break;
+                }
+            }
+        }
+        return mask;
+    }
+
     pub fn deinit(self: *FieldConds, allocator: Allocator) void {
         allocator.free(self.base);
         allocator.free(self.conds);
+        allocator.free(self.origins);
     }
 };
 
@@ -4071,13 +4102,14 @@ const ConsumptionProof = struct {
 /// inductive fact the runtime obeys. Deadness ascends along the same edges:
 /// a second holder of a source is a second holder of everything the source
 /// flows into.
-fn hasOriginWords(origins: []const u64, origin_words: usize, local: u32) bool {
-    for (origins[local * origin_words ..][0..origin_words]) |word| if (word != 0) return true;
-    return false;
+fn orOriginWords(into: []u64, origins: []const u64, origin_words: usize, local: u32) void {
+    orWords(into, origins[local * origin_words ..][0..origin_words]);
 }
 
-fn orOriginWords(into: []u64, origins: []const u64, origin_words: usize, local: u32) void {
-    for (into, origins[local * origin_words ..][0..origin_words]) |*acc, word| acc.* |= word;
+/// ORs `from` into `into`; an empty `from` (no fields tracked, or no
+/// candidate) leaves `into` alone.
+fn orWords(into: []u64, from: []const u64) void {
+    for (from, 0..) |word, index| into[index] |= word;
 }
 
 fn settleUniqueOrigins(
@@ -4230,6 +4262,11 @@ fn settleUniqueOrigins(
     }
     field_conds.conds = try allocator.alloc(arc_sig.ParamMask, @as(usize, container_count) * 64);
     @memset(field_conds.conds, 0);
+    field_conds.origin_words = origin_words;
+    field_conds.origins = try allocator.alloc(u64, @as(usize, container_count) * 64 * origin_words);
+    @memset(field_conds.origins, 0);
+    const field_origin_scratch = try allocator.alloc(u64, 64 * origin_words);
+    defer allocator.free(field_origin_scratch);
 
     const Meet = struct {
         /// The condition under which every input so far is born, or null
@@ -4264,17 +4301,20 @@ fn settleUniqueOrigins(
             if (field_conds.base[container] == no_local) continue;
             var meets: [64]Meet = @splat(Meet{});
             var dead: u64 = dead_masks[container];
+            // A stored field's origins are its inputs' origins.
+            @memset(field_origin_scratch, 0);
             for (store_inputs.row(container)) |edge_index| {
                 const edge = field_edges.stores[edge_index];
                 meets[edge.field].fromLocal(born, conds, edge.source);
-                // Field origins carry no candidate: a value derived from a
-                // candidate read is not born as a field.
-                if (hasOriginWords(origins, origin_words, edge.source)) meets[edge.field].value = null;
+                orOriginWords(field_origin_scratch[edge.field * origin_words ..][0..origin_words], origins, origin_words, edge.source);
                 if (destroyed.isSet(edge.source)) dead |= @as(u64, 1) << @as(u6, @intCast(edge.field));
             }
             for (mask_alias_inputs.row(container)) |edge_index| {
                 const source = field_edges.aliases[edge_index].source;
-                for (0..64) |field| meets[field].fromSlot(masks, field_conds, source, @intCast(field));
+                for (0..64) |field| {
+                    meets[field].fromSlot(masks, field_conds, source, @intCast(field));
+                    orWords(field_origin_scratch[field * origin_words ..][0..origin_words], field_conds.originsOf(source, @intCast(field)));
+                }
                 dead |= dead_masks[source];
             }
             for (seed_inputs.row(container)) |seed_index| {
@@ -4289,12 +4329,19 @@ fn settleUniqueOrigins(
                 const meet = &meets[edge.field];
                 for (field_edges.call_args[edge.args_start..][0..edge.args_len]) |arg| {
                     meet.fromLocal(born, conds, arg);
-                    if (hasOriginWords(origins, origin_words, arg)) meet.value = null;
+                    orOriginWords(field_origin_scratch[edge.field * origin_words ..][0..origin_words], origins, origin_words, arg);
                     if (destroyed.isSet(arg)) dead |= @as(u64, 1) << @as(u6, @intCast(edge.field));
                 }
             }
             var mask: u64 = 0;
             var changed = dead != dead_masks[container];
+            if (origin_words != 0) {
+                const container_origins = field_conds.origins[field_conds.base[container] * origin_words ..][0 .. 64 * origin_words];
+                if (!std.mem.eql(u64, container_origins, field_origin_scratch)) {
+                    @memcpy(container_origins, field_origin_scratch);
+                    changed = true;
+                }
+            }
             for (meets, 0..) |meet, field| {
                 if (!meet.isBorn()) continue;
                 const bit = @as(u64, 1) << @as(u6, @intCast(field));
@@ -4346,6 +4393,7 @@ fn settleUniqueOrigins(
             for (read_inputs.row(local)) |edge_index| {
                 const read = field_edges.reads[edge_index];
                 meet.fromSlot(masks, field_conds, read.container, read.field);
+                orWords(origin_scratch, field_conds.originsOf(read.container, read.field));
                 dead = dead or (dead_masks[read.container] & (@as(u64, 1) << @as(u6, @intCast(read.field)))) != 0;
             }
         } else {
@@ -4908,7 +4956,9 @@ const UniquenessComponentTask = struct {
                 } else {
                     whole_params |= uniqueness.conds[dense];
                 }
-                fields &= uniqueness.field_masks[dense];
+                // A field derived from a candidate read is not a unique
+                // return either: its birth is decided within this procedure.
+                fields &= uniqueness.field_masks[dense] & ~uniqueness.field_conds.fieldsWithOrigins(dense);
                 var born_fields = std.bit_set.IntegerBitSet(64){ .mask = uniqueness.field_masks[dense] };
                 var iter = born_fields.iterator(.{});
                 while (iter.next()) |field| field_params[field] |= uniqueness.field_conds.get(dense, @intCast(field));
@@ -5272,7 +5322,7 @@ fn settleUniquenessOracle(
                     } else {
                         whole_params |= uniqueness.conds[raw];
                     }
-                    fields &= uniqueness.field_masks[raw];
+                    fields &= uniqueness.field_masks[raw] & ~uniqueness.field_conds.fieldsWithOrigins(@intCast(raw));
                     var born_fields = std.bit_set.IntegerBitSet(64){ .mask = uniqueness.field_masks[raw] };
                     var born_field_iter = born_fields.iterator(.{});
                     while (born_field_iter.next()) |field| field_params[field] |= uniqueness.field_conds.get(@intCast(raw), @intCast(field));
@@ -7437,6 +7487,90 @@ test "uniqueness seed masks compose through direct calls" {
     var metrics: UniquenessMetrics = .{};
     try UniquenessOracleState.compare(&f, rc, &solution, .none, &metrics);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b01), solution.unique_seed_masks[@intFromEnum(top)]);
+}
+
+test "uniqueness carries a candidate read's origin through a returned record field to its take" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    // callee(p) = {p, []}: its first field is born exactly when the
+    // argument is, so the caller's call edge carries the argument's origin
+    // into the result's field, and the take of that field inherits it.
+    const param = try f.local(f.list);
+    const other = try f.local(f.list);
+    const pair = try f.local(f.pair);
+    const make_pair = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{ param, other }), .next = try f.ret(pair) } }, .test_fixture);
+    const callee_body = try f.store.addCFStmt(.{ .assign_list = .{ .target = other, .elems = try f.store.addLocalSpan(&.{}), .next = make_pair } }, .test_fixture);
+    const callee = try f.proc(&.{param}, callee_body, f.list);
+    const fresh_form = try f.proc(&.{}, null, f.list);
+
+    // Caller: read the candidate, pass it through the callee, take the
+    // field back, and check it.
+    const candidate = try f.local(f.list);
+    const got = try f.local(f.pair);
+    const first = try f.local(f.list);
+    const reversed = try f.local(f.list);
+    const check = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = reversed,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.store.addLocalSpan(&.{first}),
+        .next = try f.ret(reversed),
+    } }, .test_fixture);
+    const take = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = first,
+        .op = .{ .field = .{ .source = got, .field_idx = 0 } },
+        .take_kind = .take,
+        .next = check,
+    } }, .test_fixture);
+    const call = try f.call(got, callee, &.{candidate}, take);
+    const read = try f.store.addCFStmt(.{ .assign_literal = .{
+        .target = candidate,
+        .value = .{ .static_data = @enumFromInt(0) },
+        .fresh_alternative = fresh_form,
+        .next = call,
+    } }, .test_fixture);
+    _ = try f.proc(&.{}, read, f.list);
+
+    // A second read whose value only rides along in a field and is read
+    // back without a check stays static, and its take is not unique.
+    const idle = try f.local(f.list);
+    const idle_got = try f.local(f.pair);
+    const idle_first = try f.local(f.list);
+    const idle_take = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = idle_first,
+        .op = .{ .field = .{ .source = idle_got, .field_idx = 0 } },
+        .take_kind = .take,
+        .next = try f.ret(idle_first),
+    } }, .test_fixture);
+    const idle_call = try f.call(idle_got, callee, &.{idle}, idle_take);
+    const idle_read = try f.store.addCFStmt(.{ .assign_literal = .{
+        .target = idle,
+        .value = .{ .static_data = @enumFromInt(0) },
+        .fresh_alternative = fresh_form,
+        .next = idle_call,
+    } }, .test_fixture);
+    _ = try f.proc(&.{}, idle_read, f.list);
+
+    const rc = try allocator.alloc(bool, f.store.localCount());
+    defer allocator.free(rc);
+    @memset(rc, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try settleUniqueness(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true);
+    try std.testing.expect(solution.fresh_reads.isSet(@intFromEnum(read)));
+    try std.testing.expect(solution.isUnique(first));
+    try std.testing.expect(solution.isUniqueUnder(first, 0));
+    try std.testing.expect(!solution.fresh_reads.isSet(@intFromEnum(idle_read)));
+    try std.testing.expect(!solution.isUniqueUnder(idle_first, 0));
+    // The callee's field row stays a conditional row on its parameter; a
+    // candidate never reaches a signature.
+    try std.testing.expectEqual(@as(u64, 0), solution.sigOf(callee).ret_unique_fields & 1);
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, rc, &solution, .stamped, &metrics);
+    try std.testing.expect(solution.fresh_reads.isSet(@intFromEnum(read)));
+    try std.testing.expect(!solution.fresh_reads.isSet(@intFromEnum(idle_read)));
 }
 
 test "uniqueness gives a tail loop parameter no field origins from its back edge alone" {
