@@ -96,6 +96,7 @@ const Pass = struct {
     old_static_data_to_new: []?LIR.StaticDataId,
     proc_queue: std.ArrayList(LIR.LirProcSpecId),
     export_queue: std.ArrayList(LirProgram.StaticDataSymbolId),
+    plan_stack: std.ArrayList(LirProgram.ConstPlanId),
     stmt_stack: std.ArrayList(LIR.CFStmtId),
 
     fn init(result: *LirProgram.Result, frozen: ?*LirProgram.FrozenStaticData) Allocator.Error!Pass {
@@ -175,6 +176,7 @@ const Pass = struct {
             .old_static_data_to_new = old_static_data_to_new,
             .proc_queue = .empty,
             .export_queue = .empty,
+            .plan_stack = .empty,
             .stmt_stack = .empty,
         };
     }
@@ -186,6 +188,7 @@ const Pass = struct {
         self.stmt_stack.deinit(self.allocator);
         self.proc_queue.deinit(self.allocator);
         self.export_queue.deinit(self.allocator);
+        self.plan_stack.deinit(self.allocator);
         self.allocator.free(self.old_static_data_to_new);
         self.allocator.free(self.reachable_static_data);
         self.allocator.free(self.visited_plans);
@@ -366,42 +369,65 @@ const Pass = struct {
         }
     }
 
-    fn markConstPlan(self: *Pass, plan_id: LirProgram.ConstPlanId) Allocator.Error!void {
-        const index = @intFromEnum(plan_id);
-        if (index >= self.result.const_plans.items.len) reachableProcInvariant("const plan reference exceeds const_plans len");
-        if (self.visited_plans[index]) return;
-        self.visited_plans[index] = true;
+    /// Marks every procedure a const plan reaches. Reachability is a set, so
+    /// plans are visited from a worklist in any order.
+    fn markConstPlan(self: *Pass, root: LirProgram.ConstPlanId) Allocator.Error!void {
+        try self.plan_stack.append(self.allocator, root);
+        while (self.plan_stack.pop()) |plan_id| {
+            const index = @intFromEnum(plan_id);
+            if (index >= self.result.const_plans.items.len) reachableProcInvariant("const plan reference exceeds const_plans len");
+            if (self.visited_plans[index]) continue;
+            self.visited_plans[index] = true;
 
-        switch (self.result.const_plans.items[index]) {
-            .pending,
-            .layout_only,
-            .zst,
-            .scalar,
-            .str,
-            => {},
-            .list => |elem| try self.markConstPlan(elem),
-            .box => |boxed| try self.markConstPlan(boxed),
-            .tuple => |items| for (items) |item| try self.markConstPlan(item),
-            .record => |fields| for (fields) |field| try self.markConstPlan(field),
-            .tag_union => |variants| {
-                for (variants) |variant| {
-                    for (variant.payloads) |payload| try self.markConstPlan(payload);
-                }
-            },
-            .named => |named| try self.markConstPlan(named.backing),
-            .fn_value => |set_id| try self.markFnSet(set_id),
-            .erased_fn => |set_id| try self.markErasedFns(set_id),
+            switch (self.result.const_plans.items[index]) {
+                .pending,
+                .layout_only,
+                .zst,
+                .scalar,
+                .str,
+                => {},
+                .list => |elem| try self.plan_stack.append(self.allocator, elem),
+                .box => |boxed| try self.plan_stack.append(self.allocator, boxed),
+                .tuple => |items| try self.plan_stack.appendSlice(self.allocator, items),
+                .record => |fields| try self.plan_stack.appendSlice(self.allocator, fields),
+                .tag_union => |variants| {
+                    for (variants) |variant| try self.plan_stack.appendSlice(self.allocator, variant.payloads);
+                },
+                .named => |named| try self.plan_stack.append(self.allocator, named.backing),
+                .fn_value => |set_id| {
+                    const set = self.result.fn_sets.items[@intFromEnum(set_id)];
+                    for (set.variants) |variant| {
+                        for (variant.captures) |capture| try self.plan_stack.append(self.allocator, capture.plan);
+                    }
+                },
+                .erased_fn => |set_id| {
+                    const set = self.result.erased_fns.items[@intFromEnum(set_id)];
+                    for (set.entries) |entry| {
+                        try self.markProc(entry.entry);
+                        for (entry.captures) |capture| try self.plan_stack.append(self.allocator, capture.plan);
+                    }
+                },
+            }
         }
     }
 
-    fn markStaticData(self: *Pass, id: LIR.StaticDataId) Allocator.Error!void {
-        const index = @intFromEnum(id);
-        if (index >= self.result.static_data_values.items.len) reachableProcInvariant("static data reference exceeds static_data_values len");
-        if (self.reachable_static_data[index]) return;
-        self.reachable_static_data[index] = true;
-        if (self.result.static_data_values.items[index].compile_time_root) |root| {
-            if (root.role == .value) try self.markStaticData(root.role.value.failure_slot);
+    fn markStaticData(self: *Pass, root_id: LIR.StaticDataId) Allocator.Error!void {
+        // A value slot reaches its failure slot, which is marked next.
+        var next: ?LIR.StaticDataId = root_id;
+        while (next) |id| {
+            next = null;
+            const index = @intFromEnum(id);
+            if (index >= self.result.static_data_values.items.len) reachableProcInvariant("static data reference exceeds static_data_values len");
+            if (self.reachable_static_data[index]) return;
+            self.reachable_static_data[index] = true;
+            try self.markStaticDataOwner(index);
+            if (self.result.static_data_values.items[index].compile_time_root) |root| {
+                if (root.role == .value) next = root.role.value.failure_slot;
+            }
         }
+    }
+
+    fn markStaticDataOwner(self: *Pass, index: usize) Allocator.Error!void {
         if (self.static_data_exports[index]) |export_id| {
             try self.markFrozenExport(export_id);
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
@@ -430,21 +456,6 @@ const Pass = struct {
                     .data_symbol => |target| try self.export_queue.append(self.allocator, target),
                 }
             }
-        }
-    }
-
-    fn markFnSet(self: *Pass, set_id: LirProgram.FnSetId) Allocator.Error!void {
-        const set = self.result.fn_sets.items[@intFromEnum(set_id)];
-        for (set.variants) |variant| {
-            for (variant.captures) |capture| try self.markConstPlan(capture.plan);
-        }
-    }
-
-    fn markErasedFns(self: *Pass, set_id: LirProgram.ErasedFnsId) Allocator.Error!void {
-        const set = self.result.erased_fns.items[@intFromEnum(set_id)];
-        for (set.entries) |entry| {
-            try self.markProc(entry.entry);
-            for (entry.captures) |capture| try self.markConstPlan(capture.plan);
         }
     }
 

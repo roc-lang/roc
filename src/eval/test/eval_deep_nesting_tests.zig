@@ -49,8 +49,12 @@ pub const tests = [_]TestCase{
     .{
         .name = "TEMPDEEP nested tags",
         .source_kind = .module,
-        .source = "main = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++ "\n",
-        .expected = .{ .inspect_str = repeat("Ok(", depth) ++ "1" ++ repeat(")", depth) },
+        // Rendering the value would recurse once per level at runtime, which
+        // is the program's own depth; the untaken branch still compiles the
+        // rendering of the deep type.
+        .source = "nested = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++
+            "\nrender = |n| if n == 0 { 1.U64 } else { Str.count_utf8_bytes(Str.inspect(nested)) }\nmain = render(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
         .stack_bytes = stack_bytes,
         .opt_in = true,
     },
@@ -95,6 +99,34 @@ pub const tests = [_]TestCase{
         .name = "TEMPDEEP curried lambdas",
         .source_kind = .module,
         .source = "f = " ++ repeat("|_| ", depth) ++ "1.U64\nmain = f" ++ repeat("(0)", depth) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+        .opt_in = true,
+    },
+    .{
+        .name = "TEMPDEEP deep equality",
+        .source_kind = .module,
+        // Comparing the values would recurse once per level at runtime, which
+        // is the program's own depth; the untaken branch still compiles the
+        // equality of the deep type.
+        .source = "nested = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++
+            "\ncompare = |n| if n == 0 { 1.U64 } else if nested == nested { 2.U64 } else { 3.U64 }\nmain = compare(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+        .opt_in = true,
+    },
+    .{
+        .name = "TEMPDEEP long call chain",
+        .source_kind = .module,
+        // Running the chain would recurse once per function at runtime, which
+        // is the program's own depth; the untaken branch still compiles every
+        // function in the chain.
+        .source = blk: {
+            @setEvalBranchQuota(10_000_000);
+            var out: []const u8 = "";
+            for (0..depth) |i| out = out ++ std.fmt.comptimePrint("f{d} = |x| f{d}(x + 1)\n", .{ i, i + 1 });
+            break :blk out;
+        } ++ "f" ++ depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
         .stack_bytes = stack_bytes,
         .opt_in = true,

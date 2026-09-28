@@ -3922,17 +3922,31 @@ const Inserter = struct {
     /// Rebuilds a stop chain with contributions disabled: segments inside a
     /// join frame that reach an enclosing switch continuation end silently.
     fn stripStopContributions(self: *Inserter, stops: ?*const SolveStop) ResourceError!?*const SolveStop {
-        const entry = stops orelse return null;
-        const parent = try self.stripStopContributions(entry.parent);
-        if (!entry.contributes and parent == entry.parent) return entry;
-        const node = try self.solve_allocator.create(SolveStop);
-        node.* = .{
-            .stmt = entry.stmt,
-            .summary = entry.summary,
-            .contributes = false,
-            .parent = parent,
-        };
-        return node;
+        // The chain is rebuilt from its outermost entry inward; an entry is
+        // shared when neither it nor anything outside it changes.
+        var chain = std.ArrayList(*const SolveStop).empty;
+        defer chain.deinit(self.solve_allocator);
+        var cursor = stops;
+        while (cursor) |entry| : (cursor = entry.parent) try chain.append(self.solve_allocator, entry);
+        var parent: ?*const SolveStop = null;
+        var index = chain.items.len;
+        while (index > 0) {
+            index -= 1;
+            const entry = chain.items[index];
+            if (!entry.contributes and parent == entry.parent) {
+                parent = entry;
+                continue;
+            }
+            const node = try self.solve_allocator.create(SolveStop);
+            node.* = .{
+                .stmt = entry.stmt,
+                .summary = entry.summary,
+                .contributes = false,
+                .parent = parent,
+            };
+            parent = node;
+        }
+        return parent;
     }
 
     fn registerLoopKeep(
@@ -7510,12 +7524,15 @@ const Inserter = struct {
         return LIR.RcHelper.fromConcrete(helper);
     }
 
-    fn rcHelperForLayout(self: *const Inserter, op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
-        const layout_val = self.layouts.getLayout(layout_idx);
-        if (layout_val.tag == .closure) {
-            return self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx);
+    fn rcHelperForLayout(self: *const Inserter, root_op: layout_mod.RcOp, root_layout: layout_mod.Idx) layout_mod.RcHelper {
+        var op = root_op;
+        var layout_idx = root_layout;
+        while (true) {
+            const layout_val = self.layouts.getLayout(layout_idx);
+            if (layout_val.tag != .closure) return .{ .op = op, .layout_idx = layout_idx };
+            op = nestedDropOp(op);
+            layout_idx = layout_val.getClosure().captures_layout_idx;
         }
-        return .{ .op = op, .layout_idx = layout_idx };
     }
 
     fn nestedDropOp(op: layout_mod.RcOp) layout_mod.RcOp {

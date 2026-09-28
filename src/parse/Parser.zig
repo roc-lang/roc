@@ -1957,7 +1957,30 @@ fn parseTargetFileList(self: *Parser) (std.mem.Allocator.Error || error{Expected
     return try self.store.targetFileSpanFrom(files_top);
 }
 
+/// A list value whose elements are still being parsed.
+const OpenTargetConfigList = struct {
+    start: Token.Idx,
+    values_top: u32,
+};
+
 fn parseTargetConfigValueTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+    // Nested lists keep their open brackets on an explicit stack; each
+    // finished value becomes the next element of the innermost open list.
+    var open: std.ArrayList(OpenTargetConfigList) = .empty;
+    defer open.deinit(self.gpa);
+    while (true) {
+        var value = try self.parseTargetConfigLeafOrOpen(&open) orelse continue;
+        while (open.items.len > 0) {
+            try self.store.addScratchTargetConfigValue(value);
+            if (self.consumeComma() and self.peek() != .CloseSquare and self.peek() != .EndOfFile) break;
+            value = try self.closeTargetConfigList(open.pop().?);
+        } else return value;
+    }
+}
+
+/// Parses a value that is not a list, or opens a list: an empty list closes
+/// at once, and a nonempty list is pushed so its elements parse next (null).
+fn parseTargetConfigLeafOrOpen(self: *Parser, open: *std.ArrayList(OpenTargetConfigList)) std.mem.Allocator.Error!?AST.TargetConfigValue.Idx {
     const start = self.pos;
     const tag = self.peek();
     if (tag == .Int) {
@@ -1990,29 +2013,29 @@ fn parseTargetConfigValueTokens(self: *Parser) std.mem.Allocator.Error!AST.Targe
         return try self.store.addTargetConfigValue(.{ .ident = start });
     } else if (tag == .OpenSquare) {
         self.advance();
-        const values_top = self.store.scratchTargetConfigValueTop();
-        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-            try self.store.addScratchTargetConfigValue(try self.parseTargetConfigValueTokens());
-            if (!self.consumeComma()) {
-                break;
-            }
-        }
-        if (self.peek() != .CloseSquare) {
-            self.store.clearScratchTargetConfigValuesFrom(values_top);
-            return try self.store.addTargetConfigValue(.{ .malformed = .{
-                .reason = .expected_target_files_close_square,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        self.advance();
-        const values_span = try self.store.targetConfigValueSpanFrom(values_top);
-        return try self.store.addTargetConfigValue(.{ .list = values_span });
+        const list: OpenTargetConfigList = .{ .start = start, .values_top = self.store.scratchTargetConfigValueTop() };
+        if (self.peek() == .CloseSquare or self.peek() == .EndOfFile) return try self.closeTargetConfigList(list);
+        try open.append(self.gpa, list);
+        return null;
     } else {
         return try self.store.addTargetConfigValue(.{ .malformed = .{
             .reason = .expected_target_file,
             .region = .{ .start = start, .end = self.pos },
         } });
     }
+}
+
+fn closeTargetConfigList(self: *Parser, list: OpenTargetConfigList) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+    if (self.peek() != .CloseSquare) {
+        self.store.clearScratchTargetConfigValuesFrom(list.values_top);
+        return try self.store.addTargetConfigValue(.{ .malformed = .{
+            .reason = .expected_target_files_close_square,
+            .region = .{ .start = list.start, .end = self.pos },
+        } });
+    }
+    self.advance();
+    const values_span = try self.store.targetConfigValueSpanFrom(list.values_top);
+    return try self.store.addTargetConfigValue(.{ .list = values_span });
 }
 
 fn parseTargetConfigEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigEntry.Idx {

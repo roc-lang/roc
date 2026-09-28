@@ -56,12 +56,9 @@ const try_type_name = "Try";
 const try_arity: usize = 2;
 const try_error_arg_index: usize = 1;
 
-/// The same bounds `Check` walks declarations with. A walk that reaches one
-/// gives no answer, and an unanswered question keeps the `..`.
+/// Bounds on the `Try` alias walk. A walk that reaches one gives no answer,
+/// and an unanswered question keeps the `..`.
 const max_tracked_alias_formals: usize = 8;
-const max_formal_variance_decl_depth: usize = 8;
-const max_formal_variance_pending: usize = 256;
-const max_formal_variance_nodes: usize = 2048;
 const max_try_alias_depth: usize = 64;
 
 const Polarity = enum {
@@ -108,13 +105,6 @@ const Variance = enum {
         if (self == other) return self;
         return .invariant;
     }
-
-    fn ofOccurrence(polarity: Polarity) Variance {
-        return switch (polarity) {
-            .pos => .covariant,
-            .neg => .contravariant,
-        };
-    }
 };
 
 /// How one argument of a type application is generated relative to the
@@ -148,44 +138,35 @@ const ArgRule = enum {
     }
 };
 
-/// State of one `applyArgRules` question, with the bounds of
-/// `Check.FormalVarianceWalk`.
-const VarianceWalk = struct {
-    /// Declarations whose bodies are being walked, outermost first.
-    open_decls: [max_formal_variance_decl_depth]AST.Statement.Idx = undefined,
-    open_decls_len: usize = 0,
-    /// Positions the walk may still visit, counted as the checker counts them.
-    fuel: usize = max_formal_variance_nodes,
+/// `Check.VariancePosition`: where a position of a declaration body sits
+/// relative to the declaration's root.
+const Position = enum {
+    covariant,
+    contravariant,
+    invariant,
 
-    fn isOpen(self: *const VarianceWalk, decl_idx: AST.Statement.Idx) bool {
-        for (self.open_decls[0..self.open_decls_len]) |open_decl| {
-            if (open_decl == decl_idx) return true;
-        }
-        return false;
+    fn flip(self: Position) Position {
+        return switch (self) {
+            .covariant => .contravariant,
+            .contravariant => .covariant,
+            .invariant => .invariant,
+        };
     }
 
-    fn visit(self: *VarianceWalk) Unanswered!void {
-        if (self.fuel == 0) return Unanswered.Unanswered;
-        self.fuel -= 1;
-    }
-};
-
-/// One position of a declaration body, relative to the declaration's root.
-const VariancePosition = struct {
-    polarity: Polarity,
-    /// Below a reference whose variance is unknown.
-    unknown: bool = false,
-    /// How many positions the checker's explicit stack could be holding
-    /// alongside this one: at most every child of every ancestor within the
-    /// declaration.
-    pending: usize = 0,
-
-    fn child(self: VariancePosition, sibling_count: usize) VariancePosition {
-        return .{ .polarity = self.polarity, .unknown = self.unknown, .pending = self.pending + sibling_count };
+    fn through(self: Position, variance: Variance) Position {
+        return switch (variance) {
+            .unused, .covariant => self,
+            .contravariant => self.flip(),
+            .invariant => .invariant,
+        };
     }
 
-    fn withPolarity(self: VariancePosition, polarity: Polarity) VariancePosition {
-        return .{ .polarity = polarity, .unknown = self.unknown, .pending = self.pending };
+    fn occurrence(self: Position) Variance {
+        return switch (self) {
+            .covariant => .covariant,
+            .contravariant => .contravariant,
+            .invariant => .invariant,
+        };
     }
 };
 
@@ -231,6 +212,9 @@ pub const OpenRows = struct {
     /// Names a platform header `provides` to the host; their annotations keep
     /// their rows as written.
     provided_names: std.StringHashMapUnmanaged(void),
+    /// Solved variances of local type declarations' formals, or null for a
+    /// declaration this file cannot answer for.
+    decl_variances: std.AutoHashMapUnmanaged(AST.Statement.Idx, ?[]Variance),
 
     /// Index the file's declarations, imports and header.
     pub fn init(gpa: Allocator, ast: *const AST) Allocator.Error!OpenRows {
@@ -243,6 +227,7 @@ pub const OpenRows = struct {
             .wildcard_import = false,
             .anno_only_is_not_hosted = false,
             .provided_names = .{},
+            .decl_variances = .{},
         };
         errdefer self.deinit();
 
@@ -306,6 +291,9 @@ pub const OpenRows = struct {
         self.type_decls.deinit(self.gpa);
         self.external_names.deinit(self.gpa);
         self.provided_names.deinit(self.gpa);
+        var variances = self.decl_variances.valueIterator();
+        while (variances.next()) |solved| if (solved.*) |owned| self.gpa.free(owned);
+        self.decl_variances.deinit(self.gpa);
         self.redundant.deinit(self.gpa);
     }
 
@@ -457,10 +445,14 @@ pub const OpenRows = struct {
 
                 // An application this walk cannot answer for is generated as
                 // written beneath it, the most conservative answer.
-                var rules: [max_tracked_alias_formals]ArgRule = undefined;
-                var variance_walk = VarianceWalk{};
-                const rules_known = args.len <= max_tracked_alias_formals and
-                    if (self.applyArgRules(head, args.len, &rules, &variance_walk)) |_| true else |_| false;
+                const rules = try self.gpa.alloc(ArgRule, args.len);
+                defer self.gpa.free(rules);
+                const candidate_rules = try self.gpa.alloc(ArgRule, args.len);
+                defer self.gpa.free(candidate_rules);
+                const rules_known = if (self.applyArgRules(head, rules, candidate_rules)) |_| true else |err| switch (err) {
+                    error.Unanswered => false,
+                    error.OutOfMemory => return error.OutOfMemory,
+                };
 
                 const try_error_index: ?usize = switch (ctx.reach) {
                     .result => self.tryErrorArgIndex(head, args.len, 0),
@@ -533,165 +525,268 @@ pub const OpenRows = struct {
     /// unanimously over every declaration `head` could name
     /// (`Check.applyFormalVariances` with `Check.applyDeclKnowledge`).
     fn applyArgRules(
-        self: *const OpenRows,
+        self: *OpenRows,
         head: AST.TypeAnno.Idx,
-        arity: usize,
-        out: *[max_tracked_alias_formals]ArgRule,
-        variance_walk: *VarianceWalk,
-    ) Unanswered!void {
-        std.debug.assert(arity <= max_tracked_alias_formals);
+        out: []ArgRule,
+        candidate_rules: []ArgRule,
+    ) (Allocator.Error || Unanswered)!void {
         const found = self.candidates(head);
         var answered = false;
-        var candidate_rules: [max_tracked_alias_formals]ArgRule = undefined;
 
         if (found.builtin) {
-            try agree(out, &answered, uniformRules(&candidate_rules, arity, .keep));
+            @memset(candidate_rules, .keep);
+            try agree(out, &answered, candidate_rules);
         }
         if (found.external) {
-            try agree(out, &answered, uniformRules(&candidate_rules, arity, .opaque_variance));
+            @memset(candidate_rules, .opaque_variance);
+            try agree(out, &answered, candidate_rules);
         }
         for (found.locals) |decl_idx| {
-            if (variance_walk.isOpen(decl_idx)) {
-                // A reference back into a declaration being walked is walked
-                // as unmodeled, keeping this position's polarity.
-                try agree(out, &answered, uniformRules(&candidate_rules, arity, .keep));
-                continue;
-            }
-            var variances: [max_tracked_alias_formals]Variance = undefined;
-            const formals_len = try self.declFormalVariances(decl_idx, &variances, variance_walk);
-            if (formals_len != arity) return Unanswered.Unanswered;
-            for (variances[0..arity], candidate_rules[0..arity]) |variance, *rule| rule.* = ArgRule.ofVariance(variance);
-            try agree(out, &answered, candidate_rules[0..arity]);
+            const variances = try self.localDeclVariances(decl_idx) orelse return Unanswered.Unanswered;
+            if (variances.len != out.len) return Unanswered.Unanswered;
+            for (variances, candidate_rules) |variance, *rule| rule.* = ArgRule.ofVariance(variance);
+            try agree(out, &answered, candidate_rules);
         }
         if (!answered) return Unanswered.Unanswered;
     }
 
-    fn uniformRules(rules: *[max_tracked_alias_formals]ArgRule, arity: usize, rule: ArgRule) []const ArgRule {
-        for (rules[0..arity]) |*slot| slot.* = rule;
-        return rules[0..arity];
-    }
-
     /// Record one candidate's answer, requiring it to match every earlier one.
-    fn agree(out: *[max_tracked_alias_formals]ArgRule, answered: *bool, rules: []const ArgRule) Unanswered!void {
+    fn agree(out: []ArgRule, answered: *bool, rules: []const ArgRule) Unanswered!void {
         if (answered.*) {
-            for (out[0..rules.len], rules) |existing, rule| {
+            for (out, rules) |existing, rule| {
                 if (existing != rule) return Unanswered.Unanswered;
             }
             return;
         }
-        @memcpy(out[0..rules.len], rules);
+        @memcpy(out, rules);
         answered.* = true;
     }
 
-    /// `Check.declFormalVariances`: the variance of each of a type
-    /// declaration's formals within its body.
-    fn declFormalVariances(
-        self: *const OpenRows,
-        decl_idx: AST.Statement.Idx,
-        out: *[max_tracked_alias_formals]Variance,
-        variance_walk: *VarianceWalk,
-    ) Unanswered!usize {
-        if (variance_walk.open_decls_len == max_formal_variance_decl_depth) return Unanswered.Unanswered;
-        const decl = self.ast.store.getStatement(decl_idx).type_decl;
-        const header = self.ast.store.getTypeHeader(decl.header) catch return Unanswered.Unanswered;
-        const formals = self.ast.store.typeAnnoSlice(header.args);
-        if (formals.len > max_tracked_alias_formals) return Unanswered.Unanswered;
-        for (out[0..formals.len]) |*variance| variance.* = .unused;
+    /// What a written type name inside a declaration body resolves to, when
+    /// exactly one declaration could be the one it names.
+    const Resolution = union(enum) {
+        local: AST.Statement.Idx,
+        /// A `Builtin` type: covariant in every formal.
+        covariant,
+        /// Another module's type, whose variance is unknown.
+        unknown,
+        /// More than one declaration could be the one it names.
+        ambiguous,
+    };
 
-        variance_walk.open_decls[variance_walk.open_decls_len] = decl_idx;
-        variance_walk.open_decls_len += 1;
-        defer variance_walk.open_decls_len -= 1;
-
-        try self.accumulateFormalVariances(decl.anno, formals, .{ .polarity = .pos }, out, variance_walk);
-        return formals.len;
+    fn resolveHead(self: *const OpenRows, head: AST.TypeAnno.Idx) Resolution {
+        const found = self.candidates(head);
+        const count = found.locals.len + @intFromBool(found.builtin) + @intFromBool(found.external);
+        if (count != 1) return .ambiguous;
+        if (found.locals.len == 1) return .{ .local = found.locals[0] };
+        if (found.builtin) return .covariant;
+        return .unknown;
     }
 
-    /// `Check.accumulateFormalVariances`, recursive where the checker keeps an
-    /// explicit stack. `here.pending` bounds that stack's height from above,
-    /// so this walk gives up whenever the checker's could.
-    fn accumulateFormalVariances(
-        self: *const OpenRows,
-        anno_idx: AST.TypeAnno.Idx,
+    /// A local type declaration's formals and body.
+    const DeclBody = struct {
         formals: []const AST.TypeAnno.Idx,
-        here: VariancePosition,
-        out: *[max_tracked_alias_formals]Variance,
-        variance_walk: *VarianceWalk,
-    ) Unanswered!void {
-        try variance_walk.visit();
-        const anno = self.ast.store.getTypeAnno(anno_idx);
-        const child_count: usize = switch (anno) {
-            .ty_var, .underscore_type_var, .underscore, .ty, .malformed => 0,
-            .parens => 1,
-            .@"fn" => |func| self.ast.store.typeAnnoSlice(func.args).len + 1,
-            .tag_union => |tag_union| self.ast.store.typeAnnoSlice(tag_union.tags).len +
-                @intFromBool(tag_union.ext != .closed),
-            .tuple => |tuple| self.ast.store.typeAnnoSlice(tuple.annos).len,
-            .record => |record| self.ast.store.annoRecordFieldSlice(record.fields).len +
-                @intFromBool(record.ext != .closed),
-            .apply => |apply| self.ast.store.typeAnnoSlice(apply.args).len - 1,
-        };
-        if (here.pending + child_count > max_formal_variance_pending) return Unanswered.Unanswered;
-        const child = here.child(child_count);
+        body: AST.TypeAnno.Idx,
+    };
 
-        switch (anno) {
-            .ty_var => |v| self.joinFormal(v.tok, formals, here, out),
-            .underscore_type_var => |v| self.joinFormal(v.tok, formals, here, out),
-            .underscore, .ty, .malformed => {},
-            .parens => |parens| try self.accumulateFormalVariances(parens.anno, formals, child, out, variance_walk),
-            .@"fn" => |func| {
-                for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try self.accumulateFormalVariances(arg, formals, child.withPolarity(here.polarity.flip()), out, variance_walk);
+    fn declBody(self: *const OpenRows, decl_idx: AST.Statement.Idx) ?DeclBody {
+        const decl = self.ast.store.getStatement(decl_idx).type_decl;
+        const header = self.ast.store.getTypeHeader(decl.header) catch return null;
+        return .{ .formals = self.ast.store.typeAnnoSlice(header.args), .body = decl.anno };
+    }
+
+    /// `Check.localDeclFormalVariances`: the variance of each of a local
+    /// declaration's formals, solved together with every declaration it
+    /// reaches the same way. Null when this file cannot answer
+    /// the way the checker does: some reference in the group could name
+    /// more than one declaration, or a declaration does not parse.
+    fn localDeclVariances(self: *OpenRows, decl_idx: AST.Statement.Idx) Allocator.Error!?[]const Variance {
+        if (self.decl_variances.get(decl_idx)) |solved| return solved;
+
+        var group = std.ArrayListUnmanaged(AST.Statement.Idx).empty;
+        defer group.deinit(self.gpa);
+        var solving = std.AutoHashMapUnmanaged(AST.Statement.Idx, []Variance).empty;
+        defer {
+            var owned = solving.valueIterator();
+            while (owned.next()) |variances| self.gpa.free(variances.*);
+            solving.deinit(self.gpa);
+        }
+        var pending = std.ArrayListUnmanaged(AST.TypeAnno.Idx).empty;
+        defer pending.deinit(self.gpa);
+
+        const answerable = discover: {
+            if (!try self.addGroupMember(decl_idx, &group, &solving)) break :discover false;
+            var member_index: usize = 0;
+            while (member_index < group.items.len) : (member_index += 1) {
+                pending.clearRetainingCapacity();
+                try pending.append(self.gpa, self.declBody(group.items[member_index]).?.body);
+                while (pending.pop()) |anno_idx| {
+                    const children_answerable = try self.appendBodyChildren(anno_idx, &pending);
+                    if (!children_answerable) break :discover false;
+                    const apply = switch (self.ast.store.getTypeAnno(anno_idx)) {
+                        .apply => |apply| apply,
+                        .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => continue,
+                    };
+                    switch (self.resolveHead(self.ast.store.typeAnnoSlice(apply.args)[0])) {
+                        .ambiguous => break :discover false,
+                        .covariant, .unknown => {},
+                        .local => |referenced| {
+                            if (self.decl_variances.get(referenced)) |solved| {
+                                if (solved == null) break :discover false;
+                            } else if (!solving.contains(referenced)) {
+                                if (!try self.addGroupMember(referenced, &group, &solving)) break :discover false;
+                            }
+                        },
+                    }
                 }
-                try self.accumulateFormalVariances(func.ret, formals, child, out, variance_walk);
+            }
+            break :discover true;
+        };
+
+        try self.decl_variances.ensureUnusedCapacity(self.gpa, @intCast(group.items.len));
+        if (!answerable) {
+            // Every member reaches the reference this file cannot answer.
+            for (group.items) |member| self.decl_variances.putAssumeCapacity(member, null);
+            return null;
+        }
+
+        var round = std.ArrayListUnmanaged(Variance).empty;
+        defer round.deinit(self.gpa);
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (group.items) |member| {
+                const current = solving.get(member).?;
+                round.clearRetainingCapacity();
+                try round.appendNTimes(self.gpa, .unused, current.len);
+                try self.accumulateFormalVariances(member, round.items, &solving, &pending);
+                // Each round's occurrences join the previous estimate, as
+                // in `Check.localDeclFormalVariances`.
+                for (current, round.items) |*estimate, next| {
+                    const joined = estimate.join(next);
+                    if (joined == estimate.*) continue;
+                    estimate.* = joined;
+                    changed = true;
+                }
+            }
+        }
+
+        for (group.items) |member| {
+            const solved = solving.fetchRemove(member).?;
+            self.decl_variances.putAssumeCapacity(member, solved.value);
+        }
+        return self.decl_variances.get(decl_idx).?;
+    }
+
+    /// Add a declaration to the group being solved; false when it does not
+    /// parse.
+    fn addGroupMember(
+        self: *OpenRows,
+        decl_idx: AST.Statement.Idx,
+        group: *std.ArrayListUnmanaged(AST.Statement.Idx),
+        solving: *std.AutoHashMapUnmanaged(AST.Statement.Idx, []Variance),
+    ) Allocator.Error!bool {
+        const decl = self.declBody(decl_idx) orelse return false;
+        try group.ensureUnusedCapacity(self.gpa, 1);
+        try solving.ensureUnusedCapacity(self.gpa, 1);
+        const variances = try self.gpa.alloc(Variance, decl.formals.len);
+        @memset(variances, .unused);
+        group.appendAssumeCapacity(decl_idx);
+        solving.putAssumeCapacity(decl_idx, variances);
+        return true;
+    }
+
+    /// The type positions directly beneath `anno_idx` in a declaration body;
+    /// false when one does not parse.
+    fn appendBodyChildren(self: *const OpenRows, anno_idx: AST.TypeAnno.Idx, out: *std.ArrayListUnmanaged(AST.TypeAnno.Idx)) Allocator.Error!bool {
+        switch (self.ast.store.getTypeAnno(anno_idx)) {
+            .ty_var, .underscore_type_var, .underscore, .ty, .malformed => {},
+            .parens => |parens| try out.append(self.gpa, parens.anno),
+            .@"fn" => |func| {
+                try out.appendSlice(self.gpa, self.ast.store.typeAnnoSlice(func.args));
+                try out.append(self.gpa, func.ret);
             },
             .tag_union => |tag_union| {
                 for (self.ast.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
-                    // The checker visits the tag itself before its payloads.
-                    try variance_walk.visit();
                     switch (self.ast.store.getTypeAnno(tag_idx)) {
-                        .apply => |tag| {
-                            const payloads = self.ast.store.typeAnnoSlice(tag.args)[1..];
-                            if (child.pending + payloads.len > max_formal_variance_pending) return Unanswered.Unanswered;
-                            const payload_position = child.child(payloads.len);
-                            for (payloads) |payload| {
-                                try self.accumulateFormalVariances(payload, formals, payload_position, out, variance_walk);
-                            }
-                        },
+                        .apply => |tag| try out.appendSlice(self.gpa, self.ast.store.typeAnnoSlice(tag.args)[1..]),
                         .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {},
                     }
                 }
                 switch (tag_union.ext) {
-                    .named => |named| try self.accumulateFormalVariances(named.anno, formals, child, out, variance_walk),
-                    .open => try variance_walk.visit(),
-                    .closed => {},
+                    .named => |named| try out.append(self.gpa, named.anno),
+                    .open, .closed => {},
                 }
             },
-            .tuple => |tuple| for (self.ast.store.typeAnnoSlice(tuple.annos)) |elem| {
-                try self.accumulateFormalVariances(elem, formals, child, out, variance_walk);
-            },
+            .tuple => |tuple| try out.appendSlice(self.gpa, self.ast.store.typeAnnoSlice(tuple.annos)),
             .record => |record| {
                 for (self.ast.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                    const field = self.ast.store.getAnnoRecordField(field_idx) catch return Unanswered.Unanswered;
-                    try self.accumulateFormalVariances(field.ty, formals, child, out, variance_walk);
+                    const field = self.ast.store.getAnnoRecordField(field_idx) catch return false;
+                    try out.append(self.gpa, field.ty);
                 }
                 switch (record.ext) {
-                    .named => |named| try self.accumulateFormalVariances(named.anno, formals, child, out, variance_walk),
-                    .open => try variance_walk.visit(),
-                    .closed => {},
+                    .named => |named| try out.append(self.gpa, named.anno),
+                    .open, .closed => {},
                 }
             },
-            .apply => |apply| {
-                const all_args = self.ast.store.typeAnnoSlice(apply.args);
-                const args = all_args[1..];
-                if (args.len > max_tracked_alias_formals) return Unanswered.Unanswered;
-                var rules: [max_tracked_alias_formals]ArgRule = undefined;
-                try self.applyArgRules(all_args[0], args.len, &rules, variance_walk);
-                for (args, rules[0..args.len]) |arg, rule| {
-                    var arg_position = child.withPolarity(rule.apply(here.polarity));
-                    arg_position.unknown = here.unknown or rule == .opaque_variance;
-                    try self.accumulateFormalVariances(arg, formals, arg_position, out, variance_walk);
-                }
-            },
+            .apply => |apply| try out.appendSlice(self.gpa, self.ast.store.typeAnnoSlice(apply.args)[1..]),
+        }
+        return true;
+    }
+
+    /// One position of a declaration body still to be visited.
+    const VarianceWalkItem = struct {
+        anno: AST.TypeAnno.Idx,
+        position: Position,
+    };
+
+    /// `Check.accumulateFormalVariances`: join into `out[i]` the variance of
+    /// every occurrence of `decl_idx`'s formal `i` within its body.
+    fn accumulateFormalVariances(
+        self: *OpenRows,
+        decl_idx: AST.Statement.Idx,
+        out: []Variance,
+        solving: *const std.AutoHashMapUnmanaged(AST.Statement.Idx, []Variance),
+        scratch: *std.ArrayListUnmanaged(AST.TypeAnno.Idx),
+    ) Allocator.Error!void {
+        const decl = self.declBody(decl_idx).?;
+        var walk_items = std.ArrayListUnmanaged(VarianceWalkItem).empty;
+        defer walk_items.deinit(self.gpa);
+        try walk_items.append(self.gpa, .{ .anno = decl.body, .position = .covariant });
+        while (walk_items.pop()) |here| {
+            switch (self.ast.store.getTypeAnno(here.anno)) {
+                .ty_var => |v| self.joinFormal(v.tok, decl.formals, here.position, out),
+                .underscore_type_var => |v| self.joinFormal(v.tok, decl.formals, here.position, out),
+                .@"fn" => |func| {
+                    for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
+                        try walk_items.append(self.gpa, .{ .anno = arg, .position = here.position.flip() });
+                    }
+                    try walk_items.append(self.gpa, .{ .anno = func.ret, .position = here.position });
+                },
+                .apply => |apply| {
+                    const all_args = self.ast.store.typeAnnoSlice(apply.args);
+                    const args = all_args[1..];
+                    const variances: ?[]const Variance = switch (self.resolveHead(all_args[0])) {
+                        .local => |referenced| if (self.decl_variances.get(referenced)) |solved| solved.? else solving.get(referenced).?,
+                        .covariant, .unknown, .ambiguous => null,
+                    };
+                    const unknown = self.resolveHead(all_args[0]) == .unknown;
+                    for (args, 0..) |arg, index| {
+                        const position: Position = if (unknown)
+                            .invariant
+                        else if (variances) |formals|
+                            if (formals.len == args.len) here.position.through(formals[index]) else here.position
+                        else
+                            here.position;
+                        try walk_items.append(self.gpa, .{ .anno = arg, .position = position });
+                    }
+                },
+                .parens, .tag_union, .tuple, .record, .underscore, .ty, .malformed => {
+                    scratch.clearRetainingCapacity();
+                    _ = try self.appendBodyChildren(here.anno, scratch);
+                    for (scratch.items) |child| try walk_items.append(self.gpa, .{ .anno = child, .position = here.position });
+                },
+            }
         }
     }
 
@@ -699,12 +794,11 @@ pub const OpenRows = struct {
         self: *const OpenRows,
         var_tok: Token.Idx,
         formals: []const AST.TypeAnno.Idx,
-        here: VariancePosition,
-        out: *[max_tracked_alias_formals]Variance,
+        position: Position,
+        out: []Variance,
     ) void {
         const formal_index = self.formalIndex(self.tokenName(var_tok), formals) orelse return;
-        const occurrence: Variance = if (here.unknown) .invariant else Variance.ofOccurrence(here.polarity);
-        out[formal_index] = out[formal_index].join(occurrence);
+        out[formal_index] = out[formal_index].join(position.occurrence());
     }
 
     /// The index of the declaration formal named `name`.

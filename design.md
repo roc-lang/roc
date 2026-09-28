@@ -365,8 +365,9 @@ type nesting (a list of lists, a record whose field is a record, a callable
 capturing a callable), and the depth of every structure derived from those:
 checked, solved, and Monotype types, layouts, constant values, match trees,
 statement chains, and procedure graphs. Every walk over such a structure, in
-checking, checked output, Monotype, lifting, SpecConstr, lambda solving and
-lowering, Boxy, Solved-to-LIR lowering, LIR passes, backends, and the type and
+parsing, canonicalization, checking, checked output, Monotype, lifting,
+SpecConstr, lambda solving and lowering, Boxy, Solved-to-LIR lowering, LIR
+passes, backends, compile-time evaluation, the interpreter, and the type and
 layout stores, keeps its pending work in heap-backed explicit storage: a frame
 stack, a worklist, or an action stack. Direct, indirect, and mutual recursion
 over any of these structures is forbidden. Recursion over the structure of a
@@ -9196,6 +9197,12 @@ Other solved-graph mutations:
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
+- `demandPureStep` / `undoPureDemands` (`setVarContent`)—mechanism: unifying
+  an effect-polymorphic function with a pure one makes each of its effect
+  dependencies pure in place, written before the dependency's own
+  dependencies are demanded so a recursive group terminates; a dependency that
+  is already effectful fails the demand and restores every function still
+  waiting on it to its effect-polymorphic content.
 - `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by

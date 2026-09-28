@@ -2167,25 +2167,53 @@ const Certifier = struct {
     }
 
     fn valueIsLiveSeen(self: *Certifier, state: *const State, value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged) Allocator.Error!bool {
-        if (value >= self.values.items.len) return false;
-        const value_index: usize = @intCast(value);
-        if (seen.isSet(value_index)) return false;
-        seen.set(value_index);
-        defer seen.unset(value_index);
-
-        const info = self.values.items[value];
-        if (info.always_live) return true;
-        if (state.balanceOf(value) > 0 and !try self.claimsSpendUnit(state, value)) return true;
-        const holder = state.holderOf(value);
-        if (holder != no_value and try self.valueIsLiveSeen(state, holder, seen)) {
-            return true;
-        }
-        if (info.lenders.len == 0) return false;
-        for (info.lenders) |lender| {
-            if (!try self.valueIsLiveSeen(state, lender, seen)) return false;
-        }
-        return true;
+        var liveness = LivenessWalk{ .certifier = self, .state = state, .seen = seen };
+        return LivenessWalk.Eval.run(self.allocator, &liveness, value);
     }
+
+    /// A value is live when it decides so itself, or through any of: its
+    /// holder, or all of its (nonempty) lenders. `seen` holds the values on
+    /// the current path, so a cycle is not live through itself.
+    const LivenessWalk = struct {
+        certifier: *Certifier,
+        state: *const State,
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+
+        const Eval = collections.AnyAll.Evaluation(ValueId, LivenessWalk);
+
+        pub fn enter(self: *LivenessWalk, items: Eval.Items, value: ValueId) Allocator.Error!Eval.Expansion {
+            const certifier = self.certifier;
+            if (value >= certifier.values.items.len) return .{ .value = false };
+            const value_index: usize = @intCast(value);
+            if (self.seen.isSet(value_index)) return .{ .value = false };
+            const info = certifier.values.items[value];
+            if (info.always_live) return .{ .value = true };
+            self.seen.set(value_index);
+            if (self.state.balanceOf(value) > 0 and !(certifier.claimsSpendUnit(self.state, value) catch |err| {
+                self.seen.unset(value_index);
+                return err;
+            })) {
+                self.seen.unset(value_index);
+                return .{ .value = true };
+            }
+            errdefer self.seen.unset(value_index);
+            const holder = self.state.holderOf(value);
+            if (holder == no_value and info.lenders.len == 0) {
+                self.seen.unset(value_index);
+                return .{ .value = false };
+            }
+            if (holder != no_value) try items.add(holder);
+            if (info.lenders.len != 0) {
+                try items.group(.all, info.lenders.len);
+                for (info.lenders) |lender| try items.add(lender);
+            }
+            return .{ .group = .any };
+        }
+
+        pub fn exit(self: *LivenessWalk, value: ValueId, _: ?bool) Allocator.Error!void {
+            self.seen.unset(@intCast(value));
+        }
+    };
 
     /// Records the dead value's lender/holder chain in the diagnostic for
     /// panic context.
@@ -2326,79 +2354,136 @@ const Certifier = struct {
         return try self.tryClaimSeen(state, value, seen, null);
     }
 
+    /// A container that must claim its own unit from its parent before the
+    /// field under it is claimed.
+    const PendingContainerClaim = struct {
+        container: ValueId,
+        field: u16,
+        existing: ClaimSet,
+    };
+
+    /// Claims walk up the projection chain: a container without a unit of
+    /// its own claims it from its parent first. The chain is followed in a
+    /// loop, and each container's own unit and field claim are recorded on
+    /// the way back down once its parent's claim succeeds.
     fn tryClaimSeen(
         self: *Certifier,
         state: *State,
-        value: ValueId,
+        root: ValueId,
         seen: *std.bit_set.DynamicBitSetUnmanaged,
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) Allocator.Error!bool {
-        if (value >= self.values.items.len) return false;
-        const value_index: usize = @intCast(value);
-        if (seen.isSet(value_index)) return false;
-        seen.set(value_index);
-        defer seen.unset(value_index);
-
-        const info = self.values.items[value];
-        if (info.payload_source == no_value) return false;
-        const container = info.payload_source;
-        if (info.payload_projection == arc_dismantle.no_projection) return false;
-        const container_origin = self.values.items[container].origin;
-        const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
-        const field: u16 = switch (container_layout.tag) {
-            .struct_ => blk: {
-                const field_idx: u16 = @intCast(info.payload_projection & 0xffff);
-                break :blk field_idx;
-            },
-            .tag_union => blk: {
-                if (!arc_dismantle.projectionOwnsAllRc(
-                    self.store,
-                    self.layouts,
-                    container_origin,
-                    info.origin,
-                    info.payload_projection,
-                )) return false;
-                break :blk 0;
-            },
-            .scalar,
-            .box,
-            .box_of_zst,
-            .erased_box,
-            .list,
-            .list_of_zst,
-            .closure,
-            .erased_callable,
-            .zst,
-            .ptr,
-            => return false,
-        };
-        const required = try self.requiredClaims(container) orelse return false;
-        if (!required.contains(field)) return false;
-        const existing = state.claimsOf(container);
-        if (existing.contains(field)) {
-            // Only a complete projection can spend another whole unit;
-            // repeating a partial field claim would lose its other fields.
-            if (!required.isSingleton(field)) return false;
-            // A second stamped take of the same projection spends that field
-            // from an intact surplus aggregate unit. The first unit remains
-            // represented by the existing claim set.
-            if (try self.hasIntactSurplusUnit(state, container)) {
-                const before = state.balanceOf(container);
-                try state.addBalance(container, -1);
-                if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
-                    .value = container,
-                    .before = before,
-                    .after = before - 1,
-                } });
-                return true;
-            }
-            // A complete projected container can hold another unit in its
-            // parent even when its only explicit balance is the unit already
-            // described by `existing`. Claim that exact parent unit for the
-            // duplicate projection.
-            return try self.tryClaimSeen(state, container, seen, mutations);
+        var marked = std.ArrayList(ValueId).empty;
+        defer {
+            for (marked.items) |value| seen.unset(@intCast(value));
+            marked.deinit(self.allocator);
         }
-        if (!try self.ensureClaimContainerUnit(state, container, seen, mutations)) return false;
+        var pending = std.ArrayList(PendingContainerClaim).empty;
+        defer pending.deinit(self.allocator);
+
+        var value = root;
+        var claimed = walk: while (true) {
+            if (value >= self.values.items.len) break :walk false;
+            const value_index: usize = @intCast(value);
+            if (seen.isSet(value_index)) break :walk false;
+            try marked.ensureUnusedCapacity(self.allocator, 1);
+            seen.set(value_index);
+            marked.appendAssumeCapacity(value);
+
+            const info = self.values.items[value];
+            if (info.payload_source == no_value) break :walk false;
+            const container = info.payload_source;
+            if (info.payload_projection == arc_dismantle.no_projection) break :walk false;
+            const container_origin = self.values.items[container].origin;
+            const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
+            const field: u16 = switch (container_layout.tag) {
+                .struct_ => @intCast(info.payload_projection & 0xffff),
+                .tag_union => blk: {
+                    if (!arc_dismantle.projectionOwnsAllRc(
+                        self.store,
+                        self.layouts,
+                        container_origin,
+                        info.origin,
+                        info.payload_projection,
+                    )) break :walk false;
+                    break :blk 0;
+                },
+                .scalar,
+                .box,
+                .box_of_zst,
+                .erased_box,
+                .list,
+                .list_of_zst,
+                .closure,
+                .erased_callable,
+                .zst,
+                .ptr,
+                => break :walk false,
+            };
+            const required = try self.requiredClaims(container) orelse break :walk false;
+            if (!required.contains(field)) break :walk false;
+            const existing = state.claimsOf(container);
+            if (existing.contains(field)) {
+                // Only a complete projection can spend another whole unit;
+                // repeating a partial field claim would lose its other fields.
+                if (!required.isSingleton(field)) break :walk false;
+                // A second stamped take of the same projection spends that field
+                // from an intact surplus aggregate unit. The first unit remains
+                // represented by the existing claim set.
+                if (try self.hasIntactSurplusUnit(state, container)) {
+                    const before = state.balanceOf(container);
+                    try state.addBalance(container, -1);
+                    if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                        .value = container,
+                        .before = before,
+                        .after = before - 1,
+                    } });
+                    break :walk true;
+                }
+                // A complete projected container can hold another unit in its
+                // parent even when its only explicit balance is the unit already
+                // described by `existing`. Claim that exact parent unit for the
+                // duplicate projection.
+                value = container;
+                continue :walk;
+            }
+            if (state.balanceOf(container) >= 1) {
+                try self.claimContainerField(state, container, field, existing, mutations);
+                break :walk true;
+            }
+            if (state.conditionalConditionOf(container) != null) break :walk false;
+            // A nested projection container's unit becomes explicit in the
+            // certifier's state by claiming that complete container from its
+            // own parent. This is bookkeeping only: the parent claim and child
+            // balance are the two sides of the same single runtime ownership
+            // unit.
+            try pending.append(self.allocator, .{ .container = container, .field = field, .existing = existing });
+            value = container;
+        };
+
+        while (pending.pop()) |claim| {
+            if (!claimed) break;
+            const before = state.balanceOf(claim.container);
+            try state.addBalance(claim.container, 1);
+            if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                .value = claim.container,
+                .before = before,
+                .after = before + 1,
+            } });
+            try self.claimContainerField(state, claim.container, claim.field, claim.existing, mutations);
+            claimed = true;
+        }
+        return claimed;
+    }
+
+    fn claimContainerField(
+        self: *Certifier,
+        state: *State,
+        container: ValueId,
+        field: u16,
+        existing: ClaimSet,
+        mutations: ?*std.ArrayList(OwnershipMutation),
+    ) Allocator.Error!void {
         const updated = try existing.withField(self.state_arena.allocator(), field);
         try state.setClaims(container, updated);
         if (mutations) |list| try list.append(self.allocator, .{ .claims = .{
@@ -2406,31 +2491,6 @@ const Certifier = struct {
             .before = existing,
             .after = updated,
         } });
-        return true;
-    }
-
-    /// Makes a nested projection container's unit explicit in the certifier's
-    /// state by claiming that complete container from its own parent. This is
-    /// bookkeeping only: the parent claim and child balance are the two sides
-    /// of the same single runtime ownership unit.
-    fn ensureClaimContainerUnit(
-        self: *Certifier,
-        state: *State,
-        container: ValueId,
-        seen: *std.bit_set.DynamicBitSetUnmanaged,
-        mutations: ?*std.ArrayList(OwnershipMutation),
-    ) Allocator.Error!bool {
-        if (state.balanceOf(container) >= 1) return true;
-        if (state.conditionalConditionOf(container) != null) return false;
-        if (!try self.tryClaimSeen(state, container, seen, mutations)) return false;
-        const before = state.balanceOf(container);
-        try state.addBalance(container, 1);
-        if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
-            .value = container,
-            .before = before,
-            .after = before + 1,
-        } });
-        return true;
     }
 
     /// Whether the value's single unit is fully spent by claims: every
@@ -2852,58 +2912,138 @@ const Certifier = struct {
         return self.collectBorrowSummaryCarrierAnchorsSeen(state, value, seen, anchors);
     }
 
-    fn collectBorrowSummaryAbiAnchorsSeen(self: *Certifier, state: *const State, value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
+    /// A value whose lenders (and, for carrier anchors, holder) decide its
+    /// anchors. Its `seen` bit stays set until the frame finishes.
+    const AnchorFrame = struct {
+        value: ValueId,
+        /// The anchor count before this value's anchors, restored when its
+        /// lender chain is incomplete.
+        start: usize,
+        index: usize = 0,
+        stage: enum { lenders, holder, holder_result } = .lenders,
+    };
+
+    fn popAnchorFrame(frames: *std.ArrayList(AnchorFrame), seen: *std.bit_set.DynamicBitSetUnmanaged) void {
+        const frame = frames.pop().?;
+        seen.unset(@intCast(frame.value));
+    }
+
+    fn releaseAnchorFrames(self: *Certifier, frames: *std.ArrayList(AnchorFrame), seen: *std.bit_set.DynamicBitSetUnmanaged) void {
+        for (frames.items) |frame| seen.unset(@intCast(frame.value));
+        frames.deinit(self.allocator);
+    }
+
+    /// Anchors of a borrow whose every lender chain reaches ABI-live values.
+    fn collectBorrowSummaryAbiAnchorsSeen(self: *Certifier, state: *const State, root: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
+        _ = state;
+        var frames = std.ArrayList(AnchorFrame).empty;
+        defer self.releaseAnchorFrames(&frames, seen);
+        var answer = try self.enterAbiAnchor(&frames, root, seen, anchors);
+        while (frames.items.len > 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (answer) |complete| if (!complete) {
+                anchors.shrinkRetainingCapacity(frame.start);
+                popAnchorFrame(&frames, seen);
+                continue;
+            };
+            const lenders = self.values.items[frame.value].lenders;
+            if (frame.index < lenders.len) {
+                const lender = lenders[frame.index];
+                frame.index += 1;
+                answer = try self.enterAbiAnchor(&frames, lender, seen, anchors);
+                continue;
+            }
+            popAnchorFrame(&frames, seen);
+            answer = true;
+        }
+        return answer.?;
+    }
+
+    fn enterAbiAnchor(self: *Certifier, frames: *std.ArrayList(AnchorFrame), value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!?bool {
         if (value >= self.values.items.len) return false;
         const value_index: usize = @intCast(value);
         if (seen.isSet(value_index)) return false;
-        seen.set(value_index);
-        defer seen.unset(value_index);
-
         const info = self.values.items[value];
         if (info.always_live) {
             try appendUniqueValueId(anchors, self.allocator, value);
             return true;
         }
         if (info.lenders.len == 0) return false;
-        const start = anchors.items.len;
-        for (info.lenders) |lender| {
-            if (!try self.collectBorrowSummaryAbiAnchorsSeen(state, lender, seen, anchors)) {
-                anchors.shrinkRetainingCapacity(start);
-                return false;
-            }
-        }
-        return true;
+        try frames.append(self.allocator, .{ .value = value, .start = anchors.items.len });
+        seen.set(value_index);
+        return null;
     }
 
-    fn collectBorrowSummaryCarrierAnchorsSeen(self: *Certifier, state: *const State, value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
+    /// Anchors of a borrow at the shallowest live carriers: a live value
+    /// anchors itself, then complete lender chains, then the holder.
+    fn collectBorrowSummaryCarrierAnchorsSeen(self: *Certifier, state: *const State, root: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
+        var frames = std.ArrayList(AnchorFrame).empty;
+        defer self.releaseAnchorFrames(&frames, seen);
+        var answer = try self.enterCarrierAnchor(state, &frames, root, seen, anchors);
+        while (frames.items.len > 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (frame.stage) {
+                .lenders => {
+                    if (answer) |complete| if (!complete) {
+                        anchors.shrinkRetainingCapacity(frame.start);
+                        frame.stage = .holder;
+                        answer = null;
+                        continue;
+                    };
+                    const lenders = self.values.items[frame.value].lenders;
+                    if (frame.index < lenders.len) {
+                        const lender = lenders[frame.index];
+                        frame.index += 1;
+                        answer = try self.enterCarrierAnchor(state, &frames, lender, seen, anchors);
+                        continue;
+                    }
+                    popAnchorFrame(&frames, seen);
+                    answer = true;
+                },
+                .holder => {
+                    const holder = state.holderOf(frame.value);
+                    if (holder == no_value) {
+                        popAnchorFrame(&frames, seen);
+                        answer = false;
+                        continue;
+                    }
+                    frame.stage = .holder_result;
+                    answer = try self.enterCarrierAnchor(state, &frames, holder, seen, anchors);
+                },
+                .holder_result => popAnchorFrame(&frames, seen),
+            }
+        }
+        return answer.?;
+    }
+
+    fn enterCarrierAnchor(self: *Certifier, state: *const State, frames: *std.ArrayList(AnchorFrame), value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!?bool {
         if (value >= self.values.items.len) return false;
         const value_index: usize = @intCast(value);
         if (seen.isSet(value_index)) return false;
-        seen.set(value_index);
-        defer seen.unset(value_index);
-
         const info = self.values.items[value];
-        if (info.always_live or
-            (state.balanceOf(value) > 0 and !try self.claimsSpendUnit(state, value)))
-        {
+        if (info.always_live) {
             try appendUniqueValueId(anchors, self.allocator, value);
             return true;
         }
-        if (info.lenders.len != 0) {
-            const start = anchors.items.len;
-            var complete = true;
-            for (info.lenders) |lender| {
-                if (!try self.collectBorrowSummaryCarrierAnchorsSeen(state, lender, seen, anchors)) {
-                    complete = false;
-                    break;
-                }
-            }
-            if (complete) return true;
-            anchors.shrinkRetainingCapacity(start);
+        seen.set(value_index);
+        const live = state.balanceOf(value) > 0 and !(self.claimsSpendUnit(state, value) catch |err| {
+            seen.unset(value_index);
+            return err;
+        });
+        if (live) {
+            seen.unset(value_index);
+            try appendUniqueValueId(anchors, self.allocator, value);
+            return true;
         }
-        const holder = state.holderOf(value);
-        if (holder != no_value) return try self.collectBorrowSummaryCarrierAnchorsSeen(state, holder, seen, anchors);
-        return false;
+        frames.append(self.allocator, .{
+            .value = value,
+            .start = anchors.items.len,
+            .stage = if (info.lenders.len != 0) .lenders else .holder,
+        }) catch |err| {
+            seen.unset(value_index);
+            return err;
+        };
+        return null;
     }
 
     /// Adds one lifetime dependency to a normalized representative list. A

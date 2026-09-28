@@ -1046,26 +1046,20 @@ pub const Store = struct {
                 self_engine.allocator.free(self_engine.digests);
             }
 
-            /// Discovery sink: visits every local child during Tarjan's walk.
+            /// Discovery sink: lists every local child for Tarjan's walk, in
+            /// encoding order.
             const VisitSink = struct {
-                engine: *Engine,
-                parent: u32,
+                children: *std.ArrayList(u32),
+                allocator: Allocator,
 
                 fn writeByte(_: VisitSink, _: u8) Allocator.Error!void {}
 
                 fn writeU32(_: VisitSink, _: u32) Allocator.Error!void {}
 
                 fn child(self_sink: VisitSink, ref: GraphRef) Allocator.Error!void {
-                    const child_index: u32 = switch (ref) {
-                        .canonical => return,
-                        .local => |node_id| @intFromEnum(node_id),
-                    };
-                    const engine = self_sink.engine;
-                    if (engine.visit_index[child_index] == unvisited) {
-                        try engine.strongConnect(child_index);
-                        engine.low_link[self_sink.parent] = @min(engine.low_link[self_sink.parent], engine.low_link[child_index]);
-                    } else if (engine.on_stack[child_index]) {
-                        engine.low_link[self_sink.parent] = @min(engine.low_link[self_sink.parent], engine.visit_index[child_index]);
+                    switch (ref) {
+                        .canonical => {},
+                        .local => |node_id| try self_sink.children.append(self_sink.allocator, @intFromEnum(node_id)),
                     }
                 }
             };
@@ -1167,25 +1161,77 @@ pub const Store = struct {
                 }
             };
 
-            fn strongConnect(self_engine: *Engine, node_index: u32) Allocator.Error!void {
+            /// A node of Tarjan's walk whose local children are
+            /// `walk_children[children_start..children_end]`, in encoding
+            /// order.
+            const WalkFrame = struct {
+                node: u32,
+                children_start: usize,
+                children_end: usize,
+                next: usize,
+            };
+
+            /// Tarjan's walk from `root` on explicit frames, so the depth of
+            /// the layout graph never becomes call depth.
+            fn strongConnect(self_engine: *Engine, root: u32) Allocator.Error!void {
+                const allocator = self_engine.allocator;
+                var frames = std.ArrayList(WalkFrame).empty;
+                defer frames.deinit(allocator);
+                var walk_children = std.ArrayList(u32).empty;
+                defer walk_children.deinit(allocator);
+                try self_engine.enterWalkNode(root, &frames, &walk_children);
+                while (frames.items.len > 0) {
+                    const frame = &frames.items[frames.items.len - 1];
+                    if (frame.next < frame.children_end) {
+                        const child_index = walk_children.items[frame.next];
+                        frame.next += 1;
+                        if (self_engine.visit_index[child_index] == unvisited) {
+                            try self_engine.enterWalkNode(child_index, &frames, &walk_children);
+                        } else if (self_engine.on_stack[child_index]) {
+                            self_engine.low_link[frame.node] = @min(self_engine.low_link[frame.node], self_engine.visit_index[child_index]);
+                        }
+                        continue;
+                    }
+                    const finished = frames.pop().?;
+                    walk_children.shrinkRetainingCapacity(finished.children_start);
+                    const node_index = finished.node;
+                    if (self_engine.low_link[node_index] == self_engine.visit_index[node_index]) {
+                        self_engine.members.clearRetainingCapacity();
+                        while (true) {
+                            const member = self_engine.stack.pop() orelse unreachable;
+                            self_engine.on_stack[member] = false;
+                            try self_engine.members.append(self_engine.allocator, member);
+                            if (member == node_index) break;
+                        }
+                        try self_engine.resolveComponent();
+                    }
+                    if (frames.items.len > 0) {
+                        const parent = frames.items[frames.items.len - 1].node;
+                        self_engine.low_link[parent] = @min(self_engine.low_link[parent], self_engine.low_link[node_index]);
+                    }
+                }
+            }
+
+            fn enterWalkNode(
+                self_engine: *Engine,
+                node_index: u32,
+                frames: *std.ArrayList(WalkFrame),
+                walk_children: *std.ArrayList(u32),
+            ) Allocator.Error!void {
                 self_engine.visit_index[node_index] = self_engine.next_visit;
                 self_engine.low_link[node_index] = self_engine.next_visit;
                 self_engine.next_visit += 1;
                 try self_engine.stack.append(self_engine.allocator, node_index);
                 self_engine.on_stack[node_index] = true;
 
-                try encodeNode(self_engine.graph, node_index, VisitSink{ .engine = self_engine, .parent = node_index });
-
-                if (self_engine.low_link[node_index] != self_engine.visit_index[node_index]) return;
-
-                self_engine.members.clearRetainingCapacity();
-                while (true) {
-                    const member = self_engine.stack.pop() orelse unreachable;
-                    self_engine.on_stack[member] = false;
-                    try self_engine.members.append(self_engine.allocator, member);
-                    if (member == node_index) break;
-                }
-                try self_engine.resolveComponent();
+                const children_start = walk_children.items.len;
+                try encodeNode(self_engine.graph, node_index, VisitSink{ .children = walk_children, .allocator = self_engine.allocator });
+                try frames.append(self_engine.allocator, .{
+                    .node = node_index,
+                    .children_start = children_start,
+                    .children_end = walk_children.items.len,
+                    .next = children_start,
+                });
             }
 
             /// Settle the digests of the component in `members`, whose every
@@ -1617,16 +1663,6 @@ pub const Store = struct {
                 }
             }
 
-            fn visitSizeChild(self_finder: *@This(), child_id: GraphNodeId, parent_index: usize) std.mem.Allocator.Error!void {
-                const child_index = @intFromEnum(child_id);
-                if (self_finder.visit_index[child_index] == -1) {
-                    try self_finder.strongConnect(child_id);
-                    self_finder.lowlink[parent_index] = @min(self_finder.lowlink[parent_index], self_finder.lowlink[child_index]);
-                } else if (self_finder.on_stack[child_index]) {
-                    self_finder.lowlink[parent_index] = @min(self_finder.lowlink[parent_index], self_finder.visit_index[child_index]);
-                }
-            }
-
             fn hasSizeSelfEdge(self_finder: *@This(), node_id: GraphNodeId) bool {
                 return switch (self_finder.graph.getNode(node_id)) {
                     .nominal => |child| switch (child) {
@@ -1655,24 +1691,74 @@ pub const Store = struct {
                 };
             }
 
-            fn strongConnect(self_finder: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!void {
+            /// A node of Tarjan's walk whose local size children are
+            /// `walk_children[children_start..children_end]`.
+            const WalkFrame = struct {
+                node: GraphNodeId,
+                children_start: usize,
+                children_end: usize,
+                next: usize,
+            };
+
+            /// Tarjan's walk from `start` on explicit frames, so the depth of
+            /// the layout graph never becomes call depth.
+            fn strongConnect(self_finder: *@This(), start: GraphNodeId) std.mem.Allocator.Error!void {
+                const allocator = self_finder.allocator;
+                var frames = std.ArrayList(WalkFrame).empty;
+                defer frames.deinit(allocator);
+                var walk_children = std.ArrayList(GraphNodeId).empty;
+                defer walk_children.deinit(allocator);
+                try self_finder.enterWalkNode(start, &frames, &walk_children);
+                while (frames.items.len > 0) {
+                    const frame = &frames.items[frames.items.len - 1];
+                    const frame_index = @intFromEnum(frame.node);
+                    if (frame.next < frame.children_end) {
+                        const child_id = walk_children.items[frame.next];
+                        frame.next += 1;
+                        const child_index = @intFromEnum(child_id);
+                        if (self_finder.visit_index[child_index] == -1) {
+                            try self_finder.enterWalkNode(child_id, &frames, &walk_children);
+                        } else if (self_finder.on_stack[child_index]) {
+                            self_finder.lowlink[frame_index] = @min(self_finder.lowlink[frame_index], self_finder.visit_index[child_index]);
+                        }
+                        continue;
+                    }
+                    const finished = frames.pop().?;
+                    walk_children.shrinkRetainingCapacity(finished.children_start);
+                    try self_finder.finishWalkNode(finished.node);
+                    if (frames.items.len > 0) {
+                        const parent_index = @intFromEnum(frames.items[frames.items.len - 1].node);
+                        const index = @intFromEnum(finished.node);
+                        self_finder.lowlink[parent_index] = @min(self_finder.lowlink[parent_index], self_finder.lowlink[index]);
+                    }
+                }
+            }
+
+            fn enterWalkNode(
+                self_finder: *@This(),
+                node_id: GraphNodeId,
+                frames: *std.ArrayList(WalkFrame),
+                walk_children: *std.ArrayList(GraphNodeId),
+            ) std.mem.Allocator.Error!void {
+                const allocator = self_finder.allocator;
                 const index = @intFromEnum(node_id);
                 self_finder.visit_index[index] = self_finder.next_index;
                 self_finder.lowlink[index] = self_finder.next_index;
                 self_finder.next_index += 1;
-                try self_finder.stack.append(self_finder.allocator, node_id);
+                try self_finder.stack.append(allocator, node_id);
                 self_finder.on_stack[index] = true;
 
+                const children_start = walk_children.items.len;
                 switch (self_finder.graph.getNode(node_id)) {
                     .nominal => |child| switch (child) {
                         .canonical => {},
-                        .local => |child_id| try self_finder.visitSizeChild(child_id, index),
+                        .local => |child_id| try walk_children.append(allocator, child_id),
                     },
                     .struct_ => |span| {
                         for (self_finder.graph.getFields(span)) |field| {
                             switch (field.child) {
                                 .canonical => {},
-                                .local => |child_id| try self_finder.visitSizeChild(child_id, index),
+                                .local => |child_id| try walk_children.append(allocator, child_id),
                             }
                         }
                     },
@@ -1680,13 +1766,22 @@ pub const Store = struct {
                         for (self_finder.graph.getRefs(span)) |child| {
                             switch (child) {
                                 .canonical => {},
-                                .local => |child_id| try self_finder.visitSizeChild(child_id, index),
+                                .local => |child_id| try walk_children.append(allocator, child_id),
                             }
                         }
                     },
                     .pending, .committed, .box, .list, .closure, .erased_callable => {},
                 }
+                try frames.append(allocator, .{
+                    .node = node_id,
+                    .children_start = children_start,
+                    .children_end = walk_children.items.len,
+                    .next = children_start,
+                });
+            }
 
+            fn finishWalkNode(self_finder: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!void {
+                const index = @intFromEnum(node_id);
                 if (self_finder.lowlink[index] != self_finder.visit_index[index]) return;
 
                 var component = std.ArrayList(GraphNodeId).empty;

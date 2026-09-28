@@ -2085,28 +2085,25 @@ pub const Store = struct {
         }
     }
 
-    pub fn ownerHead(self: *const Store, ty: TypeId) OwnerHead {
-        return switch (self.get(ty)) {
+    pub fn ownerHead(self: *const Store, root: TypeId) OwnerHead {
+        var ty = root;
+        while (true) return switch (self.get(ty)) {
             .primitive => |primitive| .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
             .list => .{ .builtin = .list },
             .box => .{ .builtin = .box },
             .named => |named| if (named.builtin_owner) |owner|
                 .{ .builtin = owner }
-            else if (named.kind == .alias)
+            else if (named.kind == .alias) {
                 // Aliases are transparent for static dispatch: the owner is
                 // the backing's owner. (Content digests keep aliases opaque;
                 // dispatch is a representation question, so it unwraps.) This
                 // handles alias-over-alias and alias-over-nominal uniformly
                 // (the backing of an alias-over-nominal is itself a `named`
-                // node carrying the nominal's owner). The recursion
-                // terminates because alias chains in checked output are
-                // finite.
-                (if (named.backing) |backing|
-                    self.ownerHead(backing.ty)
-                else
-                    .none)
-            else
-                .{ .named_type = named.def },
+                // node carrying the nominal's owner). Alias chains in checked
+                // output are finite, so following them terminates.
+                ty = (named.backing orelse return .none).ty;
+                continue;
+            } else .{ .named_type = named.def },
             .record, .tuple, .tag_union, .func, .erased, .zst => .none,
         };
     }

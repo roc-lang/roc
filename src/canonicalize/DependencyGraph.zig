@@ -506,12 +506,20 @@ const DemandAnalyzer = struct {
 
     const Walk = struct {
         work: std.ArrayList(WalkItem) = .empty,
-        frames: std.ArrayList(DemandSummary) = .empty,
+        /// Summaries of the lambdas whose bodies are being walked inline.
+        /// Each is boxed so a summary being folded into stays in place while
+        /// the fold starts further lambda walks.
+        frames: std.ArrayList(*DemandSummary) = .empty,
 
         fn deinit(walk: *Walk, allocator: std.mem.Allocator) void {
             walk.work.deinit(allocator);
-            for (walk.frames.items) |*frame| frame.deinit(allocator);
+            for (walk.frames.items) |frame| destroyFrame(allocator, frame);
             walk.frames.deinit(allocator);
+        }
+
+        fn destroyFrame(allocator: std.mem.Allocator, frame: *DemandSummary) void {
+            frame.deinit(allocator);
+            allocator.destroy(frame);
         }
 
         fn push(walk: *Walk, allocator: std.mem.Allocator, item: WalkItem) std.mem.Allocator.Error!void {
@@ -542,7 +550,7 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         while (walk.work.pop()) |item| {
             const current: *DemandSummary = if (walk.frames.items.len > 0)
-                &walk.frames.items[walk.frames.items.len - 1]
+                walk.frames.items[walk.frames.items.len - 1]
             else
                 out;
             switch (item) {
@@ -553,14 +561,14 @@ const DemandAnalyzer = struct {
                 .apply_call_target => |call| try self.applyCallTarget(walk, current, call.func, call.args, local_callables),
                 .apply_called_value => |expr_idx| try self.applyCalledValue(walk, current, expr_idx, local_callables),
                 .finish_lambda => |fin| {
-                    var computed = walk.frames.pop().?;
-                    defer computed.deinit(self.allocator);
+                    const computed = walk.frames.pop().?;
+                    defer Walk.destroyFrame(self.allocator, computed);
                     _ = self.active_lambdas.remove(fin.lambda);
                     const parent: *DemandSummary = if (walk.frames.items.len > 0)
-                        &walk.frames.items[walk.frames.items.len - 1]
+                        walk.frames.items[walk.frames.items.len - 1]
                     else
                         out;
-                    try self.foldLambdaSummary(walk, parent, &computed, fin.lambda, fin.args, fin.demand_node);
+                    try self.foldLambdaSummary(walk, parent, computed, fin.lambda, fin.args, fin.demand_node);
                 },
             }
         }
@@ -597,12 +605,27 @@ const DemandAnalyzer = struct {
             try self.foldLambdaSummary(walk, current, summary, lambda_idx, call_args, demand_node);
             return;
         }
+        try self.beginLambdaWalk(walk, lambda_idx, call_args, demand_node);
+    }
+
+    /// Walk an uncached lambda's body inline in its own frame, guarded by
+    /// `active_lambdas` against recursion; the frame folds when it closes.
+    fn beginLambdaWalk(
+        self: *DemandAnalyzer,
+        walk: *Walk,
+        lambda_idx: CIR.Expr.Idx,
+        call_args: CIR.Expr.Span,
+        demand_node: ?CIR.Node.Idx,
+    ) std.mem.Allocator.Error!void {
         if (self.active_lambdas.contains(lambda_idx)) return;
         const expr = self.cir.store.getExpr(lambda_idx);
         if (expr != .e_lambda) return;
 
         try self.active_lambdas.put(self.allocator, lambda_idx, {});
-        try walk.frames.append(self.allocator, DemandSummary{});
+        try walk.frames.ensureUnusedCapacity(self.allocator, 1);
+        const frame = try self.allocator.create(DemandSummary);
+        frame.* = .{};
+        walk.frames.appendAssumeCapacity(frame);
         // The finish item pops first-in-last-out: argument patterns and the
         // body run inside the frame, then the frame folds into its parent.
         try walk.push(self.allocator, .{ .finish_lambda = .{ .lambda = lambda_idx, .args = call_args, .demand_node = demand_node } });
@@ -610,10 +633,22 @@ const DemandAnalyzer = struct {
         try self.pushPatternSpanReversed(walk, expr.e_lambda.args);
     }
 
+    /// A folded summary whose literal requirements are still being applied.
+    const FoldCursor = struct {
+        literals: std.AutoHashMapUnmanaged(Var, void).KeyIterator,
+        demand_node: ?CIR.Node.Idx,
+        /// Target definitions of the literal requirement being applied.
+        targets: []const CIR.Def.Idx = &.{},
+        next_target: usize = 0,
+    };
+
     /// Fold one lambda's demand summary into `into` for a call with
     /// `call_args`: graph deps transfer directly; called patterns flow through
     /// the matching argument; and polymorphic literal requirements translate
-    /// through the exact scheme-use pairs recorded at `demand_node`.
+    /// through the exact scheme-use pairs recorded at `demand_node`. A
+    /// requirement with resolved targets applies each target method's own
+    /// summary in turn, so cursors over the summaries being applied are kept
+    /// on an explicit stack.
     fn foldLambdaSummary(
         self: *DemandAnalyzer,
         walk: *Walk,
@@ -622,6 +657,51 @@ const DemandAnalyzer = struct {
         lambda_idx: CIR.Expr.Idx,
         call_args: CIR.Expr.Span,
         demand_node: ?CIR.Node.Idx,
+    ) std.mem.Allocator.Error!void {
+        var cursors = std.ArrayList(FoldCursor).empty;
+        defer cursors.deinit(self.allocator);
+        try self.foldSummaryEdges(walk, into, summary, lambda_idx, call_args);
+        try cursors.append(self.allocator, .{ .literals = summary.literal_requirements.keyIterator(), .demand_node = demand_node });
+        while (cursors.items.len > 0) {
+            const cursor = &cursors.items[cursors.items.len - 1];
+            if (cursor.next_target < cursor.targets.len) {
+                const target_def = cursor.targets[cursor.next_target];
+                cursor.next_target += 1;
+                const target_lambda = self.lambdaFromDef(target_def) orelse continue;
+                // Literal conversion arguments contain no callable value
+                // supplied by source, so only each selected method body's
+                // explicit top-level demands can flow outward.
+                const no_source_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
+                if (self.summaries.getPtr(target_lambda)) |target_summary| {
+                    try self.foldSummaryEdges(walk, into, target_summary, target_lambda, no_source_args);
+                    try cursors.append(self.allocator, .{ .literals = target_summary.literal_requirements.keyIterator(), .demand_node = null });
+                } else {
+                    try self.beginLambdaWalk(walk, target_lambda, no_source_args, null);
+                }
+                continue;
+            }
+            const literal = cursor.literals.next() orelse {
+                _ = cursors.pop();
+                continue;
+            };
+            switch (self.literalRequirementTarget(literal.*, cursor.demand_node)) {
+                .targets => |targets| {
+                    cursor.targets = targets;
+                    cursor.next_target = 0;
+                },
+                .requirement => |fn_var| _ = try into.addLiteralRequirement(self.allocator, fn_var),
+            }
+        }
+    }
+
+    /// The graph deps and called patterns of a folded summary.
+    fn foldSummaryEdges(
+        self: *DemandAnalyzer,
+        walk: *Walk,
+        into: *DemandSummary,
+        summary: *const DemandSummary,
+        lambda_idx: CIR.Expr.Idx,
+        call_args: CIR.Expr.Span,
     ) std.mem.Allocator.Error!void {
         var dep_iter = summary.deps.keyIterator();
         while (dep_iter.next()) |def_idx| {
@@ -636,11 +716,6 @@ const DemandAnalyzer = struct {
             } else {
                 _ = try into.addCalledPattern(self.allocator, pattern_idx.*);
             }
-        }
-
-        var literal_iter = summary.literal_requirements.keyIterator();
-        while (literal_iter.next()) |fn_var| {
-            try self.applyLiteralRequirement(walk, into, fn_var.*, demand_node);
         }
     }
 
@@ -1025,13 +1100,8 @@ const DemandAnalyzer = struct {
         source_fn_var: Var,
         demand_node: ?CIR.Node.Idx,
     ) std.mem.Allocator.Error!void {
-        const fn_var = if (demand_node) |node|
-            self.translateLiteralRequirement(source_fn_var, node)
-        else
-            source_fn_var;
-        const fn_root = self.cir.types.resolveVar(fn_var).var_;
-        if (self.resolved_literal_targets.get(fn_root)) |target_defs| {
-            for (target_defs.items) |target_def| {
+        switch (self.literalRequirementTarget(source_fn_var, demand_node)) {
+            .targets => |targets| for (targets) |target_def| {
                 if (self.lambdaFromDef(target_def)) |lambda_idx| {
                     // Literal conversion arguments contain no callable value
                     // supplied by source, so only each selected method body's
@@ -1039,10 +1109,26 @@ const DemandAnalyzer = struct {
                     const no_source_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
                     try self.beginApplyLambdaSummary(walk, current, lambda_idx, no_source_args, null);
                 }
-            }
-            return;
+            },
+            .requirement => |fn_var| _ = try current.addLiteralRequirement(self.allocator, fn_var),
         }
-        _ = try current.addLiteralRequirement(self.allocator, fn_var);
+    }
+
+    const LiteralTarget = union(enum) {
+        /// The definitions whose methods the literal resolved to.
+        targets: []const CIR.Def.Idx,
+        /// The literal's callable var, still polymorphic here.
+        requirement: Var,
+    };
+
+    fn literalRequirementTarget(self: *const DemandAnalyzer, source_fn_var: Var, demand_node: ?CIR.Node.Idx) LiteralTarget {
+        const fn_var = if (demand_node) |node|
+            self.translateLiteralRequirement(source_fn_var, node)
+        else
+            source_fn_var;
+        const fn_root = self.cir.types.resolveVar(fn_var).var_;
+        if (self.resolved_literal_targets.get(fn_root)) |target_defs| return .{ .targets = target_defs.items };
+        return .{ .requirement = fn_var };
     }
 
     fn translateLiteralRequirement(

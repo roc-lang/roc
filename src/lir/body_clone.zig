@@ -1850,23 +1850,47 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         }
 
         /// Map an old local to its clone, allocating a fresh same-layout local
-        /// on first encounter.
-        pub fn mapLocal(self: *Self, old: LocalId) Allocator.Error!LocalId {
-            if (self.local_map.get(old)) |existing| return existing;
-            if (@hasDecl(Rewriter, "preserveLocal")) {
-                if (self.rewriter.preserveLocal(old)) {
-                    try self.local_map.put(old, old);
-                    return old;
+        /// on first encounter. A local's Boxy descriptor may itself live in a
+        /// local, so the descriptor chain is mapped outermost first and the
+        /// descriptors are attached innermost first.
+        pub fn mapLocal(self: *Self, root: LocalId) Allocator.Error!LocalId {
+            const Pending = struct { fresh: LocalId, desc: LIR.BoxyDescRef };
+            var pending = std.ArrayList(Pending).empty;
+            defer pending.deinit(self.allocator);
+            var old = root;
+            var mapped = while (true) {
+                if (self.local_map.get(old)) |existing| break existing;
+                if (@hasDecl(Rewriter, "preserveLocal")) {
+                    if (self.rewriter.preserveLocal(old)) {
+                        try self.local_map.put(old, old);
+                        break old;
+                    }
                 }
-            }
 
-            const old_local = self.store.getLocal(old);
-            const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx });
-            try self.local_map.put(old, fresh);
-            const boxy_desc = try self.mapMaybeBoxyDescRef(old_local.boxy_desc);
-            if (boxy_desc) |desc| self.store.setLocalBoxyDesc(fresh, desc);
-            try self.new_locals.append(self.allocator, fresh);
-            return fresh;
+                const old_local = self.store.getLocal(old);
+                const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx });
+                try self.local_map.put(old, fresh);
+                const desc = old_local.boxy_desc orelse {
+                    try self.new_locals.append(self.allocator, fresh);
+                    break fresh;
+                };
+                try pending.append(self.allocator, .{ .fresh = fresh, .desc = desc });
+                switch (desc) {
+                    .local => |desc_local| old = desc_local,
+                    .static, .runtime, .dict_method_arg, .dict_method_hidden => {
+                        _ = pending.pop();
+                        self.store.setLocalBoxyDesc(fresh, desc);
+                        try self.new_locals.append(self.allocator, fresh);
+                        break fresh;
+                    },
+                }
+            };
+            while (pending.pop()) |entry| {
+                self.store.setLocalBoxyDesc(entry.fresh, .{ .local = mapped });
+                try self.new_locals.append(self.allocator, entry.fresh);
+                mapped = entry.fresh;
+            }
+            return mapped;
         }
 
         /// Allocate a fresh local of `layout_idx` owned by the clone.
@@ -1876,22 +1900,32 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return local;
         }
 
-        fn mapInlineScope(self: *Self, old: LIR.InlineScopeId) Allocator.Error!LIR.InlineScopeId {
-            if (self.inline_scope_outer == LIR.InlineScopeId.none) return old;
-            if (old == LIR.InlineScopeId.none) return self.inline_scope_outer;
-
-            if (self.inline_scope_map.get(old)) |existing| return existing;
-
-            const source = self.store.inlineScope(old);
-            const mapped = try self.store.addInlineScope(.{
-                .source_symbol = source.source_symbol,
-                .source_name = source.source_name,
-                .source_loc = source.source_loc,
-                .call_site = source.call_site,
-                .parent = try self.mapInlineScope(source.parent),
-            });
-            try self.inline_scope_map.put(old, mapped);
-            return mapped;
+        /// Map an inline scope to its clone. A scope's parent chain is
+        /// cloned outermost first, so every clone's parent exists before it.
+        fn mapInlineScope(self: *Self, root: LIR.InlineScopeId) Allocator.Error!LIR.InlineScopeId {
+            if (self.inline_scope_outer == LIR.InlineScopeId.none) return root;
+            var chain = std.ArrayList(LIR.InlineScopeId).empty;
+            defer chain.deinit(self.allocator);
+            var old = root;
+            var parent = while (true) {
+                if (old == LIR.InlineScopeId.none) break self.inline_scope_outer;
+                if (self.inline_scope_map.get(old)) |existing| break existing;
+                try chain.append(self.allocator, old);
+                old = self.store.inlineScope(old).parent;
+            };
+            while (chain.pop()) |scope| {
+                const source = self.store.inlineScope(scope);
+                const mapped = try self.store.addInlineScope(.{
+                    .source_symbol = source.source_symbol,
+                    .source_name = source.source_name,
+                    .source_loc = source.source_loc,
+                    .call_site = source.call_site,
+                    .parent = parent,
+                });
+                try self.inline_scope_map.put(scope, mapped);
+                parent = mapped;
+            }
+            return parent;
         }
 
         fn mapJoinPoint(self: *Self, old: LIR.JoinPointId) Allocator.Error!LIR.JoinPointId {
@@ -1961,7 +1995,6 @@ fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
         },
     }
 }
-
 
 const TestRetRewriter = struct {
     pub fn cloneRet(_: *TestRetRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {

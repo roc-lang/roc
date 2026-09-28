@@ -73,6 +73,13 @@ const UnifyFrame = union(enum) {
         pair: UnifyPair,
         action: UnifyFinishAction,
     },
+    /// Relate generated-private evidence for one public/private pair.
+    relate: struct {
+        public: Type.TypeVarId,
+        private: Type.TypeVarId,
+    },
+    /// Retire a public/private pair once everything it relates is related.
+    relate_exit: UnifyPair,
 };
 
 /// A pair of spans whose element-wise unification is deferred until after the
@@ -1850,7 +1857,18 @@ const Solver = struct {
     fn unify(self: *Solver, lhs: Type.TypeVarId, rhs: Type.TypeVarId) Allocator.Error!void {
         const base = self.unify_stack.items.len;
         try self.pushUnifyPair(&self.unify_stack, lhs, rhs);
+        try self.drainUnifyStack(base);
+    }
 
+    /// Relate generated-private evidence from a checked-public shape into
+    /// its private representation, on the unification stack.
+    fn relateGeneratedPrivateEvidence(self: *Solver, public_ty: Type.TypeVarId, private_ty: Type.TypeVarId) Allocator.Error!void {
+        const base = self.unify_stack.items.len;
+        try self.pushRelate(&self.unify_stack, public_ty, private_ty);
+        try self.drainUnifyStack(base);
+    }
+
+    fn drainUnifyStack(self: *Solver, base: usize) Allocator.Error!void {
         while (self.unify_stack.items.len > base) {
             const frame = self.unify_stack.pop().?;
             switch (frame) {
@@ -1864,6 +1882,8 @@ const Solver = struct {
                     self.applyUnifyFinish(finish.action);
                     _ = self.active_unifications.remove(finish.pair);
                 },
+                .relate => |relate| try self.processRelate(&self.unify_stack, relate.public, relate.private),
+                .relate_exit => |pair| _ = self.active_private_evidence_relations.remove(pair),
             }
         }
     }
@@ -2115,11 +2135,11 @@ const Solver = struct {
                     left_named.kind != right_named.kind or
                     left_named.builtin_owner != right_named.builtin_owner)
                 {
-                    if (try self.unifyForcedDynamicIterator(a, b, left_named, right_named)) return;
-                    if (try self.unifyIteratorOwnerStampedPublic(a, b, left_named, right_named)) return;
-                    if (try self.unifyGeneratedIteratorJoin(a, b, left_named, right_named)) return;
-                    if (try self.unifyPublicGeneratedIterator(a, b, left_named, right_named)) return;
-                    if (try self.unifyNominalOpaqueViews(a, b, left_named, right_named)) return;
+                    if (try self.unifyForcedDynamicIterator(stack, finish_index, a, b, left_named, right_named)) return;
+                    if (try self.unifyIteratorOwnerStampedPublic(stack, finish_index, a, b, left_named, right_named)) return;
+                    if (try self.unifyGeneratedIteratorJoin(stack, finish_index, a, b, left_named, right_named)) return;
+                    if (try self.unifyPublicGeneratedIterator(stack, finish_index, a, b, left_named, right_named)) return;
+                    if (try self.unifyNominalOpaqueViews(stack, finish_index, a, b, left_named, right_named)) return;
                     Common.invariant("named type identity failed Lambda Solved unification");
                 }
                 if (left_named.backing) |left_backing| {
@@ -2129,11 +2149,11 @@ const Solver = struct {
                         stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
                         try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
                     } else if (left_backing.authority == .generated_private) {
-                        try self.relateGeneratedPrivateEvidence(right_backing.ty, left_backing.ty);
-                        self.program.types.set(b, .{ .link = a });
+                        stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                        try self.pushRelate(stack, right_backing.ty, left_backing.ty);
                     } else if (right_backing.authority == .generated_private) {
-                        try self.relateGeneratedPrivateEvidence(left_backing.ty, right_backing.ty);
-                        self.program.types.set(a, .{ .link = b });
+                        stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = b, .rhs = a } };
+                        try self.pushRelate(stack, left_backing.ty, right_backing.ty);
                     } else {
                         Common.invariant("named type backing authorities were incompatible during Lambda Solved unification");
                     }
@@ -2184,6 +2204,8 @@ const Solver = struct {
     /// callable flow through the shared runtime representation.
     fn unifyNominalOpaqueViews(
         self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        finish_index: usize,
         left_ty: Type.TypeVarId,
         right_ty: Type.TypeVarId,
         left: anytype,
@@ -2204,11 +2226,6 @@ const Solver = struct {
             return false;
         }
 
-        try self.unifySpans(
-            left.args,
-            right.args,
-            "nominal/opaque type arguments failed Lambda Solved unification",
-        );
         const left_backing = left.backing orelse
             Common.invariant("nominal/opaque visibility relation lacked a checked runtime backing");
         const right_backing = right.backing orelse
@@ -2231,12 +2248,14 @@ const Solver = struct {
             Common.invariant("opaque interface view carried inspectable backing authority");
         }
 
-        try self.unify(left_backing.ty, right_backing.ty);
-        if (left_is_opaque) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
+        linkAtFinish(stack, finish_index, if (left_is_opaque) left_ty else right_ty, if (left_is_opaque) right_ty else left_ty);
+        try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
+        try self.pushSpanPairs(
+            stack,
+            left.args,
+            right.args,
+            "nominal/opaque type arguments failed Lambda Solved unification",
+        );
         return true;
     }
 
@@ -2316,8 +2335,22 @@ const Solver = struct {
     /// slots (and still-open Lambda Solved slots) are unified. A checked-public
     /// inspectable named type may correspond to its structural backing in the
     /// private witness; walk through that backing without linking either root.
-    fn relateGeneratedPrivateEvidence(
+    fn pushRelate(
         self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        public_ty: Type.TypeVarId,
+        private_ty: Type.TypeVarId,
+    ) Allocator.Error!void {
+        try stack.append(self.allocator, .{ .relate = .{ .public = public_ty, .private = private_ty } });
+    }
+
+    /// Relates one public/private pair, pushing the pairs it relates next.
+    /// The pair stays active until its `relate_exit` frame pops, after
+    /// everything it pushed. Components are pushed in order and then
+    /// reversed so they are related in order.
+    fn processRelate(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
         public_ty: Type.TypeVarId,
         private_ty: Type.TypeVarId,
     ) Allocator.Error!void {
@@ -2328,7 +2361,12 @@ const Solver = struct {
         const pair = UnifyPair.init(public_root, private_root);
         const active = try self.active_private_evidence_relations.getOrPut(pair);
         if (active.found_existing) return;
-        defer _ = self.active_private_evidence_relations.remove(pair);
+        stack.append(self.allocator, .{ .relate_exit = pair }) catch |err| {
+            _ = self.active_private_evidence_relations.remove(pair);
+            return err;
+        };
+        const mark = stack.items.len;
+        defer std.mem.reverse(UnifyFrame, stack.items[mark..]);
 
         const public = try self.resolvedContentAt(public_root);
         const private = try self.resolvedContentAt(private_root);
@@ -2337,7 +2375,7 @@ const Solver = struct {
             public == .lambda_set or private == .lambda_set or
             public == .erased or private == .erased)
         {
-            try self.unify(public_root, private_root);
+            try self.pushUnifyPair(stack, public_root, private_root);
             return;
         }
 
@@ -2352,11 +2390,11 @@ const Solver = struct {
             .zst => if (private != .zst) Common.invariant("generated-private evidence relation received different type structure"),
             .list => |public_elem| {
                 if (private_content_tag != .list) Common.invariant("generated-private evidence relation received different type structure");
-                try self.relateGeneratedPrivateEvidence(public_elem, private.list);
+                try self.pushRelate(stack, public_elem, private.list);
             },
             .box => |public_elem| {
                 if (private_content_tag != .box) Common.invariant("generated-private evidence relation received different type structure");
-                try self.relateGeneratedPrivateEvidence(public_elem, private.box);
+                try self.pushRelate(stack, public_elem, private.box);
             },
             .tuple => |public_items| {
                 if (private_content_tag != .tuple) Common.invariant("generated-private evidence relation received different type structure");
@@ -2365,7 +2403,8 @@ const Solver = struct {
                     Common.invariant("generated-private evidence relation received tuples of different arity");
                 }
                 for (0..public_items.count()) |index| {
-                    try self.relateGeneratedPrivateEvidence(
+                    try self.pushRelate(
+                        stack,
                         self.program.types.spanItem(public_items, index),
                         self.program.types.spanItem(private_items, index),
                     );
@@ -2383,12 +2422,12 @@ const Solver = struct {
                     if (public_field.name != private_field.name) {
                         Common.invariant("generated-private evidence relation received records with different fields");
                     }
-                    try self.relateGeneratedPrivateEvidence(public_field.ty, private_field.ty);
+                    try self.pushRelate(stack, public_field.ty, private_field.ty);
                     if ((public_field.value_ty == null) != (private_field.value_ty == null)) {
                         Common.invariant("generated-private evidence relation received different record field kinds");
                     }
                     if (public_field.value_ty) |public_value_ty| {
-                        try self.relateGeneratedPrivateEvidence(public_value_ty, private_field.value_ty.?);
+                        try self.pushRelate(stack, public_value_ty, private_field.value_ty.?);
                     }
                 }
             },
@@ -2407,7 +2446,8 @@ const Solver = struct {
                         Common.invariant("generated-private evidence relation received tag unions with different tags");
                     }
                     for (0..public_tag.payloads.count()) |payload_index| {
-                        try self.relateGeneratedPrivateEvidence(
+                        try self.pushRelate(
+                            stack,
                             self.program.types.spanItem(public_tag.payloads, payload_index),
                             self.program.types.spanItem(private_tag.payloads, payload_index),
                         );
@@ -2421,13 +2461,14 @@ const Solver = struct {
                     Common.invariant("generated-private evidence relation received functions of different arity");
                 }
                 for (0..public_fn.args.count()) |index| {
-                    try self.relateGeneratedPrivateEvidence(
+                    try self.pushRelate(
+                        stack,
                         self.program.types.spanItem(public_fn.args, index),
                         self.program.types.spanItem(private_fn.args, index),
                     );
                 }
-                try self.unify(public_fn.callable, private_fn.callable);
-                try self.relateGeneratedPrivateEvidence(public_fn.ret, private_fn.ret);
+                try self.pushUnifyPair(stack, public_fn.callable, private_fn.callable);
+                try self.pushRelate(stack, public_fn.ret, private_fn.ret);
             },
             .named => |public_named| {
                 if (private_content_tag != .named) {
@@ -2436,7 +2477,7 @@ const Solver = struct {
                     if (public_backing.authority != .checked_public or public_backing.use != .inspectable) {
                         Common.invariant("generated-private evidence relation could not traverse an opaque public named type");
                     }
-                    try self.relateGeneratedPrivateEvidence(public_backing.ty, private_root);
+                    try self.pushRelate(stack, public_backing.ty, private_root);
                     return;
                 }
                 const private_named = private.named;
@@ -2451,7 +2492,8 @@ const Solver = struct {
                         Common.invariant("generated-private evidence relation received named types with different arity");
                     }
                     for (0..public_named.args.count()) |index| {
-                        try self.relateGeneratedPrivateEvidence(
+                        try self.pushRelate(
+                            stack,
                             self.program.types.spanItem(public_named.args, index),
                             self.program.types.spanItem(private_named.args, index),
                         );
@@ -2462,7 +2504,7 @@ const Solver = struct {
                         if (public_backing.use != private_backing.use) {
                             Common.invariant("generated-private evidence relation received different named backing uses");
                         }
-                        try self.relateGeneratedPrivateEvidence(public_backing.ty, private_backing.ty);
+                        try self.pushRelate(stack, public_backing.ty, private_backing.ty);
                     } else if (private_named.backing != null) {
                         Common.invariant("generated-private evidence relation received different named backing presence");
                     }
@@ -2470,7 +2512,8 @@ const Solver = struct {
                     if (public_named.args.count() == 0 or private_named.args.count() == 0) {
                         Common.invariant("generated-private iterator evidence lacked a public item argument");
                     }
-                    try self.relateGeneratedPrivateEvidence(
+                    try self.pushRelate(
+                        stack,
                         self.program.types.spanItem(public_named.args, 0),
                         self.program.types.spanItem(private_named.args, 0),
                     );
@@ -2481,6 +2524,8 @@ const Solver = struct {
 
     fn unifyIteratorOwnerStampedPublic(
         self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        finish_index: usize,
         left_ty: Type.TypeVarId,
         right_ty: Type.TypeVarId,
         left: anytype,
@@ -2491,17 +2536,16 @@ const Solver = struct {
         _ = iteratorLikeOwnerFromPair(left.builtin_owner, right.builtin_owner) orelse return false;
         if (left.builtin_owner == right.builtin_owner) return false;
 
-        try self.unifySpans(left.args, right.args, "iterator owner-stamp argument lists failed Lambda Solved unification");
-        if (isIteratorLikeOwner(left.builtin_owner)) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
+        const left_owns = isIteratorLikeOwner(left.builtin_owner);
+        linkAtFinish(stack, finish_index, if (left_owns) left_ty else right_ty, if (left_owns) right_ty else left_ty);
+        try self.pushSpanPairs(stack, left.args, right.args, "iterator owner-stamp argument lists failed Lambda Solved unification");
         return true;
     }
 
     fn unifyForcedDynamicIterator(
         self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        finish_index: usize,
         left_ty: Type.TypeVarId,
         right_ty: Type.TypeVarId,
         left: anytype,
@@ -2514,23 +2558,19 @@ const Solver = struct {
             Common.invariant("forced-dynamic iterator reached Lambda Solved without a public item argument");
         }
 
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+        linkAtFinish(stack, finish_index, if (left_dynamic) left_ty else right_ty, if (left_dynamic) right_ty else left_ty);
         const dynamic = if (left_dynamic) left else right;
         const other = if (left_dynamic) right else left;
         switch (other.def.iterator_representation) {
-            .none => try self.relateForcedDynamicPublicEvidence(dynamic, other),
-            .minted => try self.unifyGeneratedIteratorBackings(left, right),
+            .none => try self.relateForcedDynamicPublicEvidence(stack, dynamic, other),
+            .minted => try self.unifyGeneratedIteratorBackings(stack, left, right),
             .forced_dynamic => Common.invariant("forced-dynamic iterator relation received two dynamic representations"),
         }
-        if (left_dynamic) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
+        try self.pushUnifyPair(stack, self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
         return true;
     }
 
-    fn relateForcedDynamicPublicEvidence(self: *Solver, dynamic: anytype, public: anytype) Allocator.Error!void {
+    fn relateForcedDynamicPublicEvidence(self: *Solver, stack: *std.ArrayList(UnifyFrame), dynamic: anytype, public: anytype) Allocator.Error!void {
         const public_backing = public.backing orelse return;
         const dynamic_backing = dynamic.backing orelse
             Common.invariant("forced-dynamic iterator relation found dynamic backing on only one side");
@@ -2540,11 +2580,13 @@ const Solver = struct {
         if (public_backing.authority != .checked_public or dynamic_backing.authority != .generated_private) {
             Common.invariant("forced-dynamic iterator evidence relation received incorrect backing authority");
         }
-        try self.relateGeneratedPrivateEvidence(public_backing.ty, dynamic_backing.ty);
+        try self.pushRelate(stack, public_backing.ty, dynamic_backing.ty);
     }
 
     fn unifyGeneratedIteratorJoin(
         self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        finish_index: usize,
         left_ty: Type.TypeVarId,
         right_ty: Type.TypeVarId,
         left: anytype,
@@ -2555,7 +2597,8 @@ const Solver = struct {
         if (left.args.count() == 0 or right.args.count() == 0) {
             Common.invariant("generated iterator join reached Lambda Solved without a public item argument");
         }
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+        const left_owns = isIteratorLikeOwner(left.builtin_owner);
+        linkAtFinish(stack, finish_index, if (left_owns) left_ty else right_ty, if (left_owns) right_ty else left_ty);
 
         if (left.backing) |left_backing| {
             const right_backing = right.backing orelse
@@ -2566,21 +2609,18 @@ const Solver = struct {
             if (left_backing.authority != right_backing.authority) {
                 Common.invariant("generated iterator join found different backing authorities");
             }
-            try self.unify(left_backing.ty, right_backing.ty);
+            try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
         } else if (right.backing != null) {
             Common.invariant("generated iterator join found backing on only one side");
         }
-
-        if (isIteratorLikeOwner(left.builtin_owner)) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
+        try self.pushUnifyPair(stack, self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
         return true;
     }
 
     fn unifyPublicGeneratedIterator(
         self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        finish_index: usize,
         left_ty: Type.TypeVarId,
         right_ty: Type.TypeVarId,
         left: anytype,
@@ -2591,9 +2631,9 @@ const Solver = struct {
         if (left.args.count() == 0 or right.args.count() == 0) {
             Common.invariant("generated iterator evidence reached Lambda Solved without a public item argument");
         }
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
 
         const left_minted = left.def.iterator_representation == .minted;
+        linkAtFinish(stack, finish_index, if (left_minted) left_ty else right_ty, if (left_minted) right_ty else left_ty);
         const generated = if (left_minted) left else right;
         const public = if (left_minted) right else left;
         if (public.backing) |public_backing| {
@@ -2602,18 +2642,13 @@ const Solver = struct {
             if (generated_backing.authority != .generated_private) {
                 Common.invariant("generated iterator evidence backing lacked private authority");
             }
-            try self.relateGeneratedPrivateEvidence(public_backing.ty, generated_backing.ty);
+            try self.pushRelate(stack, public_backing.ty, generated_backing.ty);
         }
-
-        if (left_minted) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
+        try self.pushUnifyPair(stack, self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
         return true;
     }
 
-    fn unifyGeneratedIteratorBackings(self: *Solver, left: anytype, right: anytype) Allocator.Error!void {
+    fn unifyGeneratedIteratorBackings(self: *Solver, stack: *std.ArrayList(UnifyFrame), left: anytype, right: anytype) Allocator.Error!void {
         const left_backing = left.backing orelse
             Common.invariant("generated iterator relation found backing on only one side");
         const right_backing = right.backing orelse
@@ -2624,7 +2659,7 @@ const Solver = struct {
         if (left_backing.authority != .generated_private or right_backing.authority != .generated_private) {
             Common.invariant("private iterator relation received a checked-public backing");
         }
-        try self.unify(left_backing.ty, right_backing.ty);
+        try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
     }
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
@@ -2632,13 +2667,10 @@ const Solver = struct {
         return (content.named.backing orelse Common.invariant("transparent alias reached Lambda Solved without a backing type")).ty;
     }
 
-    fn unifySpans(self: *Solver, lhs: Type.Span, rhs: Type.Span, comptime message: []const u8) Allocator.Error!void {
-        if (lhs.count() != rhs.count()) Common.invariant(message);
-        for (0..lhs.count()) |i| {
-            const left_ty = self.program.types.spanItem(lhs, i);
-            const right_ty = self.program.types.spanItem(rhs, i);
-            try self.unify(left_ty, right_ty);
-        }
+    /// Links `rhs` to `lhs` when the pair's finish frame pops, after every
+    /// relation the pair pushed has completed.
+    fn linkAtFinish(stack: *std.ArrayList(UnifyFrame), finish_index: usize, lhs: Type.TypeVarId, rhs: Type.TypeVarId) void {
+        stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = lhs, .rhs = rhs } };
     }
 
     /// Push one `process` frame per span element, in reverse so the stack

@@ -462,30 +462,55 @@ const CallableShape = struct {
 
 /// Requests retain frozen type, name, and function identities in owned shape
 /// trees, never worker-generated AST identities.
+/// A shape still to copy and where its copy goes.
+const ShapeCopy = struct { source: Shape, target: *Shape };
+
 fn copyShape(allocator: Allocator, shape: Shape) Allocator.Error!Shape {
-    return switch (shape) {
-        .any => shape,
-        .tag => |tag| .{ .tag = .{ .ty = tag.ty, .name = tag.name, .payloads = try copyShapes(allocator, tag.payloads) } },
-        .tuple => |tuple| .{ .tuple = .{ .ty = tuple.ty, .items = try copyShapes(allocator, tuple.items) } },
-        .callable => |callable| .{ .callable = .{ .ty = callable.ty, .fn_id = callable.fn_id, .captures = try copyShapes(allocator, callable.captures) } },
-        .nominal => |nominal| blk: {
-            const backing = try allocator.create(Shape);
-            backing.* = try copyShape(allocator, nominal.backing.*);
-            break :blk .{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
-        },
-        .record => |record| blk: {
-            const fields = try allocator.alloc(FieldShape, record.fields.len);
-            for (fields, record.fields) |*field, source| {
-                field.* = .{ .name = source.name, .shape = try copyShape(allocator, source.shape) };
-            }
-            break :blk .{ .record = .{ .ty = record.ty, .fields = fields } };
-        },
-    };
+    var result: Shape = undefined;
+    var pending = std.ArrayList(ShapeCopy).empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, .{ .source = shape, .target = &result });
+    try drainShapeCopies(allocator, &pending);
+    return result;
 }
 
 fn copyShapes(allocator: Allocator, shapes: []const Shape) Allocator.Error![]const Shape {
+    var pending = std.ArrayList(ShapeCopy).empty;
+    defer pending.deinit(allocator);
+    const copied = try copyShapeSlots(allocator, shapes, &pending);
+    try drainShapeCopies(allocator, &pending);
+    return copied;
+}
+
+/// Copy every pending shape into its target. Shapes nest as deeply as the
+/// constructors they describe, so components are copied from a worklist.
+fn drainShapeCopies(allocator: Allocator, pending: *std.ArrayList(ShapeCopy)) Allocator.Error!void {
+    while (pending.pop()) |item| {
+        item.target.* = switch (item.source) {
+            .any => item.source,
+            .tag => |tag| .{ .tag = .{ .ty = tag.ty, .name = tag.name, .payloads = try copyShapeSlots(allocator, tag.payloads, pending) } },
+            .tuple => |tuple| .{ .tuple = .{ .ty = tuple.ty, .items = try copyShapeSlots(allocator, tuple.items, pending) } },
+            .callable => |callable| .{ .callable = .{ .ty = callable.ty, .fn_id = callable.fn_id, .captures = try copyShapeSlots(allocator, callable.captures, pending) } },
+            .nominal => |nominal| blk: {
+                const backing = try allocator.create(Shape);
+                try pending.append(allocator, .{ .source = nominal.backing.*, .target = backing });
+                break :blk .{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
+            },
+            .record => |record| blk: {
+                const fields = try allocator.alloc(FieldShape, record.fields.len);
+                for (fields, record.fields) |*field, source| {
+                    field.name = source.name;
+                    try pending.append(allocator, .{ .source = source.shape, .target = &field.shape });
+                }
+                break :blk .{ .record = .{ .ty = record.ty, .fields = fields } };
+            },
+        };
+    }
+}
+
+fn copyShapeSlots(allocator: Allocator, shapes: []const Shape, pending: *std.ArrayList(ShapeCopy)) Allocator.Error![]const Shape {
     const copied = try allocator.alloc(Shape, shapes.len);
-    for (copied, shapes) |*copy, shape| copy.* = try copyShape(allocator, shape);
+    for (copied, shapes) |*copy, shape| try pending.append(allocator, .{ .source = shape, .target = copy });
     return copied;
 }
 
@@ -1374,7 +1399,7 @@ const Pass = struct {
         const raw = @intFromEnum(request.fn_id);
         if (self.newSpecAdmission(raw) != .admitted) return false;
         for (self.plans[raw].specs.items) |spec| {
-            if (patternEql(self.program, spec.pattern, request.pattern)) return false;
+            if (try patternEql(self.program, spec.pattern, request.pattern)) return false;
         }
         const args = try self.arena.allocator().alloc(Shape, request.pattern.args.len);
         for (args, request.pattern.args) |*arg, source| arg.* = try copyShape(self.arena.allocator(), source);
@@ -1446,59 +1471,67 @@ const Pass = struct {
     /// references, and this reader never follows bindings or local references.
     /// Memoization visits each shared expression once. In particular, a list's
     /// elements need no visit because SpecConstr has no symbolic list shape.
-    fn staticDataStructure(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!*const Value {
-        if (self.static_data_structure.get(expr_id)) |cached| return cached;
-        const arena = self.arena.allocator();
+    ///
+    /// Constructors nest as deeply as the source writes them, so each
+    /// constructor waits on an explicit frame for its components and is
+    /// memoized after them, as a direct walk would.
+    fn staticDataStructure(self: *Pass, root: Ast.ExprId) Allocator.Error!*const Value {
+        if (self.static_data_structure.get(root)) |cached| return cached;
+        const Frame = struct {
+            expr_id: Ast.ExprId,
+            components: []const Ast.ExprId,
+            values: []Value,
+            next: usize = 0,
+        };
+        var frames = std.ArrayList(Frame).empty;
+        defer {
+            for (frames.items) |frame| {
+                self.allocator.free(frame.components);
+                self.allocator.free(frame.values);
+            }
+            frames.deinit(self.allocator);
+        }
+        var delivered: ?*const Value = null;
+        if (try self.staticDataLeaf(root)) |leaf| return leaf;
+        try frames.append(self.allocator, try self.staticDataFrame(Frame, root));
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (delivered) |value| {
+                frame.values[frame.next - 1] = value.*;
+                delivered = null;
+            }
+            if (frame.next < frame.components.len) {
+                const component = frame.components[frame.next];
+                frame.next += 1;
+                if (self.static_data_structure.get(component)) |cached| {
+                    delivered = cached;
+                } else if (try self.staticDataLeaf(component)) |leaf| {
+                    delivered = leaf;
+                } else {
+                    try frames.ensureUnusedCapacity(self.allocator, 1);
+                    frames.appendAssumeCapacity(try self.staticDataFrame(Frame, component));
+                }
+                continue;
+            }
+            const finished = frames.pop().?;
+            defer {
+                self.allocator.free(finished.components);
+                self.allocator.free(finished.values);
+            }
+            const stored = try self.finishStaticDataStructure(finished.expr_id, finished.values);
+            if (frames.items.len == 0) return stored;
+            delivered = stored;
+        }
+    }
+
+    /// The memoized structure of an expression with no constructor
+    /// components, or null for a constructor.
+    fn staticDataLeaf(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!?*const Value {
         const expr = self.program.getExpr(expr_id);
         const value: Value = switch (expr.data) {
             .inline_expects_enabled => .{ .expr = expr_id },
             .comptime_value => .{ .expr = expr_id },
-            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
-                .ty = expr.ty,
-                .static_data = candidate.static_data,
-                .expr = expr_id,
-                .structure = try self.staticDataStructure(candidate.runtime_expr),
-            } },
-            .tag => |tag| blk: {
-                const payloads = try arena.alloc(Value, tag.payloads.len);
-                for (payloads, 0..) |*payload, i| {
-                    payload.* = (try self.staticDataStructure(GuardedList.at(self.program.exprSpan(tag.payloads), i))).*;
-                }
-                break :blk .{ .tag = .{ .ty = expr.ty, .name = tag.name, .payloads = payloads } };
-            },
-            .tuple => |span| blk: {
-                const items = try arena.alloc(Value, span.len);
-                for (items, 0..) |*item, i| {
-                    item.* = (try self.staticDataStructure(GuardedList.at(self.program.exprSpan(span), i))).*;
-                }
-                break :blk .{ .tuple = .{ .ty = expr.ty, .items = items } };
-            },
-            .record => |span| blk: {
-                const fields = try arena.alloc(FieldValue, span.len);
-                for (fields, 0..) |*field, i| {
-                    const source = GuardedList.at(self.program.fieldExprSpan(span), i);
-                    field.* = .{
-                        .name = source.name,
-                        .value = (try self.staticDataStructure(source.value)).*,
-                    };
-                }
-                break :blk .{ .record = .{ .ty = expr.ty, .fields = fields } };
-            },
-            .nominal => |backing| .{ .nominal = .{
-                .ty = expr.ty,
-                .backing = try self.staticDataStructure(backing),
-            } },
-            .fn_ref => |ref| blk: {
-                const captures = try arena.alloc(CaptureValue, ref.captures.len);
-                for (captures, 0..) |*capture, i| {
-                    const source = self.program.captureOperandAt(ref.captures, i);
-                    capture.* = .{
-                        .id = source.id,
-                        .value = (try self.staticDataStructure(source.value)).*,
-                    };
-                }
-                break :blk .{ .callable = .{ .ty = expr.ty, .fn_id = ref.fn_id, .captures = captures } };
-            },
+            .static_data_candidate, .tag, .tuple, .record, .nominal, .fn_ref => return null,
             // A binding/control expression owns its complete lexical scope.
             // Retaining it as an opaque leaf preserves its exact evaluation
             // without exposing initializer-private locals through the view.
@@ -1562,10 +1595,83 @@ const Pass = struct {
                 break :blk .{ .expr = expr_id };
             },
         };
-        const stored = try arena.create(Value);
+        return try self.storeStaticDataStructure(expr_id, value);
+    }
+
+    fn storeStaticDataStructure(self: *Pass, expr_id: Ast.ExprId, value: Value) Allocator.Error!*const Value {
+        const stored = try self.arena.allocator().create(Value);
         stored.* = value;
         try self.static_data_structure.put(expr_id, stored);
         return stored;
+    }
+
+    /// A constructor's frame, listing its components in order.
+    fn staticDataFrame(self: *Pass, comptime Frame: type, expr_id: Ast.ExprId) Allocator.Error!Frame {
+        const expr = self.program.getExpr(expr_id);
+        var components = std.ArrayList(Ast.ExprId).empty;
+        errdefer components.deinit(self.allocator);
+        switch (expr.data) {
+            .static_data_candidate => |candidate| try components.append(self.allocator, candidate.runtime_expr),
+            .tag => |tag| for (0..tag.payloads.len) |i| try components.append(self.allocator, GuardedList.at(self.program.exprSpan(tag.payloads), i)),
+            .tuple => |span| for (0..span.len) |i| try components.append(self.allocator, GuardedList.at(self.program.exprSpan(span), i)),
+            .record => |span| for (0..span.len) |i| try components.append(self.allocator, GuardedList.at(self.program.fieldExprSpan(span), i).value),
+            .nominal => |backing| try components.append(self.allocator, backing),
+            .fn_ref => |ref| for (0..ref.captures.len) |i| try components.append(self.allocator, self.program.captureOperandAt(ref.captures, i).value),
+            else => unreachable,
+        }
+        const owned = try components.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned);
+        return .{ .expr_id = expr_id, .components = owned, .values = try self.allocator.alloc(Value, owned.len) };
+    }
+
+    /// Store a constructor's structure from its components' structures.
+    fn finishStaticDataStructure(self: *Pass, expr_id: Ast.ExprId, values: []const Value) Allocator.Error!*const Value {
+        const arena = self.arena.allocator();
+        const expr = self.program.getExpr(expr_id);
+        const value: Value = switch (expr.data) {
+            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
+                .ty = expr.ty,
+                .static_data = candidate.static_data,
+                .expr = expr_id,
+                .structure = blk: {
+                    const structure = try arena.create(Value);
+                    structure.* = values[0];
+                    break :blk structure;
+                },
+            } },
+            .tag => |tag| .{ .tag = .{ .ty = expr.ty, .name = tag.name, .payloads = try arena.dupe(Value, values) } },
+            .tuple => .{ .tuple = .{ .ty = expr.ty, .items = try arena.dupe(Value, values) } },
+            .record => |span| blk: {
+                const fields = try arena.alloc(FieldValue, span.len);
+                for (fields, values, 0..) |*field, field_value, i| {
+                    field.* = .{
+                        .name = GuardedList.at(self.program.fieldExprSpan(span), i).name,
+                        .value = field_value,
+                    };
+                }
+                break :blk .{ .record = .{ .ty = expr.ty, .fields = fields } };
+            },
+            .nominal => .{ .nominal = .{
+                .ty = expr.ty,
+                .backing = blk: {
+                    const backing = try arena.create(Value);
+                    backing.* = values[0];
+                    break :blk backing;
+                },
+            } },
+            .fn_ref => |ref| blk: {
+                const captures = try arena.alloc(CaptureValue, ref.captures.len);
+                for (captures, values, 0..) |*capture, capture_value, i| {
+                    capture.* = .{
+                        .id = self.program.captureOperandAt(ref.captures, i).id,
+                        .value = capture_value,
+                    };
+                }
+                break :blk .{ .callable = .{ .ty = expr.ty, .fn_id = ref.fn_id, .captures = captures } };
+            },
+            else => unreachable,
+        };
+        return try self.storeStaticDataStructure(expr_id, value);
     }
 
     fn markAnalysis(self: *Pass) AnalysisMark {
@@ -2109,7 +2215,7 @@ const Pass = struct {
                     .symbol = symbol,
                     .source = source_fn.source,
                     .root_identity = source_fn.root_identity,
-                    .spec_constr_pattern = patternDigest(self.program, spec.pattern),
+                    .spec_constr_pattern = try patternDigest(self.program, spec.pattern),
                     .args = .empty(),
                     .captures = source_fn.captures,
                     .body = .hosted,
@@ -2303,7 +2409,7 @@ const Pass = struct {
 
         const pattern: CallPattern = .{ .args = shapes };
         for (self.plans[raw].specs.items) |spec| {
-            if (patternEql(self.program, spec.pattern, pattern)) return;
+            if (try patternEql(self.program, spec.pattern, pattern)) return;
         }
 
         try self.plans[raw].specs.append(self.allocator, .{
@@ -2326,7 +2432,7 @@ const Pass = struct {
             return;
         }
         for (self.plans[raw].specs.items) |spec| {
-            if (patternEql(self.program, spec.pattern, pattern)) return;
+            if (try patternEql(self.program, spec.pattern, pattern)) return;
         }
 
         try self.plans[raw].specs.append(self.allocator, .{
@@ -2342,7 +2448,7 @@ const Pass = struct {
 
         const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         for (self.plans[raw].specs.items) |spec| {
-            if (patternEql(self.program, spec.pattern, pattern)) return;
+            if (try patternEql(self.program, spec.pattern, pattern)) return;
         }
         if (self.newSpecAdmission(raw) != .admitted) return;
 
@@ -2352,7 +2458,7 @@ const Pass = struct {
             .symbol = symbol,
             .source = source_fn.source,
             .root_identity = source_fn.root_identity,
-            .spec_constr_pattern = patternDigest(self.program, pattern),
+            .spec_constr_pattern = try patternDigest(self.program, pattern),
             .signature = null,
             .args = .empty(),
             .captures = source_fn.captures,
@@ -2424,7 +2530,7 @@ const Pass = struct {
             .symbol = symbol,
             .source = source_fn.source,
             .root_identity = source_fn.root_identity,
-            .spec_constr_pattern = patternDigest(self.program, spec.pattern),
+            .spec_constr_pattern = try patternDigest(self.program, spec.pattern),
             .signature = null,
             .args = args,
             .captures = source_fn.captures,
@@ -4357,180 +4463,207 @@ const Pass = struct {
         for (pattern.args, args) |shape, arg| {
             const cloned = try cloner.cloneExprValue(arg);
             bindings.appendChain(cloned.bindings);
-            if (!shapeMatchesValue(self.program, shape, cloned.value)) return false;
+            if (!try shapeMatchesValue(self.program, shape, cloned.value)) return false;
             try cloner.appendExprsFromValue(shape, cloned.value, out);
         }
         matched = true;
         return true;
     }
 
+    /// Append each expression a shape's `.any` positions select, in shape
+    /// order; false when the expression does not have the shape. Shapes
+    /// nest as deeply as their constructors, so positions are visited from a
+    /// worklist, last-first so the first is visited next.
     fn appendExistingExprsForShape(
         self: *Pass,
-        shape: Shape,
-        expr_id: Ast.ExprId,
+        root_shape: Shape,
+        root_expr: Ast.ExprId,
         out: *std.ArrayList(Ast.ExprId),
     ) Allocator.Error!bool {
-        switch (shape) {
-            .any => {
-                try out.append(self.allocator, expr_id);
-                return true;
+        const Pending = struct { shape: Shape, expr_id: Ast.ExprId };
+        var pending = std.ArrayList(Pending).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .shape = root_shape, .expr_id = root_expr });
+        while (pending.pop()) |item| {
+            const expr_id = item.expr_id;
+            const mark = pending.items.len;
+            switch (item.shape) {
+                .any => try out.append(self.allocator, expr_id),
+                .tag => |tag| {
+                    const expr = self.program.getExpr(expr_id);
+                    const expr_tag = switch (expr.data) {
+                        .tag => |expr_tag| expr_tag,
+                        _ => return false,
+                    };
+                    if (!sameType(self.program, expr.ty, tag.ty) or !self.program.names.tagLabelTextEql(expr_tag.name, tag.name)) return false;
+                    const payloads = self.program.exprSpan(expr_tag.payloads);
+                    if (payloads.len != tag.payloads.len) Common.invariant("tag call pattern arity differed from tag expression arity");
+                    for (tag.payloads, 0..) |payload_shape, index| {
+                        try pending.append(self.allocator, .{ .shape = payload_shape, .expr_id = GuardedList.at(payloads, index) });
+                    }
+                },
+                .record => |record| {
+                    const expr = self.program.getExpr(expr_id);
+                    const fields = switch (expr.data) {
+                        .record => |fields| self.program.fieldExprSpan(fields),
+                        _ => return false,
+                    };
+                    if (!sameType(self.program, expr.ty, record.ty) or fields.len != record.fields.len) return false;
+                    for (record.fields, 0..) |field_shape, index| {
+                        const field = GuardedList.at(fields, index);
+                        if (!self.program.names.recordFieldLabelTextEql(field_shape.name, field.name)) return false;
+                        try pending.append(self.allocator, .{ .shape = field_shape.shape, .expr_id = field.value });
+                    }
+                },
+                .tuple => |tuple| {
+                    const expr = self.program.getExpr(expr_id);
+                    const items = switch (expr.data) {
+                        .tuple => |items| self.program.exprSpan(items),
+                        _ => return false,
+                    };
+                    if (!sameType(self.program, expr.ty, tuple.ty) or items.len != tuple.items.len) return false;
+                    for (tuple.items, 0..) |item_shape, index| {
+                        try pending.append(self.allocator, .{ .shape = item_shape, .expr_id = GuardedList.at(items, index) });
+                    }
+                },
+                .nominal => |nominal| {
+                    const expr = self.program.getExpr(expr_id);
+                    const backing = switch (expr.data) {
+                        .nominal => |backing| backing,
+                        _ => return false,
+                    };
+                    if (!sameType(self.program, expr.ty, nominal.ty)) return false;
+                    try pending.append(self.allocator, .{ .shape = nominal.backing.*, .expr_id = backing });
+                },
+                .callable => return false,
+            }
+            std.mem.reverse(Pending, pending.items[mark..]);
+        }
+        return true;
+    }
+
+    /// The constructor shape of an expression, or null when it is not an
+    /// explicit constructor. A component that is not one stands as `.any` of
+    /// its type, except a nominal's backing, which decides the nominal.
+    /// Constructors nest as deeply as the source writes them, so each waits
+    /// on an explicit frame for its components.
+    fn constructorShape(self: *Pass, root: Ast.ExprId) Allocator.Error!?Shape {
+        const Frame = struct {
+            expr_id: Ast.ExprId,
+            /// Each component's expression, when it has one, and the type an
+            /// absent or non-constructor component stands as.
+            components: []const ConstructorShapeComponent,
+            shapes: []?Shape,
+            next: usize = 0,
+        };
+        var frames = std.ArrayList(Frame).empty;
+        defer {
+            for (frames.items) |frame| {
+                self.allocator.free(frame.components);
+                self.allocator.free(frame.shapes);
+            }
+            frames.deinit(self.allocator);
+        }
+        var delivered: ?Shape = null;
+        switch (try self.enterConstructorShape(root)) {
+            .leaf => |shape| return shape,
+            .components => |components| {
+                errdefer self.allocator.free(components);
+                const shapes = try self.allocator.alloc(?Shape, components.len);
+                errdefer self.allocator.free(shapes);
+                try frames.append(self.allocator, .{ .expr_id = root, .components = components, .shapes = shapes });
             },
-            .tag => |tag| {
-                const expr = self.program.getExpr(expr_id);
-                const expr_tag = switch (expr.data) {
-                    .tag => |expr_tag| expr_tag,
-                    _ => return false,
-                };
-                if (!sameType(self.program, expr.ty, tag.ty) or !self.program.names.tagLabelTextEql(expr_tag.name, tag.name)) return false;
-                const payloads = self.program.exprSpan(expr_tag.payloads);
-                if (payloads.len != tag.payloads.len) Common.invariant("tag call pattern arity differed from tag expression arity");
-                for (tag.payloads, payloads) |payload_shape, payload| {
-                    if (!try self.appendExistingExprsForShape(payload_shape, payload, out)) return false;
+        }
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next > 0) frame.shapes[frame.next - 1] = delivered;
+            delivered = null;
+            if (frame.next < frame.components.len) {
+                const component = frame.components[frame.next];
+                frame.next += 1;
+                const expr_id = component.expr orelse continue;
+                switch (try self.enterConstructorShape(expr_id)) {
+                    .leaf => |shape| delivered = shape,
+                    .components => |components| {
+                        errdefer self.allocator.free(components);
+                        const shapes = try self.allocator.alloc(?Shape, components.len);
+                        errdefer self.allocator.free(shapes);
+                        try frames.append(self.allocator, .{ .expr_id = expr_id, .components = components, .shapes = shapes });
+                    },
                 }
-                return true;
-            },
-            .record => |record| {
-                const expr = self.program.getExpr(expr_id);
-                const fields = switch (expr.data) {
-                    .record => |fields| self.program.fieldExprSpan(fields),
-                    _ => return false,
-                };
-                if (!sameType(self.program, expr.ty, record.ty) or fields.len != record.fields.len) return false;
-                for (record.fields, fields) |field_shape, field| {
-                    if (!self.program.names.recordFieldLabelTextEql(field_shape.name, field.name)) return false;
-                    if (!try self.appendExistingExprsForShape(field_shape.shape, field.value, out)) return false;
-                }
-                return true;
-            },
-            .tuple => |tuple| {
-                const expr = self.program.getExpr(expr_id);
-                const items = switch (expr.data) {
-                    .tuple => |items| self.program.exprSpan(items),
-                    _ => return false,
-                };
-                if (!sameType(self.program, expr.ty, tuple.ty) or items.len != tuple.items.len) return false;
-                for (tuple.items, items) |item_shape, item| {
-                    if (!try self.appendExistingExprsForShape(item_shape, item, out)) return false;
-                }
-                return true;
-            },
-            .nominal => |nominal| {
-                const expr = self.program.getExpr(expr_id);
-                const backing = switch (expr.data) {
-                    .nominal => |backing| backing,
-                    _ => return false,
-                };
-                if (!sameType(self.program, expr.ty, nominal.ty)) return false;
-                return try self.appendExistingExprsForShape(nominal.backing.*, backing, out);
-            },
-            .callable => return false,
+                continue;
+            }
+            const finished = frames.pop().?;
+            defer {
+                self.allocator.free(finished.components);
+                self.allocator.free(finished.shapes);
+            }
+            const shape = try self.finishConstructorShape(finished.expr_id, finished.components, finished.shapes);
+            if (frames.items.len == 0) return shape;
+            delivered = shape;
         }
     }
 
-    fn constructorShape(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!?Shape {
+    const ConstructorShapeComponent = struct {
+        expr: ?Ast.ExprId,
+        ty: Type.TypeId,
+    };
+
+    const ConstructorShapeEntry = union(enum) {
+        /// The expression's shape needs no component.
+        leaf: ?Shape,
+        /// The expression's components, in order. Owned.
+        components: []const ConstructorShapeComponent,
+    };
+
+    fn enterConstructorShape(self: *Pass, expr_id: Ast.ExprId) Allocator.Error!ConstructorShapeEntry {
         const expr = self.program.getExpr(expr_id);
         if (expr.data == .tag or expr.data == .record or expr.data == .tuple) assertStructuralConstructionType(self.program, expr.ty);
-        return switch (expr.data) {
-            .tag => |tag| blk: {
+        var components = std.ArrayList(ConstructorShapeComponent).empty;
+        errdefer components.deinit(self.allocator);
+        switch (expr.data) {
+            .tag => |tag| {
                 const payloads = self.program.exprSpan(tag.payloads);
-                const shapes = try self.arena.allocator().alloc(Shape, payloads.len);
                 for (0..payloads.len) |index| {
                     const payload = GuardedList.at(payloads, index);
-                    shapes[index] = (try self.constructorShape(payload)) orelse
-                        .{ .any = self.program.getExpr(payload).ty };
+                    try components.append(self.allocator, .{ .expr = payload, .ty = self.program.getExpr(payload).ty });
                 }
-                break :blk Shape{ .tag = .{
-                    .ty = expr.ty,
-                    .name = tag.name,
-                    .payloads = shapes,
-                } };
             },
-            .record => |fields_span| blk: {
+            .record => |fields_span| {
                 const fields = self.program.fieldExprSpan(fields_span);
-                const shapes = try self.arena.allocator().alloc(FieldShape, fields.len);
                 for (0..fields.len) |index| {
                     const field = GuardedList.at(fields, index);
-                    shapes[index] = .{
-                        .name = field.name,
-                        .shape = (try self.constructorShape(field.value)) orelse
-                            .{ .any = self.program.getExpr(field.value).ty },
-                    };
+                    try components.append(self.allocator, .{ .expr = field.value, .ty = self.program.getExpr(field.value).ty });
                 }
-                break :blk Shape{ .record = .{
-                    .ty = expr.ty,
-                    .fields = shapes,
-                } };
             },
-            .record_update => |update| blk: {
-                const record_ty = recordUpdateBackingType(self.program, expr.ty);
+            .record_update => |update| {
                 const type_fields = self.program.types.fieldSpan(recordUpdateFieldSpan(self.program, expr.ty));
                 const update_fields = self.program.fieldExprSpan(update.fields);
-                const shapes = try self.arena.allocator().alloc(FieldShape, type_fields.len);
                 for (0..type_fields.len) |index| {
                     const type_field = GuardedList.at(type_fields, index);
                     const updated = for (0..update_fields.len) |update_index| {
                         const field = GuardedList.at(update_fields, update_index);
                         if (self.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
                     } else null;
-                    shapes[index] = .{
-                        .name = type_field.name,
-                        .shape = if (updated) |value|
-                            (try self.constructorShape(value)) orelse .{ .any = type_field.ty }
-                        else
-                            .{ .any = type_field.ty },
-                    };
+                    try components.append(self.allocator, .{ .expr = updated, .ty = type_field.ty });
                 }
-                const record_shape = Shape{ .record = .{
-                    .ty = record_ty,
-                    .fields = shapes,
-                } };
-                if (nominalConstructionLayer(self.program, expr.ty) != null) {
-                    const backing = try self.arena.allocator().create(Shape);
-                    backing.* = record_shape;
-                    break :blk Shape{ .nominal = .{
-                        .ty = expr.ty,
-                        .backing = backing,
-                    } };
-                }
-                break :blk record_shape;
             },
-            .tuple => |items_span| blk: {
+            .tuple => |items_span| {
                 const items = self.program.exprSpan(items_span);
-                const shapes = try self.arena.allocator().alloc(Shape, items.len);
                 for (0..items.len) |index| {
                     const item = GuardedList.at(items, index);
-                    shapes[index] = (try self.constructorShape(item)) orelse
-                        .{ .any = self.program.getExpr(item).ty };
+                    try components.append(self.allocator, .{ .expr = item, .ty = self.program.getExpr(item).ty });
                 }
-                break :blk Shape{ .tuple = .{
-                    .ty = expr.ty,
-                    .items = shapes,
-                } };
             },
-            .nominal => |backing| blk: {
-                const backing_shape = (try self.constructorShape(backing)) orelse break :blk null;
-                const stored = try self.arena.allocator().create(Shape);
-                stored.* = backing_shape;
-                break :blk Shape{ .nominal = .{
-                    .ty = expr.ty,
-                    .backing = stored,
-                } };
-            },
-            .fn_ref => |fn_ref| blk: {
+            .nominal => |backing| try components.append(self.allocator, .{ .expr = backing, .ty = self.program.getExpr(backing).ty }),
+            .fn_ref => |fn_ref| {
                 const capture_operands = self.program.captureOperandSpan(fn_ref.captures);
-                const capture_shapes = try self.arena.allocator().alloc(Shape, capture_operands.len);
                 for (0..capture_operands.len) |index| {
                     const operand = GuardedList.at(capture_operands, index);
-                    capture_shapes[index] = (try self.constructorShape(operand.value)) orelse
-                        .{ .any = self.program.getExpr(operand.value).ty };
+                    try components.append(self.allocator, .{ .expr = operand.value, .ty = self.program.getExpr(operand.value).ty });
                 }
-                break :blk Shape{ .callable = .{
-                    .ty = expr.ty,
-                    .fn_id = fn_ref.fn_id,
-                    .captures = capture_shapes,
-                } };
             },
-            .typed_boundary => null,
+            .typed_boundary,
             .local,
             .unit,
             .@"unreachable",
@@ -4576,7 +4709,100 @@ const Pass = struct {
             .expect_err,
             .literal_rejected,
             .expect,
-            => null,
+            => return .{ .leaf = null },
+        }
+        return .{ .components = try components.toOwnedSlice(self.allocator) };
+    }
+
+    fn finishConstructorShape(
+        self: *Pass,
+        expr_id: Ast.ExprId,
+        components: []const ConstructorShapeComponent,
+        component_shapes: []const ?Shape,
+    ) Allocator.Error!?Shape {
+        const arena = self.arena.allocator();
+        const expr = self.program.getExpr(expr_id);
+        return switch (expr.data) {
+            .tag => |tag| blk: {
+                const shapes = try arena.alloc(Shape, components.len);
+                for (shapes, components, component_shapes) |*shape, component, component_shape| {
+                    shape.* = component_shape orelse .{ .any = component.ty };
+                }
+                break :blk Shape{ .tag = .{
+                    .ty = expr.ty,
+                    .name = tag.name,
+                    .payloads = shapes,
+                } };
+            },
+            .record => |fields_span| blk: {
+                const fields = self.program.fieldExprSpan(fields_span);
+                const shapes = try arena.alloc(FieldShape, components.len);
+                for (shapes, components, component_shapes, 0..) |*shape, component, component_shape, index| {
+                    shape.* = .{
+                        .name = GuardedList.at(fields, index).name,
+                        .shape = component_shape orelse .{ .any = component.ty },
+                    };
+                }
+                break :blk Shape{ .record = .{
+                    .ty = expr.ty,
+                    .fields = shapes,
+                } };
+            },
+            .record_update => blk: {
+                const record_ty = recordUpdateBackingType(self.program, expr.ty);
+                const type_fields = self.program.types.fieldSpan(recordUpdateFieldSpan(self.program, expr.ty));
+                const shapes = try arena.alloc(FieldShape, components.len);
+                for (shapes, components, component_shapes, 0..) |*shape, component, component_shape, index| {
+                    shape.* = .{
+                        .name = GuardedList.at(type_fields, index).name,
+                        .shape = component_shape orelse .{ .any = component.ty },
+                    };
+                }
+                const record_shape = Shape{ .record = .{
+                    .ty = record_ty,
+                    .fields = shapes,
+                } };
+                if (nominalConstructionLayer(self.program, expr.ty) != null) {
+                    const backing = try arena.create(Shape);
+                    backing.* = record_shape;
+                    break :blk Shape{ .nominal = .{
+                        .ty = expr.ty,
+                        .backing = backing,
+                    } };
+                }
+                break :blk record_shape;
+            },
+            .tuple => blk: {
+                const shapes = try arena.alloc(Shape, components.len);
+                for (shapes, components, component_shapes) |*shape, component, component_shape| {
+                    shape.* = component_shape orelse .{ .any = component.ty };
+                }
+                break :blk Shape{ .tuple = .{
+                    .ty = expr.ty,
+                    .items = shapes,
+                } };
+            },
+            .nominal => blk: {
+                const backing_shape = component_shapes[0] orelse break :blk null;
+                const stored = try arena.create(Shape);
+                stored.* = backing_shape;
+                break :blk Shape{ .nominal = .{
+                    .ty = expr.ty,
+                    .backing = stored,
+                } };
+            },
+            .fn_ref => |fn_ref| blk: {
+                const capture_shapes = try arena.alloc(Shape, components.len);
+                for (capture_shapes, components, component_shapes) |*shape, component, component_shape| {
+                    shape.* = component_shape orelse .{ .any = component.ty };
+                }
+                break :blk Shape{ .callable = .{
+                    .ty = expr.ty,
+                    .fn_id = fn_ref.fn_id,
+                    .captures = capture_shapes,
+                } };
+            },
+            else => unreachable,
         };
     }
 
@@ -4590,89 +4816,156 @@ const Pass = struct {
     /// design.md "Core Principles" on bounded post-check walks.
     const shape_work_budget: u32 = 4096;
 
-    fn shapeFromValue(self: *Pass, value: Value) Allocator.Error!ShapeProof {
+    fn shapeFromValue(self: *Pass, root: Value) Allocator.Error!ShapeProof {
         var budget: u32 = shape_work_budget;
-        return try self.shapeFromValueBudgeted(value, &budget);
+        // Composite values wait on explicit frames for their components,
+        // entered in pre-order so the budget reaches the same nodes a direct
+        // walk does.
+        const Frame = struct {
+            value: Value,
+            components: []const Value,
+            proofs: []ShapeProof,
+            next: usize = 0,
+        };
+        var frames = std.ArrayList(Frame).empty;
+        defer {
+            for (frames.items) |frame| {
+                self.allocator.free(frame.components);
+                self.allocator.free(frame.proofs);
+            }
+            frames.deinit(self.allocator);
+        }
+        var delivered: ShapeProof = undefined;
+        switch (try self.enterShapeFromValue(root, &budget)) {
+            .proof => |proof| return proof,
+            .components => |entry| try frames.append(self.allocator, .{ .value = entry.value, .components = entry.components, .proofs = entry.proofs }),
+        }
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next > 0) frame.proofs[frame.next - 1] = delivered;
+            if (frame.next < frame.components.len) {
+                const component = frame.components[frame.next];
+                frame.next += 1;
+                switch (try self.enterShapeFromValue(component, &budget)) {
+                    .proof => |proof| delivered = proof,
+                    .components => |entry| {
+                        errdefer {
+                            self.allocator.free(entry.components);
+                            self.allocator.free(entry.proofs);
+                        }
+                        try frames.append(self.allocator, .{ .value = entry.value, .components = entry.components, .proofs = entry.proofs });
+                    },
+                }
+                continue;
+            }
+            const finished = frames.pop().?;
+            defer {
+                self.allocator.free(finished.components);
+                self.allocator.free(finished.proofs);
+            }
+            const proof = try self.finishShapeFromValue(finished.value, finished.components, finished.proofs);
+            if (frames.items.len == 0) return proof;
+            delivered = proof;
+        }
     }
 
-    fn shapeFromValueBudgeted(self: *Pass, value: Value, budget: *u32) Allocator.Error!ShapeProof {
-        if (budget.* == 0) return .unknown_budget_exhausted;
-        budget.* -= 1;
-        return switch (value) {
-            .expr => |expr| if (try self.constructorShape(expr)) |shape| .{ .proven = shape } else .disproven,
-            .runtime_anchor => |anchor| try self.shapeFromValueBudgeted(anchor.structure.*, budget),
-            .static_data_candidate => |candidate| try self.shapeFromValueBudgeted(candidate.structure.*, budget),
-            .tag => |tag| blk: {
-                const payloads = try self.arena.allocator().alloc(Shape, tag.payloads.len);
-                for (tag.payloads, 0..) |payload, index| {
-                    payloads[index] = switch (try self.shapeFromValueBudgeted(payload, budget)) {
-                        .proven => |shape| shape,
-                        .disproven, .unknown_budget_exhausted => .{ .any = valueType(self.program, payload) },
-                    };
-                }
-                break :blk ShapeProof{ .proven = .{ .tag = .{
+    const ShapeFromValueEntry = union(enum) {
+        proof: ShapeProof,
+        /// A composite value (wrappers stripped) and its components, each
+        /// with a proof slot. Owned.
+        components: struct { value: Value, components: []const Value, proofs: []ShapeProof },
+    };
+
+    /// Spend budget on a value and its wrappers, answering a leaf at once.
+    fn enterShapeFromValue(self: *Pass, start: Value, budget: *u32) Allocator.Error!ShapeFromValueEntry {
+        var value = start;
+        while (true) {
+            if (budget.* == 0) return .{ .proof = .unknown_budget_exhausted };
+            budget.* -= 1;
+            switch (value) {
+                .expr => |expr| return .{ .proof = if (try self.constructorShape(expr)) |shape| .{ .proven = shape } else .disproven },
+                .runtime_anchor => |anchor| value = anchor.structure.*,
+                .static_data_candidate => |candidate| value = candidate.structure.*,
+                .tag, .record, .tuple, .nominal, .callable => break,
+            }
+        }
+        var components = std.ArrayList(Value).empty;
+        errdefer components.deinit(self.allocator);
+        switch (value) {
+            .tag => |tag| try components.appendSlice(self.allocator, tag.payloads),
+            .record => |record| for (record.fields) |field| try components.append(self.allocator, field.value),
+            .tuple => |tuple| try components.appendSlice(self.allocator, tuple.items),
+            .nominal => |nominal| try components.append(self.allocator, nominal.backing.*),
+            .callable => |callable| for (callable.captures) |capture| try components.append(self.allocator, capture.value),
+            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+        }
+        const owned = try components.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned);
+        return .{ .components = .{ .value = value, .components = owned, .proofs = try self.allocator.alloc(ShapeProof, owned.len) } };
+    }
+
+    /// A component's shape, or `.any` of its type when it has none.
+    fn shapeOrAny(self: *Pass, proof: ShapeProof, component: Value) Shape {
+        return switch (proof) {
+            .proven => |shape| shape,
+            .disproven, .unknown_budget_exhausted => .{ .any = valueType(self.program, component) },
+        };
+    }
+
+    fn finishShapeFromValue(self: *Pass, value: Value, components: []const Value, proofs: []const ShapeProof) Allocator.Error!ShapeProof {
+        const arena = self.arena.allocator();
+        switch (value) {
+            .tag => |tag| {
+                const payloads = try arena.alloc(Shape, components.len);
+                for (payloads, proofs, components) |*payload, proof, component| payload.* = self.shapeOrAny(proof, component);
+                return .{ .proven = .{ .tag = .{
                     .ty = tag.ty,
                     .name = tag.name,
                     .payloads = payloads,
                 } } };
             },
-            .record => |record| blk: {
-                const fields = try self.arena.allocator().alloc(FieldShape, record.fields.len);
-                for (record.fields, 0..) |field, index| {
-                    fields[index] = .{
-                        .name = field.name,
-                        .shape = switch (try self.shapeFromValueBudgeted(field.value, budget)) {
-                            .proven => |shape| shape,
-                            .disproven, .unknown_budget_exhausted => .{ .any = valueType(self.program, field.value) },
-                        },
-                    };
+            .record => |record| {
+                const fields = try arena.alloc(FieldShape, components.len);
+                for (fields, record.fields, proofs, components) |*field, source, proof, component| {
+                    field.* = .{ .name = source.name, .shape = self.shapeOrAny(proof, component) };
                 }
-                break :blk ShapeProof{ .proven = .{ .record = .{
+                return .{ .proven = .{ .record = .{
                     .ty = record.ty,
                     .fields = fields,
                 } } };
             },
-            .tuple => |tuple| blk: {
-                const items = try self.arena.allocator().alloc(Shape, tuple.items.len);
-                for (tuple.items, 0..) |item, index| {
-                    items[index] = switch (try self.shapeFromValueBudgeted(item, budget)) {
-                        .proven => |shape| shape,
-                        .disproven, .unknown_budget_exhausted => .{ .any = valueType(self.program, item) },
-                    };
-                }
-                break :blk ShapeProof{ .proven = .{ .tuple = .{
+            .tuple => |tuple| {
+                const items = try arena.alloc(Shape, components.len);
+                for (items, proofs, components) |*item, proof, component| item.* = self.shapeOrAny(proof, component);
+                return .{ .proven = .{ .tuple = .{
                     .ty = tuple.ty,
                     .items = items,
                 } } };
             },
-            .nominal => |nominal| blk: {
-                const backing_shape = switch (try self.shapeFromValueBudgeted(nominal.backing.*, budget)) {
+            .nominal => |nominal| {
+                const backing_shape = switch (proofs[0]) {
                     .proven => |shape| shape,
-                    .disproven => break :blk .disproven,
-                    .unknown_budget_exhausted => break :blk .unknown_budget_exhausted,
+                    .disproven => return .disproven,
+                    .unknown_budget_exhausted => return .unknown_budget_exhausted,
                 };
-                const stored = try self.arena.allocator().create(Shape);
+                const stored = try arena.create(Shape);
                 stored.* = backing_shape;
-                break :blk ShapeProof{ .proven = .{ .nominal = .{
+                return .{ .proven = .{ .nominal = .{
                     .ty = nominal.ty,
                     .backing = stored,
                 } } };
             },
-            .callable => |callable| blk: {
-                const captures = try self.arena.allocator().alloc(Shape, callable.captures.len);
-                for (callable.captures, 0..) |capture, index| {
-                    captures[index] = switch (try self.shapeFromValueBudgeted(capture.value, budget)) {
-                        .proven => |shape| shape,
-                        .disproven, .unknown_budget_exhausted => .{ .any = valueType(self.program, capture.value) },
-                    };
-                }
-                break :blk ShapeProof{ .proven = .{ .callable = .{
+            .callable => |callable| {
+                const captures = try arena.alloc(Shape, components.len);
+                for (captures, proofs, components) |*capture, proof, component| capture.* = self.shapeOrAny(proof, component);
+                return .{ .proven = .{ .callable = .{
                     .ty = callable.ty,
                     .fn_id = callable.fn_id,
                     .captures = captures,
                 } } };
             },
-        };
+            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+        }
     }
 };
 
@@ -5678,7 +5971,7 @@ const Cloner = struct {
         const cloned = input.?.get(.cloned);
         const reused = cloned.bindings.isEmpty() and
             self.canReuseOriginalExpr(task.expr) and
-            self.valueMatchesSourceExpr(cloned.value, task.expr, 0);
+            try self.valueMatchesSourceExpr(cloned.value, task.expr, 0);
         task.saved.restore(self);
         return .{ .ret = .{ .parts = .{
             .reused = if (reused) task.expr else null,
@@ -9184,7 +9477,7 @@ const Cloner = struct {
         task.out.* = .empty;
         task.out_owned = true;
         for (self.pass.plans[raw].specs.items) |spec| {
-            if (!callPatternMatchesValues(self.pass.program, spec.pattern, task.values)) continue;
+            if (!try callPatternMatchesValues(self.pass.program, spec.pattern, task.values)) continue;
             task.spec_pattern = spec.pattern;
             task.spec_fn = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls");
             frame.index = 0;
@@ -9295,7 +9588,7 @@ const Cloner = struct {
         const value = task.value;
         if (frame.cursor == 0) {
             frame.cursor = 1;
-            if (shapeMatchesValue(self.pass.program, shape, value)) {
+            if (try shapeMatchesValue(self.pass.program, shape, value)) {
                 task.mode = .append;
                 return .{ .call = .{ .append_exprs_from_value = .{ .shape = shape, .value = value, .out = task.out } } };
             }
@@ -9555,7 +9848,7 @@ const Cloner = struct {
                 task.scrutinee = input.?.get(.cloned);
                 task.chain = try self.newChain();
                 task.chain.* = task.scrutinee.bindings;
-                if (self.knownConstructorSize(task.scrutinee.value).exactValue() == null) {
+                if ((try self.knownConstructorSize(task.scrutinee.value)).exactValue() == null) {
                     // The scrutinee's measured size saturated the work budget: it is
                     // cyclic or too deep to materialize. Skip the known-match collapse
                     // and emit the residual match over a plain clone of the source
@@ -9992,7 +10285,7 @@ const Cloner = struct {
         if (frame.cursor == 1) {
             return .{ .tail = try self.makeReusableTask(.{ .expr = input.?.get(.expr) }, task.bindings) };
         }
-        switch (self.knownConstructorSize(task.value).admitExpansion(known_value_expansion_limit)) {
+        switch ((try self.knownConstructorSize(task.value)).admitExpansion(known_value_expansion_limit)) {
             .admitted => {},
             .denied_growth_limit, .denied_unknown_measure => {
                 // Materialize the known value once and bind it reuse-safely,
@@ -10028,7 +10321,7 @@ const Cloner = struct {
             },
             1 => {
                 const cloned = input.?.get(.cloned);
-                if (self.knownConstructorSize(cloned.value).exactValue() == null) {
+                if ((try self.knownConstructorSize(cloned.value)).exactValue() == null) {
                     frame.cursor = 2;
                     return .{ .call = .{ .plain = .{ .expr = task.expr } } };
                 }
@@ -10346,8 +10639,8 @@ const Cloner = struct {
                 task.needs_typed_boundary = !sameType(self.pass.program, task.ty, source_fn.ret);
                 if (task.needs_typed_boundary and !callable.iterator_step) return residualCallableCall(frame, task);
                 var callable_call_size = ConstructorSize{ .exact = 0 };
-                for (callable.captures) |capture| callable_call_size = callable_call_size.plus(self.knownConstructorSize(capture.value));
-                callable_call_size = callable_call_size.plus(self.argsKnownConstructorSize(task.args_span));
+                for (callable.captures) |capture| callable_call_size = callable_call_size.plus(try self.knownConstructorSize(capture.value));
+                callable_call_size = callable_call_size.plus(try self.argsKnownConstructorSize(task.args_span));
                 task.exact_call_size = callable_call_size.exactValue();
                 for (self.inline_stack.items) |active| {
                     if (active.fn_id != callable.fn_id) continue;
@@ -10498,7 +10791,7 @@ const Cloner = struct {
                 // long as the representation conversion remains explicit.
                 task.needs_typed_boundary = !sameType(self.pass.program, task.result_ty, source_fn.ret);
                 if (task.needs_typed_boundary and self.iterator_inline_depth == 0) return plainDirectCall(frame, task);
-                const direct_call_size = self.argsKnownConstructorSize(task.args_span).plus(self.captureOperandsKnownConstructorSize(task.captures_span));
+                const direct_call_size = (try self.argsKnownConstructorSize(task.args_span)).plus(try self.captureOperandsKnownConstructorSize(task.captures_span));
                 task.exact_call_size = direct_call_size.exactValue();
                 for (self.inline_stack.items) |active| {
                     if (active.fn_id != callee) continue;
@@ -10641,9 +10934,9 @@ const Cloner = struct {
     }
 
     /// Leave the active-recursive marks of a recursive binding statement.
-    fn leaveRecursiveStmt(self: *Cloner, task: *StmtTask, let_: anytype) void {
-        if (task.recursive_pat) |pat| self.unmarkActiveRecursiveValuePat(pat);
-        if (let_.recursive) self.unmarkActiveRecursiveValuePat(let_.pat);
+    fn leaveRecursiveStmt(self: *Cloner, task: *StmtTask, let_: anytype) Allocator.Error!void {
+        if (task.recursive_pat) |pat| try self.unmarkActiveRecursiveValuePat(pat);
+        if (let_.recursive) try self.unmarkActiveRecursiveValuePat(let_.pat);
     }
 
     fn stepStmt(self: *Cloner, frame: *CloneFrame, task: *StmtTask, input: ?CloneResult) Common.LowerError!CloneStep {
@@ -10715,7 +11008,7 @@ const Cloner = struct {
                             .recursive = let_.recursive,
                             .comptime_site = let_.comptime_site,
                         } };
-                        self.leaveRecursiveStmt(task, let_);
+                        try self.leaveRecursiveStmt(task, let_);
                         return try self.finishStmt(task, cloned);
                     }
                     const pat = self.pass.program.getPat(let_.pat);
@@ -10735,7 +11028,7 @@ const Cloner = struct {
                 else => {
                     const reusable = input.?.get(.value);
                     if (try self.bindPatToFlowValue(let_.pat, reusable)) {
-                        self.leaveRecursiveStmt(task, let_);
+                        try self.leaveRecursiveStmt(task, let_);
                         return try self.finishStmt(task, null);
                     }
                     self.subst.restore(task.change_before);
@@ -10773,7 +11066,7 @@ const Cloner = struct {
             .recursive = let_.recursive,
             .comptime_site = let_.comptime_site,
         } };
-        self.leaveRecursiveStmt(task, let_);
+        try self.leaveRecursiveStmt(task, let_);
         return try self.finishStmt(task, cloned);
     }
 
@@ -11706,82 +11999,87 @@ const Cloner = struct {
         return try self.pass.program.addTypedLocalSpan(args.items);
     }
 
-    fn valueFromShapeArgs(self: *Cloner, shape: Shape, args: *std.ArrayList(Ast.TypedLocal)) Allocator.Error!Value {
-        switch (shape) {
-            .any => |ty| {
-                const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
-                try args.append(self.pass.allocator, .{ .local = local, .ty = ty });
-                return .{ .expr = try self.addExpr(.{
-                    .ty = ty,
-                    .data = .{ .local = local },
-                }) };
-            },
-            .tag => |tag| {
-                const payloads = try self.arena.allocator().alloc(Value, tag.payloads.len);
-                for (tag.payloads, 0..) |payload, index| {
-                    payloads[index] = try self.valueFromShapeArgs(payload, args);
-                }
-                return .{ .tag = .{
-                    .ty = tag.ty,
-                    .name = tag.name,
-                    .payloads = payloads,
-                } };
-            },
-            .record => |record| {
-                const fields = try self.arena.allocator().alloc(FieldValue, record.fields.len);
-                for (record.fields, 0..) |field, index| {
-                    fields[index] = .{
-                        .name = field.name,
-                        .value = try self.valueFromShapeArgs(field.shape, args),
-                    };
-                }
-                return .{ .record = .{
-                    .ty = record.ty,
-                    .fields = fields,
-                } };
-            },
-            .tuple => |tuple| {
-                const items = try self.arena.allocator().alloc(Value, tuple.items.len);
-                for (tuple.items, 0..) |item, index| {
-                    items[index] = try self.valueFromShapeArgs(item, args);
-                }
-                return .{ .tuple = .{
-                    .ty = tuple.ty,
-                    .items = items,
-                } };
-            },
-            .nominal => |nominal| {
-                const backing = try self.arena.allocator().create(Value);
-                backing.* = try self.valueFromShapeArgs(nominal.backing.*, args);
-                return .{ .nominal = .{
-                    .ty = nominal.ty,
-                    .backing = backing,
-                } };
-            },
-            .callable => |callable| {
-                // A callable shape's captures are parallel, in ascending
-                // CaptureId order, to its function's sorted capture slots, so we
-                // read each capture's CaptureId from the matching slot.
-                const slots = self.pass.program.typedLocalSpan(self.pass.program.getFn(callable.fn_id).captures);
-                if (slots.len != callable.captures.len) {
-                    Common.invariant("callable shape capture count differed from its function capture slots");
-                }
-                const captures = try self.arena.allocator().alloc(CaptureValue, callable.captures.len);
-                for (0..callable.captures.len) |index| {
-                    const capture = callable.captures[index];
-                    const slot = GuardedList.at(slots, index);
-                    captures[index] = .{
-                        .id = self.pass.program.captureIdOfLocal(slot.local),
-                        .value = try self.valueFromShapeArgs(capture, args),
-                    };
-                }
-                return .{ .callable = .{
-                    .ty = callable.ty,
-                    .fn_id = callable.fn_id,
-                    .captures = captures,
-                } };
-            },
+    /// The value a shape describes, with a fresh argument local for each
+    /// `.any` position, appended to `args` in shape order. Shapes nest as
+    /// deeply as their constructors, so positions are filled from a
+    /// worklist, last-first so the first is filled next.
+    fn valueFromShapeArgs(self: *Cloner, root_shape: Shape, args: *std.ArrayList(Ast.TypedLocal)) Allocator.Error!Value {
+        const Pending = struct { shape: Shape, target: *Value };
+        var result: Value = undefined;
+        var pending = std.ArrayList(Pending).empty;
+        defer pending.deinit(self.pass.allocator);
+        try pending.append(self.pass.allocator, .{ .shape = root_shape, .target = &result });
+        const arena = self.arena.allocator();
+        while (pending.pop()) |item| {
+            const mark = pending.items.len;
+            item.target.* = switch (item.shape) {
+                .any => |ty| blk: {
+                    const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+                    try args.append(self.pass.allocator, .{ .local = local, .ty = ty });
+                    break :blk .{ .expr = try self.addExpr(.{
+                        .ty = ty,
+                        .data = .{ .local = local },
+                    }) };
+                },
+                .tag => |tag| blk: {
+                    const payloads = try arena.alloc(Value, tag.payloads.len);
+                    for (tag.payloads, payloads) |payload, *target| try pending.append(self.pass.allocator, .{ .shape = payload, .target = target });
+                    break :blk .{ .tag = .{
+                        .ty = tag.ty,
+                        .name = tag.name,
+                        .payloads = payloads,
+                    } };
+                },
+                .record => |record| blk: {
+                    const fields = try arena.alloc(FieldValue, record.fields.len);
+                    for (record.fields, fields) |field, *target| {
+                        target.name = field.name;
+                        try pending.append(self.pass.allocator, .{ .shape = field.shape, .target = &target.value });
+                    }
+                    break :blk .{ .record = .{
+                        .ty = record.ty,
+                        .fields = fields,
+                    } };
+                },
+                .tuple => |tuple| blk: {
+                    const items = try arena.alloc(Value, tuple.items.len);
+                    for (tuple.items, items) |item_shape, *target| try pending.append(self.pass.allocator, .{ .shape = item_shape, .target = target });
+                    break :blk .{ .tuple = .{
+                        .ty = tuple.ty,
+                        .items = items,
+                    } };
+                },
+                .nominal => |nominal| blk: {
+                    const backing = try arena.create(Value);
+                    try pending.append(self.pass.allocator, .{ .shape = nominal.backing.*, .target = backing });
+                    break :blk .{ .nominal = .{
+                        .ty = nominal.ty,
+                        .backing = backing,
+                    } };
+                },
+                .callable => |callable| blk: {
+                    // A callable shape's captures are parallel, in ascending
+                    // CaptureId order, to its function's sorted capture slots, so we
+                    // read each capture's CaptureId from the matching slot.
+                    const slots = self.pass.program.typedLocalSpan(self.pass.program.getFn(callable.fn_id).captures);
+                    if (slots.len != callable.captures.len) {
+                        Common.invariant("callable shape capture count differed from its function capture slots");
+                    }
+                    const captures = try arena.alloc(CaptureValue, callable.captures.len);
+                    for (captures, callable.captures, 0..) |*target, capture, index| {
+                        target.id = self.pass.program.captureIdOfLocal(GuardedList.at(slots, index).local);
+                        try pending.append(self.pass.allocator, .{ .shape = capture, .target = &target.value });
+                    }
+                    break :blk .{ .callable = .{
+                        .ty = callable.ty,
+                        .fn_id = callable.fn_id,
+                        .captures = captures,
+                    } };
+                },
+            };
+            std.mem.reverse(Pending, pending.items[mark..]);
         }
+        return result;
     }
 
     fn directCallHasKnownShapeArg(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!bool {
@@ -12053,66 +12351,76 @@ const Cloner = struct {
 
     /// At a non-demanding materialization site, preserve a source constructor
     /// only when symbolic analysis left its complete runtime tree unchanged.
+    /// Whether a value is exactly the source expression's construction:
+    /// every component must be. Components are compared from a worklist; a
+    /// component past the wrapper-strip depth declines the match.
     fn valueMatchesSourceExpr(
         self: *const Cloner,
-        value: Value,
-        expr_id: Ast.ExprId,
-        depth: usize,
-    ) bool {
-        if (depth >= value_wrapper_strip_cap) return false;
-        if (value == .expr) return value.expr == expr_id;
+        root_value: Value,
+        root_expr: Ast.ExprId,
+        root_depth: usize,
+    ) Allocator.Error!bool {
+        const Pair = struct { value: Value, expr_id: Ast.ExprId, depth: usize };
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(self.pass.allocator);
+        try pending.append(self.pass.allocator, .{ .value = root_value, .expr_id = root_expr, .depth = root_depth });
+        while (pending.pop()) |pair| {
+            const value = pair.value;
+            const expr_id = pair.expr_id;
+            const depth = pair.depth;
+            if (depth >= value_wrapper_strip_cap) return false;
+            if (value == .expr) {
+                if (value.expr != expr_id) return false;
+                continue;
+            }
 
-        const expr = self.pass.program.getExpr(expr_id);
-        return switch (value) {
-            .runtime_anchor, .callable => false,
-            .static_data_candidate => |candidate| blk: {
-                if (expr.data != .static_data_candidate) break :blk false;
-                const source = expr.data.static_data_candidate;
-                break :blk candidate.ty == expr.ty and
-                    candidate.static_data == source.static_data and
-                    candidate.expr == expr_id;
-            },
-            .tag => |tag| blk: {
-                if (expr.data != .tag) break :blk false;
-                const source = expr.data.tag;
-                if (tag.ty != expr.ty or tag.name != source.name) break :blk false;
-                const payloads = self.pass.program.exprSpan(source.payloads);
-                if (tag.payloads.len != payloads.len) break :blk false;
-                for (0..payloads.len) |index| {
-                    if (!self.valueMatchesSourceExpr(tag.payloads[index], GuardedList.at(payloads, index), depth + 1)) break :blk false;
-                }
-                break :blk true;
-            },
-            .record => |record| blk: {
-                if (expr.data != .record) break :blk false;
-                const fields = self.pass.program.fieldExprSpan(expr.data.record);
-                if (record.ty != expr.ty or record.fields.len != fields.len) break :blk false;
-                for (0..fields.len) |index| {
-                    const source = GuardedList.at(fields, index);
-                    const field = record.fields[index];
-                    if (field.name != source.name or
-                        !self.valueMatchesSourceExpr(field.value, source.value, depth + 1))
-                    {
-                        break :blk false;
+            const expr = self.pass.program.getExpr(expr_id);
+            switch (value) {
+                .runtime_anchor, .callable => return false,
+                .static_data_candidate => |candidate| {
+                    if (expr.data != .static_data_candidate) return false;
+                    const source = expr.data.static_data_candidate;
+                    if (!(candidate.ty == expr.ty and
+                        candidate.static_data == source.static_data and
+                        candidate.expr == expr_id)) return false;
+                },
+                .tag => |tag| {
+                    if (expr.data != .tag) return false;
+                    const source = expr.data.tag;
+                    if (tag.ty != expr.ty or tag.name != source.name) return false;
+                    const payloads = self.pass.program.exprSpan(source.payloads);
+                    if (tag.payloads.len != payloads.len) return false;
+                    for (0..payloads.len) |index| {
+                        try pending.append(self.pass.allocator, .{ .value = tag.payloads[index], .expr_id = GuardedList.at(payloads, index), .depth = depth + 1 });
                     }
-                }
-                break :blk true;
-            },
-            .tuple => |tuple| blk: {
-                if (expr.data != .tuple) break :blk false;
-                const items = self.pass.program.exprSpan(expr.data.tuple);
-                if (tuple.ty != expr.ty or tuple.items.len != items.len) break :blk false;
-                for (0..items.len) |index| {
-                    if (!self.valueMatchesSourceExpr(tuple.items[index], GuardedList.at(items, index), depth + 1)) break :blk false;
-                }
-                break :blk true;
-            },
-            .nominal => |nominal| blk: {
-                if (expr.data != .nominal or nominal.ty != expr.ty) break :blk false;
-                break :blk self.valueMatchesSourceExpr(nominal.backing.*, expr.data.nominal, depth + 1);
-            },
-            .expr => unreachable,
-        };
+                },
+                .record => |record| {
+                    if (expr.data != .record) return false;
+                    const fields = self.pass.program.fieldExprSpan(expr.data.record);
+                    if (record.ty != expr.ty or record.fields.len != fields.len) return false;
+                    for (0..fields.len) |index| {
+                        const source = GuardedList.at(fields, index);
+                        const field = record.fields[index];
+                        if (field.name != source.name) return false;
+                        try pending.append(self.pass.allocator, .{ .value = field.value, .expr_id = source.value, .depth = depth + 1 });
+                    }
+                },
+                .tuple => |tuple| {
+                    if (expr.data != .tuple) return false;
+                    const items = self.pass.program.exprSpan(expr.data.tuple);
+                    if (tuple.ty != expr.ty or tuple.items.len != items.len) return false;
+                    for (0..items.len) |index| {
+                        try pending.append(self.pass.allocator, .{ .value = tuple.items[index], .expr_id = GuardedList.at(items, index), .depth = depth + 1 });
+                    }
+                },
+                .nominal => |nominal| {
+                    if (expr.data != .nominal or nominal.ty != expr.ty) return false;
+                    try pending.append(self.pass.allocator, .{ .value = nominal.backing.*, .expr_id = expr.data.nominal, .depth = depth + 1 });
+                },
+                .expr => unreachable,
+            }
+        }
+        return true;
     }
 
     fn plainExprCanReuse(data: Ast.ExprData) bool {
@@ -12367,44 +12675,102 @@ const Cloner = struct {
     /// Append the binder locals of `pat_id` in traversal order. Returns false
     /// for pattern forms whose binders this rewrite does not thread through a
     /// join (list and string patterns), declining the dispatch split.
-    fn collectPatBinders(self: *Cloner, pat_id: Ast.PatId, arena: Allocator, out: *std.ArrayList(Ast.LocalId)) Common.LowerError!bool {
-        const pat = self.pass.program.getPat(pat_id);
-        switch (pat.data) {
-            .bind => |local| try out.append(arena, local),
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .as => |as| {
-                if (!try self.collectPatBinders(as.pattern, arena, out)) return false;
-                try out.append(arena, as.local);
-            },
-            .record => |fields_span| {
-                const fields = self.pass.program.recordDestructSpan(fields_span);
-                for (0..fields.len) |index| {
-                    if (!try self.collectPatBinders(GuardedList.at(fields, index).pattern, arena, out)) return false;
-                }
-            },
-            .tuple => |items_span| {
-                const pats = self.pass.program.patSpan(items_span);
-                for (0..pats.len) |index| {
-                    if (!try self.collectPatBinders(GuardedList.at(pats, index), arena, out)) return false;
-                }
-            },
-            .tag => |tag_pat| {
-                const pats = self.pass.program.patSpan(tag_pat.payloads);
-                for (0..pats.len) |index| {
-                    if (!try self.collectPatBinders(GuardedList.at(pats, index), arena, out)) return false;
-                }
-            },
-            .nominal => |backing| {
-                if (!try self.collectPatBinders(backing, arena, out)) return false;
-            },
-            .list, .str_pattern => return false,
+    /// One step of a walk over a pattern's binders in source order: every
+    /// subpattern's binders come before the `as` local that binds it.
+    const PatBinderEvent = union(enum) {
+        binder: Ast.LocalId,
+        /// A list or string pattern, reached before its subpatterns.
+        sequence,
+    };
+
+    const PatBinderItem = union(enum) {
+        pat: Ast.PatId,
+        local: Ast.LocalId,
+    };
+
+    /// Walks a pattern's binders on an explicit stack.
+    const PatBinderWalk = struct {
+        program: *const Ast.Program,
+        allocator: Allocator,
+        stack: std.ArrayList(PatBinderItem) = .empty,
+
+        fn init(program: *const Ast.Program, allocator: Allocator, root: Ast.PatId) Allocator.Error!PatBinderWalk {
+            var walk: PatBinderWalk = .{ .program = program, .allocator = allocator };
+            try walk.stack.append(allocator, .{ .pat = root });
+            return walk;
         }
+
+        fn deinit(walk: *PatBinderWalk) void {
+            walk.stack.deinit(walk.allocator);
+        }
+
+        fn next(walk: *PatBinderWalk) Allocator.Error!?PatBinderEvent {
+            while (walk.stack.pop()) |item| {
+                const pat_id = switch (item) {
+                    .local => |local| return .{ .binder = local },
+                    .pat => |pat_id| pat_id,
+                };
+                // Components are pushed last-first so they are visited in order.
+                const mark = walk.stack.items.len;
+                switch (walk.program.getPat(pat_id).data) {
+                    .bind => |local| return .{ .binder = local },
+                    .wildcard,
+                    .int_lit,
+                    .dec_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .str_lit,
+                    => {},
+                    .as => |as| {
+                        try walk.stack.append(walk.allocator, .{ .local = as.local });
+                        try walk.stack.append(walk.allocator, .{ .pat = as.pattern });
+                    },
+                    .record => |fields_span| {
+                        const fields = walk.program.recordDestructSpan(fields_span);
+                        for (0..fields.len) |index| try walk.stack.append(walk.allocator, .{ .pat = GuardedList.at(fields, index).pattern });
+                        std.mem.reverse(PatBinderItem, walk.stack.items[mark..]);
+                    },
+                    .tuple => |items_span| {
+                        const pats = walk.program.patSpan(items_span);
+                        for (0..pats.len) |index| try walk.stack.append(walk.allocator, .{ .pat = GuardedList.at(pats, index) });
+                        std.mem.reverse(PatBinderItem, walk.stack.items[mark..]);
+                    },
+                    .tag => |tag_pat| {
+                        const pats = walk.program.patSpan(tag_pat.payloads);
+                        for (0..pats.len) |index| try walk.stack.append(walk.allocator, .{ .pat = GuardedList.at(pats, index) });
+                        std.mem.reverse(PatBinderItem, walk.stack.items[mark..]);
+                    },
+                    .nominal => |backing| try walk.stack.append(walk.allocator, .{ .pat = backing }),
+                    .list => |list| {
+                        const pats = walk.program.patSpan(list.patterns);
+                        for (0..pats.len) |index| try walk.stack.append(walk.allocator, .{ .pat = GuardedList.at(pats, index) });
+                        if (list.rest) |rest| {
+                            if (rest.pattern) |rest_pattern| try walk.stack.append(walk.allocator, .{ .pat = rest_pattern });
+                        }
+                        std.mem.reverse(PatBinderItem, walk.stack.items[mark..]);
+                        return .sequence;
+                    },
+                    .str_pattern => |str| {
+                        const steps = walk.program.strPatternStepSpan(str.steps);
+                        for (0..steps.len) |index| {
+                            if (GuardedList.at(steps, index).capture) |capture| try walk.stack.append(walk.allocator, .{ .pat = capture });
+                        }
+                        std.mem.reverse(PatBinderItem, walk.stack.items[mark..]);
+                        return .sequence;
+                    },
+                }
+            }
+            return null;
+        }
+    };
+
+    fn collectPatBinders(self: *Cloner, pat_id: Ast.PatId, arena: Allocator, out: *std.ArrayList(Ast.LocalId)) Common.LowerError!bool {
+        var walk = try PatBinderWalk.init(self.pass.program, self.pass.allocator, pat_id);
+        defer walk.deinit();
+        while (try walk.next()) |event| switch (event) {
+            .binder => |local| try out.append(arena, local),
+            .sequence => return false,
+        };
         return true;
     }
 
@@ -12471,134 +12837,159 @@ const Cloner = struct {
     /// on the inline stack is admitted only when its known-constructor arguments
     /// are strictly smaller, so inlining an adapter step's `Iter.next` on its
     /// inner iterator (one layer smaller) makes progress and terminates.
-    fn knownConstructorSize(self: *Cloner, value: Value) ConstructorSize {
+    fn knownConstructorSize(self: *Cloner, root: Value) Allocator.Error!ConstructorSize {
         var budget: u32 = known_constructor_size_work_budget;
-        return self.knownConstructorSizeBudgeted(value, &budget);
-    }
-
-    fn knownConstructorSizeBudgeted(self: *Cloner, value: Value, budget: *u32) ConstructorSize {
-        if (budget.* == 0) return .unknown_budget_exhausted;
-        budget.* -= 1;
-        return switch (value) {
-            .expr => .{ .exact = 0 },
-            .runtime_anchor => |anchor| self.knownConstructorSizeBudgeted(anchor.structure.*, budget),
-            .static_data_candidate => |candidate| self.knownConstructorSizeBudgeted(candidate.structure.*, budget),
-            .tag => |tag| blk: {
-                var count = ConstructorSize{ .exact = 1 };
-                for (tag.payloads) |payload| count = count.plus(self.knownConstructorSizeBudgeted(payload, budget));
-                break :blk count;
-            },
-            .record => |record| blk: {
-                var count = ConstructorSize{ .exact = 1 };
-                for (record.fields) |field| count = count.plus(self.knownConstructorSizeBudgeted(field.value, budget));
-                break :blk count;
-            },
-            .tuple => |tuple| blk: {
-                var count = ConstructorSize{ .exact = 1 };
-                for (tuple.items) |item| count = count.plus(self.knownConstructorSizeBudgeted(item, budget));
-                break :blk count;
-            },
-            .nominal => |nominal| (ConstructorSize{ .exact = 1 }).plus(self.knownConstructorSizeBudgeted(nominal.backing.*, budget)),
-            .callable => |callable| blk: {
-                var count = ConstructorSize{ .exact = 1 };
-                for (callable.captures) |capture| count = count.plus(self.knownConstructorSizeBudgeted(capture.value, budget));
-                break :blk count;
-            },
-        };
+        // Nodes are visited in pre-order from a worklist, components pushed
+        // last-first, so the budget reaches the same nodes a direct walk does.
+        var pending = std.ArrayList(Value).empty;
+        defer pending.deinit(self.pass.allocator);
+        try pending.append(self.pass.allocator, root);
+        var total = ConstructorSize{ .exact = 0 };
+        while (pending.pop()) |value| {
+            if (budget == 0) {
+                total = total.plus(.unknown_budget_exhausted);
+                continue;
+            }
+            budget -= 1;
+            const mark = pending.items.len;
+            switch (value) {
+                .expr => {},
+                .runtime_anchor => |anchor| try pending.append(self.pass.allocator, anchor.structure.*),
+                .static_data_candidate => |candidate| try pending.append(self.pass.allocator, candidate.structure.*),
+                .tag => |tag| {
+                    total = total.plus(.{ .exact = 1 });
+                    try pending.appendSlice(self.pass.allocator, tag.payloads);
+                },
+                .record => |record| {
+                    total = total.plus(.{ .exact = 1 });
+                    for (record.fields) |field| try pending.append(self.pass.allocator, field.value);
+                },
+                .tuple => |tuple| {
+                    total = total.plus(.{ .exact = 1 });
+                    try pending.appendSlice(self.pass.allocator, tuple.items);
+                },
+                .nominal => |nominal| {
+                    total = total.plus(.{ .exact = 1 });
+                    try pending.append(self.pass.allocator, nominal.backing.*);
+                },
+                .callable => |callable| {
+                    total = total.plus(.{ .exact = 1 });
+                    for (callable.captures) |capture| try pending.append(self.pass.allocator, capture.value);
+                },
+            }
+            std.mem.reverse(Value, pending.items[mark..]);
+        }
+        return total;
     }
 
     /// Resolve an expression to its known value through the current
     /// substitution environment without emitting anything. Used only to measure
     /// a call's known-constructor size for the inline recursion guard; returns
     /// null when the expression carries no known constructor here.
-    fn peekKnownValue(self: *Cloner, expr_id: Ast.ExprId) ?Value {
-        const expr = self.pass.program.getExpr(expr_id);
-        return switch (expr.data) {
-            .local => |local| blk: {
-                if (self.subst.get(self.pass.program, local)) |value| break :blk value;
-                break :blk null;
-            },
-            .field_access => |field| blk: {
-                const receiver = self.peekKnownValue(field.receiver) orelse break :blk null;
-                break :blk fieldPathFromValue(
-                    self.pass.program,
-                    receiver,
-                    self.pass.program.fieldAccessSegmentSpan(field.segments),
-                );
-            },
-            .tuple_access => |access| blk: {
-                const receiver = self.peekKnownValue(access.tuple) orelse break :blk null;
-                break :blk itemFromValue(receiver, access.elem_index);
-            },
-            .static_data_candidate => |candidate| self.peekKnownValue(candidate.runtime_expr),
-            .inline_expects_enabled => null,
-            .comptime_value => null,
-            .typed_boundary => |boundary| self.peekKnownValue(boundary.value),
-            .unit,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .list,
-            .tuple,
-            .record,
-            .record_update,
-            .tag,
-            .nominal,
-            .let_,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            .fn_ref,
-            .call_value,
-            .call_proc,
-            .low_level,
-            .structural_eq,
-            .structural_hash,
-            .match_,
-            .if_,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .block,
-            .loop_,
-            .break_,
-            .continue_,
-            .join_point,
-            .jump,
-            .return_,
-            .crash,
-            .comptime_branch_taken,
-            .comptime_exhaustiveness_failed,
-            .dbg,
-            .expect_err,
-            .literal_rejected,
-            .expect,
-            => null,
+    /// The value an expression is statically known to be. An accessor chain
+    /// (`x.a.0.b`) is followed down to its base first and then applied
+    /// outward, so its length never becomes call depth.
+    fn peekKnownValue(self: *Cloner, root: Ast.ExprId) Allocator.Error!?Value {
+        var accessors = std.ArrayList(Ast.ExprId).empty;
+        defer accessors.deinit(self.pass.allocator);
+        var expr_id = root;
+        var value: Value = base: while (true) {
+            const expr = self.pass.program.getExpr(expr_id);
+            switch (expr.data) {
+                .local => |local| {
+                    if (self.subst.get(self.pass.program, local)) |known| break :base known;
+                    return null;
+                },
+                .field_access => |field| {
+                    try accessors.append(self.pass.allocator, expr_id);
+                    expr_id = field.receiver;
+                },
+                .tuple_access => |access| {
+                    try accessors.append(self.pass.allocator, expr_id);
+                    expr_id = access.tuple;
+                },
+                .static_data_candidate => |candidate| expr_id = candidate.runtime_expr,
+                .inline_expects_enabled => return null,
+                .comptime_value => return null,
+                .typed_boundary => |boundary| expr_id = boundary.value,
+                .unit,
+                .@"unreachable",
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .bytes_lit,
+                .list,
+                .tuple,
+                .record,
+                .record_update,
+                .tag,
+                .nominal,
+                .let_,
+                .lambda,
+                .def_ref,
+                .fn_def,
+                .fn_ref,
+                .call_value,
+                .call_proc,
+                .low_level,
+                .structural_eq,
+                .structural_hash,
+                .match_,
+                .if_,
+                .uninitialized,
+                .uninitialized_payload,
+                .if_initialized_payload,
+                .try_sequence,
+                .try_record_sequence,
+                .block,
+                .loop_,
+                .break_,
+                .continue_,
+                .join_point,
+                .jump,
+                .return_,
+                .crash,
+                .comptime_branch_taken,
+                .comptime_exhaustiveness_failed,
+                .dbg,
+                .expect_err,
+                .literal_rejected,
+                .expect,
+                => return null,
+            }
         };
+        while (accessors.pop()) |accessor| {
+            value = switch (self.pass.program.getExpr(accessor).data) {
+                .field_access => |field| fieldPathFromValue(
+                    self.pass.program,
+                    value,
+                    self.pass.program.fieldAccessSegmentSpan(field.segments),
+                ),
+                .tuple_access => |access| itemFromValue(value, access.elem_index),
+                else => unreachable,
+            } orelse return null;
+        }
+        return value;
     }
 
-    fn argsKnownConstructorSize(self: *Cloner, span: Ast.Span(Ast.ExprId)) ConstructorSize {
+    fn argsKnownConstructorSize(self: *Cloner, span: Ast.Span(Ast.ExprId)) Allocator.Error!ConstructorSize {
         var total = ConstructorSize{ .exact = 0 };
         const args = self.pass.program.exprSpan(span);
         for (0..args.len) |index| {
             const arg = GuardedList.at(args, index);
-            if (self.peekKnownValue(arg)) |value| total = total.plus(self.knownConstructorSize(value));
+            if (try self.peekKnownValue(arg)) |value| total = total.plus(try self.knownConstructorSize(value));
         }
         return total;
     }
 
-    fn captureOperandsKnownConstructorSize(self: *Cloner, span: Ast.Span(Ast.CaptureOperand)) ConstructorSize {
+    fn captureOperandsKnownConstructorSize(self: *Cloner, span: Ast.Span(Ast.CaptureOperand)) Allocator.Error!ConstructorSize {
         var total = ConstructorSize{ .exact = 0 };
         const operands = self.pass.program.captureOperandSpan(span);
         for (0..operands.len) |index| {
             const operand = GuardedList.at(operands, index);
-            if (self.peekKnownValue(operand.value)) |value| total = total.plus(self.knownConstructorSize(value));
+            if (try self.peekKnownValue(operand.value)) |value| total = total.plus(try self.knownConstructorSize(value));
         }
         return total;
     }
@@ -12653,139 +13044,201 @@ const Cloner = struct {
         }
     }
 
+    /// A pattern being bound to a value, waiting on its subpatterns.
+    const PatValueFrame = struct {
+        pat_id: Ast.PatId,
+        value: Value,
+        stage: enum { start, as_binding, from_receiver, from_value, nominal } = .start,
+        index: usize = 0,
+        verdict: MatchVerdict = .match,
+        receiver: Ast.ExprId = undefined,
+        record: RecordValue = undefined,
+        tuple: TupleValue = undefined,
+        tag: TagValue = undefined,
+    };
+
+    fn PatValueStep(comptime Answer: type) type {
+        return union(enum) {
+            /// Bind a subpattern; the frame resumes with its answer.
+            child: struct { pat_id: Ast.PatId, value: Value },
+            done: Answer,
+        };
+    }
+
+    /// Drive a pattern-to-value binding on an explicit frame stack, so
+    /// pattern nesting never nests native calls.
+    fn runPatValue(
+        self: *Cloner,
+        comptime Answer: type,
+        comptime step: fn (*Cloner, *PatValueFrame, ?Answer) Common.LowerError!PatValueStep(Answer),
+        pat_id: Ast.PatId,
+        value: Value,
+    ) Common.LowerError!Answer {
+        var frames = std.ArrayList(PatValueFrame).empty;
+        defer {
+            // A nominal frame holds one wrapper-strip level until it answers.
+            for (frames.items) |frame| {
+                if (frame.stage == .nominal) self.wrapper_strip_depth -= 1;
+            }
+            frames.deinit(self.pass.allocator);
+        }
+        try frames.append(self.pass.allocator, .{ .pat_id = pat_id, .value = value });
+        var input: ?Answer = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            const next = try step(self, frame, input);
+            input = null;
+            switch (next) {
+                .child => |child| try frames.append(self.pass.allocator, .{ .pat_id = child.pat_id, .value = child.value }),
+                .done => |answer| {
+                    _ = frames.pop();
+                    if (frames.items.len == 0) return answer;
+                    input = answer;
+                },
+            }
+        }
+    }
+
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
-        const pat = self.pass.program.getPat(pat_id);
+        return try self.runPatValue(MatchVerdict, stepBindPatToValue, pat_id, value);
+    }
+
+    fn stepBindPatToValue(self: *Cloner, frame: *PatValueFrame, input: ?MatchVerdict) Common.LowerError!PatValueStep(MatchVerdict) {
+        const pat = self.pass.program.getPat(frame.pat_id);
+        const value = frame.value;
+        // A component's verdict: a no-match decides the pattern, and an
+        // unknown makes the pattern at most unknown.
+        if (input) |child_verdict| switch (frame.stage) {
+            .start => unreachable,
+            .as_binding => {
+                if (child_verdict != .match) return .{ .done = child_verdict };
+                try self.subst.put(self.pass.program, pat.data.as.local, value);
+                return .{ .done = .match };
+            },
+            .nominal => {
+                self.wrapper_strip_depth -= 1;
+                frame.stage = .start;
+                return .{ .done = child_verdict };
+            },
+            .from_receiver, .from_value => switch (child_verdict) {
+                .match => {},
+                .no_match => return .{ .done = .no_match },
+                .unknown, .unknown_budget_exhausted => frame.verdict = mergeMatchUnknown(frame.verdict, child_verdict),
+            },
+        };
         switch (pat.data) {
             .bind => |local| {
                 try self.subst.put(self.pass.program, local, value);
-                return .match;
+                return .{ .done = .match };
             },
-            .wildcard => return .match,
+            .wildcard => return .{ .done = .match },
             .as => |as| {
-                const verdict = try self.bindPatToValue(as.pattern, value);
-                if (verdict != .match) return verdict;
-                try self.subst.put(self.pass.program, as.local, value);
-                return .match;
+                frame.stage = .as_binding;
+                return .{ .child = .{ .pat_id = as.pattern, .value = value } };
             },
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
-                switch (value) {
-                    .runtime_anchor => |anchor| return try self.bindPatToValue(pat_id, anchor.structure.*),
-                    .expr => |receiver| {
-                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
-                        var verdict: MatchVerdict = .match;
-                        for (0..fields.len) |index| {
-                            const field = GuardedList.at(fields, index);
-                            const field_ty = self.pass.program.getPat(field.pattern).ty;
-                            const field_expr = try self.addFieldAccessExpr(field_ty, receiver, field.name);
-                            const child_verdict = try self.bindPatToValue(field.pattern, .{ .expr = field_expr });
-                            switch (child_verdict) {
-                                .match => {},
-                                .no_match => return .no_match,
-                                .unknown, .unknown_budget_exhausted => verdict = mergeMatchUnknown(verdict, child_verdict),
-                            }
-                        }
-                        return verdict;
-                    },
-                    .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {},
-                }
-                const record = recordFromValue(value) orelse switch (value) {
-                    .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
-                    .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
-                };
-                var verdict: MatchVerdict = .match;
-                for (0..fields.len) |index| {
-                    const field = GuardedList.at(fields, index);
-                    const field_value = fieldFromRecord(self.pass.program, record, field.name) orelse
-                        Common.invariant("record pattern field was absent from the record value");
-                    const child_verdict = try self.bindPatToValue(field.pattern, field_value);
-                    switch (child_verdict) {
-                        .match => {},
-                        .no_match => return .no_match,
-                        .unknown, .unknown_budget_exhausted => verdict = mergeMatchUnknown(verdict, child_verdict),
+                if (frame.stage == .start) {
+                    // An anchor's structure is matched in its place.
+                    while (frame.value == .runtime_anchor) frame.value = frame.value.runtime_anchor.structure.*;
+                    const record_value = frame.value;
+                    switch (record_value) {
+                        .runtime_anchor => unreachable,
+                        .expr => |receiver| {
+                            if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .{ .done = .unknown };
+                            frame.stage = .from_receiver;
+                            frame.receiver = receiver;
+                        },
+                        .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
+                            frame.stage = .from_value;
+                            frame.record = recordFromValue(record_value) orelse switch (record_value) {
+                                .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
+                                .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
+                            };
+                        },
                     }
                 }
-                return verdict;
+                if (frame.index == fields.len) return .{ .done = frame.verdict };
+                const field = GuardedList.at(fields, frame.index);
+                frame.index += 1;
+                if (frame.stage == .from_receiver) {
+                    const field_ty = self.pass.program.getPat(field.pattern).ty;
+                    const field_expr = try self.addFieldAccessExpr(field_ty, frame.receiver, field.name);
+                    return .{ .child = .{ .pat_id = field.pattern, .value = .{ .expr = field_expr } } };
+                }
+                const field_value = fieldFromRecord(self.pass.program, frame.record, field.name) orelse
+                    Common.invariant("record pattern field was absent from the record value");
+                return .{ .child = .{ .pat_id = field.pattern, .value = field_value } };
             },
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
-                switch (value) {
-                    .runtime_anchor => |anchor| return try self.bindPatToValue(pat_id, anchor.structure.*),
-                    .expr => |receiver| {
-                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
-                        var verdict: MatchVerdict = .match;
-                        for (0..pats.len) |index| {
-                            const child_pat = GuardedList.at(pats, index);
-                            const item_ty = self.pass.program.getPat(child_pat).ty;
-                            const item_expr = try self.addExpr(.{ .ty = item_ty, .data = .{ .tuple_access = .{
-                                .tuple = receiver,
-                                .elem_index = @as(u32, @intCast(index)),
-                            } } });
-                            const child_verdict = try self.bindPatToValue(child_pat, .{ .expr = item_expr });
-                            switch (child_verdict) {
-                                .match => {},
-                                .no_match => return .no_match,
-                                .unknown, .unknown_budget_exhausted => verdict = mergeMatchUnknown(verdict, child_verdict),
-                            }
-                        }
-                        return verdict;
-                    },
-                    .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {},
-                }
-                const tuple = tupleFromValue(value) orelse switch (value) {
-                    .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
-                    .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
-                };
-                if (pats.len != tuple.items.len) Common.invariant("tuple pattern arity differed from the tuple value");
-                var verdict: MatchVerdict = .match;
-                for (0..pats.len) |index| {
-                    const child_pat = GuardedList.at(pats, index);
-                    const child_value = tuple.items[index];
-                    const child_verdict = try self.bindPatToValue(child_pat, child_value);
-                    switch (child_verdict) {
-                        .match => {},
-                        .no_match => return .no_match,
-                        .unknown, .unknown_budget_exhausted => verdict = mergeMatchUnknown(verdict, child_verdict),
+                if (frame.stage == .start) {
+                    // An anchor's structure is matched in its place.
+                    while (frame.value == .runtime_anchor) frame.value = frame.value.runtime_anchor.structure.*;
+                    const tuple_value = frame.value;
+                    switch (tuple_value) {
+                        .runtime_anchor => unreachable,
+                        .expr => |receiver| {
+                            if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .{ .done = .unknown };
+                            frame.stage = .from_receiver;
+                            frame.receiver = receiver;
+                        },
+                        .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
+                            frame.stage = .from_value;
+                            frame.tuple = tupleFromValue(tuple_value) orelse switch (tuple_value) {
+                                .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
+                                .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
+                            };
+                            if (pats.len != frame.tuple.items.len) Common.invariant("tuple pattern arity differed from the tuple value");
+                        },
                     }
                 }
-                return verdict;
+                if (frame.index == pats.len) return .{ .done = frame.verdict };
+                const index = frame.index;
+                frame.index += 1;
+                const child_pat = GuardedList.at(pats, index);
+                if (frame.stage == .from_receiver) {
+                    const item_ty = self.pass.program.getPat(child_pat).ty;
+                    const item_expr = try self.addExpr(.{ .ty = item_ty, .data = .{ .tuple_access = .{
+                        .tuple = frame.receiver,
+                        .elem_index = @as(u32, @intCast(index)),
+                    } } });
+                    return .{ .child = .{ .pat_id = child_pat, .value = .{ .expr = item_expr } } };
+                }
+                return .{ .child = .{ .pat_id = child_pat, .value = frame.tuple.items[index] } };
             },
             .tag => |tag_pat| {
-                if (value == .expr) return .unknown;
-                const tag = tagFromValue(value) orelse switch (value) {
-                    .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
-                    .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
-                };
-                if (!self.pass.program.names.tagLabelTextEql(tag.name, tag_pat.name)) return .no_match;
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
-                if (pats.len != tag.payloads.len) Common.invariant("tag pattern payload arity differed from the tag value");
-                var verdict: MatchVerdict = .match;
-                for (0..pats.len) |index| {
-                    const child_pat = GuardedList.at(pats, index);
-                    const child_value = tag.payloads[index];
-                    const child_verdict = try self.bindPatToValue(child_pat, child_value);
-                    switch (child_verdict) {
-                        .match => {},
-                        .no_match => return .no_match,
-                        .unknown, .unknown_budget_exhausted => verdict = mergeMatchUnknown(verdict, child_verdict),
-                    }
+                if (frame.stage == .start) {
+                    if (value == .expr) return .{ .done = .unknown };
+                    frame.tag = tagFromValue(value) orelse switch (value) {
+                        .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
+                        .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
+                    };
+                    if (!self.pass.program.names.tagLabelTextEql(frame.tag.name, tag_pat.name)) return .{ .done = .no_match };
+                    if (pats.len != frame.tag.payloads.len) Common.invariant("tag pattern payload arity differed from the tag value");
+                    frame.stage = .from_value;
                 }
-                return verdict;
+                if (frame.index == pats.len) return .{ .done = frame.verdict };
+                const index = frame.index;
+                frame.index += 1;
+                return .{ .child = .{ .pat_id = GuardedList.at(pats, index), .value = frame.tag.payloads[index] } };
             },
             .nominal => |backing_pat| {
                 // Stripping a nominal or static-data wrapper follows a value
                 // pointer edge that a recursive construction can loop through;
                 // a cyclic value declines to a residual runtime match.
-                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return .unknown_budget_exhausted;
-                self.wrapper_strip_depth += 1;
-                defer self.wrapper_strip_depth -= 1;
-                return switch (value) {
-                    .runtime_anchor => |anchor| try self.bindPatToValue(pat_id, anchor.structure.*),
-                    .static_data_candidate => |candidate| try self.bindPatToValue(pat_id, candidate.structure.*),
-                    .nominal => |nominal| try self.bindPatToValue(backing_pat, nominal.backing.*),
-                    .expr => .unknown,
+                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return .{ .done = .unknown_budget_exhausted };
+                const child: Ast.PatId, const child_value: Value = switch (value) {
+                    .runtime_anchor => |anchor| .{ frame.pat_id, anchor.structure.* },
+                    .static_data_candidate => |candidate| .{ frame.pat_id, candidate.structure.* },
+                    .nominal => |nominal| .{ backing_pat, nominal.backing.* },
+                    .expr => return .{ .done = .unknown },
                     .tag, .record, .tuple, .callable => Common.invariant("nominal pattern matched an unwrapped constructor value"),
                 };
+                self.wrapper_strip_depth += 1;
+                frame.stage = .nominal;
+                return .{ .child = .{ .pat_id = child, .value = child_value } };
             },
             // These pattern forms have no symbolic `Value` representation,
             // so their outcome is statically undecidable here.
@@ -12796,7 +13249,7 @@ const Cloner = struct {
             .frac_f64_lit,
             .str_lit,
             .str_pattern,
-            => return .unknown,
+            => return .{ .done = .unknown },
         }
     }
 
@@ -12813,92 +13266,117 @@ const Cloner = struct {
     /// may project a value of a statically known record or tuple type and
     /// simply reports whether all required substitutions could be formed.
     fn bindPatToFlowValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
-        const pat = self.pass.program.getPat(pat_id);
+        return try self.runPatValue(bool, stepBindPatToFlowValue, pat_id, value);
+    }
+
+    fn stepBindPatToFlowValue(self: *Cloner, frame: *PatValueFrame, input: ?bool) Common.LowerError!PatValueStep(bool) {
+        const pat = self.pass.program.getPat(frame.pat_id);
+        const value = frame.value;
+        if (input) |bound| switch (frame.stage) {
+            .start => unreachable,
+            .as_binding => {
+                if (!bound) return .{ .done = false };
+                try self.subst.put(self.pass.program, pat.data.as.local, value);
+                return .{ .done = true };
+            },
+            .nominal => {
+                self.wrapper_strip_depth -= 1;
+                frame.stage = .start;
+                return .{ .done = bound };
+            },
+            .from_receiver, .from_value => if (!bound) return .{ .done = false },
+        };
         switch (pat.data) {
             .bind => |local| {
                 try self.subst.put(self.pass.program, local, value);
-                return true;
+                return .{ .done = true };
             },
-            .wildcard => return true,
+            .wildcard => return .{ .done = true },
             .as => |as| {
-                if (!try self.bindPatToFlowValue(as.pattern, value)) return false;
-                try self.subst.put(self.pass.program, as.local, value);
-                return true;
+                frame.stage = .as_binding;
+                return .{ .child = .{ .pat_id = as.pattern, .value = value } };
             },
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
-                switch (value) {
+                if (frame.stage == .start) switch (value) {
                     .record, .nominal, .runtime_anchor, .static_data_candidate => {
-                        const record = recordFromValue(value) orelse return false;
-                        for (0..fields.len) |index| {
-                            const field = GuardedList.at(fields, index);
-                            const field_value = fieldFromRecord(self.pass.program, record, field.name) orelse return false;
-                            if (!try self.bindPatToFlowValue(field.pattern, field_value)) return false;
-                        }
+                        frame.record = recordFromValue(value) orelse return .{ .done = false };
+                        frame.stage = .from_value;
                     },
                     .expr => |receiver| {
-                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
-                        for (0..fields.len) |index| {
-                            const field = GuardedList.at(fields, index);
-                            const field_ty = self.pass.program.getPat(field.pattern).ty;
-                            const field_expr = try self.addFieldAccessExpr(field_ty, receiver, field.name);
-                            if (!try self.bindPatToFlowValue(field.pattern, .{ .expr = field_expr })) return false;
-                        }
+                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .{ .done = false };
+                        frame.receiver = receiver;
+                        frame.stage = .from_receiver;
                     },
-                    .tag, .tuple, .callable => return false,
+                    .tag, .tuple, .callable => return .{ .done = false },
+                };
+                if (frame.index == fields.len) return .{ .done = true };
+                const field = GuardedList.at(fields, frame.index);
+                frame.index += 1;
+                if (frame.stage == .from_receiver) {
+                    const field_ty = self.pass.program.getPat(field.pattern).ty;
+                    const field_expr = try self.addFieldAccessExpr(field_ty, frame.receiver, field.name);
+                    return .{ .child = .{ .pat_id = field.pattern, .value = .{ .expr = field_expr } } };
                 }
-                return true;
+                const field_value = fieldFromRecord(self.pass.program, frame.record, field.name) orelse return .{ .done = false };
+                return .{ .child = .{ .pat_id = field.pattern, .value = field_value } };
             },
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
-                switch (value) {
+                if (frame.stage == .start) switch (value) {
                     .tuple, .nominal, .runtime_anchor, .static_data_candidate => {
-                        const tuple = tupleFromValue(value) orelse return false;
-                        if (pats.len != tuple.items.len) return false;
-                        for (0..pats.len) |index| {
-                            const child_pat = GuardedList.at(pats, index);
-                            if (!try self.bindPatToFlowValue(child_pat, tuple.items[index])) return false;
-                        }
+                        frame.tuple = tupleFromValue(value) orelse return .{ .done = false };
+                        if (pats.len != frame.tuple.items.len) return .{ .done = false };
+                        frame.stage = .from_value;
                     },
                     .expr => |receiver| {
-                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
-                        for (0..pats.len) |index| {
-                            const child_pat = GuardedList.at(pats, index);
-                            const item_ty = self.pass.program.getPat(child_pat).ty;
-                            const item_expr = try self.addExpr(.{ .ty = item_ty, .data = .{ .tuple_access = .{
-                                .tuple = receiver,
-                                .elem_index = @as(u32, @intCast(index)),
-                            } } });
-                            if (!try self.bindPatToFlowValue(child_pat, .{ .expr = item_expr })) return false;
-                        }
+                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .{ .done = false };
+                        frame.receiver = receiver;
+                        frame.stage = .from_receiver;
                     },
-                    .tag, .record, .callable => return false,
+                    .tag, .record, .callable => return .{ .done = false },
+                };
+                if (frame.index == pats.len) return .{ .done = true };
+                const index = frame.index;
+                frame.index += 1;
+                const child_pat = GuardedList.at(pats, index);
+                if (frame.stage == .from_receiver) {
+                    const item_ty = self.pass.program.getPat(child_pat).ty;
+                    const item_expr = try self.addExpr(.{ .ty = item_ty, .data = .{ .tuple_access = .{
+                        .tuple = frame.receiver,
+                        .elem_index = @as(u32, @intCast(index)),
+                    } } });
+                    return .{ .child = .{ .pat_id = child_pat, .value = .{ .expr = item_expr } } };
                 }
-                return true;
+                return .{ .child = .{ .pat_id = child_pat, .value = frame.tuple.items[index] } };
             },
             .tag => |tag_pat| {
-                const tag = tagFromValue(value) orelse return false;
-                if (!self.pass.program.names.tagLabelTextEql(tag.name, tag_pat.name)) return false;
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
-                if (pats.len != tag.payloads.len) return false;
-                for (0..pats.len) |index| {
-                    if (!try self.bindPatToFlowValue(GuardedList.at(pats, index), tag.payloads[index])) return false;
+                if (frame.stage == .start) {
+                    frame.tag = tagFromValue(value) orelse return .{ .done = false };
+                    if (!self.pass.program.names.tagLabelTextEql(frame.tag.name, tag_pat.name)) return .{ .done = false };
+                    if (pats.len != frame.tag.payloads.len) return .{ .done = false };
+                    frame.stage = .from_value;
                 }
-                return true;
+                if (frame.index == pats.len) return .{ .done = true };
+                const index = frame.index;
+                frame.index += 1;
+                return .{ .child = .{ .pat_id = GuardedList.at(pats, index), .value = frame.tag.payloads[index] } };
             },
             .nominal => |backing_pat| {
                 // Stripping a nominal or static-data wrapper follows a value
                 // pointer edge that a recursive construction can loop through;
                 // a cyclic value declines the flow binding.
-                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return false;
-                self.wrapper_strip_depth += 1;
-                defer self.wrapper_strip_depth -= 1;
-                return switch (value) {
-                    .runtime_anchor => |anchor| try self.bindPatToFlowValue(pat_id, anchor.structure.*),
-                    .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.structure.*),
-                    .nominal => |nominal| try self.bindPatToFlowValue(backing_pat, nominal.backing.*),
-                    .expr, .tag, .record, .tuple, .callable => false,
+                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return .{ .done = false };
+                const child: Ast.PatId, const child_value: Value = switch (value) {
+                    .runtime_anchor => |anchor| .{ frame.pat_id, anchor.structure.* },
+                    .static_data_candidate => |candidate| .{ frame.pat_id, candidate.structure.* },
+                    .nominal => |nominal| .{ backing_pat, nominal.backing.* },
+                    .expr, .tag, .record, .tuple, .callable => return .{ .done = false },
                 };
+                self.wrapper_strip_depth += 1;
+                frame.stage = .nominal;
+                return .{ .child = .{ .pat_id = child, .value = child_value } };
             },
             .list,
             .int_lit,
@@ -12907,7 +13385,7 @@ const Cloner = struct {
             .frac_f64_lit,
             .str_lit,
             .str_pattern,
-            => return false,
+            => return .{ .done = false },
         }
     }
 
@@ -12936,49 +13414,12 @@ const Cloner = struct {
     }
 
     fn shadowPatLocals(self: *Cloner, pat_id: Ast.PatId) Common.LowerError!void {
-        const pat = self.pass.program.getPat(pat_id);
-        switch (pat.data) {
-            .bind => |local| try self.shadowLocal(local),
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .as => |as| {
-                try self.shadowPatLocals(as.pattern);
-                try self.shadowLocal(as.local);
-            },
-            .record => |fields| {
-                const record_fields = self.pass.program.recordDestructSpan(fields);
-                for (0..record_fields.len) |index| {
-                    try self.shadowPatLocals(GuardedList.at(record_fields, index).pattern);
-                }
-            },
-            .tuple => |items| {
-                const children = self.pass.program.patSpan(items);
-                for (0..children.len) |index| try self.shadowPatLocals(GuardedList.at(children, index));
-            },
-            .tag => |tag| {
-                const children = self.pass.program.patSpan(tag.payloads);
-                for (0..children.len) |index| try self.shadowPatLocals(GuardedList.at(children, index));
-            },
-            .nominal => |backing| try self.shadowPatLocals(backing),
-            .list => |list| {
-                const children = self.pass.program.patSpan(list.patterns);
-                for (0..children.len) |index| try self.shadowPatLocals(GuardedList.at(children, index));
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.shadowPatLocals(rest_pattern);
-                }
-            },
-            .str_pattern => |str| {
-                const steps = self.pass.program.strPatternStepSpan(str.steps);
-                for (0..steps.len) |index| {
-                    if (GuardedList.at(steps, index).capture) |capture| try self.shadowPatLocals(capture);
-                }
-            },
-        }
+        var walk = try PatBinderWalk.init(self.pass.program, self.pass.allocator, pat_id);
+        defer walk.deinit();
+        while (try walk.next()) |event| switch (event) {
+            .binder => |local| try self.shadowLocal(local),
+            .sequence => {},
+        };
     }
 
     fn shadowStmtSpanLocals(self: *Cloner, span: Ast.Span(Ast.StmtId)) Common.LowerError!void {
@@ -12993,95 +13434,21 @@ const Cloner = struct {
     }
 
     fn markActiveRecursiveValuePat(self: *Cloner, pat_id: Ast.PatId) Allocator.Error!void {
-        const pat = self.pass.program.getPat(pat_id);
-        switch (pat.data) {
-            .bind => |local| try self.active_recursive_value_locals.put(local, {}),
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .as => |as| {
-                try self.markActiveRecursiveValuePat(as.pattern);
-                try self.active_recursive_value_locals.put(as.local, {});
-            },
-            .record => |fields| {
-                const record_fields = self.pass.program.recordDestructSpan(fields);
-                for (0..record_fields.len) |index| {
-                    try self.markActiveRecursiveValuePat(GuardedList.at(record_fields, index).pattern);
-                }
-            },
-            .tuple => |items| {
-                const children = self.pass.program.patSpan(items);
-                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
-            },
-            .tag => |tag| {
-                const children = self.pass.program.patSpan(tag.payloads);
-                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
-            },
-            .nominal => |backing| try self.markActiveRecursiveValuePat(backing),
-            .list => |list| {
-                const children = self.pass.program.patSpan(list.patterns);
-                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.markActiveRecursiveValuePat(rest_pattern);
-                }
-            },
-            .str_pattern => |str| {
-                const steps = self.pass.program.strPatternStepSpan(str.steps);
-                for (0..steps.len) |index| {
-                    if (GuardedList.at(steps, index).capture) |capture| try self.markActiveRecursiveValuePat(capture);
-                }
-            },
-        }
+        var walk = try PatBinderWalk.init(self.pass.program, self.pass.allocator, pat_id);
+        defer walk.deinit();
+        while (try walk.next()) |event| switch (event) {
+            .binder => |local| try self.active_recursive_value_locals.put(local, {}),
+            .sequence => {},
+        };
     }
 
-    fn unmarkActiveRecursiveValuePat(self: *Cloner, pat_id: Ast.PatId) void {
-        const pat = self.pass.program.getPat(pat_id);
-        switch (pat.data) {
-            .bind => |local| _ = self.active_recursive_value_locals.remove(local),
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .as => |as| {
-                self.unmarkActiveRecursiveValuePat(as.pattern);
-                _ = self.active_recursive_value_locals.remove(as.local);
-            },
-            .record => |fields| {
-                const record_fields = self.pass.program.recordDestructSpan(fields);
-                for (0..record_fields.len) |index| {
-                    self.unmarkActiveRecursiveValuePat(GuardedList.at(record_fields, index).pattern);
-                }
-            },
-            .tuple => |items| {
-                const children = self.pass.program.patSpan(items);
-                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
-            },
-            .tag => |tag| {
-                const children = self.pass.program.patSpan(tag.payloads);
-                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
-            },
-            .nominal => |backing| self.unmarkActiveRecursiveValuePat(backing),
-            .list => |list| {
-                const children = self.pass.program.patSpan(list.patterns);
-                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| self.unmarkActiveRecursiveValuePat(rest_pattern);
-                }
-            },
-            .str_pattern => |str| {
-                const steps = self.pass.program.strPatternStepSpan(str.steps);
-                for (0..steps.len) |index| {
-                    if (GuardedList.at(steps, index).capture) |capture| self.unmarkActiveRecursiveValuePat(capture);
-                }
-            },
-        }
+    fn unmarkActiveRecursiveValuePat(self: *Cloner, pat_id: Ast.PatId) Allocator.Error!void {
+        var walk = try PatBinderWalk.init(self.pass.program, self.pass.allocator, pat_id);
+        defer walk.deinit();
+        while (try walk.next()) |event| switch (event) {
+            .binder => |local| _ = self.active_recursive_value_locals.remove(local),
+            .sequence => {},
+        };
     }
 
     const BinderCloneMode = enum {
@@ -13480,88 +13847,157 @@ const Cloner = struct {
     /// all of its leaves already outlive the initializer.
     fn reanchorRecursiveValue(
         self: *Cloner,
-        value: Value,
+        root_value: Value,
+        root_runtime: Ast.ExprId,
+        initializer_bindings: BindingChain,
+        budget: *u32,
+        root_has_value_type: bool,
+    ) Common.LowerError!?Value {
+        // Structures nest as deeply as their constructors, so each record,
+        // tuple, or nominal waits on an explicit frame for its components,
+        // entered in pre-order so the budget reaches the same nodes a direct
+        // walk does.
+        const Frame = struct {
+            structure: Value,
+            runtime: Ast.ExprId,
+            runtime_has_value_type: bool,
+            values: []Value = &.{},
+            fields: []FieldValue = &.{},
+            next: usize = 0,
+        };
+        var frames = std.ArrayList(Frame).empty;
+        defer frames.deinit(self.pass.allocator);
+        const arena = self.arena.allocator();
+        var delivered: ?Value = null;
+        var request: ?struct { value: Value, runtime: Ast.ExprId, has_value_type: bool } = .{
+            .value = root_value,
+            .runtime = root_runtime,
+            .has_value_type = root_has_value_type,
+        };
+        while (true) {
+            if (request) |pending| {
+                request = null;
+                switch (try self.enterReanchor(pending.value, pending.runtime, initializer_bindings, budget, pending.has_value_type)) {
+                    .done => |value| delivered = value,
+                    .structure => |structure| {
+                        var frame: Frame = .{
+                            .structure = structure,
+                            .runtime = pending.runtime,
+                            .runtime_has_value_type = pending.has_value_type,
+                        };
+                        switch (structure) {
+                            .record => |record| frame.fields = try arena.alloc(FieldValue, record.fields.len),
+                            .tuple => |tuple| frame.values = try arena.alloc(Value, tuple.items.len),
+                            .nominal => {},
+                            .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                        }
+                        try frames.append(self.pass.allocator, frame);
+                    },
+                }
+            }
+            if (frames.items.len == 0) return delivered;
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next > 0) {
+                const index = frame.next - 1;
+                switch (frame.structure) {
+                    .record => |record| frame.fields[index] = .{
+                        .name = record.fields[index].name,
+                        .value = delivered orelse Common.invariant("record field with a runtime position could not be recursively anchored"),
+                    },
+                    .tuple => frame.values[index] = delivered orelse
+                        Common.invariant("tuple item with a runtime position could not be recursively anchored"),
+                    .nominal => {},
+                    .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                }
+            }
+            switch (frame.structure) {
+                .record => |record| if (frame.next < record.fields.len) {
+                    const field = record.fields[frame.next];
+                    frame.next += 1;
+                    const field_runtime = try self.addFieldAccessExpr(
+                        valueType(self.pass.program, field.value),
+                        frame.runtime,
+                        field.name,
+                    );
+                    request = .{ .value = field.value, .runtime = field_runtime, .has_value_type = true };
+                    continue;
+                },
+                .tuple => |tuple| if (frame.next < tuple.items.len) {
+                    const index = frame.next;
+                    frame.next += 1;
+                    const item = tuple.items[index];
+                    const item_runtime = try self.addExpr(.{ .ty = valueType(self.pass.program, item), .data = .{ .tuple_access = .{
+                        .tuple = frame.runtime,
+                        .elem_index = @as(u32, @intCast(index)),
+                    } } });
+                    request = .{ .value = item, .runtime = item_runtime, .has_value_type = true };
+                    continue;
+                },
+                .nominal => |nominal| if (frame.next == 0) {
+                    frame.next = 1;
+                    request = .{ .value = nominal.backing.*, .runtime = frame.runtime, .has_value_type = false };
+                    continue;
+                },
+                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+            }
+            const finished = frames.pop().?;
+            const structure: Value = switch (finished.structure) {
+                .record => |record| .{ .record = .{ .ty = record.ty, .fields = finished.fields } },
+                .tuple => |tuple| .{ .tuple = .{ .ty = tuple.ty, .items = finished.values } },
+                .nominal => |nominal| blk: {
+                    const inner = delivered orelse {
+                        delivered = if (finished.runtime_has_value_type) Value{ .expr = finished.runtime } else null;
+                        continue;
+                    };
+                    const backing = try arena.create(Value);
+                    backing.* = inner;
+                    break :blk .{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
+                },
+                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+            };
+            delivered = if (finished.runtime_has_value_type) try self.runtimeAnchoredValue(structure, finished.runtime) else structure;
+        }
+    }
+
+    const ReanchorEntry = union(enum) {
+        /// The value's rebased form, decided without components.
+        done: ?Value,
+        /// A record, tuple, or nominal whose components are rebased next.
+        structure: Value,
+    };
+
+    /// Spend budget on a value and any anchors around it, deciding it at once
+    /// unless it is a record, tuple, or nominal.
+    fn enterReanchor(
+        self: *Cloner,
+        start: Value,
         runtime: Ast.ExprId,
         initializer_bindings: BindingChain,
         budget: *u32,
         runtime_has_value_type: bool,
-    ) Common.LowerError!?Value {
-        if (budget.* == 0) return if (runtime_has_value_type) Value{ .expr = runtime } else null;
-        budget.* -= 1;
-
+    ) Common.LowerError!ReanchorEntry {
+        var value = start;
+        while (true) {
+            if (budget.* == 0) return .{ .done = if (runtime_has_value_type) Value{ .expr = runtime } else null };
+            budget.* -= 1;
+            switch (value) {
+                .runtime_anchor => |anchor| value = anchor.structure.*,
+                else => break,
+            }
+        }
         switch (value) {
             .expr => |expr| {
                 if (try self.exprCanSubstitute(expr) and
-                    !try initializer_bindings.referencedByExpr(self.pass.allocator, self.pass.program, expr)) return value;
-                return if (runtime_has_value_type) Value{ .expr = runtime } else null;
+                    !try initializer_bindings.referencedByExpr(self.pass.allocator, self.pass.program, expr)) return .{ .done = value };
+                return .{ .done = if (runtime_has_value_type) Value{ .expr = runtime } else null };
             },
-            .runtime_anchor => |anchor| return try self.reanchorRecursiveValue(
-                anchor.structure.*,
-                runtime,
-                initializer_bindings,
-                budget,
-                runtime_has_value_type,
-            ),
-            .record => |record| {
-                const fields = try self.arena.allocator().alloc(FieldValue, record.fields.len);
-                for (record.fields, 0..) |field, index| {
-                    const field_runtime = try self.addFieldAccessExpr(
-                        valueType(self.pass.program, field.value),
-                        runtime,
-                        field.name,
-                    );
-                    fields[index] = .{
-                        .name = field.name,
-                        .value = (try self.reanchorRecursiveValue(
-                            field.value,
-                            field_runtime,
-                            initializer_bindings,
-                            budget,
-                            true,
-                        )) orelse Common.invariant("record field with a runtime position could not be recursively anchored"),
-                    };
-                }
-                const structure = Value{ .record = .{ .ty = record.ty, .fields = fields } };
-                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
-            },
-            .tuple => |tuple| {
-                const items = try self.arena.allocator().alloc(Value, tuple.items.len);
-                for (tuple.items, 0..) |item, index| {
-                    const item_runtime = try self.addExpr(.{ .ty = valueType(self.pass.program, item), .data = .{ .tuple_access = .{
-                        .tuple = runtime,
-                        .elem_index = @as(u32, @intCast(index)),
-                    } } });
-                    items[index] = (try self.reanchorRecursiveValue(
-                        item,
-                        item_runtime,
-                        initializer_bindings,
-                        budget,
-                        true,
-                    )) orelse Common.invariant("tuple item with a runtime position could not be recursively anchored");
-                }
-                const structure = Value{ .tuple = .{ .ty = tuple.ty, .items = items } };
-                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
-            },
-            .nominal => |nominal| {
-                const backing = try self.arena.allocator().create(Value);
-                backing.* = (try self.reanchorRecursiveValue(
-                    nominal.backing.*,
-                    runtime,
-                    initializer_bindings,
-                    budget,
-                    false,
-                )) orelse {
-                    if (runtime_has_value_type) return Value{ .expr = runtime };
-                    return null;
-                };
-                const structure = Value{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
-                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
-            },
+            .runtime_anchor => unreachable,
+            .record, .tuple, .nominal => return .{ .structure = value },
             .static_data_candidate, .tag, .callable => {
                 if (try self.valueContainsNonReusableOrInitializerLocalExpr(initializer_bindings, value, budget)) {
-                    return if (runtime_has_value_type) Value{ .expr = runtime } else null;
+                    return .{ .done = if (runtime_has_value_type) Value{ .expr = runtime } else null };
                 }
-                return if (runtime_has_value_type) try self.runtimeAnchoredValue(value, runtime) else value;
+                return .{ .done = if (runtime_has_value_type) try self.runtimeAnchoredValue(value, runtime) else value };
             },
         }
     }
@@ -13604,12 +14040,17 @@ const Cloner = struct {
         return self.activeRecursiveFieldTupleReadBase(expr_id);
     }
 
-    fn activeRecursiveFieldTupleReadBase(self: *Cloner, expr_id: Ast.ExprId) ?Ast.ExprId {
-        const data = self.pass.program.getExpr(expr_id).data;
-        if (data == .local) return if (self.active_recursive_value_locals.contains(data.local)) expr_id else null;
-        if (data == .field_access) return self.activeRecursiveFieldTupleReadBase(data.field_access.receiver);
-        if (data == .tuple_access) return self.activeRecursiveFieldTupleReadBase(data.tuple_access.tuple);
-        return null;
+    fn activeRecursiveFieldTupleReadBase(self: *Cloner, start: Ast.ExprId) ?Ast.ExprId {
+        var expr_id = start;
+        while (true) {
+            const data = self.pass.program.getExpr(expr_id).data;
+            if (data == .local) return if (self.active_recursive_value_locals.contains(data.local)) expr_id else null;
+            if (data == .field_access) {
+                expr_id = data.field_access.receiver;
+            } else if (data == .tuple_access) {
+                expr_id = data.tuple_access.tuple;
+            } else return null;
+        }
     }
 
     fn callableCaptureAbiDigest(
@@ -14801,15 +15242,19 @@ fn structuralValue(value: Value) Value {
     return structuralValueStripping(value, 0);
 }
 
-fn structuralValueStripping(value: Value, strip_depth: usize) Value {
-    if (strip_depth >= value_wrapper_strip_cap) {
-        Common.invariant("structuralValue followed a value wrapper chain past the strip cap");
+fn structuralValueStripping(start: Value, strip_depth: usize) Value {
+    var value = start;
+    var depth = strip_depth;
+    while (true) : (depth += 1) {
+        if (depth >= value_wrapper_strip_cap) {
+            Common.invariant("structuralValue followed a value wrapper chain past the strip cap");
+        }
+        value = switch (value) {
+            .runtime_anchor => |anchor| anchor.structure.*,
+            .static_data_candidate => |candidate| candidate.structure.*,
+            .expr, .tag, .record, .tuple, .nominal, .callable => return value,
+        };
     }
-    return switch (value) {
-        .runtime_anchor => |anchor| structuralValueStripping(anchor.structure.*, strip_depth + 1),
-        .static_data_candidate => |candidate| structuralValueStripping(candidate.structure.*, strip_depth + 1),
-        .expr, .tag, .record, .tuple, .nominal, .callable => value,
-    };
 }
 
 /// Whether two Monotype ids denote the same type. The type store is not
@@ -14855,49 +15300,80 @@ fn typeTagByName(
 /// Content digest of a call pattern, rendered the way `patternEql` compares:
 /// types by their Monotype digest, labels by text, callable targets by the
 /// target function's checked source identity.
-fn patternDigest(program: *Ast.Program, pattern: CallPattern) names.TypeDigest {
+fn patternDigest(program: *Ast.Program, pattern: CallPattern) Allocator.Error!names.TypeDigest {
     var hasher = TypeDigestHasher.init();
     writePatternBytes(&hasher, "roc.spec-constr.call-pattern.v1");
     writePatternU32(&hasher, @intCast(pattern.args.len));
-    for (pattern.args) |shape| writeShapeDigest(program, &hasher, shape);
+    for (pattern.args) |shape| try writeShapeDigest(program, &hasher, shape);
     return .{ .bytes = hasher.finalResult() };
 }
 
-fn writeShapeDigest(program: *Ast.Program, hasher: *TypeDigestHasher, shape: Shape) void {
-    writePatternBytes(hasher, @tagName(shape));
-    switch (shape) {
-        .any => |ty| writePatternType(program, hasher, ty),
-        .tag => |tag| {
-            writePatternType(program, hasher, tag.ty);
-            writePatternBytes(hasher, program.names.tagLabelText(tag.name));
-            writePatternU32(hasher, @intCast(tag.payloads.len));
-            for (tag.payloads) |payload| writeShapeDigest(program, hasher, payload);
-        },
-        .record => |record| {
-            writePatternType(program, hasher, record.ty);
-            writePatternU32(hasher, @intCast(record.fields.len));
-            for (record.fields) |field| {
-                writePatternBytes(hasher, program.names.recordFieldLabelText(field.name));
-                writeShapeDigest(program, hasher, field.shape);
-            }
-        },
-        .tuple => |tuple| {
-            writePatternType(program, hasher, tuple.ty);
-            writePatternU32(hasher, @intCast(tuple.items.len));
-            for (tuple.items) |item| writeShapeDigest(program, hasher, item);
-        },
-        .nominal => |nominal| {
-            writePatternType(program, hasher, nominal.ty);
-            writeShapeDigest(program, hasher, nominal.backing.*);
-        },
-        .callable => |callable| {
-            writePatternType(program, hasher, callable.ty);
-            const target = program.fnSourceDigest(callable.fn_id) orelse
-                Common.invariant("call-pattern callable target has no checked source identity");
-            hasher.update(&target);
-            writePatternU32(hasher, @intCast(callable.captures.len));
-            for (callable.captures) |capture| writeShapeDigest(program, hasher, capture);
-        },
+/// One pending write of a shape digest: a shape, or the label written just
+/// before a record field's shape.
+const ShapeDigestItem = union(enum) {
+    shape: Shape,
+    field_label: names.RecordFieldNameId,
+};
+
+/// Write a shape's digest in pre-order, each node before its components.
+/// Components are pushed last-first so the first is written next.
+fn writeShapeDigest(program: *Ast.Program, hasher: *TypeDigestHasher, root: Shape) Allocator.Error!void {
+    var pending = std.ArrayList(ShapeDigestItem).empty;
+    defer pending.deinit(program.allocator);
+    try pending.append(program.allocator, .{ .shape = root });
+    while (pending.pop()) |item| {
+        const shape = switch (item) {
+            .field_label => |name| {
+                writePatternBytes(hasher, program.names.recordFieldLabelText(name));
+                continue;
+            },
+            .shape => |shape| shape,
+        };
+        writePatternBytes(hasher, @tagName(shape));
+        switch (shape) {
+            .any => |ty| writePatternType(program, hasher, ty),
+            .tag => |tag| {
+                writePatternType(program, hasher, tag.ty);
+                writePatternBytes(hasher, program.names.tagLabelText(tag.name));
+                writePatternU32(hasher, @intCast(tag.payloads.len));
+                try pushShapeDigestItems(program, &pending, tag.payloads);
+            },
+            .record => |record| {
+                writePatternType(program, hasher, record.ty);
+                writePatternU32(hasher, @intCast(record.fields.len));
+                var index = record.fields.len;
+                while (index > 0) {
+                    index -= 1;
+                    try pending.append(program.allocator, .{ .shape = record.fields[index].shape });
+                    try pending.append(program.allocator, .{ .field_label = record.fields[index].name });
+                }
+            },
+            .tuple => |tuple| {
+                writePatternType(program, hasher, tuple.ty);
+                writePatternU32(hasher, @intCast(tuple.items.len));
+                try pushShapeDigestItems(program, &pending, tuple.items);
+            },
+            .nominal => |nominal| {
+                writePatternType(program, hasher, nominal.ty);
+                try pending.append(program.allocator, .{ .shape = nominal.backing.* });
+            },
+            .callable => |callable| {
+                writePatternType(program, hasher, callable.ty);
+                const target = program.fnSourceDigest(callable.fn_id) orelse
+                    Common.invariant("call-pattern callable target has no checked source identity");
+                hasher.update(&target);
+                writePatternU32(hasher, @intCast(callable.captures.len));
+                try pushShapeDigestItems(program, &pending, callable.captures);
+            },
+        }
+    }
+}
+
+fn pushShapeDigestItems(program: *Ast.Program, pending: *std.ArrayList(ShapeDigestItem), shapes: []const Shape) Allocator.Error!void {
+    var index = shapes.len;
+    while (index > 0) {
+        index -= 1;
+        try pending.append(program.allocator, .{ .shape = shapes[index] });
     }
 }
 
@@ -14920,143 +15396,151 @@ fn writePatternU32(hasher: *TypeDigestHasher, value: u32) void {
     hasher.update(&buffer);
 }
 
-fn patternEql(program: *Ast.Program, lhs: CallPattern, rhs: CallPattern) bool {
+fn patternEql(program: *Ast.Program, lhs: CallPattern, rhs: CallPattern) Allocator.Error!bool {
     if (lhs.args.len != rhs.args.len) return false;
     for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
-        if (!shapeEql(program, lhs_arg, rhs_arg)) return false;
+        if (!try shapeEql(program, lhs_arg, rhs_arg)) return false;
     }
     return true;
 }
 
-fn shapeEql(program: *Ast.Program, lhs: Shape, rhs: Shape) bool {
-    if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
-    return switch (lhs) {
-        .any => |lhs_ty| sameType(program, lhs_ty, rhs.any),
-        .tag => |lhs_tag| blk: {
-            const rhs_tag = rhs.tag;
-            if (!sameType(program, lhs_tag.ty, rhs_tag.ty) or
-                !program.names.tagLabelTextEql(lhs_tag.name, rhs_tag.name) or
-                lhs_tag.payloads.len != rhs_tag.payloads.len)
-            {
-                break :blk false;
-            }
-            for (lhs_tag.payloads, rhs_tag.payloads) |lhs_payload, rhs_payload| {
-                if (!shapeEql(program, lhs_payload, rhs_payload)) break :blk false;
-            }
-            break :blk true;
-        },
-        .record => |lhs_record| blk: {
-            const rhs_record = rhs.record;
-            if (!sameType(program, lhs_record.ty, rhs_record.ty) or lhs_record.fields.len != rhs_record.fields.len) break :blk false;
-            for (lhs_record.fields, rhs_record.fields) |lhs_field, rhs_field| {
-                if (!program.names.recordFieldLabelTextEql(lhs_field.name, rhs_field.name) or
-                    !shapeEql(program, lhs_field.shape, rhs_field.shape))
+/// Whether two shapes are equal: every pair of corresponding components
+/// must be, so pairs are compared from a worklist.
+fn shapeEql(program: *Ast.Program, lhs_root: Shape, rhs_root: Shape) Allocator.Error!bool {
+    const Pair = struct { lhs: Shape, rhs: Shape };
+    var pending = std.ArrayList(Pair).empty;
+    defer pending.deinit(program.allocator);
+    try pending.append(program.allocator, .{ .lhs = lhs_root, .rhs = rhs_root });
+    while (pending.pop()) |pair| {
+        const lhs = pair.lhs;
+        const rhs = pair.rhs;
+        if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
+        switch (lhs) {
+            .any => |lhs_ty| if (!sameType(program, lhs_ty, rhs.any)) return false,
+            .tag => |lhs_tag| {
+                const rhs_tag = rhs.tag;
+                if (!sameType(program, lhs_tag.ty, rhs_tag.ty) or
+                    !program.names.tagLabelTextEql(lhs_tag.name, rhs_tag.name) or
+                    lhs_tag.payloads.len != rhs_tag.payloads.len)
                 {
-                    break :blk false;
+                    return false;
                 }
-            }
-            break :blk true;
-        },
-        .tuple => |lhs_tuple| blk: {
-            const rhs_tuple = rhs.tuple;
-            if (!sameType(program, lhs_tuple.ty, rhs_tuple.ty) or lhs_tuple.items.len != rhs_tuple.items.len) break :blk false;
-            for (lhs_tuple.items, rhs_tuple.items) |lhs_item, rhs_item| {
-                if (!shapeEql(program, lhs_item, rhs_item)) break :blk false;
-            }
-            break :blk true;
-        },
-        .nominal => |lhs_nominal| {
-            const rhs_nominal = rhs.nominal;
-            return sameType(program, lhs_nominal.ty, rhs_nominal.ty) and shapeEql(program, lhs_nominal.backing.*, rhs_nominal.backing.*);
-        },
-        .callable => |lhs_callable| blk: {
-            const rhs_callable = rhs.callable;
-            if (!sameType(program, lhs_callable.ty, rhs_callable.ty) or
-                !callableTargetMatches(program, lhs_callable.fn_id, rhs_callable.fn_id) or
-                lhs_callable.captures.len != rhs_callable.captures.len)
-            {
-                break :blk false;
-            }
-            for (lhs_callable.captures, rhs_callable.captures) |lhs_capture, rhs_capture| {
-                if (!shapeEql(program, lhs_capture, rhs_capture)) break :blk false;
-            }
-            break :blk true;
-        },
-    };
+                for (lhs_tag.payloads, rhs_tag.payloads) |lhs_payload, rhs_payload| {
+                    try pending.append(program.allocator, .{ .lhs = lhs_payload, .rhs = rhs_payload });
+                }
+            },
+            .record => |lhs_record| {
+                const rhs_record = rhs.record;
+                if (!sameType(program, lhs_record.ty, rhs_record.ty) or lhs_record.fields.len != rhs_record.fields.len) return false;
+                for (lhs_record.fields, rhs_record.fields) |lhs_field, rhs_field| {
+                    if (!program.names.recordFieldLabelTextEql(lhs_field.name, rhs_field.name)) return false;
+                    try pending.append(program.allocator, .{ .lhs = lhs_field.shape, .rhs = rhs_field.shape });
+                }
+            },
+            .tuple => |lhs_tuple| {
+                const rhs_tuple = rhs.tuple;
+                if (!sameType(program, lhs_tuple.ty, rhs_tuple.ty) or lhs_tuple.items.len != rhs_tuple.items.len) return false;
+                for (lhs_tuple.items, rhs_tuple.items) |lhs_item, rhs_item| {
+                    try pending.append(program.allocator, .{ .lhs = lhs_item, .rhs = rhs_item });
+                }
+            },
+            .nominal => |lhs_nominal| {
+                const rhs_nominal = rhs.nominal;
+                if (!sameType(program, lhs_nominal.ty, rhs_nominal.ty)) return false;
+                try pending.append(program.allocator, .{ .lhs = lhs_nominal.backing.*, .rhs = rhs_nominal.backing.* });
+            },
+            .callable => |lhs_callable| {
+                const rhs_callable = rhs.callable;
+                if (!sameType(program, lhs_callable.ty, rhs_callable.ty) or
+                    !callableTargetMatches(program, lhs_callable.fn_id, rhs_callable.fn_id) or
+                    lhs_callable.captures.len != rhs_callable.captures.len)
+                {
+                    return false;
+                }
+                for (lhs_callable.captures, rhs_callable.captures) |lhs_capture, rhs_capture| {
+                    try pending.append(program.allocator, .{ .lhs = lhs_capture, .rhs = rhs_capture });
+                }
+            },
+        }
+    }
+    return true;
 }
 
 /// Whether one specialization's call pattern accepts a call's argument values.
 /// This reads the values the caller already cloned and takes no `Cloner`, so
 /// deciding a specialization cannot clone a source argument a second time and a
 /// rejected specialization costs nothing and leaves nothing behind.
-fn callPatternMatchesValues(program: *Ast.Program, pattern: CallPattern, values: []const Value) bool {
+fn callPatternMatchesValues(program: *Ast.Program, pattern: CallPattern, values: []const Value) Allocator.Error!bool {
     if (pattern.args.len != values.len) Common.invariant("call-pattern arity differed from direct call arity");
     for (pattern.args, values) |shape, value| {
-        if (!shapeMatchesValue(program, shape, value)) return false;
+        if (!try shapeMatchesValue(program, shape, value)) return false;
     }
     return true;
 }
 
-fn shapeMatchesValue(program: *Ast.Program, shape: Shape, value: Value) bool {
-    const structural_value = structuralValue(value);
-    return switch (shape) {
-        .any => true,
-        .tag => |tag| blk: {
-            if (structural_value != .tag) break :blk false;
-            const value_tag = structural_value.tag;
-            if (!sameType(program, tag.ty, value_tag.ty) or
-                !program.names.tagLabelTextEql(tag.name, value_tag.name) or
-                tag.payloads.len != value_tag.payloads.len)
-            {
-                break :blk false;
-            }
-            for (tag.payloads, value_tag.payloads) |payload_shape, payload_value| {
-                if (!shapeMatchesValue(program, payload_shape, payload_value)) break :blk false;
-            }
-            break :blk true;
-        },
-        .record => |record| blk: {
-            if (structural_value != .record) break :blk false;
-            const value_record = structural_value.record;
-            if (!sameType(program, record.ty, value_record.ty) or record.fields.len != value_record.fields.len) break :blk false;
-            for (record.fields, value_record.fields) |field_shape, field_value| {
-                if (!program.names.recordFieldLabelTextEql(field_shape.name, field_value.name) or
-                    !shapeMatchesValue(program, field_shape.shape, field_value.value))
+/// Whether a value has a shape: every component must, so pairs are checked
+/// from a worklist.
+fn shapeMatchesValue(program: *Ast.Program, root_shape: Shape, root_value: Value) Allocator.Error!bool {
+    const Pair = struct { shape: Shape, value: Value };
+    var pending = std.ArrayList(Pair).empty;
+    defer pending.deinit(program.allocator);
+    try pending.append(program.allocator, .{ .shape = root_shape, .value = root_value });
+    while (pending.pop()) |pair| {
+        const structural_value = structuralValue(pair.value);
+        switch (pair.shape) {
+            .any => {},
+            .tag => |tag| {
+                if (structural_value != .tag) return false;
+                const value_tag = structural_value.tag;
+                if (!sameType(program, tag.ty, value_tag.ty) or
+                    !program.names.tagLabelTextEql(tag.name, value_tag.name) or
+                    tag.payloads.len != value_tag.payloads.len)
                 {
-                    break :blk false;
+                    return false;
                 }
-            }
-            break :blk true;
-        },
-        .tuple => |tuple| blk: {
-            if (structural_value != .tuple) break :blk false;
-            const value_tuple = structural_value.tuple;
-            if (!sameType(program, tuple.ty, value_tuple.ty) or tuple.items.len != value_tuple.items.len) break :blk false;
-            for (tuple.items, value_tuple.items) |item_shape, item_value| {
-                if (!shapeMatchesValue(program, item_shape, item_value)) break :blk false;
-            }
-            break :blk true;
-        },
-        .nominal => |nominal| blk: {
-            if (structural_value != .nominal) break :blk false;
-            const value_nominal = structural_value.nominal;
-            break :blk sameType(program, nominal.ty, value_nominal.ty) and shapeMatchesValue(program, nominal.backing.*, value_nominal.backing.*);
-        },
-        .callable => |callable| blk: {
-            if (structural_value != .callable) break :blk false;
-            const value_callable = structural_value.callable;
-            if (!sameType(program, callable.ty, value_callable.ty) or
-                !callableTargetMatches(program, callable.fn_id, value_callable.fn_id) or
-                callable.captures.len != value_callable.captures.len)
-            {
-                break :blk false;
-            }
-            for (callable.captures, value_callable.captures) |capture_shape, capture_value| {
-                if (!shapeMatchesValue(program, capture_shape, capture_value.value)) break :blk false;
-            }
-            break :blk true;
-        },
-    };
+                for (tag.payloads, value_tag.payloads) |payload_shape, payload_value| {
+                    try pending.append(program.allocator, .{ .shape = payload_shape, .value = payload_value });
+                }
+            },
+            .record => |record| {
+                if (structural_value != .record) return false;
+                const value_record = structural_value.record;
+                if (!sameType(program, record.ty, value_record.ty) or record.fields.len != value_record.fields.len) return false;
+                for (record.fields, value_record.fields) |field_shape, field_value| {
+                    if (!program.names.recordFieldLabelTextEql(field_shape.name, field_value.name)) return false;
+                    try pending.append(program.allocator, .{ .shape = field_shape.shape, .value = field_value.value });
+                }
+            },
+            .tuple => |tuple| {
+                if (structural_value != .tuple) return false;
+                const value_tuple = structural_value.tuple;
+                if (!sameType(program, tuple.ty, value_tuple.ty) or tuple.items.len != value_tuple.items.len) return false;
+                for (tuple.items, value_tuple.items) |item_shape, item_value| {
+                    try pending.append(program.allocator, .{ .shape = item_shape, .value = item_value });
+                }
+            },
+            .nominal => |nominal| {
+                if (structural_value != .nominal) return false;
+                const value_nominal = structural_value.nominal;
+                if (!sameType(program, nominal.ty, value_nominal.ty)) return false;
+                try pending.append(program.allocator, .{ .shape = nominal.backing.*, .value = value_nominal.backing.* });
+            },
+            .callable => |callable| {
+                if (structural_value != .callable) return false;
+                const value_callable = structural_value.callable;
+                if (!sameType(program, callable.ty, value_callable.ty) or
+                    !callableTargetMatches(program, callable.fn_id, value_callable.fn_id) or
+                    callable.captures.len != value_callable.captures.len)
+                {
+                    return false;
+                }
+                for (callable.captures, value_callable.captures) |capture_shape, capture_value| {
+                    try pending.append(program.allocator, .{ .shape = capture_shape, .value = capture_value.value });
+                }
+            },
+        }
+    }
+    return true;
 }
 
 fn callableTargetMatches(program: *const Ast.Program, expected: Ast.FnId, actual: Ast.FnId) bool {
@@ -15101,15 +15585,19 @@ fn isGeneratedIteratorStepField(
         field == topology.step_field;
 }
 
-fn fieldFromValueStripping(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId, strip_depth: usize) ?Value {
-    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("fieldFromValue followed a value wrapper chain past the strip cap");
-    return switch (value) {
-        .runtime_anchor => |anchor| fieldFromValueStripping(program, anchor.structure.*, name, strip_depth + 1),
-        .static_data_candidate => |candidate| fieldFromValueStripping(program, candidate.structure.*, name, strip_depth + 1),
-        .record => |record| fieldFromRecord(program, record, name),
-        .nominal => |nominal| fieldFromValueStripping(program, nominal.backing.*, name, strip_depth + 1),
-        .expr, .tag, .tuple, .callable => null,
-    };
+fn fieldFromValueStripping(program: *const Ast.Program, start: Value, name: names.RecordFieldNameId, strip_depth: usize) ?Value {
+    var value = start;
+    var depth = strip_depth;
+    while (true) : (depth += 1) {
+        if (depth >= value_wrapper_strip_cap) Common.invariant("fieldFromValue followed a value wrapper chain past the strip cap");
+        value = switch (value) {
+            .runtime_anchor => |anchor| anchor.structure.*,
+            .static_data_candidate => |candidate| candidate.structure.*,
+            .record => |record| return fieldFromRecord(program, record, name),
+            .nominal => |nominal| nominal.backing.*,
+            .expr, .tag, .tuple, .callable => return null,
+        };
+    }
 }
 
 fn fieldPathFromValue(program: *const Ast.Program, receiver: Value, segments: anytype) ?Value {
@@ -15141,60 +15629,76 @@ fn itemFromValue(value: Value, index: u32) ?Value {
     return itemFromValueStripping(value, index, 0);
 }
 
-fn itemFromValueStripping(value: Value, index: u32, strip_depth: usize) ?Value {
-    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("itemFromValue followed a value wrapper chain past the strip cap");
-    return switch (value) {
-        .runtime_anchor => |anchor| itemFromValueStripping(anchor.structure.*, index, strip_depth + 1),
-        .static_data_candidate => |candidate| itemFromValueStripping(candidate.structure.*, index, strip_depth + 1),
-        .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
-        .nominal => |nominal| itemFromValueStripping(nominal.backing.*, index, strip_depth + 1),
-        .expr, .tag, .record, .callable => null,
-    };
+fn itemFromValueStripping(start: Value, index: u32, strip_depth: usize) ?Value {
+    var value = start;
+    var depth = strip_depth;
+    while (true) : (depth += 1) {
+        if (depth >= value_wrapper_strip_cap) Common.invariant("itemFromValue followed a value wrapper chain past the strip cap");
+        value = switch (value) {
+            .runtime_anchor => |anchor| anchor.structure.*,
+            .static_data_candidate => |candidate| candidate.structure.*,
+            .tuple => |tuple| return if (index < tuple.items.len) tuple.items[index] else null,
+            .nominal => |nominal| nominal.backing.*,
+            .expr, .tag, .record, .callable => return null,
+        };
+    }
 }
 
 fn tagFromValue(value: Value) ?TagValue {
     return tagFromValueStripping(value, 0);
 }
 
-fn tagFromValueStripping(value: Value, strip_depth: usize) ?TagValue {
-    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tagFromValue followed a value wrapper chain past the strip cap");
-    return switch (value) {
-        .runtime_anchor => |anchor| tagFromValueStripping(anchor.structure.*, strip_depth + 1),
-        .static_data_candidate => |candidate| tagFromValueStripping(candidate.structure.*, strip_depth + 1),
-        .tag => |tag| tag,
-        .nominal => |nominal| tagFromValueStripping(nominal.backing.*, strip_depth + 1),
-        .expr, .record, .tuple, .callable => null,
-    };
+fn tagFromValueStripping(start: Value, strip_depth: usize) ?TagValue {
+    var value = start;
+    var depth = strip_depth;
+    while (true) : (depth += 1) {
+        if (depth >= value_wrapper_strip_cap) Common.invariant("tagFromValue followed a value wrapper chain past the strip cap");
+        value = switch (value) {
+            .runtime_anchor => |anchor| anchor.structure.*,
+            .static_data_candidate => |candidate| candidate.structure.*,
+            .tag => |tag| return tag,
+            .nominal => |nominal| nominal.backing.*,
+            .expr, .record, .tuple, .callable => return null,
+        };
+    }
 }
 
 fn recordFromValue(value: Value) ?RecordValue {
     return recordFromValueStripping(value, 0);
 }
 
-fn recordFromValueStripping(value: Value, strip_depth: usize) ?RecordValue {
-    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("recordFromValue followed a value wrapper chain past the strip cap");
-    return switch (value) {
-        .runtime_anchor => |anchor| recordFromValueStripping(anchor.structure.*, strip_depth + 1),
-        .static_data_candidate => |candidate| recordFromValueStripping(candidate.structure.*, strip_depth + 1),
-        .record => |record| record,
-        .nominal => |nominal| recordFromValueStripping(nominal.backing.*, strip_depth + 1),
-        .expr, .tag, .tuple, .callable => null,
-    };
+fn recordFromValueStripping(start: Value, strip_depth: usize) ?RecordValue {
+    var value = start;
+    var depth = strip_depth;
+    while (true) : (depth += 1) {
+        if (depth >= value_wrapper_strip_cap) Common.invariant("recordFromValue followed a value wrapper chain past the strip cap");
+        value = switch (value) {
+            .runtime_anchor => |anchor| anchor.structure.*,
+            .static_data_candidate => |candidate| candidate.structure.*,
+            .record => |record| return record,
+            .nominal => |nominal| nominal.backing.*,
+            .expr, .tag, .tuple, .callable => return null,
+        };
+    }
 }
 
 fn tupleFromValue(value: Value) ?TupleValue {
     return tupleFromValueStripping(value, 0);
 }
 
-fn tupleFromValueStripping(value: Value, strip_depth: usize) ?TupleValue {
-    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tupleFromValue followed a value wrapper chain past the strip cap");
-    return switch (value) {
-        .runtime_anchor => |anchor| tupleFromValueStripping(anchor.structure.*, strip_depth + 1),
-        .static_data_candidate => |candidate| tupleFromValueStripping(candidate.structure.*, strip_depth + 1),
-        .tuple => |tuple| tuple,
-        .nominal => |nominal| tupleFromValueStripping(nominal.backing.*, strip_depth + 1),
-        .expr, .tag, .record, .callable => null,
-    };
+fn tupleFromValueStripping(start: Value, strip_depth: usize) ?TupleValue {
+    var value = start;
+    var depth = strip_depth;
+    while (true) : (depth += 1) {
+        if (depth >= value_wrapper_strip_cap) Common.invariant("tupleFromValue followed a value wrapper chain past the strip cap");
+        value = switch (value) {
+            .runtime_anchor => |anchor| anchor.structure.*,
+            .static_data_candidate => |candidate| candidate.structure.*,
+            .tuple => |tuple| return tuple,
+            .nominal => |nominal| nominal.backing.*,
+            .expr, .tag, .record, .callable => return null,
+        };
+    }
 }
 
 fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
@@ -15291,7 +15795,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     try std.testing.expectEqual(read, value.value.expr);
     try std.testing.expectEqual(read, try cloner.cloneExprPlain(read));
     try std.testing.expect(!try cloner.exprHasKnownShape(read));
-    try std.testing.expect(cloner.peekKnownValue(read) == null);
+    try std.testing.expect((try cloner.peekKnownValue(read)) == null);
     try std.testing.expect((try pass.staticDataStructure(read)).* == .expr);
     var renames = collections.DenseMap(Ast.LocalId, Ast.LocalId).init(allocator);
     defer renames.deinit();

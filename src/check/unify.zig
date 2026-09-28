@@ -2790,7 +2790,44 @@ const Unifier = struct {
         }
     }
 
+    /// A function made pure whose own dependencies are still being demanded.
+    const PureDemand = struct {
+        var_: Var,
+        func: Func,
+        next: u32 = 0,
+    };
+
     fn demandPureFunction(self: *Self, dep_var: Var) Error!void {
+        const allocator = self.scratch.gpa;
+        var pending = std.ArrayList(PureDemand).empty;
+        defer pending.deinit(allocator);
+        self.demandPureStep(&pending, dep_var) catch |err| return self.undoPureDemands(&pending, err);
+        while (pending.items.len > 0) {
+            const top = &pending.items[pending.items.len - 1];
+            const deps = top.func.effect_deps;
+            if (top.next == deps.len()) {
+                _ = pending.pop();
+                continue;
+            }
+            const next = self.types_store.getVarAt(deps, top.next);
+            top.next += 1;
+            self.demandPureStep(&pending, next) catch |err| return self.undoPureDemands(&pending, err);
+        }
+    }
+
+    /// A dependency that fails the demand fails every function waiting on
+    /// it, and each of those functions' effects then still depends on it, so
+    /// their pure writes are undone.
+    fn undoPureDemands(self: *Self, pending: *std.ArrayList(PureDemand), err: Error) Error {
+        while (pending.pop()) |demand| {
+            try self.types_store.setVarContent(demand.var_, .{ .structure = .{ .fn_unbound = demand.func } });
+        }
+        return err;
+    }
+
+    /// Demands one function be pure. An effect-polymorphic function becomes
+    /// pure in place and is queued so its own dependencies are demanded.
+    fn demandPureStep(self: *Self, pending: *std.ArrayList(PureDemand), dep_var: Var) Error!void {
         var current = dep_var;
         while (true) {
             const resolved = self.types_store.resolveVar(current);
@@ -2805,14 +2842,9 @@ const Unifier = struct {
                         // Write the pure type before visiting the dependencies
                         // so a recursive group, whose members depend on each
                         // other, terminates at the member already made pure.
-                        // A dependency that turns out effectful fails the
-                        // whole demand, and this function's effect then still
-                        // depends on it, so the write is undone on that path.
+                        try pending.ensureUnusedCapacity(self.scratch.gpa, 1);
                         try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_pure = .{ .args = func.args, .ret = func.ret } } });
-                        self.demandPureEffectDeps(func.effect_deps) catch |err| {
-                            try self.types_store.setVarContent(resolved.var_, .{ .structure = .{ .fn_unbound = func } });
-                            return err;
-                        };
+                        pending.appendAssumeCapacity(.{ .var_ = resolved.var_, .func = func });
                         return;
                     },
                     .record,

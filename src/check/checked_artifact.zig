@@ -19789,8 +19789,39 @@ const EvidencePass = struct {
         chain: []const []const EvidenceParam,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
+        return switch (try self.resolveObligationStep(dispatcher_var, dispatcher_ty, method, structural_kind, constraint_fn_var, chain, commit_unpinned)) {
+            .resolved => |resolution| resolution,
+            .node => |request| .{ .direct_pending = try self.evidenceNodeForTarget(request.target, request.dispatcher_ty, request.constraint_fn_var, null, .dispatch_edge) },
+        };
+    }
+
+    /// A procedure target whose evidence node the obligation resolves to.
+    const EvidenceNodeRequest = struct {
+        target: static_dispatch.MethodTarget,
+        dispatcher_ty: ?CheckedTypeId,
+        constraint_fn_var: ?Var,
+    };
+
+    /// An obligation's resolution, or the procedure target whose evidence
+    /// node is its direct resolution. The node is built by the caller, so a
+    /// target's nested evidence never nests native calls.
+    const ObligationStep = union(enum) {
+        resolved: ?static_dispatch.CheckedCallResolution,
+        node: EvidenceNodeRequest,
+    };
+
+    fn resolveObligationStep(
+        self: *EvidencePass,
+        dispatcher_var: Var,
+        dispatcher_ty: CheckedTypeId,
+        method: canonical.MethodNameId,
+        structural_kind: ?static_dispatch.StructuralKind,
+        constraint_fn_var: ?Var,
+        chain: []const []const EvidenceParam,
+        commit_unpinned: bool,
+    ) Allocator.Error!ObligationStep {
         if (constraint_fn_var) |fn_var| {
-            if (self.types.varStaticDispatchRejected(fn_var)) return .checked_error;
+            if (self.types.varStaticDispatchRejected(fn_var)) return .{ .resolved = .checked_error };
         }
 
         const resolved = self.types.resolveVar(dispatcher_var);
@@ -19802,11 +19833,11 @@ const EvidencePass = struct {
                     if (param.source != .scheme_requirement) continue;
                     if (self.types.resolveVar(param.constraint.fn_var).var_ != self.types.resolveVar(fn_var).var_) continue;
                     if (try self.names.internMethodIdent(self.module.identStoreConst(), param.constraint.fn_name) != method) continue;
-                    return .{ .evidence_dependent = .{
+                    return .{ .resolved = .{ .evidence_dependent = .{
                         .scheme_param = param.published_index orelse checkedArtifactInvariant("forwarded scheme requirement was not published", .{}),
                         .index = .{ .depth = @intCast(depth), .index = @intCast(index) },
                         .independent_callable = false,
-                    } };
+                    } } };
                 }
             }
         };
@@ -19825,7 +19856,7 @@ const EvidencePass = struct {
             if (derivation_kind) |expected_kind| {
                 if (constraint_fn_var) |fn_var| {
                     if (self.generatedCodecDerivationForSourceConstraint(fn_var, expected_kind) != null) {
-                        return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
+                        return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
                     }
                 }
             }
@@ -19846,7 +19877,7 @@ const EvidencePass = struct {
                         const fresh_fn: ?Var = if (constraint_fn_var) |fn_var| self.pairForResolved(pairs, self.types.resolveVar(fn_var).var_) else null;
                         const fresh_dispatcher_ty = self.checked_types.rootForSourceVar(self.module, fresh) orelse
                             checkedArtifactInvariant("checked dispatch use instantiation type was not published", .{});
-                        return self.resolveObligation(fresh, fresh_dispatcher_ty, method, structural_kind, fresh_fn orelse constraint_fn_var, chain, true);
+                        return self.resolveObligationStep(fresh, fresh_dispatcher_ty, method, structural_kind, fresh_fn orelse constraint_fn_var, chain, true);
                     }
                 }
             }
@@ -19860,7 +19891,7 @@ const EvidencePass = struct {
             // fence and must never be inferred from the callable or its return.
             // A presence variable is not a dispatch target and carries no
             // obligations—treat it as inert like `.err`.
-            .err, .field_presence => return .checked_error,
+            .err, .field_presence => return .{ .resolved = .checked_error },
             .flex => |flex| return self.resolveVarObligation(resolved.var_, dispatcher_ty, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .rigid => |rigid| return self.resolveVarObligation(resolved.var_, dispatcher_ty, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .alias, .structure => {
@@ -19871,7 +19902,7 @@ const EvidencePass = struct {
                             // checking rejected its declaration and already
                             // reported why. The dispatch itself needs no second
                             // diagnostic; it just must never lower.
-                            .rejected => .checked_error,
+                            .rejected => .{ .resolved = .checked_error },
                             .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var),
                         };
                     }
@@ -19882,11 +19913,11 @@ const EvidencePass = struct {
                     // structurally, so a miss there is a publication bug
                     // (every view the checker resolved against is searched
                     // above).
-                    if (structural_kind) |kind| return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
+                    if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
                     std.debug.panic("publication could not resolve a checked dispatch target for an owned method", .{});
                 }
                 // No owner head: a genuinely structural shape.
-                if (structural_kind) |kind| return .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
+                if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
                 checkedArtifactInvariant("ownerless non-structural dispatch reached publication without an explicit rejection", .{});
             },
         }
@@ -19918,20 +19949,20 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
         chain: []const []const EvidenceParam,
         commit_unpinned: bool,
-    ) Allocator.Error!?static_dispatch.CheckedCallResolution {
+    ) Allocator.Error!ObligationStep {
         if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
             const independent_callable = match.callable_relation != .exact;
-            return .{ .evidence_dependent = .{
+            return .{ .resolved = .{ .evidence_dependent = .{
                 .index = match.index,
                 .independent_callable = independent_callable,
                 .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
-            } };
+            } } };
         }
 
         // Not bound by this chain. During template walks another template's
         // scheme may bind it (plan-ref spans can overlap); only the final
         // sweep commits unpinned classifications.
-        if (!commit_unpinned) return null;
+        if (!commit_unpinned) return .{ .resolved = null };
 
         // Not an evidence param of any enclosing callable, so no edge pins it
         // and monotype materializes it by `numericDefaultPhaseForConstraints`—
@@ -19946,11 +19977,11 @@ const EvidencePass = struct {
                 .mono_specialization_str => .{ .builtin = .str },
                 // `checking_finalized` is stamped only on vars checking already
                 // resolved; an unresolved one cannot carry it.
-                .checking_finalized => return .checked_error,
+                .checking_finalized => return .{ .resolved = .checked_error },
             };
             if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
                 return switch (found) {
-                    .rejected => .checked_error,
+                    .rejected => .{ .resolved = .checked_error },
                     .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var),
                 };
             }
@@ -19960,10 +19991,10 @@ const EvidencePass = struct {
         // enclosing callable, no defaulting literal). Generated codecs require
         // the explicit checker snapshot handled above; without one, the
         // unpinned-dispatch rule decides.
-        return switch (static_dispatch.unpinnedDispatchResolution(structural_kind)) {
+        return .{ .resolved = switch (static_dispatch.unpinnedDispatchResolution(structural_kind)) {
             .structural => .{ .structural = try self.structuralDerivation(structural_kind.?, constraint_fn_var) },
             .unreachable_value => .@"unreachable",
-        };
+        } };
     }
 
     fn structuralDerivation(
@@ -20062,21 +20093,19 @@ const EvidencePass = struct {
         structural_kind: ?static_dispatch.StructuralKind,
         dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
-    ) Allocator.Error!static_dispatch.CheckedCallResolution {
+    ) Allocator.Error!ObligationStep {
         return switch (target.kind) {
             .structural => |kind| blk: {
                 if (structural_kind == null or structural_kind.? != kind) {
                     checkedArtifactInvariant("structural method registry result did not match the checked dispatch result mode", .{});
                 }
-                break :blk .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
+                break :blk .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
             },
-            .procedure, .local_proc => .{ .direct_pending = try self.evidenceNodeForTarget(
-                target,
-                dispatcher_ty,
-                constraint_fn_var,
-                null,
-                .dispatch_edge,
-            ) },
+            .procedure, .local_proc => .{ .node = .{
+                .target = target,
+                .dispatcher_ty = dispatcher_ty,
+                .constraint_fn_var = constraint_fn_var,
+            } },
         };
     }
 
@@ -20158,6 +20187,117 @@ const EvidencePass = struct {
         contract_callable_ty: ?CheckedTypeId,
         selection: MethodTargetSelection,
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
+        var frames = std.ArrayList(EvidenceRecordFrame).empty;
+        defer {
+            for (frames.items) |*frame| {
+                _ = self.record_in_progress.remove(frame.record_idx);
+                frame.deinit(self.allocator);
+            }
+            frames.deinit(self.allocator);
+        }
+        switch (try self.beginEvidenceNode(target, dispatcher_ty, constraint_fn_var, contract_callable_ty, selection)) {
+            .done => |node_id| return node_id,
+            .record => |frame| try frames.append(self.allocator, frame),
+        }
+        // The node of a nested target that just finished, for the pending
+        // parameter of the frame below it.
+        var delivered: ?static_dispatch.EvidenceNodeId = null;
+        while (true) {
+            const top = frames.items.len - 1;
+            const frame = &frames.items[top];
+            if (delivered) |node_id| {
+                frame.entries.appendAssumeCapacity(self.evidenceFromResolution(frame.pending, .{ .direct_pending = node_id }));
+                delivered = null;
+            }
+            if (frame.next < frame.params.items.len) {
+                const param = frame.params.items[frame.next];
+                frame.next += 1;
+                const context = try self.evidenceContextForRecordParam(frame.pairs, param);
+                switch (try self.resolveObligationStep(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, self.current_chain, true)) {
+                    .resolved => |resolution| frame.entries.appendAssumeCapacity(self.evidenceFromResolution(context, resolution orelse
+                        checkedArtifactInvariant("committed evidence resolution was not total", .{}))),
+                    .node => |request| switch (try self.beginEvidenceNode(request.target, request.dispatcher_ty, request.constraint_fn_var, null, .dispatch_edge)) {
+                        .done => |node_id| frame.entries.appendAssumeCapacity(self.evidenceFromResolution(context, .{ .direct_pending = node_id })),
+                        .record => |nested| {
+                            frame.pending = context;
+                            try frames.append(self.allocator, nested);
+                        },
+                    },
+                }
+                continue;
+            }
+            var finished = frames.pop().?;
+            defer finished.deinit(self.allocator);
+            const node_id = self.finishEvidenceNode(&finished) catch |err| {
+                _ = self.record_in_progress.remove(finished.record_idx);
+                return err;
+            };
+            if (frames.items.len == 0) return node_id;
+            delivered = node_id;
+        }
+    }
+
+    /// A target's evidence node whose recorded nested evidence is still being
+    /// resolved, one parameter of the scheme-use record at a time. The record
+    /// stays in progress until the node is interned.
+    const EvidenceRecordFrame = struct {
+        record_idx: u32,
+        target: static_dispatch.MethodTarget,
+        dispatcher_ty: ?CheckedTypeId,
+        callable_ty: CheckedTypeId,
+        procedure_schema: ?ProcedureEvidenceSchema,
+        scheme_root: Var,
+        pairs: []const ModuleEnv.SchemeUsePair,
+        params: std.ArrayListUnmanaged(EvidenceParam) = .empty,
+        entries: std.ArrayListUnmanaged(static_dispatch.CheckedEvidence) = .empty,
+        next: usize = 0,
+        /// The parameter whose target node the frame above is building.
+        pending: EvidenceContext = undefined,
+
+        fn deinit(frame: *EvidenceRecordFrame, allocator: Allocator) void {
+            frame.params.deinit(allocator);
+            frame.entries.deinit(allocator);
+        }
+    };
+
+    const EvidenceNodeStart = union(enum) {
+        done: static_dispatch.EvidenceNodeId,
+        /// The target's recorded nested evidence must be resolved first.
+        record: EvidenceRecordFrame,
+    };
+
+    fn finishEvidenceNode(self: *EvidencePass, frame: *const EvidenceRecordFrame) Allocator.Error!static_dispatch.EvidenceNodeId {
+        const nested: RecordSiteSpans = .{
+            .refs = try self.appendEvidenceRefs(frame.entries.items),
+            .subst = try self.appendSiteSubstitution(frame.scheme_root, frame.pairs),
+        };
+        if (frame.procedure_schema == .requires_record or frame.procedure_schema == .from_target) {
+            const target_view = self.procedureEvidenceView(frame.target);
+            if (nested.refs.len != target_view.template.evidence_params.len) {
+                checkedArtifactInvariant("recorded procedure target evidence length differed from its declared params", .{});
+            }
+        }
+        const node_id = try self.internEvidenceNode(.{
+            .target = frame.target,
+            .dispatcher_ty = frame.dispatcher_ty,
+            .generated_codec_derivation = null,
+            .instantiation = .{ .callable = frame.callable_ty },
+            .nested = .{ .resolved = nested.refs },
+            .subst = nested.subst,
+        });
+        try self.node_by_record.put(frame.record_idx, node_id);
+        _ = self.record_in_progress.remove(frame.record_idx);
+        return node_id;
+    }
+
+    fn beginEvidenceNode(
+        self: *EvidencePass,
+        target: static_dispatch.MethodTarget,
+        dispatcher_ty: ?CheckedTypeId,
+        constraint_fn_var: ?Var,
+        contract_callable_ty: ?CheckedTypeId,
+        selection: MethodTargetSelection,
+    ) Allocator.Error!EvidenceNodeStart {
         if (target.kind == .structural) {
             checkedArtifactInvariant("structural method registry result reached the callable evidence-node graph", .{});
         }
@@ -20185,13 +20325,13 @@ const EvidencePass = struct {
                 if (procedure_schema == .requires_record or procedure_schema == .from_target) {
                     checkedArtifactInvariant("recursive dispatch target did not have callable-derived evidence", .{});
                 }
-                return try self.internEvidenceNode(.{
+                return .{ .done = try self.internEvidenceNode(.{
                     .target = target,
                     .dispatcher_ty = dispatcher_ty,
                     .generated_codec_derivation = generated_codec_derivation,
                     .instantiation = .{ .callable = callable_ty.? },
                     .nested = if (procedure_schema == .none) .{ .resolved = .{} } else .from_callable,
-                });
+                }) };
             }
             if (self.node_by_record.get(idx)) |memoized| {
                 const existing = self.evidence_nodes.items[@intFromEnum(memoized)];
@@ -20205,43 +20345,43 @@ const EvidencePass = struct {
                 {
                     checkedArtifactInvariant("one checked dispatch evidence record resolved at two checked call identities", .{});
                 }
-                return memoized;
+                return .{ .done = memoized };
             }
             if ((try self.record_in_progress.getOrPut(idx)).found_existing) {
                 checkedArtifactInvariant("checked dispatch evidence chain was cyclic", .{});
             }
-            defer _ = self.record_in_progress.remove(idx);
+            errdefer _ = self.record_in_progress.remove(idx);
 
-            const nested = (try self.evidenceRefsForRecord(idx, true)).?;
-            if (procedure_schema == .requires_record or procedure_schema == .from_target) {
-                const target_view = self.procedureEvidenceView(target);
-                if (nested.refs.len != target_view.template.evidence_params.len) {
-                    checkedArtifactInvariant("recorded procedure target evidence length differed from its declared params", .{});
-                }
+            const module_env = self.module.moduleEnvConst();
+            if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+                checkedArtifactInvariant("where-method callable relation reached scheme-use evidence emission", .{});
             }
-            const node_id = try self.internEvidenceNode(.{
+            var frame: EvidenceRecordFrame = .{
+                .record_idx = idx,
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
-                .generated_codec_derivation = generated_codec_derivation,
-                .instantiation = .{ .callable = callable_ty.? },
-                .nested = .{ .resolved = nested.refs },
-                .subst = nested.subst,
-            });
-            try self.node_by_record.put(idx, node_id);
-            return node_id;
+                .callable_ty = callable_ty.?,
+                .procedure_schema = procedure_schema,
+                .scheme_root = @enumFromInt(record.scheme_root),
+                .pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len],
+            };
+            errdefer frame.deinit(self.allocator);
+            try self.enumerateParams(frame.scheme_root, &frame.params);
+            try frame.entries.ensureTotalCapacity(self.allocator, frame.params.items.len);
+            return .{ .record = frame };
         }
 
         if (procedure_schema == .from_callable) {
             if (constraint_fn_var == null) {
                 checkedArtifactInvariant("callable-derived procedure evidence had no checked callable relation", .{});
             }
-            return try self.internEvidenceNode(.{
+            return .{ .done = try self.internEvidenceNode(.{
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .generated_codec_derivation = generated_codec_derivation,
                 .instantiation = .{ .callable = callable_ty.? },
                 .nested = .from_callable,
-            });
+            }) };
         }
 
         if (procedure_schema == .requires_record or procedure_schema == .from_target) {
@@ -20255,13 +20395,13 @@ const EvidencePass = struct {
             .{ .callable = callable }
         else
             .monomorphic;
-        return try self.internEvidenceNode(.{
+        return .{ .done = try self.internEvidenceNode(.{
             .target = target,
             .dispatcher_ty = dispatcher_ty,
             .generated_codec_derivation = generated_codec_derivation,
             .instantiation = instantiation,
             .nested = .{ .resolved = .{} },
-        });
+        }) };
     }
 
     fn internEvidenceNode(
@@ -20379,6 +20519,16 @@ const EvidencePass = struct {
         param: EvidenceParam,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedEvidence {
+        const context = try self.evidenceContextForRecordParam(pairs, param);
+        const resolution = (try self.resolveObligation(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
+        return self.evidenceFromResolution(context, resolution);
+    }
+
+    fn evidenceContextForRecordParam(
+        self: *EvidencePass,
+        pairs: []const ModuleEnv.SchemeUsePair,
+        param: EvidenceParam,
+    ) Allocator.Error!EvidenceContext {
         const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
         const fresh_dispatcher = self.pairForResolved(pairs, dispatcher_root) orelse param.dispatcher_var;
         const fn_root = self.types.resolveVar(param.constraint.fn_var).var_;
@@ -20387,7 +20537,30 @@ const EvidencePass = struct {
         // sides of the relation independently.
         const fresh_fn: ?Var = self.pairForResolved(pairs, fn_root) orelse
             if (param.source == .scheme_requirement) param.constraint.fn_var else null;
-        return try self.evidenceForVar(param, fresh_dispatcher, fresh_fn, commit_unpinned);
+        return try self.evidenceContext(param, fresh_dispatcher, fresh_fn);
+    }
+
+    /// One obligation of an instantiated scheme, ready to resolve.
+    const EvidenceContext = struct {
+        param: EvidenceParam,
+        var_: Var,
+        fresh_fn_var: ?Var,
+        method: canonical.MethodNameId,
+        structural_kind: ?static_dispatch.StructuralKind,
+        dispatcher_ty: CheckedTypeId,
+    };
+
+    fn evidenceContext(self: *EvidencePass, param: EvidenceParam, var_: Var, fresh_fn_var: ?Var) Allocator.Error!EvidenceContext {
+        const idents = self.module.identStoreConst();
+        return .{
+            .param = param,
+            .var_ = var_,
+            .fresh_fn_var = fresh_fn_var,
+            .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
+            .structural_kind = self.structuralKindForMethodIdent(param.constraint.fn_name),
+            .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, var_) orelse
+                checkedArtifactInvariant("checked scheme evidence dispatcher type was not published", .{}),
+        };
     }
 
     /// Resolve one obligation of an instantiated scheme: the fresh dispatcher
@@ -20403,13 +20576,20 @@ const EvidencePass = struct {
         fresh_fn_var: ?Var,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedEvidence {
-        const idents = self.module.identStoreConst();
-        const method = try self.names.internMethodIdent(idents, param.constraint.fn_name);
-        const structural_kind = self.structuralKindForMethodIdent(param.constraint.fn_name);
-        const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, var_) orelse
-            checkedArtifactInvariant("checked scheme evidence dispatcher type was not published", .{});
+        const context = try self.evidenceContext(param, var_, fresh_fn_var);
+        const resolution = (try self.resolveObligation(var_, context.dispatcher_ty, context.method, context.structural_kind, fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
+        return self.evidenceFromResolution(context, resolution);
+    }
 
-        const resolution = (try self.resolveObligation(var_, dispatcher_ty, method, structural_kind, fresh_fn_var, self.current_chain, commit_unpinned)) orelse return null;
+    fn evidenceFromResolution(
+        self: *EvidencePass,
+        context: EvidenceContext,
+        resolution: static_dispatch.CheckedCallResolution,
+    ) static_dispatch.CheckedEvidence {
+        const param = context.param;
+        const var_ = context.var_;
+        const fresh_fn_var = context.fresh_fn_var;
+        const dispatcher_ty = context.dispatcher_ty;
         return .{
             .dispatcher_ty = dispatcher_ty,
             .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),

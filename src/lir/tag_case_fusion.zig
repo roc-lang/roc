@@ -1128,71 +1128,85 @@ fn redirectProducerEdge(
     edge_jump: LIR.CFStmtId,
     target: LIR.JoinPointId,
 ) ResourceError!LIR.CFStmtId {
-    if (start == edge_jump) return try store.addCFStmt(.{ .jump = .{ .target = target } }, fusionOrigin(store.stmtOrigin(edge_jump)));
-    const stmt = store.getCFStmt(start);
-    switch (stmt) {
-        .decref => |release| {
-            const next = try redirectProducerEdge(store, release.next, edge_jump, target);
-            var copy = release;
-            copy.next = next;
-            return try store.addCFStmt(.{ .decref = copy }, store.stmtOrigin(start));
-        },
-        .incref => |retain| {
-            const next = try redirectProducerEdge(store, retain.next, edge_jump, target);
-            var copy = retain;
-            copy.next = next;
-            return try store.addCFStmt(.{ .incref = copy }, store.stmtOrigin(start));
-        },
-        .decref_if_initialized => |release| {
-            const next = try redirectProducerEdge(store, release.next, edge_jump, target);
-            var copy = release;
-            copy.next = next;
-            return try store.addCFStmt(.{ .decref_if_initialized = copy }, store.stmtOrigin(start));
-        },
-        .init_uninitialized,
-        .assign_ref,
-        .assign_literal,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        .store_struct,
-        .store_tag,
-        .set_local,
-        .debug,
-        .expect,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
-        .free,
-        .switch_stmt,
-        .switch_initialized_payload,
-        .str_match,
-        .str_match_set,
-        .loop_continue,
-        .loop_break,
-        .join,
-        .jump,
-        .ret,
-        .crash,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
-        => unreachable,
+    // The edge's releases are copied innermost first, so each copy's
+    // continuation exists before it.
+    var chain = std.ArrayList(LIR.CFStmtId).empty;
+    defer chain.deinit(store.allocator);
+    var cursor = start;
+    while (cursor != edge_jump) {
+        try chain.append(store.allocator, cursor);
+        cursor = switch (store.getCFStmt(cursor)) {
+            .decref => |release| release.next,
+            .incref => |retain| retain.next,
+            .decref_if_initialized => |release| release.next,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            => unreachable,
+        };
     }
+    var next = try store.addCFStmt(.{ .jump = .{ .target = target } }, fusionOrigin(store.stmtOrigin(edge_jump)));
+    while (chain.pop()) |stmt_id| {
+        const origin = store.stmtOrigin(stmt_id);
+        next = switch (store.getCFStmt(stmt_id)) {
+            .decref => |release| blk: {
+                var copy = release;
+                copy.next = next;
+                break :blk try store.addCFStmt(.{ .decref = copy }, origin);
+            },
+            .incref => |retain| blk: {
+                var copy = retain;
+                copy.next = next;
+                break :blk try store.addCFStmt(.{ .incref = copy }, origin);
+            },
+            .decref_if_initialized => |release| blk: {
+                var copy = release;
+                copy.next = next;
+                break :blk try store.addCFStmt(.{ .decref_if_initialized = copy }, origin);
+            },
+            else => unreachable,
+        };
+    }
+    return next;
 }
 
 test "tag case fusion declarations are referenced" {

@@ -446,11 +446,15 @@ pub const ProgramView = struct {
         return null;
     }
 
-    fn exprIsListMapCanReuseOp(self: ProgramView, expr_id: ExprId) bool {
-        const data = self.exprs[@intFromEnum(expr_id)].data;
-        const tag = std.meta.activeTag(data);
-        if (tag == .low_level) return data.low_level.op == .list_map_can_reuse;
-        return tag == .block and data.block.statements.len == 0 and self.exprIsListMapCanReuseOp(data.block.final_expr);
+    fn exprIsListMapCanReuseOp(self: ProgramView, root: ExprId) bool {
+        var expr_id = root;
+        while (true) {
+            const data = self.exprs[@intFromEnum(expr_id)].data;
+            const tag = std.meta.activeTag(data);
+            if (tag == .low_level) return data.low_level.op == .list_map_can_reuse;
+            if (tag != .block or data.block.statements.len != 0) return false;
+            expr_id = data.block.final_expr;
+        }
     }
 };
 

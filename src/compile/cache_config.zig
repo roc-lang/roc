@@ -240,7 +240,9 @@ pub const Constants = struct {
     /// 109: Every source node replaced by a runtime error, patterns included,
     ///      stays readable through the node store's `replaced_source_nodes`,
     ///      named by the `.malformed` payload.
-    pub const CACHE_VERSION = 109;
+    /// 110: A type variable's rank is a full word, since valid source can nest
+    ///      generalization scopes past any narrower bound.
+    pub const CACHE_VERSION = 110;
 };
 
 /// Configuration for the Roc cache system.

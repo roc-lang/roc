@@ -17634,81 +17634,76 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return ls.layoutSizeAlign(layout_val).size;
         }
 
+        /// Whether two layouts share one runtime representation: every pair
+        /// of corresponding components reachable from them must. A pair is
+        /// assumed interchangeable while it is being checked, so recursive
+        /// layouts terminate, and pairs are checked from a worklist.
         fn layoutsInterchangeable(
             self: *Self,
-            a: layout.Idx,
-            b: layout.Idx,
+            root_a: layout.Idx,
+            root_b: layout.Idx,
         ) Allocator.Error!bool {
+            const Pair = struct { a: layout.Idx, b: layout.Idx };
             var seen = std.AutoHashMap(u64, void).init(self.allocator);
             defer seen.deinit();
-            return try self.layoutsInterchangeableInner(a, b, &seen);
-        }
-
-        fn layoutsInterchangeableInner(
-            self: *Self,
-            a: layout.Idx,
-            b: layout.Idx,
-            seen: *std.AutoHashMap(u64, void),
-        ) Allocator.Error!bool {
-            if (a == b) return true;
+            var pending = std.ArrayList(Pair).empty;
+            defer pending.deinit(self.allocator);
+            try pending.append(self.allocator, .{ .a = root_a, .b = root_b });
 
             const ls = self.layout_store;
-            const a_layout = ls.getLayout(a);
-            const b_layout = ls.getLayout(b);
-            if (a_layout.tag != b_layout.tag) return false;
-            if (ls.layoutSize(a_layout) != ls.layoutSize(b_layout)) return false;
+            while (pending.pop()) |pair| {
+                const a = pair.a;
+                const b = pair.b;
+                if (a == b) continue;
 
-            const key = (@as(u64, @intFromEnum(a)) << 32) | @as(u64, @intFromEnum(b));
-            if ((try seen.getOrPut(key)).found_existing) return true;
+                const a_layout = ls.getLayout(a);
+                const b_layout = ls.getLayout(b);
+                if (a_layout.tag != b_layout.tag) return false;
+                if (ls.layoutSize(a_layout) != ls.layoutSize(b_layout)) return false;
 
-            switch (a_layout.tag) {
-                .scalar => return std.meta.eql(a_layout.getScalar(), b_layout.getScalar()),
-                .zst => return true,
-                .erased_box => return true,
-                .box, .box_of_zst => {
-                    return try self.layoutsInterchangeableInner(
-                        ls.getBoxInfo(a_layout).elem_layout_idx,
-                        ls.getBoxInfo(b_layout).elem_layout_idx,
-                        seen,
-                    );
-                },
-                .list, .list_of_zst => {
-                    return try self.layoutsInterchangeableInner(
-                        ls.getListInfo(a_layout).elem_layout_idx,
-                        ls.getListInfo(b_layout).elem_layout_idx,
-                        seen,
-                    );
-                },
-                .struct_ => {
-                    const a_info = ls.getStructInfo(a_layout);
-                    const b_info = ls.getStructInfo(b_layout);
-                    if (a_info.fields.len != b_info.fields.len) return false;
-                    var i: u32 = 0;
-                    while (i < a_info.fields.len) : (i += 1) {
-                        const a_field = a_info.fields.get(i);
-                        const b_field = b_info.fields.get(i);
-                        if (a_field.is_padding != b_field.is_padding) return false;
-                        if (!try self.layoutsInterchangeableInner(a_field.layout, b_field.layout, seen)) return false;
-                    }
-                    return true;
-                },
-                .tag_union => {
-                    const a_info = ls.getTagUnionInfo(a_layout);
-                    const b_info = ls.getTagUnionInfo(b_layout);
-                    if (a_info.variants.len != b_info.variants.len) return false;
-                    if (a_info.discriminant_offset != b_info.discriminant_offset) return false;
-                    var i: u32 = 0;
-                    while (i < a_info.variants.len) : (i += 1) {
-                        if (!try self.layoutsInterchangeableInner(
-                            a_info.variants.get(i).payload_layout,
-                            b_info.variants.get(i).payload_layout,
-                            seen,
-                        )) return false;
-                    }
-                    return true;
-                },
-                .closure, .erased_callable, .ptr => return false,
+                const key = (@as(u64, @intFromEnum(a)) << 32) | @as(u64, @intFromEnum(b));
+                if ((try seen.getOrPut(key)).found_existing) continue;
+
+                switch (a_layout.tag) {
+                    .scalar => if (!std.meta.eql(a_layout.getScalar(), b_layout.getScalar())) return false,
+                    .zst, .erased_box => {},
+                    .box, .box_of_zst => try pending.append(self.allocator, .{
+                        .a = ls.getBoxInfo(a_layout).elem_layout_idx,
+                        .b = ls.getBoxInfo(b_layout).elem_layout_idx,
+                    }),
+                    .list, .list_of_zst => try pending.append(self.allocator, .{
+                        .a = ls.getListInfo(a_layout).elem_layout_idx,
+                        .b = ls.getListInfo(b_layout).elem_layout_idx,
+                    }),
+                    .struct_ => {
+                        const a_info = ls.getStructInfo(a_layout);
+                        const b_info = ls.getStructInfo(b_layout);
+                        if (a_info.fields.len != b_info.fields.len) return false;
+                        var i: u32 = 0;
+                        while (i < a_info.fields.len) : (i += 1) {
+                            const a_field = a_info.fields.get(i);
+                            const b_field = b_info.fields.get(i);
+                            if (a_field.is_padding != b_field.is_padding) return false;
+                            try pending.append(self.allocator, .{ .a = a_field.layout, .b = b_field.layout });
+                        }
+                    },
+                    .tag_union => {
+                        const a_info = ls.getTagUnionInfo(a_layout);
+                        const b_info = ls.getTagUnionInfo(b_layout);
+                        if (a_info.variants.len != b_info.variants.len) return false;
+                        if (a_info.discriminant_offset != b_info.discriminant_offset) return false;
+                        var i: u32 = 0;
+                        while (i < a_info.variants.len) : (i += 1) {
+                            try pending.append(self.allocator, .{
+                                .a = a_info.variants.get(i).payload_layout,
+                                .b = b_info.variants.get(i).payload_layout,
+                            });
+                        }
+                    },
+                    .closure, .erased_callable, .ptr => return false,
+                }
             }
+            return true;
         }
 
         /// Call a boxy runtime C-ABI wrapper. Boxy wrappers live in `eval`,

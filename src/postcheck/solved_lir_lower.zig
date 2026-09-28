@@ -8719,72 +8719,7 @@ const Lowerer = struct {
         backing_layout: layout.Idx,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        const target_layout = self.result.store.getLocal(target).layout_idx;
-        if (target_layout == backing_layout) return try self.assignLocal(where, target, backing_local, next);
-
-        const target_content = self.result.layouts.getLayout(target_layout);
-        const backing_content = self.result.layouts.getLayout(backing_layout);
-
-        if (target_content.tag == .box and try self.layoutsEquivalent(target_content.getIdx(), backing_layout)) {
-            return try self.assignUnaryLowLevel(where, target, .box_box, backing_local, next);
-        }
-        if (target_content.tag == .box_of_zst and self.result.layouts.isZeroSized(backing_content)) {
-            return try self.assignUnaryLowLevel(where, target, .box_box, backing_local, next);
-        }
-        if (backing_content.tag == .box and try self.layoutsEquivalent(backing_content.getIdx(), target_layout)) {
-            return try self.assignUnaryLowLevel(where, target, .box_unbox, backing_local, next);
-        }
-        if (backing_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) {
-            return try self.assignUnaryLowLevel(where, target, .box_unbox, backing_local, next);
-        }
-
-        if (self.isZstLocal(target)) {
-            if (!self.isZstLocal(backing_local)) {
-                Common.invariant("nominal boundary tried to store non-zero-sized source into zero-sized target");
-            }
-            return try self.assignZst(where, target, next);
-        }
-
-        const target_is_box = target_content.tag == .box or target_content.tag == .box_of_zst;
-        const backing_is_box = backing_content.tag == .box or backing_content.tag == .box_of_zst;
-        const target_is_erased_ptr = target_content.tag == .scalar and target_content.getScalar().tag == .opaque_ptr;
-        const backing_is_erased_ptr = backing_content.tag == .scalar and backing_content.getScalar().tag == .opaque_ptr;
-        const target_is_list = target_content.tag == .list or target_content.tag == .list_of_zst;
-        const backing_is_list = backing_content.tag == .list or backing_content.tag == .list_of_zst;
-        const boxing_compatible =
-            (target_is_box == backing_is_box) or
-            (target_is_box and backing_is_erased_ptr) or
-            (backing_is_box and target_is_erased_ptr);
-        if ((target_is_box or backing_is_box or target_is_erased_ptr or backing_is_erased_ptr) and boxing_compatible and !target_is_list and !backing_is_list) {
-            return try self.addAssignRef(where, target, .{ .nominal = .{ .backing_ref = backing_local } }, next);
-        }
-
-        if (target_content.tag == .struct_ and backing_content.tag == .struct_) {
-            if (try self.assignStructBoundary(where, target, target_content, backing_local, backing_content, next)) |converted| {
-                return converted;
-            }
-        }
-        if (target_content.tag == .tag_union and backing_content.tag == .tag_union) {
-            if (try self.assignTagUnionLayoutBoundary(where, target, target_content, backing_local, backing_content, next)) |converted| {
-                return converted;
-            }
-        }
-        if (try self.layoutsEquivalent(target_layout, backing_layout)) {
-            return try self.assignLocal(where, target, backing_local, next);
-        }
-
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
-                "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
-                .{
-                    @intFromEnum(target_layout),
-                    @tagName(target_content.tag),
-                    @intFromEnum(backing_layout),
-                    @tagName(backing_content.tag),
-                },
-            );
-        }
-        unreachable;
+        return (try self.runBoundary(where, .{ .nominal_layout = .{ .target = target, .backing_local = backing_local, .backing_layout = backing_layout, .next = next } })).?;
     }
 
     fn assignUnaryLowLevel(
@@ -9567,11 +9502,14 @@ const Lowerer = struct {
             return .{ .index = i, .ty = GuardedList.at(payload_tys, i), .pat = GuardedList.at(payloads, i) };
         }
 
-        pub fn tagVariantCount(self: MatchTreeCtx, ty: Type.TypeId) ?u32 {
-            const content = self.l.types.get(ty);
-            if (content == .tag_union) return @intCast(self.l.types.tagSpan(content.tag_union).len);
-            if (content == .named and content.named.backing != null) return self.tagVariantCount(content.named.backing.?.ty);
-            return null;
+        pub fn tagVariantCount(self: MatchTreeCtx, root: Type.TypeId) ?u32 {
+            var ty = root;
+            while (true) {
+                const content = self.l.types.get(ty);
+                if (content == .tag_union) return @intCast(self.l.types.tagSpan(content.tag_union).len);
+                if (content != .named) return null;
+                ty = (content.named.backing orelse return null).ty;
+            }
         }
 
         pub fn callableVariant(_: MatchTreeCtx, _: Lifted.PatId, _: Type.TypeId) u16 {
@@ -10152,8 +10090,8 @@ const Lowerer = struct {
         }
     };
 
-    fn patternCanMiss(self: *Lowerer, pat_id: Lifted.PatId) bool {
-        return PatternRefutability.canMiss(LiftedPatternRefutabilityAdapter, .{ .lowerer = self }, pat_id);
+    fn patternCanMiss(self: *Lowerer, pat_id: Lifted.PatId) Allocator.Error!bool {
+        return PatternRefutability.canMiss(LiftedPatternRefutabilityAdapter, .{ .lowerer = self }, self.allocator, pat_id);
     }
 
     fn lowerPatternThen(self: *Lowerer, where: LowerSite, pat_id: Lifted.PatId, source: LIR.LocalId, on_match: LIR.CFStmtId, miss: ?PatternMiss, continuation: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -10726,7 +10664,7 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
         comptime_site: ?Lifted.ComptimeSiteId,
     ) Common.LowerError!LIR.CFStmtId {
-        if (!self.patternCanMiss(pat_id)) return try self.bindPattern(where, pat_id, source, next);
+        if (!try self.patternCanMiss(pat_id)) return try self.bindPattern(where, pat_id, source, next);
 
         const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
         const crash = if (comptime_site) |site|
@@ -11541,18 +11479,6 @@ const Lowerer = struct {
         return (try self.runBoundary(where, .{ .variants = .{ .kind = .tag_union, .target = target, .target_span = target_span, .source = source, .source_span = source_span, .next = next } })).?;
     }
 
-    /// Two struct layouts field by field; null when their fields do not
-    /// correspond one to one.
-    fn assignStructBoundary(self: *Lowerer, where: LowerSite, target: LIR.LocalId, target_content: layout.Layout, source: LIR.LocalId, source_content: layout.Layout, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
-        return try self.runBoundary(where, .{ .struct_layout = .{ .target = target, .target_content = target_content, .source = source, .source_content = source_content, .next = next } });
-    }
-
-    /// Two tag-union layouts variant by variant; null when they are not
-    /// equivalent.
-    fn assignTagUnionLayoutBoundary(self: *Lowerer, where: LowerSite, target: LIR.LocalId, target_content: layout.Layout, source: LIR.LocalId, source_content: layout.Layout, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
-        return try self.runBoundary(where, .{ .tag_union_layout = .{ .target = target, .target_content = target_content, .source = source, .source_content = source_content, .next = next } });
-    }
-
     /// A conversion between two locals' representations in front of `next`.
     const BoundaryTask = union(enum) {
         /// `assignTypedBoundary`
@@ -11581,6 +11507,15 @@ const Lowerer = struct {
         tag_union_layout: struct { target: LIR.LocalId, target_content: layout.Layout, source: LIR.LocalId, source_content: layout.Layout, next: LIR.CFStmtId },
         /// One variant of two equivalent tag-union layouts.
         tag_union_layout_variant: struct { target: LIR.LocalId, target_content: layout.Layout, target_index: u16, source: LIR.LocalId, source_content: layout.Layout, source_index: u16, next: LIR.CFStmtId },
+        /// `assignNominalBoundary`
+        nominal_layout: NominalLayoutConversion,
+    };
+
+    const NominalLayoutConversion = struct {
+        target: LIR.LocalId,
+        backing_local: LIR.LocalId,
+        backing_layout: layout.Idx,
+        next: LIR.CFStmtId,
     };
 
     const TypedConversion = struct {
@@ -11654,6 +11589,84 @@ const Lowerer = struct {
         ret: ?LIR.CFStmtId,
     };
 
+    /// A nominal value's backing into the nominal's own layout. Struct and
+    /// tag-union layouts convert component by component as child tasks
+    /// (cursor 1 and 2); a child that does not apply answers none, and the
+    /// next conversion is tried.
+    fn stepNominalLayoutBoundary(self: *Lowerer, where: LowerSite, frame: *BoundaryFrame, task: NominalLayoutConversion, input: ?(?LIR.CFStmtId)) Common.LowerError!BoundaryStep {
+        const target = task.target;
+        const backing_local = task.backing_local;
+        const backing_layout = task.backing_layout;
+        const next = task.next;
+        if (input) |converted| if (converted) |stmt| return .{ .ret = stmt };
+
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const target_content = self.result.layouts.getLayout(target_layout);
+        const backing_content = self.result.layouts.getLayout(backing_layout);
+        if (frame.cursor == 0) {
+            if (target_layout == backing_layout) return .{ .ret = try self.assignLocal(where, target, backing_local, next) };
+
+            if (target_content.tag == .box and try self.layoutsEquivalent(target_content.getIdx(), backing_layout)) {
+                return .{ .ret = try self.assignUnaryLowLevel(where, target, .box_box, backing_local, next) };
+            }
+            if (target_content.tag == .box_of_zst and self.result.layouts.isZeroSized(backing_content)) {
+                return .{ .ret = try self.assignUnaryLowLevel(where, target, .box_box, backing_local, next) };
+            }
+            if (backing_content.tag == .box and try self.layoutsEquivalent(backing_content.getIdx(), target_layout)) {
+                return .{ .ret = try self.assignUnaryLowLevel(where, target, .box_unbox, backing_local, next) };
+            }
+            if (backing_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) {
+                return .{ .ret = try self.assignUnaryLowLevel(where, target, .box_unbox, backing_local, next) };
+            }
+
+            if (self.isZstLocal(target)) {
+                if (!self.isZstLocal(backing_local)) {
+                    Common.invariant("nominal boundary tried to store non-zero-sized source into zero-sized target");
+                }
+                return .{ .ret = try self.assignZst(where, target, next) };
+            }
+
+            const target_is_box = target_content.tag == .box or target_content.tag == .box_of_zst;
+            const backing_is_box = backing_content.tag == .box or backing_content.tag == .box_of_zst;
+            const target_is_erased_ptr = target_content.tag == .scalar and target_content.getScalar().tag == .opaque_ptr;
+            const backing_is_erased_ptr = backing_content.tag == .scalar and backing_content.getScalar().tag == .opaque_ptr;
+            const target_is_list = target_content.tag == .list or target_content.tag == .list_of_zst;
+            const backing_is_list = backing_content.tag == .list or backing_content.tag == .list_of_zst;
+            const boxing_compatible =
+                (target_is_box == backing_is_box) or
+                (target_is_box and backing_is_erased_ptr) or
+                (backing_is_box and target_is_erased_ptr);
+            if ((target_is_box or backing_is_box or target_is_erased_ptr or backing_is_erased_ptr) and boxing_compatible and !target_is_list and !backing_is_list) {
+                return .{ .ret = try self.addAssignRef(where, target, .{ .nominal = .{ .backing_ref = backing_local } }, next) };
+            }
+
+            if (target_content.tag == .struct_ and backing_content.tag == .struct_) {
+                frame.cursor = 1;
+                return .{ .call = .{ .struct_layout = .{ .target = target, .target_content = target_content, .source = backing_local, .source_content = backing_content, .next = next } } };
+            }
+        }
+        if (frame.cursor < 2 and target_content.tag == .tag_union and backing_content.tag == .tag_union) {
+            frame.cursor = 2;
+            return .{ .call = .{ .tag_union_layout = .{ .target = target, .target_content = target_content, .source = backing_local, .source_content = backing_content, .next = next } } };
+        }
+        if (try self.layoutsEquivalent(target_layout, backing_layout)) {
+            return .{ .ret = try self.assignLocal(where, target, backing_local, next) };
+        }
+
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
+                .{
+                    @intFromEnum(target_layout),
+                    @tagName(target_content.tag),
+                    @intFromEnum(backing_layout),
+                    @tagName(backing_content.tag),
+                },
+            );
+        }
+        unreachable;
+    }
+
     fn runBoundary(self: *Lowerer, where: LowerSite, root: BoundaryTask) Common.LowerError!?LIR.CFStmtId {
         var frames: std.ArrayList(BoundaryFrame) = .empty;
         defer {
@@ -11714,20 +11727,24 @@ const Lowerer = struct {
                 return .{ .call = .{ .typed = .{ .target = task.target, .target_ty = task.target_ty, .source = frame.first, .source_ty = task.source_ty, .next = task.next } } };
             },
             .equivalent_named => |task| {
-                if (input) |converted| {
-                    return .{ .ret = try self.assignNominalBoundary(where, frame.second, task.source, self.result.store.getLocal(task.source).layout_idx, converted.?) };
-                }
                 const target_backing = self.types.get(task.target_ty).named.backing orelse
                     Common.invariant("equivalent named boundary target had no runtime backing");
                 const source_backing = self.types.get(task.source_ty).named.backing orelse
                     Common.invariant("equivalent named boundary source had no runtime backing");
-
-                const target_backing_layout = try self.layoutOfType(target_backing.ty);
-                frame.first = try self.addTemp(target_backing.ty);
-                frame.second = try self.addTemp(source_backing.ty);
-
-                const current = try self.assignNominalBoundary(where, task.target, frame.first, target_backing_layout, task.next);
-                return .{ .call = .{ .typed = .{ .target = frame.first, .target_ty = target_backing.ty, .source = frame.second, .source_ty = source_backing.ty, .next = current } } };
+                switch (frame.cursor) {
+                    0 => {
+                        const target_backing_layout = try self.layoutOfType(target_backing.ty);
+                        frame.first = try self.addTemp(target_backing.ty);
+                        frame.second = try self.addTemp(source_backing.ty);
+                        frame.cursor = 1;
+                        return .{ .call = .{ .nominal_layout = .{ .target = task.target, .backing_local = frame.first, .backing_layout = target_backing_layout, .next = task.next } } };
+                    },
+                    1 => {
+                        frame.cursor = 2;
+                        return .{ .call = .{ .typed = .{ .target = frame.first, .target_ty = target_backing.ty, .source = frame.second, .source_ty = source_backing.ty, .next = input.?.? } } };
+                    },
+                    else => return .{ .tail = .{ .nominal_layout = .{ .target = frame.second, .backing_local = task.source, .backing_layout = self.result.store.getLocal(task.source).layout_idx, .next = input.?.? } } },
+                }
             },
             .fields => |task| try self.stepFieldsBoundary(where, frame, task, input),
             .variants => |task| try self.stepVariantsBoundary(where, frame, task, input),
@@ -11736,6 +11753,7 @@ const Lowerer = struct {
             .struct_layout => |task| try self.stepStructLayoutBoundary(where, frame, task, input),
             .tag_union_layout => |task| try self.stepTagUnionLayoutBoundary(where, frame, task, input),
             .tag_union_layout_variant => |task| try self.stepTagUnionLayoutVariantBoundary(where, frame, task, input),
+            .nominal_layout => |task| try self.stepNominalLayoutBoundary(where, frame, task, input),
         };
     }
 
