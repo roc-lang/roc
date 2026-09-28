@@ -3286,13 +3286,13 @@ const Formatter = struct {
             try fmt.markRedundantOpenRows(fmt.ast.store.statementSlice(block.statements), .block);
             for (fmt.ast.store.statementSlice(block.statements), 0..) |s, i| {
                 const region = fmt.nodeRegion(@intFromEnum(s));
-                try fmt.flushCommentsBeforeDiscard(region.start);
+                _ = try fmt.flushCommentsBeforeWithSpacing(region.start, .{ .after_block_open = i == 0 });
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
                 try fmt.formatStatement(s);
 
                 if (i == block.statements.span.len - 1) {
-                    try fmt.flushCommentsBeforeDiscard(region.end);
+                    _ = try fmt.flushCommentsBeforeWithSpacing(region.end, .{ .before_block_close = true });
                 }
             }
             try fmt.ensureNewline();
@@ -3302,7 +3302,10 @@ const Formatter = struct {
         } else if (fmt.regionHasInteriorComment(block.region)) {
             try fmt.push('{');
             fmt.curr_indent += 1;
-            try fmt.flushCommentsBeforeDiscard(fmt.regionClosingToken(block.region).?);
+            _ = try fmt.flushCommentsBeforeWithSpacing(fmt.regionClosingToken(block.region).?, .{
+                .after_block_open = true,
+                .before_block_close = true,
+            });
             fmt.curr_indent -= 1;
             try fmt.ensureNewline();
             try fmt.pushIndent();
@@ -3682,15 +3685,25 @@ const Formatter = struct {
     /// are emitted before any comment or trailing content. Used to insert blank lines
     /// between top-level defs.
     fn flushCommentsBeforeMin(fmt: *Formatter, tokenIdx: Token.Idx, min_leading_newlines: u8) error{WriteFailed}!bool {
+        return fmt.flushCommentsBeforeWithSpacing(tokenIdx, .{ .min_leading_newlines = min_leading_newlines });
+    }
+
+    const CommentSpacing = struct {
+        min_leading_newlines: u8 = 0,
+        after_block_open: bool = false,
+        before_block_close: bool = false,
+    };
+
+    fn flushCommentsBeforeWithSpacing(fmt: *Formatter, tokenIdx: Token.Idx, spacing: CommentSpacing) error{WriteFailed}!bool {
         const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
-        return fmt.flushComments(start, fmt.ast.env.source[start..end], min_leading_newlines);
+        return fmt.flushComments(start, fmt.ast.env.source[start..end], spacing);
     }
 
     fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!bool {
         const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
-        return fmt.flushComments(start, fmt.ast.env.source[start..end], 0);
+        return fmt.flushComments(start, fmt.ast.env.source[start..end], .{});
     }
 
     fn flushCommentsEOF(fmt: *Formatter) error{WriteFailed}!void {
@@ -3748,48 +3761,36 @@ const Formatter = struct {
         return offset == 0 and comment_text.len > 0 and comment_text[0] == '!';
     }
 
-    /// `start_offset` is the absolute source offset that `between_text` begins at.
-    fn flushComments(fmt: *Formatter, start_offset: usize, between_text: []const u8, min_leading_newlines: u8) error{WriteFailed}!bool {
+    /// Delay whitespace until its following comment or token is known, so block
+    /// edges can trim blank lines without changing gaps inside the block.
+    /// `start_offset` is the absolute source offset of `between_text`.
+    fn flushComments(fmt: *Formatter, start_offset: usize, between_text: []const u8, spacing: CommentSpacing) error{WriteFailed}!bool {
         var newline_count: usize = 0;
-        var prev_was_comment: bool = false;
-        // True once we've either upgraded a source newline into a blank line
-        // or padded up front to satisfy `min_leading_newlines`. Used to decide
-        // whether we still owe a trailing blank line at the end.
-        var leading_blank_satisfied: bool = (min_leading_newlines == 0);
+        var prev_was_comment = false;
+        var leading_blank_satisfied = spacing.min_leading_newlines == 0;
         var i: usize = 0;
         while (i < between_text.len) {
             if (between_text[i] == '#') {
-                // Found a comment, extract it
-                const comment_start = i + 1; // Skip the #
+                const comment_start = i + 1;
                 var comment_end = comment_start;
                 while (comment_end < between_text.len and between_text[comment_end] != '\n' and between_text[comment_end] != '\r') {
                     comment_end += 1;
                 }
 
-                // If this comment is "standalone" (preceded by at least one
-                // newline) AND we still owe the caller a leading blank line,
-                // emit it now so the comment sticks to the next statement.
-                // Inline comments (no preceding newline) are kept attached
-                // to the previous statement and the blank line is emitted
-                // afterwards.
+                // Keep inline comments attached to the preceding token. Any
+                // required separation before the next definition follows them.
                 const is_inline = newline_count == 0 and !fmt.has_newline;
                 if (!leading_blank_satisfied and !is_inline) {
-                    while (newline_count < min_leading_newlines) {
-                        try fmt.newline();
-                        newline_count += 1;
-                    }
+                    newline_count = @max(newline_count, spacing.min_leading_newlines);
                     leading_blank_satisfied = true;
                 }
-
-                // Check if it's a doc comment
                 const is_doc_comment = comment_start < between_text.len and between_text[comment_start] == '#';
-                // If a doc comment directly follows code (only one \n between them,
-                // and the previous token wasn't another comment), add a blank line.
-                if (is_doc_comment and newline_count == 1 and !prev_was_comment) {
-                    try fmt.newline();
-                    newline_count += 1;
+                if (is_doc_comment and newline_count == 1 and !prev_was_comment and !spacing.after_block_open) {
+                    newline_count = 2;
                 }
 
+                const limit: usize = if (spacing.after_block_open and !prev_was_comment) 1 else 2;
+                for (0..@min(limit, newline_count)) |_| try fmt.newline();
                 if (newline_count > 0 or fmt.has_newline) {
                     try fmt.pushIndent();
                 } else {
@@ -3797,46 +3798,29 @@ const Formatter = struct {
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
-                // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
+                // Preserve shebangs and doc-comment markers.
                 if (!isShebang(start_offset + i, comment_text) and comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
-                try fmt.newline();
-                newline_count = 1; // reset count to allow an additional newline after a comment
+                newline_count = 1;
                 prev_was_comment = true;
                 i = comment_end + 1;
-                // The comment's line ending was already emitted, including both bytes of CRLF.
+                // Count the comment's line ending once, including CRLF.
                 if (i < between_text.len and between_text[comment_end] == '\r' and between_text[i] == '\n') i += 1;
             } else if (between_text[i] == '\n') {
-                if (newline_count < 2) {
-                    try fmt.newline();
-                }
                 newline_count += 1;
-                // Upgrade the first source newline into a blank line if the
-                // caller asked for one and we haven't already satisfied it.
-                if (!leading_blank_satisfied and !prev_was_comment and newline_count == 1 and min_leading_newlines >= 2) {
-                    try fmt.newline();
-                    newline_count = 2;
-                    leading_blank_satisfied = true;
-                }
                 i += 1;
             } else {
                 i += 1;
             }
         }
 
-        // If we still owe a blank line (e.g., the only content was an inline
-        // comment, or the inter-statement region was empty), pad it on at the
-        // end so the next statement is preceded by the requested blank.
         if (!leading_blank_satisfied) {
-            while (newline_count < min_leading_newlines) {
-                try fmt.newline();
-                newline_count += 1;
-            }
+            newline_count = @max(newline_count, spacing.min_leading_newlines);
         }
-
-        // Return true if there was a newline, whether or not there was a comment
+        const limit: usize = if (spacing.before_block_close or (spacing.after_block_open and !prev_was_comment)) 1 else 2;
+        for (0..@min(limit, newline_count)) |_| try fmt.newline();
         return newline_count > 0;
     }
 
@@ -6544,4 +6528,45 @@ test "a bare line break after a unary operator normalizes away" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("x = !y\n", result);
+}
+
+test "blank lines at block beginning/end are removed" {
+    // Repro for https://github.com/roc-lang/roc/issues/11774
+    // `roc fmt` must drop blank lines immediately after the opening `{` and
+    // immediately before the closing `}` of a block, while preserving interior
+    // blank lines between statements.
+    const input = "main! = |_args| {\n" ++
+        "\n" ++
+        "\tStdout.line!(\"Hello world!\")?\n" ++
+        "\n" ++
+        "\tOk({})\n" ++
+        "\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected = "main! = |_args| {\n" ++
+        "\tStdout.line!(\"Hello world!\")?\n" ++
+        "\n" ++
+        "\tOk({})\n" ++
+        "}\n";
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "block boundary spacing preserves interior comments and blank lines" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "x = {\n\n\n  1\n\n\n}\n", .expected = "x = {\n\t1\n}\n" },
+        .{ .input = "x = {\n\n y = {\n\n 1\n\n }\n\n y\n\n}\n", .expected = "x = {\n\ty = {\n\t\t1\n\t}\n\n\ty\n}\n" },
+        .{ .input = "x = {\n\n # leading\n\n 1\n\n # trailing\n\n}\n", .expected = "x = {\n\t# leading\n\n\t1\n\n\t# trailing\n}\n" },
+        .{ .input = "x = {\n ## docs\n y = 1\n y\n}\n", .expected = "x = {\n\t## docs\n\ty = 1\n\ty\n}\n" },
+        .{ .input = "x = { # opening\n\n 1 # result\n\n}\n", .expected = "x = { # opening\n\n\t1 # result\n}\n" },
+        .{ .input = "x = || {\n\n ## first\n\n # second\n\n}\n", .expected = "x = || {\n\t## first\n\n\t# second\n}\n" },
+        .{ .input = "x = || {\n\n}\n", .expected = "x = || {}\n" },
+        .{ .input = "x = {\r\n\r\n # leading\r\n\r\n 1 # result\r\n\r\n}\r\n", .expected = "x = {\n\t# leading\n\n\t1 # result\n}\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
 }
