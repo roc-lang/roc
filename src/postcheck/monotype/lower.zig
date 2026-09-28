@@ -25128,8 +25128,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!?DraftExprId {
-        const entry = self.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
-        if (self.loweringOwnHoistedConstRoot(entry)) return null;
+        const entry = self.restoredHoistedConstEntry(expr_id) orelse return null;
         return try self.restoredHoistedConstAtType(entry, ty);
     }
 
@@ -25138,9 +25137,19 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         request_node: NodeId,
     ) Allocator.Error!?DraftExprId {
+        const entry = self.restoredHoistedConstEntry(expr_id) orelse return null;
+        return try self.restoredHoistedConstAtNode(entry, request_node);
+    }
+
+    /// The hoisted const an expression lowers by restoring, rather than by
+    /// lowering its own checked body.
+    fn restoredHoistedConstEntry(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+    ) ?checked.HoistedConstEntry {
         const entry = self.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
-        return try self.restoredHoistedConstAtNode(entry, request_node);
+        return entry;
     }
 
     fn selectedHoistedConstEntry(
@@ -43021,6 +43030,10 @@ const BodyContext = struct {
     }
 
     fn graphFreeResultTypeForExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+        // A restored hoisted const never performs its checked dispatch, so
+        // that dispatch's graph-free classification does not describe the
+        // restored value's type cell.
+        if (self.restoredHoistedConstEntry(expr_id) != null) return null;
         const expr = self.view.bodies.expr(expr_id);
         const plan_id = switch (expr.data) {
             .dispatch_call => |plan| plan,
