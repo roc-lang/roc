@@ -11681,7 +11681,13 @@ The dispatch *target*'s declaration is the third route to `checked_error`, and
 it fences the target the way the paragraph above fences the receiver. A method
 whose declaration canonicalization could not canonicalize, or whose body
 checking poisoned, carries `e_runtime_error` as its bound expression; its
-diagnostic is already reported and it has no runtime target. Such a declaration
+diagnostic is already reported and it has no runtime target. An annotated
+method whose body contains an error instead keeps its lambda around the
+poisoned body, checked at the annotation's type, only when that annotation
+itself declares a function: a bare `_` hole declares no callable type, and a
+function shape filled into it by the erroneous body is not a declaration, so
+such a method's bound expression becomes the runtime error like an unannotated
+one. Such a declaration
 is still *declared*, so `MethodRegistry` records its `(MethodOwner,
 MethodNameId)` key with no target rather than omitting it, and
 `lookupCheckedMethodTarget` answers `rejected` instead of "no such method".

@@ -21332,9 +21332,14 @@ const ExprCheckFrame = struct {
             if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
                 // A method's callable wrapper is explicit input to method-template
                 // publication, so keep that wrapper around its already-erroneous
-                // child. Other annotated values are the executable boundary and
-                // must themselves become the runtime error.
+                // child. The kept wrapper's checked type is the annotation's, so
+                // this requires an annotation that itself declares a function; a
+                // wrapper whose function shape came only from a `_` hole filled by
+                // the erroneous body has no declared callable type. Other annotated
+                // values are the executable boundary and must themselves become
+                // the runtime error.
                 const is_method_callable = isFunctionDef(&checker.cir.store, checker.cir.store.getExpr(self.expr_idx)) and
+                    checker.varIsFunctionType(anno_vars.anno_var_backup) and
                     checker.exprDefinesMethod(self.expr_idx);
                 if (!is_method_callable) {
                     try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
