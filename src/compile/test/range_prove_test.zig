@@ -278,6 +278,67 @@ fn countColdDefaults(store: *const lir.LirStore, layouts: *const layout.Store) h
     }
 }
 
+const FillShape = struct {
+    found: bool = false,
+    unsafe_appends: usize = 0,
+    reserves: usize = 0,
+    fits_checks: usize = 0,
+};
+
+var fill_shape: FillShape = .{};
+
+fn countFillShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    fill_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "list_with_capacity") == 0) continue;
+        fill_shape = .{
+            .found = true,
+            .unsafe_appends = std.mem.count(u8, text, "list_append_unsafe"),
+            .reserves = std.mem.count(u8, text, "list_reserve("),
+            .fits_checks = std.mem.count(u8, text, "num_is_gte("),
+        };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== fill proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+test "a counted fill of a reserved list runs its appends unchecked once the slack is seen to cover the loop" {
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(
+            "fill : U64, U8 -> U64\n" ++
+                "fill = |n, x| {\n" ++
+                "    var $out = List.with_capacity(n)\n" ++
+                "    var $i = 0\n" ++
+                "    while $i < n {\n" ++
+                "        $out = List.append($out, x)\n" ++
+                "        $i = $i + 1\n" ++
+                "    }\n" ++
+                "    List.len($out)\n" ++
+                "}\n" ++
+                "# A second caller keeps `List.append` a procedure the loop calls,\n" ++
+                "# rather than a body inlined at its one use.\n" ++
+                "tail : List(U8), U8 -> U64\n" ++
+                "tail = |xs, x| List.len(List.append(xs, x))\n",
+            "fill(List.len(_args), 3) + tail(Str.to_utf8(Str.join_with(_args, \",\")), 4)",
+        ),
+        .{ .inline_mode = .wrappers },
+        countFillShape,
+    );
+    try std.testing.expect(fill_shape.found);
+    // The checked body keeps its reserve behind the limit diamond; the
+    // versioned copy appends without one; the head compares the spare
+    // against the remaining iterations.
+    try std.testing.expectEqual(@as(usize, 2), fill_shape.unsafe_appends);
+    try std.testing.expectEqual(@as(usize, 1), fill_shape.reserves);
+    try std.testing.expect(fill_shape.fits_checks >= 1);
+}
+
 test "a checked list read's miss arm lowers as the cold default of its bounds switch" {
     try harness.expectLirInspectionWithOptions(
         arithmeticApp(

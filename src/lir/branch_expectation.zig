@@ -115,7 +115,6 @@ fn carriesExpectation(store: *const LirStore, definitions: *const collections.De
 }
 
 const testing = std.testing;
-const layout_mod = @import("layout");
 
 const Fixture = struct {
     store: LirStore,
