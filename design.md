@@ -18106,6 +18106,30 @@ ancestor directory and filters events by the unresolved relative suffix. This
 keeps watch coverage for later directory creation without widening the logical
 watch set.
 
+Filesystem watch registration must also scale with explicit input paths, never
+with unrelated directory trees. The watch layer retains an indexed graph of
+the path entries needed to reach each input, including symlinks and their
+targets. Directory watches are nonrecursive. Existing ancestors guard path
+replacement, and creating a missing path component refreshes coverage even if
+the input is still missing and no compilation is necessary. File inode watches
+on inotify and vnode backends also observe writes through aliases. Compiler
+input identities remain logical paths; resolved notification locations do not
+change checked-module or cache identities.
+
+Named notifications select affected inputs before any content reads. Vnode
+directory notifications have no entry names, so they inspect only immediate
+entries in the input graph, without enumerating directory contents. macOS uses
+vnode notifications for this exact-input mode to avoid recursive FSEvents
+coverage of ancestor directories. Filesystem timestamps do not establish
+content identity, and access-time-only notifications must not create read loops.
+Lost notifications require coverage and input-state reconciliation. Windows
+registrations must keep their overlapped I/O records and buffers at stable
+addresses until completion, including cancellation completion during shutdown.
+Registration is validated against the path graph after watches are installed,
+followed by the existing comparison with the states consumed by compilation;
+neither path replacement nor source edits during setup may silently escape
+detection.
+
 Filesystem event bursts are debounced for 25ms before re-reading watched inputs.
 If another filesystem event with changed bytes arrives while a check/test rerun
 is in progress, the in-progress run is cancelled and superseded by the newest
