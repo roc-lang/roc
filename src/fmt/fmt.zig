@@ -834,7 +834,15 @@ const Formatter = struct {
                     try fmt.formatWhereConstraint(w, where_multiline);
                 }
                 if (d.associated) |assoc| {
-                    try fmt.pushAll(".");
+                    const open_curly = assoc.region.start;
+                    const dot = open_curly - 1;
+                    if (fmt.hasCommentBefore(dot) and try fmt.flushCommentsBefore(dot)) {
+                        try fmt.pushIndent();
+                    }
+                    try fmt.push('.');
+                    if (fmt.hasCommentBefore(open_curly) and try fmt.flushCommentsBefore(open_curly)) {
+                        try fmt.pushIndent();
+                    }
                     try fmt.push('{');
                     if (assoc.statements.span.len > 0) {
                         fmt.curr_indent += 1;
@@ -851,6 +859,12 @@ const Formatter = struct {
                         try fmt.flushCommentsBeforeDiscard(assoc.region.end - 1);
                         try fmt.ensureNewline();
                         fmt.curr_indent -= 1;
+                        try fmt.pushIndent();
+                    } else if (fmt.regionHasInteriorComment(assoc.region)) {
+                        fmt.curr_indent += 1;
+                        try fmt.flushCommentsBeforeDiscard(fmt.regionClosingToken(assoc.region).?);
+                        fmt.curr_indent -= 1;
+                        try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
                     try fmt.push('}');
@@ -4703,6 +4717,49 @@ test "issue 11713: match closing brace aligns after a multiline final arm" {
         const result = try moduleFmtsStable(std.testing.allocator, input, false);
         defer std.testing.allocator.free(result);
         try std.testing.expectEqualStrings(input, result);
+    }
+}
+
+test "issue 11773: comments preserved around a method list" {
+    // Repro for https://github.com/roc-lang/roc/issues/11773
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{
+            .input = "MyModule := {\n\t# TODO: write code\n}.{\n\t# TODO: write code\n}\n",
+            .expected = "MyModule := {\n\t# TODO: write code\n}.{\n\t# TODO: write code\n}\n",
+        },
+        .{
+            .input = "MyModule := U64.{ # inline\n}",
+            .expected = "MyModule := U64.{ # inline\n}\n",
+        },
+        .{
+            .input = "MyModule := U64.{\n\t# first\n\n\t# second\n}",
+            .expected = "MyModule := U64.{\n\t# first\n\n\t# second\n}\n",
+        },
+        .{
+            .input = "Outer := U64.{\n\tInner := U64.{\n\t\t# nested\n\t}\n}",
+            .expected = "Outer := U64.{\n\tInner := U64.{\n\t\t# nested\n\t}\n}\n",
+        },
+        .{
+            .input = "MyModule := U64 # before dot\n.{ x = 1 }",
+            .expected = "MyModule := U64 # before dot\n.{\n\tx = 1\n}\n",
+        },
+        .{
+            .input = "MyModule := U64 # before dot\n.{}",
+            .expected = "MyModule := U64 # before dot\n.{}\n",
+        },
+        .{
+            .input = "MyModule := U64. # after dot\n{ x = 1 }",
+            .expected = "MyModule := U64. # after dot\n{\n\tx = 1\n}\n",
+        },
+        .{
+            .input = "MyModule := U64\n.\n{}",
+            .expected = "MyModule := U64.{}\n",
+        },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
     }
 }
 
