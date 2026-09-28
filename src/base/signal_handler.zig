@@ -105,7 +105,10 @@ const ULONG = c_ulong;
 const ALT_STACK_SIZE = 64 * 1024;
 
 threadlocal var thread_stack_bounds: ?StackBounds = null;
-threadlocal var thread_alt_stack_storage: [ALT_STACK_SIZE]u8 align(16) = undefined;
+// sigaltstack accepts byte-aligned storage. The escape path aligns the actual
+// landing address; do not promise over-alignment for Darwin's TLS allocation,
+// which would let optimization erase that required stack-pointer alignment.
+threadlocal var thread_alt_stack_storage: [ALT_STACK_SIZE]u8 = undefined;
 threadlocal var current_thread_installed = false;
 
 // zig 0.16 moved the blocking Thread.Mutex behind std.Io; for this

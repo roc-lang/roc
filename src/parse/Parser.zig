@@ -1673,6 +1673,7 @@ const RequiresEntriesResult = union(enum) {
 };
 
 fn parseRequiresEntriesTokens(self: *Parser) std.mem.Allocator.Error!RequiresEntriesResult {
+    const start = self.pos;
     self.expect(.OpenCurly) catch {
         return .{ .malformed = .expected_requires_rigids_open_curly };
     };
@@ -1772,7 +1773,9 @@ fn parseRequiresEntriesTokens(self: *Parser) std.mem.Allocator.Error!RequiresEnt
             return .{ .malformed = .expected_requires_signatures_close_curly };
         };
     }
-    return .{ .span = try self.store.requiresEntrySpanFrom(requires_entries_top) };
+    var entries = try self.store.requiresEntrySpanFrom(requires_entries_top);
+    entries.region = .{ .start = start, .end = self.pos };
+    return .{ .span = entries };
 }
 
 fn parsePatternString(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx {

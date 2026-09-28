@@ -42,6 +42,7 @@ const MachO = struct {
     const S_ATTR_PURE_INSTRUCTIONS = 0x80000000;
     const S_ATTR_DEBUG = 0x02000000;
     const S_ATTR_SOME_INSTRUCTIONS = 0x00000400;
+    const S_ZEROFILL = 0x1;
 
     // Symbol types
     const N_EXT = 0x01;
@@ -202,6 +203,12 @@ pub const Architecture = enum {
 };
 
 /// Symbol definition
+/// Ordinal of the `__bss` section: it follows the five sections every object
+/// declares, so a zero-fill symbol's `n_sect` is stable.
+pub const zero_fill_section_number: u8 = 6;
+
+/// A symbol the object defines in one of its sections, or references
+/// undefined (section 0).
 pub const Symbol = struct {
     name: []const u8,
     section: u8, // 0 = undefined, 1 = __text, etc.
@@ -221,6 +228,8 @@ pub const MachOWriter = struct {
 
     // Read-only data section
     rodata: []const u8,
+    /// Size of `__bss`, which the file declares without storing bytes.
+    zero_fill_size: u64,
 
     // Symbols and relocations
     symbols: std.ArrayList(Symbol),
@@ -265,6 +274,7 @@ pub const MachOWriter = struct {
             .arch = arch,
             .text = &.{},
             .rodata = &.{},
+            .zero_fill_size = 0,
             .symbols = .empty,
             .text_relocs = .empty,
             .rodata_relocs = .empty,
@@ -313,6 +323,10 @@ pub const MachOWriter = struct {
     }
 
     /// Borrow read-only data section contents until write completes.
+    pub fn setZeroFill(self: *Self, size: u64) void {
+        self.zero_fill_size = size;
+    }
+
     pub fn setRodata(self: *Self, rodata: []const u8) void {
         self.rodata = rodata;
     }
@@ -415,7 +429,7 @@ pub const MachOWriter = struct {
     pub fn write(self: *Self, output: *std.ArrayList(u8)) Allocator.Error!void {
         // Calculate sizes
         const header_size: u32 = @sizeOf(MachHeader64);
-        const section_count: u32 = 5;
+        const section_count: u32 = 6;
         const segment_cmd_size: u32 = @sizeOf(SegmentCommand64) + section_count * @sizeOf(Section64);
         const symtab_cmd_size: u32 = @sizeOf(SymtabCommand);
         const dysymtab_cmd_size: u32 = @sizeOf(DysymtabCommand);
@@ -517,9 +531,10 @@ pub const MachOWriter = struct {
             .cmdsize = segment_cmd_size,
             .segname = segname,
             .vmaddr = 0,
-            .vmsize = text_size + rodata_size + debug_line_size + debug_abbrev_size + debug_info_size,
+            .vmsize = @as(u64, text_size) + rodata_size + debug_line_size + debug_abbrev_size + debug_info_size + self.zero_fill_size,
             .fileoff = text_offset,
-            // The segment contains all five declared sections, including DWARF.
+            // The segment's file extent covers the five byte-backed sections,
+            // including DWARF; `__bss` adds only to its virtual size.
             .filesize = text_reloc_offset - text_offset,
             .maxprot = 7, // rwx
             .initprot = 7,
@@ -574,6 +589,7 @@ pub const MachOWriter = struct {
         var dwarf_segname: [16]u8 = std.mem.zeroes([16]u8);
         @memcpy(dwarf_segname[0..7], "__DWARF");
         const debug_addr_base: u64 = @as(u64, text_size) + rodata_size;
+        const zero_fill_addr: u64 = debug_addr_base + debug_line_size + debug_abbrev_size + debug_info_size;
 
         var dbg_line_name: [16]u8 = std.mem.zeroes([16]u8);
         @memcpy(dbg_line_name[0..12], "__debug_line");
@@ -628,6 +644,26 @@ pub const MachOWriter = struct {
             .reserved3 = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&debug_info_section));
+
+        // `__bss` is last in the segment, as zero-fill sections must be, and
+        // has no file offset: the loader maps zero pages for its extent.
+        var bss_sectname: [16]u8 = std.mem.zeroes([16]u8);
+        @memcpy(bss_sectname[0..5], "__bss");
+        const bss_section = Section64{
+            .sectname = bss_sectname,
+            .segname = const_segname,
+            .addr = zero_fill_addr,
+            .size = self.zero_fill_size,
+            .offset = 0,
+            .@"align" = 4,
+            .reloff = 0,
+            .nreloc = 0,
+            .flags = MachO.S_ZEROFILL,
+            .reserved1 = 0,
+            .reserved2 = 0,
+            .reserved3 = 0,
+        };
+        output.appendSliceAssumeCapacity(std.mem.asBytes(&bss_section));
 
         // Write symtab command
         const symtab_cmd = SymtabCommand{
@@ -756,6 +792,7 @@ pub const MachOWriter = struct {
                 0 => 0,
                 1 => 0,
                 2 => text_size,
+                zero_fill_section_number => zero_fill_addr,
                 else => unreachable,
             };
 
@@ -1001,9 +1038,14 @@ test "macho segment file extent contains every declared section" {
     for (0..segment.nsects) |index| {
         const offset = sections_offset + index * @sizeOf(Section64);
         const section = std.mem.bytesToValue(Section64, output.items[offset..][0..@sizeOf(Section64)]);
+        try std.testing.expect(section.addr + section.size <= segment.vmaddr + segment.vmsize);
+        // A zero-fill section has a virtual extent and no file extent.
+        if (section.flags & MachO.S_ZEROFILL != 0) {
+            try std.testing.expectEqual(@as(u32, 0), section.offset);
+            continue;
+        }
         try std.testing.expect(section.offset >= segment.fileoff);
         try std.testing.expect(section.offset + section.size <= segment.fileoff + segment.filesize);
-        try std.testing.expect(section.addr + section.size <= segment.vmaddr + segment.vmsize);
         if (section.nreloc != 0) try std.testing.expect(section.reloff >= segment.fileoff + segment.filesize);
     }
 }

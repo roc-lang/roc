@@ -44,7 +44,7 @@ top_level = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - for_bang_stream.md:14:12:20:2
+TYPE MISMATCH - for_bang_stream.md:14:12:14:15
 EFFECTFUL FUNCTION NAME - for_bang_stream.md:14:1:14:9
 MISSING METHOD - for_bang_stream.md:25:14:25:15
 EFFECTFUL TOP LEVEL VALUE - for_bang_stream.md:31:13:37:2
@@ -54,11 +54,11 @@ EFFECTFUL TOP LEVEL VALUE - for_bang_stream.md:31:13:37:2
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 14 12) (end 20 2))
+		(region (start 14 12) (end 14 15))
 		(headline
 			(reflow "This expression is used in an unexpected way."))
 		(document
-			(source-region (file "for_bang_stream.md") (start 14 12) (end 20 2) (annotation error) (line-text "pure_sum = |s| {\n    var $total = 0\n    for! n in s {\n        $total = $total + n\n    }\n    $total\n}"))
+			(source-region (file "for_bang_stream.md") (start 14 12) (end 14 15) (annotation error) (line-text "pure_sum = |s| {"))
 			(line-break)
 			(reflow "It has the type:")
 			(line-break)
