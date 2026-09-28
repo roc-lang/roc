@@ -242,7 +242,9 @@ pub const Constants = struct {
     ///      named by the `.malformed` payload.
     /// 110: Expect roots reaching checked errors are ineligible for execution,
     ///      including errors in referenced procedures and constants.
-    pub const CACHE_VERSION = 110;
+    /// 111: `Stream` is a checked builtin nominal, so every module interns its
+    ///      unqualified and fully qualified type names as common identifiers.
+    pub const CACHE_VERSION = 111;
 };
 
 /// Configuration for the Roc cache system.

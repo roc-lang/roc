@@ -3469,7 +3469,7 @@ Builtin :: [].{
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
 	## effectful, so combinators like [Stream.map!] can run effects per item while
-	## staying lazy. Produced from an [Iter] via [Iter.map!], or from an effectful source
+	## staying lazy. Produced from an [Iter] via [Iter.stream], or from an effectful source
 	## via [Stream.custom], and driven by [Stream.collect!].
 	Stream(item) :: {
 		len_if_known : [Known(U64), Unknown],
@@ -3481,15 +3481,15 @@ Builtin :: [].{
 		## Carries the source's length forward so [Stream.collect!] can pre-size.
 		from_iter : Iter(item) -> Stream(item)
 		from_iter = |iterator|
-			{
-				len_if_known: Iter.size_hint(iterator),
-				step!: ||
+			stream_from_step(
+				Iter.size_hint(iterator),
+				||
 					match Iter.next(iterator) {
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
 					},
-			}
+			)
 
 		## Build a lazy, effectful stream from a seed; the effectful counterpart of [Iter.custom].
 		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
@@ -3503,9 +3503,9 @@ Builtin :: [].{
 		## resource is released rather than retained by the rest of the stream.
 		custom : state, [Known(U64), Unknown], (state => Try((item, state), [NoMore])) -> Stream(item)
 		custom = |seed, len_if_known, advance!|
-			{
+			stream_from_step(
 				len_if_known,
-				step!: ||
+				||
 					match advance!(seed) {
 						Ok((item, next_seed)) =>
 							One({
@@ -3524,7 +3524,7 @@ Builtin :: [].{
 							})
 						Err(NoMore) => Done
 					},
-			}
+			)
 
 		## Transform each item of this stream. The transform may run effects; because
 		## the stream's steps are already effectful, building the mapped stream stays
@@ -3532,31 +3532,21 @@ Builtin :: [].{
 		map : Stream(a), (a => b) -> Stream(b)
 		map = |stream, transform!|
 			match stream {
-				{ len_if_known, step! } => {
-					len_if_known,
-					step!: ||
-						match step!() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
-							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
-						},
-				}
+				{ len_if_known, .. } =>
+					stream_from_step(
+						len_if_known,
+						||
+							match Stream.next!(stream) {
+								Done => Done
+								Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
+								One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
+							},
+					)
 			}
 
 		## Transform each item of this stream with an effectful function.
 		map! : Stream(a), (a => b) => Stream(b)
-		map! = |stream, transform!|
-			match stream {
-				{ len_if_known, step! } => {
-					len_if_known,
-					step!: ||
-						match step!() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Stream.map!(rest, transform!) })
-							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map!(rest, transform!) })
-						},
-				}
-			}
+		map! = |stream, transform!| Stream.map(stream, transform!)
 
 		## Advance the stream by one step.
 		next! : Stream(item) => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]
@@ -24139,6 +24129,15 @@ iter_from_step : [Known(U64), Unknown], (() -> [One({ item : item, rest : Iter(i
 iter_from_step = |len_if_known, step| {
 	len_if_known,
 	step,
+}
+
+# The `Stream` counterpart of `iter_from_step`: every `Stream` source and
+# adapter builds its value through this one registered constructor, so Monotype
+# can give the result its exact minted representation.
+stream_from_step : [Known(U64), Unknown], (() => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]) -> Stream(item)
+stream_from_step = |len_if_known, step!| {
+	len_if_known,
+	step!,
 }
 
 range_done : () -> Iter(item)

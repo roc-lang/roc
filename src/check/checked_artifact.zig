@@ -2715,6 +2715,7 @@ pub const CheckedBuiltinNominal = enum {
     dict,
     set,
     iter,
+    stream,
     parse_tag_union_spec,
     fields,
     field,
@@ -2832,7 +2833,7 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .box => .box,
         .dict => .dict,
         .set => .set,
-        .iter => .iterator,
+        .iter, .stream => .iterator,
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
         .field => .field,
@@ -9096,6 +9097,7 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.dict) or ident.eql(common.builtin_dict)) return .dict;
     if (ident.eql(common.set) or ident.eql(common.builtin_set)) return .set;
     if (ident.eql(common.iter) or ident.eql(common.builtin_iter)) return .iter;
+    if (ident.eql(common.stream) or ident.eql(common.builtin_stream)) return .stream;
     if (ident.eql(common.builtin_encoding_parse_tag_union_spec)) return .parse_tag_union_spec;
     if (ident.eql(common.builtin_encoding_field_names)) return .fields;
     if (ident.eql(common.builtin_encoding_field_name)) return .field;
@@ -27172,7 +27174,7 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                         if (!try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active)) break :blk false;
                         break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[1], active);
                     },
-                    .iter => {
+                    .iter, .stream => {
                         const backing = checked_types.nominalBackingTemplateForPayload(nominal) orelse break :blk true;
                         break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, backing, active);
                     },
@@ -29806,7 +29808,7 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
         .source_scheme = .{},
         .body = .{ .callable_eval_template = @enumFromInt(3) },
         .intrinsic = .str_inspect,
-        .iterator_procedure = .iter_map,
+        .iterator_procedure = .map,
         .runtime_result_provenance = .list_element_read,
         .template_closure = stored,
     });
@@ -29819,7 +29821,7 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
 
     try std.testing.expectEqual(@as(usize, 1), rt.loaded.bindings.len);
     try std.testing.expectEqual(IntrinsicId.str_inspect, rt.loaded.bindings[0].intrinsic.?);
-    try std.testing.expectEqual(IteratorProcedureId.iter_map, rt.loaded.bindings[0].iterator_procedure.?);
+    try std.testing.expectEqual(IteratorProcedureId.map, rt.loaded.bindings[0].iterator_procedure.?);
     try std.testing.expectEqual(
         RuntimeResultProvenance.list_element_read,
         rt.loaded.bindings[0].runtime_result_provenance.?,
@@ -40100,8 +40102,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x7A, 0x7F, 0xA5, 0xAE, 0x00, 0xBD, 0xD3, 0x8D, 0x79, 0x07, 0xE7, 0xF0, 0x33, 0xD8, 0xE0, 0x6D,
-        0xE6, 0x20, 0x2B, 0xAE, 0x5D, 0x80, 0x8F, 0x8D, 0xA6, 0xBD, 0xEF, 0x0E, 0x5F, 0x63, 0xE3, 0x2D,
+        0xC3, 0xEC, 0xC3, 0xED, 0x17, 0xCC, 0x98, 0x36, 0x92, 0xFC, 0x77, 0x98, 0x9F, 0x47, 0xF0, 0xEC,
+        0x37, 0x04, 0xDD, 0xFE, 0x73, 0x3C, 0x4C, 0x02, 0x50, 0x7F, 0xB9, 0x18, 0x7F, 0x06, 0x53, 0xF6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -40215,7 +40217,7 @@ test "template dispatch classification separates direct calls from graph relatio
                 .kind = .{ .procedure = .{
                     .proc = undefined,
                     .template = undefined,
-                    .runtime_target = .{ .graph_participating = .{ .iterator_procedure = .iter_map } },
+                    .runtime_target = .{ .graph_participating = .{ .iterator_procedure = .map } },
                 } },
                 .callable_ty = callable_ty,
             },

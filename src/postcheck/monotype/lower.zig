@@ -26639,8 +26639,8 @@ const BodyContext = struct {
         procedure: ?checked.IteratorProcedureId,
         args: []const checked.CheckedExprId,
     ) Allocator.Error!bool {
-        if (procedure != .iter_custom) return false;
-        if (args.len != 3) Common.invariant("Iter.custom call did not have three arguments");
+        if (procedure != .custom) return false;
+        if (args.len != 3) Common.invariant("custom iterator call did not have three arguments");
         return try self.graph.containsIteratorInterface(try self.instNode(self.view.bodies.expr(args[0]).ty));
     }
 
@@ -27216,7 +27216,7 @@ const BodyContext = struct {
         defer self.allocator.free(fields);
         const backing_ty = self.namedBackingType(ret_ty) orelse
             Common.invariant("FieldNames iterator result was not an Iter nominal type");
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
         const len_field = self.recordFieldByName(backing_ty, topology.len_field);
         const step_field = self.recordFieldByName(backing_ty, topology.step_field);
         const step_fn_ty = step_field.ty;
@@ -27444,14 +27444,14 @@ const BodyContext = struct {
         const expected_ret = if (self.isGeneratedIteratorEvidenceNode(request_fn.ret)) request_fn.ret else null;
 
         if (expected_ret) |expected| switch (procedure) {
-            .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
+            .from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
             .numeric_range_delegate => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_to, .numeric_until => {},
+            .identity, .next, .custom, .single, .list_iter, .list_iter_rev, .str_iter_utf8, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_to, .numeric_until => {},
         };
 
         switch (procedure) {
-            .iter_iter => {
+            .identity => {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Iter.iter reached Monotype with an unexpected arity");
                 }
@@ -27459,9 +27459,9 @@ const BodyContext = struct {
                     return try self.graphFunctionNode(&.{request_fn.args[0]}, request_fn.args[0]);
                 }
             },
-            .iter_next => {
+            .next => {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
-                    Common.invariant("Iter.next reached Monotype with an unexpected arity");
+                    Common.invariant("iterator next reached Monotype with an unexpected arity");
                 }
                 if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
                     return try self.graphFunctionNode(
@@ -27470,9 +27470,9 @@ const BodyContext = struct {
                     );
                 }
             },
-            .iter_custom => {
+            .custom => {
                 if (checked_args.len != 3 or request_fn.args.len != 3) {
-                    Common.invariant("Iter.custom reached Monotype with an unexpected arity");
+                    Common.invariant("custom iterator source reached Monotype with an unexpected arity");
                 }
                 if (self.expectedGeneratedIteratorProducerNode(expected_ret, mintedProducerKind(procedure))) |expected| {
                     if (self.isForcedDynamicIteratorNode(expected)) {
@@ -27525,7 +27525,7 @@ const BodyContext = struct {
                     try self.generatedIteratorNode(mintedProducerKind(procedure), public_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
-            .iter_single => {
+            .single => {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Iter.single reached Monotype with an unexpected arity");
                 }
@@ -27548,9 +27548,9 @@ const BodyContext = struct {
                     try self.generatedIteratorNode(mintedProducerKind(procedure), public_fn.ret, &.{}, null),
                 );
             },
-            .iter_map, .iter_keep_if, .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_take_first, .iter_drop_first, .iter_append, .iter_with_index, .iter_step_by => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
-            .iter_concat => {
+            .map, .keep_if, .drop_if => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
+            .take_first, .drop_first, .append, .with_index, .step_by, .from_iter => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .concat => {
                 if (checked_args.len != 2 or request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
                 }
@@ -27564,16 +27564,17 @@ const BodyContext = struct {
                     );
                 }
             },
-            .numeric_range_delegate, .iter_from_step, .range_done => {},
+            .numeric_range_delegate, .from_step, .range_done => {},
         }
         return null;
     }
 
-    /// Build the `Iter.custom` transition request with its checked state role
-    /// bound to the seed's exact representation. The transition's argument and
-    /// successful next-state result share that checked identity, so a fresh
-    /// instantiation propagates the representation through both positions
-    /// without mutating a finished seed Monotype or reconstructing a type path.
+    /// Build the transition request of `Iter.custom` or `Stream.custom` with
+    /// its checked state role bound to the seed's exact representation. The
+    /// transition's argument and successful next-state result share that
+    /// checked identity, so a fresh instantiation propagates the
+    /// representation through both positions without mutating a finished seed
+    /// Monotype or reconstructing a type path.
     fn iterCustomAdvanceRequestNode(
         self: *BodyContext,
         checked_advance: checked.CheckedExprId,
@@ -27582,29 +27583,29 @@ const BodyContext = struct {
         const checked_fn_ty = self.view.bodies.expr(checked_advance).ty;
         const checked_fn = self.checkedFunctionType(checked_fn_ty);
         if (checked_fn.args.len != 1) {
-            Common.invariant("Iter.custom advance callable did not have exactly one state argument");
+            Common.invariant("custom iterator advance callable did not have exactly one state argument");
         }
         var checked_try_ty = checked_fn.ret;
         const checked_try = while (true) switch (checkedPayload(self.view, checked_try_ty)) {
             .alias => |alias| checked_try_ty = alias.backing,
             .nominal => |nominal| break nominal,
-            .pending, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance callable did not return Try"),
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("custom iterator advance callable did not return Try"),
         };
         const checked_try_builtin = switch (checked_try.representation) {
             .builtin => |builtin| builtin,
-            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => Common.invariant("Iter.custom advance callable returned a non-builtin Try"),
+            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => Common.invariant("custom iterator advance callable returned a non-builtin Try"),
         };
         if (checked.builtinRuntimeEncoding(checked_try_builtin) != .try_nominal or checked_try.args.len != 2) {
-            Common.invariant("Iter.custom advance callable did not return the builtin Try type");
+            Common.invariant("custom iterator advance callable did not return the builtin Try type");
         }
         var checked_ok = checked_try.args[0];
         const checked_ok_items = while (true) switch (checkedPayload(self.view, checked_ok)) {
             .alias => |alias| checked_ok = alias.backing,
             .tuple => |items| break items,
-            .pending, .err, .flex, .rigid, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance success value was not an item-state tuple"),
+            .pending, .err, .flex, .rigid, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("custom iterator advance success value was not an item-state tuple"),
         };
         if (checked_ok_items.len != 2) {
-            Common.invariant("Iter.custom advance success tuple did not have item and state elements");
+            Common.invariant("custom iterator advance success tuple did not have item and state elements");
         }
         const checked_next_state = checked_ok_items[1];
 
@@ -27624,7 +27625,7 @@ const BodyContext = struct {
         const advance_node = try self.instNode(checked_fn_ty);
         const advance_fn = try self.graph.functionNodes(advance_node);
         if (advance_fn.args.len != 1 or !self.graph.sameClass(advance_fn.args[0], state_node)) {
-            Common.invariant("Iter.custom advance request lost its exact state argument");
+            Common.invariant("custom iterator advance request lost its exact state argument");
         }
         self.graph.registerConstructorEvidenceRequest(advance_node);
         return advance_node;
@@ -27645,7 +27646,9 @@ const BodyContext = struct {
         expected_ret: ?NodeId,
         callable_index: ?usize,
     ) Allocator.Error!?NodeId {
-        if (checked_args.len != 2 or args.len != 2) {
+        // The adapted iterator is always the first argument; the remaining
+        // arguments are the operation's own inputs.
+        if (checked_args.len != args.len or args.len == 0 or args.len > 2) {
             Common.invariant("iterator adapter reached Monotype with an unexpected arity");
         }
         if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
@@ -27709,12 +27712,12 @@ const BodyContext = struct {
 
     const IteratorRepresentationNames = Type.IteratorTopology;
 
-    fn iteratorRepresentationNames(self: *BodyContext) Allocator.Error!IteratorRepresentationNames {
+    fn iteratorRepresentationNames(self: *BodyContext, owner: static_dispatch.IteratorOwner) Allocator.Error!IteratorRepresentationNames {
         const topologies = self.view.static_dispatch_plans.iterator_topologies;
-        if (topologies.len != 1) {
-            Common.invariant("checked module omitted its unique iterator representation topology");
+        if (topologies.len != std.enums.values(static_dispatch.IteratorOwner).len) {
+            Common.invariant("checked module omitted an iterator representation topology");
         }
-        const topology = topologies[0];
+        const topology = topologies[@intFromEnum(owner)];
         return .{
             .len_field = try self.recordFieldName(self.view, topology.len_field),
             .step_field = try self.recordFieldName(self.view, topology.step_field),
@@ -27728,11 +27731,19 @@ const BodyContext = struct {
         };
     }
 
+    /// The public iterator type a generated or public iterator node belongs to.
+    fn iteratorOwnerOfNamed(builtin_owner: ?static_dispatch.BuiltinOwner) static_dispatch.IteratorOwner {
+        const owner = builtin_owner orelse
+            Common.invariant("iterator representation requested for a type without builtin identity");
+        return static_dispatch.iteratorOwner(owner) orelse
+            Common.invariant("iterator representation requested for a non-iterator builtin type");
+    }
+
     fn generatedIteratorConstructorFunctionNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
         const named = self.graph.content(iterator).named;
         const backing = named.backing orelse
             Common.invariant("generated iterator constructor requested a type without backing");
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(iteratorOwnerOfNamed(named.builtin_owner));
         return try self.graphFunctionNode(&.{
             try self.graph.recordFieldNode(backing.node, topology.len_field),
             try self.graph.recordFieldNode(backing.node, topology.step_field),
@@ -27743,7 +27754,7 @@ const BodyContext = struct {
         const named = self.graph.content(iterator).named;
         const backing = named.backing orelse
             Common.invariant("generated iterator next requested a type without backing");
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(iteratorOwnerOfNamed(named.builtin_owner));
         const step = try self.graph.functionNodes(try self.graph.recordFieldNode(backing.node, topology.step_field));
         return step.ret;
     }
@@ -27832,7 +27843,8 @@ const BodyContext = struct {
                 def.iterator_representation = .minted;
                 def.iterator_kind = ctx.kind;
                 def.iterator_depth = ctx.mint_depth;
-                def.iterator_topology = try ctx.body.iteratorRepresentationNames();
+                const topology = try ctx.body.iteratorRepresentationNames(iteratorOwnerOfNamed(ctx.public_source.builtin_owner));
+                def.iterator_topology = topology;
                 return try ctx.body.graph.namedContent(.{
                     .named_type = ctx.public_source.named_type,
                     .def = def,
@@ -27841,6 +27853,7 @@ const BodyContext = struct {
                     .args = args,
                     .backing = .{
                         .node = try ctx.body.generatedIteratorBackingNode(
+                            topology,
                             ctx.public_source.backing.node,
                             self_node,
                             ctx.item_node,
@@ -27928,7 +27941,8 @@ const BodyContext = struct {
                 def.iterator_representation = .forced_dynamic;
                 def.iterator_kind = .forced_dynamic;
                 def.iterator_depth = 0;
-                def.iterator_topology = try ctx.body.iteratorRepresentationNames();
+                const topology = try ctx.body.iteratorRepresentationNames(iteratorOwnerOfNamed(ctx.public_source.builtin_owner));
+                def.iterator_topology = topology;
                 return try ctx.body.graph.namedContent(.{
                     .named_type = ctx.public_source.named_type,
                     .def = def,
@@ -27937,6 +27951,7 @@ const BodyContext = struct {
                     .args = args,
                     .backing = .{
                         .node = try ctx.body.generatedIteratorBackingNode(
+                            topology,
                             ctx.public_source.backing.node,
                             self_node,
                             ctx.item_node,
@@ -27961,18 +27976,18 @@ const BodyContext = struct {
 
     fn generatedIteratorBackingNode(
         self: *BodyContext,
+        topology: IteratorRepresentationNames,
         public_backing: NodeId,
         self_node: NodeId,
         item_node: NodeId,
     ) Allocator.Error!NodeId {
-        const topology = try self.iteratorRepresentationNames();
         const public_fields = (try self.graph.recordNodes(public_backing)).fields;
         const fields = try self.graph.arena().alloc(InstField, public_fields.len);
         for (public_fields, fields) |field, *out| {
             out.* = .{
                 .name = field.name,
                 .ty = if (field.name == topology.step_field)
-                    try self.generatedIteratorStepFunctionNode(field.ty, self_node, item_node)
+                    try self.generatedIteratorStepFunctionNode(topology, field.ty, self_node, item_node)
                 else
                     field.ty,
                 .value_ty = field.value_ty,
@@ -27988,6 +28003,7 @@ const BodyContext = struct {
 
     fn generatedIteratorStepFunctionNode(
         self: *BodyContext,
+        topology: IteratorRepresentationNames,
         public_step: NodeId,
         self_node: NodeId,
         item_node: NodeId,
@@ -27995,17 +28011,17 @@ const BodyContext = struct {
         const step = try self.graph.functionNodes(public_step);
         return try self.graphFunctionNode(
             step.args,
-            try self.generatedIteratorStepResultNode(step.ret, self_node, item_node),
+            try self.generatedIteratorStepResultNode(topology, step.ret, self_node, item_node),
         );
     }
 
     fn generatedIteratorStepResultNode(
         self: *BodyContext,
+        topology: IteratorRepresentationNames,
         public_result: NodeId,
         self_node: NodeId,
         item_node: NodeId,
     ) Allocator.Error!NodeId {
-        const topology = try self.iteratorRepresentationNames();
         const public_tags = (try self.graph.tagRowNodes(public_result)).tags;
         const tags = try self.graph.arena().alloc(InstTag, public_tags.len);
         for (public_tags, tags) |tag, *out| {
@@ -28474,7 +28490,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
         mode: FieldNamesIterMode,
     ) Allocator.Error!DraftExprId {
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
         return switch (mode) {
             .all => try self.lowerInterpolationLenIfKnown(remaining, ty),
             .for_size => blk: {
@@ -28498,7 +28514,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{});
         defer demand_scope.leave();
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
         const done_tag = self.monoTagByName(step_ret_ty, topology.done_tag);
         const body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = done_tag.name,
@@ -28521,7 +28537,7 @@ const BodyContext = struct {
         const rest_ty = try self.exprType(rest_expr);
         const demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{ item_ty, rest_ty });
         defer demand_scope.leave();
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
         const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const one_payloads = self.typeStore().span(one_tag.payloads);
         if (one_payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
@@ -28552,7 +28568,7 @@ const BodyContext = struct {
         defer demand_scope.leave();
         const item_local = try self.addLocal(self.builder.symbols.fresh(), field_handle_ty);
         const item_local_expr = try self.localExpr(item_local, field_handle_ty);
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
 
         const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const one_payloads = self.typeStore().span(one_tag.payloads);
@@ -28595,7 +28611,7 @@ const BodyContext = struct {
         const fields = self.typeStore().fieldSpan(self.recordFieldsSpan(ty));
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
 
         for (0..GuardedList.borrowLen(fields)) |i| {
             const field = GuardedList.at(fields, i);
@@ -33522,9 +33538,9 @@ const BodyContext = struct {
         checked_args: []const checked.CheckedExprId,
         fn_nodes: FunctionNodes,
     ) Allocator.Error!?LoweredCall {
-        if (procedure != .iter_next) return null;
+        if (procedure != .next) return null;
         if (checked_args.len != 1 or fn_nodes.args.len != 1) {
-            Common.invariant("Iter.next reached Monotype with an unexpected arity");
+            Common.invariant("iterator next reached Monotype with an unexpected arity");
         }
         const iterator_node = fn_nodes.args[0];
         if (!self.isGeneratedIteratorEvidenceNode(iterator_node)) return null;
@@ -33546,7 +33562,8 @@ const BodyContext = struct {
     ) Allocator.Error!BodyExprData {
         const backing = self.graph.namedNodes(iterator_node).backing orelse
             Common.invariant("generated iterator next requested a type without backing");
-        const step_name = try self.nameStoreMut().internRecordFieldLabel("step");
+        const owner = iteratorOwnerOfNamed(self.graph.content(iterator_node).named.builtin_owner);
+        const step_name = (try self.iteratorRepresentationNames(owner)).step_field;
         const step_node = try self.graph.opaqueDefinitionFieldNode(backing.node, step_name);
         const step = try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(step_node),
@@ -34798,7 +34815,7 @@ const BodyContext = struct {
             if (try self.nodeIsProvenUninhabited(arg_node)) return fn_nodes.ret;
         }
         if (self.iteratorProcedureForResolvedTarget(target)) |procedure| {
-            if (procedure == .iter_next and fn_nodes.args.len == 1 and self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) {
+            if (procedure == .next and fn_nodes.args.len == 1 and self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) {
                 return fn_nodes.ret;
             }
         }
@@ -34914,7 +34931,7 @@ const BodyContext = struct {
             request_fn_node,
             edge,
             if (recursive_reference) .recursive_reference else .instantiation,
-            if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
+            if (proc.iterator_procedure == .from_step) .exact_graph else .independent_roots,
             .inherit,
         );
     }
@@ -38981,7 +38998,7 @@ const BodyContext = struct {
 
         const backing_ty = self.namedBackingType(ty) orelse
             Common.invariant("generated interpolation iterator expected Iter nominal type");
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
         const len_field = self.recordFieldByName(backing_ty, topology.len_field);
         const step_field = self.recordFieldByName(backing_ty, topology.step_field);
         const step_fn_ty = step_field.ty;
@@ -39062,7 +39079,7 @@ const BodyContext = struct {
         const fields = self.typeStore().fieldSpan(self.recordFieldsSpan(backing_ty));
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
 
         for (0..GuardedList.borrowLen(fields)) |i| {
             const field = GuardedList.at(fields, i);
@@ -39092,7 +39109,7 @@ const BodyContext = struct {
         remaining: usize,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
         const known_tag = self.monoTagByName(ty, topology.known_tag);
         const payloads = self.typeStore().span(known_tag.payloads);
         if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
@@ -39113,7 +39130,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{});
         defer demand_scope.leave();
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
         const done_tag = self.monoTagByName(step_ret_ty, topology.done_tag);
         const body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = done_tag.name,
@@ -39146,7 +39163,7 @@ const BodyContext = struct {
             .tuple = try self.addExprSpan(&[_]DraftExprId{ value_expr, segment_expr }),
         } });
 
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
         const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const payloads = self.typeStore().span(one_tag.payloads);
         if (payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
@@ -39169,7 +39186,7 @@ const BodyContext = struct {
         const fields = self.typeStore().fieldSpan(self.recordFieldsSpan(ty));
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
-        const topology = try self.iteratorRepresentationNames();
+        const topology = try self.iteratorRepresentationNames(.iter);
 
         for (0..GuardedList.borrowLen(fields)) |i| {
             const field = GuardedList.at(fields, i);
@@ -45304,7 +45321,7 @@ const BodyContext = struct {
                     request_fn_node,
                     edge,
                     .instantiation,
-                    if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
+                    if (procedure.runtime_target.iteratorProcedure() == .from_step) .exact_graph else .independent_roots,
                     codec_contract_selection,
                 );
             },
@@ -45434,7 +45451,7 @@ const BodyContext = struct {
                     request_fn_node,
                     edge,
                     .instantiation,
-                    if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
+                    if (procedure.runtime_target.iteratorProcedure() == .from_step) .exact_graph else .independent_roots,
                     .inherit,
                 );
             },
@@ -55979,7 +55996,7 @@ const BodyContext = struct {
         expected_ret_ty: ?DraftTypeCell,
     ) Allocator.Error!?DraftExprId {
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
-        if (procedure != .iter_iter and procedure != .iter_next) return null;
+        if (procedure != .identity and procedure != .next) return null;
 
         if (!self.isGeneratedIteratorEvidenceNode(dispatcher_node)) return null;
         try self.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
@@ -55990,13 +56007,13 @@ const BodyContext = struct {
             dispatcher_node,
         );
         switch (procedure) {
-            .iter_iter => {
+            .identity => {
                 if (expected_ret_ty) |expected| {
                     try relateRequestComponent(self.graph, dispatcher_node, try expected.toGraphNode(self.graph));
                 }
                 return iterator;
             },
-            .iter_next => {
+            .next => {
                 const step_ret_node = try self.generatedIteratorStepReturnNode(dispatcher_node);
                 if (expected_ret_ty) |expected| {
                     try relateRequestComponent(self.graph, step_ret_node, try expected.toGraphNode(self.graph));
@@ -56006,7 +56023,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
+            .custom, .single, .list_iter, .list_iter_rev, .str_iter_utf8, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .from_step, .range_done => unreachable,
         }
     }
 
@@ -60586,6 +60603,7 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .field => .field,
         .try_ => null,
         .iter => .iter,
+        .stream => .stream,
         .crypto_sha256_digest => .crypto_sha256_digest,
         .crypto_sha256_hasher => .crypto_sha256_hasher,
         .crypto_blake3_digest => .crypto_blake3_digest,
