@@ -482,9 +482,9 @@ pub const ConstRootPlan = struct {
     /// representation evidence from the public checked type.
     ret_type: const_store.ConstTypeId,
     plan: ConstPlanId,
-    /// The slot the evaluation publishes this root's completed value into,
-    /// when a consumer asked for the value to be materialized. Null when no
-    /// consumer of this program reads the value.
+    /// Consumer-requested materialization slot, when the root manifest asks
+    /// for one. Other reads may declare additional representation-specific
+    /// slots; this field is not the complete publication inventory.
     value_slot: ?LIR.StaticDataId = null,
 
     pub fn shape(self: ConstRootPlan) RootShape {
@@ -520,6 +520,8 @@ pub const LiteralRootPlan = struct {
 
 /// One exact LIR value construction that is frozen as readonly target data.
 pub const StaticDataValue = struct {
+    /// Post-ARC guards reading this slot; threaded through ComptimeValueGuard.
+    first_comptime_guard: ?u32 = null,
     /// Null when completed frozen data supplies this slot directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
@@ -550,6 +552,7 @@ pub const StaticDataValue = struct {
 
 /// Exact post-ARC guard identity consumed by successful-root completion.
 pub const ComptimeValueGuard = struct {
+    next_for_slot: ?u32 = null,
     /// Shared statements have one record per owning procedure.
     owner: LIR.LirProcSpecId,
     completed: bool = false,

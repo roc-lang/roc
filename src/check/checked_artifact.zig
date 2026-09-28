@@ -24608,7 +24608,6 @@ fn publishLiteralConversionRoots(
             .direct_pending, .structural => checkedArtifactInvariant("literal conversion had no finalized callable dispatch", .{}),
         }
         if (conversion_root.* != null) checkedArtifactInvariant("literal received a second conversion root", .{});
-        const result_ty = checkedFunctionPayload(&checked_types.store, plan.callable_ty, "literal conversion root").ret;
         conversion_root.* = @enumFromInt(@as(u32, @intCast(first_root + root_list.items.len)));
         try CompileTimeRootTable.appendCompileTimeRoot(&root_list, allocator, .{
             .module_idx = module.moduleIndex(),
@@ -24616,7 +24615,7 @@ fn publishLiteralConversionRoots(
             .source = .{ .expr = @enumFromInt(literal.node_idx) },
             .pattern = null,
             .expr = expr_id,
-            .checked_type = result_ty,
+            .checked_type = bodies.expr(expr_id).ty,
             .payload = .pending,
         });
     }
@@ -27243,8 +27242,8 @@ pub const CompileTimeRootKind = enum {
     expect,
     /// A `from_numeral` conversion of a numeric literal whose target is a
     /// non-builtin nominal type. The root body evaluates the dispatch call's
-    /// `Try` result; finalization unwraps `Ok` into the stored constant and
-    /// reports `Err(InvalidNumeral(..))` as a checking problem.
+    /// `Try` result and returns its validated `Ok` payload. `Err` becomes a
+    /// literal rejection terminal, reported as a checking problem.
     numeral_conversion,
     /// A `from_quote` conversion of a string literal whose target is a
     /// non-builtin nominal type; works exactly like `numeral_conversion` with
@@ -33252,7 +33251,8 @@ pub const CheckedModuleArtifact = struct {
     // Version 103 persists the checked root index for immutable composition.
     // Version 104 gives standalone literal roots only to conversions whose
     // complete checked dispatch contract is specialization-independent.
-    const serialized_layout_version: u32 = 104;
+    // Version 105 also declares literal-conversion roots at their validated payload type.
+    const serialized_layout_version: u32 = 105;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -40100,8 +40100,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x12, 0x9F, 0xFC, 0xA5, 0x37, 0xE2, 0xC5, 0xAB, 0x55, 0xBE, 0xAF, 0x41, 0xDE, 0x52, 0x67, 0x3C,
-        0x93, 0xFB, 0x45, 0x9E, 0xE7, 0x7E, 0x52, 0x86, 0x61, 0x54, 0x57, 0x96, 0x44, 0x6C, 0xB7, 0x55,
+        0x7A, 0x7F, 0xA5, 0xAE, 0x00, 0xBD, 0xD3, 0x8D, 0x79, 0x07, 0xE7, 0xF0, 0x33, 0xD8, 0xE0, 0x6D,
+        0xE6, 0x20, 0x2B, 0xAE, 0x5D, 0x80, 0x8F, 0x8D, 0xA6, 0xBD, 0xEF, 0x0E, 0x5F, 0x63, 0xE3, 0x2D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

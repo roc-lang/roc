@@ -111,7 +111,11 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
     // Preserve each owner discovered before rewriting shared statements.
     for (uses.items) |use| {
         const guard = guards.get(use.stmt).?;
+        const slot = &program.static_data_values.items[@intFromEnum(use.slot)];
+        const previous = slot.first_comptime_guard;
+        slot.first_comptime_guard = @intCast(program.comptime_value_guards.items.len);
         program.comptime_value_guards.appendAssumeCapacity(.{
+            .next_for_slot = previous,
             .owner = use.proc,
             .entry = use.stmt,
             .success = guard.success,
@@ -121,16 +125,15 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
     }
     var locals: std.ArrayList(LIR.LocalId) = .empty;
     defer locals.deinit(allocator);
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+    // Discovery appends uses in procedure order, so each owner's uses form
+    // one contiguous span even when statements are shared between owners.
+    var use_index: usize = 0;
+    while (use_index < uses.items.len) {
+        const proc_id = uses.items[use_index].proc;
         locals.clearRetainingCapacity();
-        var affected = false;
-        for (uses.items) |use| {
-            if (use.proc != proc_id) continue;
-            affected = true;
-            try locals.appendSlice(allocator, &guards.get(use.stmt).?.locals);
+        while (use_index < uses.items.len and uses.items[use_index].proc == proc_id) : (use_index += 1) {
+            try locals.appendSlice(allocator, &guards.get(uses.items[use_index].stmt).?.locals);
         }
-        if (!affected) continue;
         const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
         for (0..frame.len) |i| try locals.append(allocator, GuardedList.at(frame, i));
         std.mem.sort(LIR.LocalId, locals.items, {}, localLessThan);
@@ -172,8 +175,12 @@ fn localLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
 
 /// Caller has explicit successful evaluation evidence for this root's slot.
 pub fn completeSuccessfulSlot(program: *Program.Result, slot: LIR.StaticDataId) std.mem.Allocator.Error!void {
-    for (program.comptime_value_guards.items) |*guard| {
-        if (guard.value_slot != slot or guard.completed) continue;
+    var next = program.static_data_values.items[@intFromEnum(slot)].first_comptime_guard;
+    while (next) |index| {
+        const guard = &program.comptime_value_guards.items[index];
+        next = guard.next_for_slot;
+        std.debug.assert(guard.value_slot == slot);
+        if (guard.completed) continue;
         try program.store.replaceCFStmt(guard.entry, program.store.getCFStmt(guard.success), program.store.stmtOrigin(guard.success));
         program.store.getProcSpecPtr(guard.owner).native_code_revision += 1;
         guard.completed = true;
