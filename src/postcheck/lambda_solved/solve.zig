@@ -170,6 +170,7 @@ const Solver = struct {
         list_drop_first,
         list_drop_last,
         list_release_excess_capacity,
+        list_clear,
         list_reverse,
         list_set,
         list_replace_unsafe,
@@ -1732,6 +1733,7 @@ const Solver = struct {
                 try self.unify(expected, args[0]);
             },
             .list_release_excess_capacity,
+            .list_clear,
             .list_reverse,
             => {
                 expectLowLevelArity(op, args, 1);

@@ -16335,6 +16335,13 @@ versioned loop is not such a loop, and cloning it would double the emitted
 body for every level of nesting to remove one predictable branch per site;
 it keeps its flag-dispatched sets instead.
 
+`List.clear` is its own low-level, `list_clear`, run by every backend as the
+zero-length sublist from index zero: that window is never a slice, so unlike
+`list_sublist` its result is born unique, and a list cleared and refilled
+each iteration keeps both its allocation and its unique birth. Modeled as a
+sublist, the clear left the chain unborn, the parameter it emptied borrowed,
+and the retained parameter's clear returned an empty list with no capacity.
+
 An append-only promoted loop versions on its slack instead. The fill limit
 answers whether the next append fits; a bound on the loop's remaining
 iterations answers whether every remaining append does, once. The bound is
