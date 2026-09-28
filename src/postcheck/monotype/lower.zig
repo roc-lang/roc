@@ -854,12 +854,23 @@ const CallableInstantiation = struct {
     callable_ty: checked.CheckedTypeId,
 };
 
+/// The substitution checking applied to a selected target's scheme at the
+/// edge that selected it: one checked type per quantified variable, in the
+/// target scheme's `scheme_vars` order, read in `view`.
+const CheckedTargetSubstitution = struct {
+    view: ModuleView,
+    tys: []const checked.CheckedTypeId,
+};
+
 const DraftLocalProcContextId = enum(u32) { _ };
 
 const MethodLookup = struct {
     view: ModuleView,
     target: static_dispatch.MethodTarget,
     instantiation: ?CallableInstantiation = null,
+    /// The checked edge's substitution for the target's scheme, when checking
+    /// selected this target for this relation.
+    substitution: ?CheckedTargetSubstitution = null,
     /// Exact lexical declaration instance for a local method target. Checked
     /// binder ids identify source syntax, not the specialization-local capture
     /// environment in which that declaration was lowered.
@@ -915,6 +926,13 @@ const SpecEvidenceTarget = struct {
     instantiation: ?CallableInstantiation,
     local_proc_context: ?DraftLocalProcContextId,
     nested: NestedSpecEvidence,
+    /// The substitution checking applied to the target's scheme where it
+    /// selected the target, which binds quantified variables that neither the
+    /// target's root nor its requirement's callable reaches. It is consumed
+    /// when the target specializes and is not part of the evidence's
+    /// identity: those variables are determined by the selected targets, and
+    /// the specialization is keyed by its completed substitution.
+    substitution: ?CheckedTargetSubstitution = null,
     callable_contracts: []const SpecEvidence = &.{},
 };
 
@@ -1143,6 +1161,19 @@ const TargetEvidenceSource = union(enum) {
     checked: EvidenceContract,
     materialized_contract: []const SpecEvidence,
 };
+
+/// The substitution an evidence node recorded for its target's scheme, or
+/// null for a monomorphic target.
+fn checkedTargetSubstitution(site_view: ModuleView, node: static_dispatch.EvidenceNode) ?CheckedTargetSubstitution {
+    if (node.subst.len == 0) return null;
+    const table = site_view.static_dispatch_plans;
+    const start: usize = node.subst.start;
+    const len: usize = node.subst.len;
+    if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
+        Common.invariant("checked target substitution range was outside its checked module");
+    }
+    return .{ .view = site_view, .tys = table.site_substitutions[start .. start + len] };
+}
 
 /// A materialized contract already names the checked targets and their nested
 /// contracts. Once its callable relations have been consumed, those edge-local
@@ -44046,6 +44077,7 @@ const BodyContext = struct {
                 .callable => |callable_ty| .{ .view = site_view, .callable_ty = callable_ty },
             } else null,
             .local_proc_context = lookup.local_proc_context,
+            .substitution = checkedTargetSubstitution(site_view, node),
             .nested = switch (node.nested) {
                 .from_callable => .synthesize,
                 .resolved => blk: {
@@ -44103,14 +44135,15 @@ const BodyContext = struct {
                     {
                         Common.invariant("substitution-derived target differed from checked target contract");
                     }
-                    const contract_nested = switch (contract_target.nested) {
-                        .synthesize => if (contract_target.callable_contracts.len == 0) break :blk derived else derived_target.nested,
-                        .resolved => |resolved| NestedSpecEvidence{ .resolved = resolved },
-                    };
+                    if (contract_target.nested == .synthesize and contract_target.substitution == null and contract_target.callable_contracts.len == 0) break :blk derived;
                     const merged = try self.builder.evidence_arena.allocator().create(SpecEvidenceTarget);
                     merged.* = derived_target.*;
                     merged.instantiation = null;
-                    merged.nested = contract_nested;
+                    merged.substitution = contract_target.substitution;
+                    switch (contract_target.nested) {
+                        .synthesize => {},
+                        .resolved => |resolved| merged.nested = .{ .resolved = resolved },
+                    }
                     merged.callable_contracts = contract_target.callable_contracts;
                     break :blk .{ .target = merged };
                 },
@@ -44673,6 +44706,31 @@ const BodyContext = struct {
         return try self.substitutionFromCheckedTypes(self.view, table.site_substitutions[start .. start + len]);
     }
 
+    /// Seed a selected target's scheme context with the substitution checking
+    /// applied where it selected the target, as a direct target specializes
+    /// under its recorded substitution. The checked types are instantiated
+    /// together in one context of the selecting module, so variables they
+    /// share stay shared, and relating the target's root to the request then
+    /// refines the slots that root reaches.
+    fn seedCheckedTargetSubstitution(
+        self: *BodyContext,
+        target_ctx: *BodyContext,
+        schema: SchemeRequirements,
+        substitution: CheckedTargetSubstitution,
+    ) Allocator.Error!void {
+        var site_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self.builder,
+            substitution.view,
+            self.method_scope,
+            self.owner_template,
+            self.graph,
+            self.draft,
+        );
+        defer site_ctx.deinit();
+        try target_ctx.seedSubstitution(schema, try site_ctx.substitutionFromCheckedTypes(substitution.view, substitution.tys));
+    }
+
     /// The requirement contract a checked iterator dispatch call recorded for
     /// its target, mirroring `dispatchTargetContract`.
     fn iteratorCallContract(self: *BodyContext, call: static_dispatch.IteratorDispatchCall) ?EvidenceContract {
@@ -44747,6 +44805,10 @@ const BodyContext = struct {
                                 null
                             else
                                 target.instantiation,
+                            .substitution = if (dependent.independent_callable)
+                                null
+                            else
+                                target.substitution,
                             .local_proc_context = target.local_proc_context,
                         },
                     },
@@ -45475,11 +45537,13 @@ const BodyContext = struct {
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
                 const template = lookup.view.templates.get(procedure.template.template);
+                const schema = templateSchemaIn(lookup.view, &template);
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
+                if (lookup.substitution) |substitution| try self.seedCheckedTargetSubstitution(&target_ctx, schema, substitution);
                 const target_root_node = try target_ctx.instNode(template.checked_fn_root);
                 try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
-                const edge = try self.deriveTargetEdge(&target_ctx, templateSchemaIn(lookup.view, &template), evidence_source);
+                const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
                     procedure.template,
@@ -45493,11 +45557,13 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| blk: {
+                const schema = self.scopeSchema(lookup.view, local.dispatch_scope);
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
+                if (lookup.substitution) |substitution| try self.seedCheckedTargetSubstitution(&target_ctx, schema, substitution);
                 const target_root_node = try target_ctx.instNode(source_fn_ty);
                 try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
-                const edge = try self.deriveTargetEdge(&target_ctx, self.scopeSchema(lookup.view, local.dispatch_scope), evidence_source);
+                const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk .{ .local = try self.lowerDraftLocalProcAtNode(
                     .{
                         .binder = local.binder,

@@ -98,6 +98,18 @@ pub fn identityVarsFromVar(
     return try allocator.dupe(types.Var, builder.identity_variables.entries.items);
 }
 
+/// Whether the canonical-key walk enumerates a variable with this descriptor
+/// as an identity variable: a flex, a rigid (`#polarity` markers included), or
+/// an identity the checker explicitly closed to `[]`. Every producer of a
+/// scheme instantiation's substitution pairs exactly these variables.
+pub fn isIdentityVariable(desc: types.Descriptor) bool {
+    if (desc.flags.empty_tag_union_is_default) return true;
+    return switch (desc.content) {
+        .flex, .rigid => true,
+        .alias, .field_presence, .structure, .err => false,
+    };
+}
+
 /// Enumerate a complete scheme under one identity numbering. The callable's
 /// slots keep their canonical order; explicit relation roots append only
 /// identities not already reachable from that callable.

@@ -10997,7 +10997,14 @@ type. Each explicitly independent request or restored-constant occurrence
 receives fresh mutable graph cells while preserving the snapshot's internal
 sharing and recursion within that occurrence. Repeated imports inside one
 ownership scope reconnect to its cells. Equal interned content is not occurrence
-identity; only explicit ownership selects either operation. Every context-free procedure-template request defers until the requesting
+identity; only explicit ownership selects either operation. A nominal owns its
+imported backing cell: the backing neither registers in nor reconnects through
+the ownership scope, and interface-summary replay imports a settled backing
+leaf the same way. An equal structural value elsewhere in the scope is a
+different occurrence, and relating it to a nominal lifts its class into that
+nominal; a backing sharing that class would come to name the nominal it backs,
+and joining the two nominal instances would make a nominal its own backing.
+Every context-free procedure-template request defers until the requesting
 graph is final, when its specialization key is stable. Constraints formerly
 owned only by an unresolved callee body are present in the checked interface
 program and have already participated in the request's relation closure.
@@ -11750,7 +11757,13 @@ The dispatch *target*'s declaration is the third route to `checked_error`, and
 it fences the target the way the paragraph above fences the receiver. A method
 whose declaration canonicalization could not canonicalize, or whose body
 checking poisoned, carries `e_runtime_error` as its bound expression; its
-diagnostic is already reported and it has no runtime target. Such a declaration
+diagnostic is already reported and it has no runtime target. An annotated
+method whose body contains an error instead keeps its lambda around the
+poisoned body, checked at the annotation's type, only when that annotation
+itself declares a function: a bare `_` hole declares no callable type, and a
+function shape filled into it by the erroneous body is not a declaration, so
+such a method's bound expression becomes the runtime error like an unannotated
+one. Such a declaration
 is still *declared*, so `MethodRegistry` records its `(MethodOwner,
 MethodNameId)` key with no target rather than omitting it, and
 `lookupCheckedMethodTarget` answers `rejected` instead of "no such method".
@@ -11971,7 +11984,17 @@ therefore do not become redundant specialization identities. A plan resolved
 parents for nested local functions by `depth`). A direct plan's evidence node
 records the target's substitution the same way, so a direct target specializes
 under the exact substitution checking applied rather than under a re-derived
-one.
+one. Every evidence node records it, including a node that resolves a
+requirement rather than a call, and a target that evidence selects carries
+that record until it specializes: its scheme context is seeded with the
+recorded substitution before its root is related to the request. Relating the
+root cannot bind a quantified variable that only a constraint callable
+reaches, and when several same-name calls on one receiver share an evidence
+parameter, relating one callable cannot bind the variables only the others
+reach (`x.m() ? |_| Other` discards `m`'s error row). Checking bound all of
+them when it selected the target. The record is consumed, not identity: those
+variables are determined by the selected targets, and the specialization is
+keyed by its completed substitution.
 
 An evidence-dependent dispatch whose checked plan authorizes nested-contract
 reuse consumes the already-materialized contract directly. Its targets and

@@ -1307,6 +1307,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10667: platform exposes imported nested type", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10667_nested_platform_exposes/platform/main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "exposed but not defined" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10667: app imports platform-exposed nested type", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10667_nested_platform_exposes/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "module not found" }, .{ .stream = .stderr, .text = "type not exposed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10667: nested public type hides source module items", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10667_nested_platform_exposes/internal_app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "does not exist" }, .{ .stream = .stderr, .text = "pf.Blub.internal" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    // Repro for https://github.com/roc-lang/roc/issues/11765: a generic
+    // function returning a value whose `_` annotation defaulted to a closed
+    // row carries that row as an identity of its scheme, and every use's
+    // substitution must pair it, in its own module and through an import.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11765: default-closed value row in a generic function's scheme (defining module)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_11765_default_closed_value_row/Reply.roc", .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11765: default-closed value row in a generic function's scheme (importing module)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_11765_default_closed_value_row/Uses.roc", .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
     // Repro for https://github.com/roc-lang/roc/issues/10705: two public names
     // that resolve to one source module must contribute one type-check
     // environment, not one per import name.
@@ -2487,6 +2493,8 @@ const subcommand_cases = [_]CliCase{
     // runtime-empty string onto a heap-sized literal must produce a unique
     // result before the following concat tries to grow it.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10595: dev interpolation copies a static prefix before appending a suffix", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_10595_empty_runtime_str_concat.roc", .exit = .success, .stdout_exact = "aaaaaaaaaaaaaaaaaaaaaaaab\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11767: nominal match on a flex-dispatched result keeps the nominal's backing distinct (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_11767_nominal_match_after_flex_dispatch.roc", .exit = .success, .stdout_exact = "x\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11767: nominal match on a flex-dispatched result keeps the nominal's backing distinct (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/issue_11767_nominal_match_after_flex_dispatch.roc", .exit = .success, .stdout_exact = "x\n" } } },
     // Non-`?` channels asking a hosted result for a wider error row: every one
     // is a type error, never an extern emitted at the wider row (design.md
     // "Host Symbol ABI"). The three mismatches are the annotated binding, the

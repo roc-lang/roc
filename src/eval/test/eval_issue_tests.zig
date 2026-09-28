@@ -4012,4 +4012,93 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .problem_and_crash = {} },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11770
+        // A method annotated `_` whose body is erroneous has no declared
+        // callable type, so its declaration is rejected like an unannotated
+        // one instead of publishing a lambda whose checked type is not a
+        // function.
+        .name = "issue 11770: erroneous method annotated with a hole dispatched through a where clause",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: erroneous method annotated with a hole called on a value",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\show_it = |value| value.show()
+        \\
+        \\main = show_it(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: erroneous method annotated with a hole called through a type parameter",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| {
+        \\    A : a
+        \\    A.show(value)
+        \\}
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: method annotated with a hole calling a declaration with no value",
+        .source_kind = .module,
+        .source =
+        \\missing : T -> Str
+        \\
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| missing(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: method annotated with a hole and a valid body dispatches through a where clause",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |_t| "shown"
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .inspect_str = "\"shown\"" },
+    },
 };
