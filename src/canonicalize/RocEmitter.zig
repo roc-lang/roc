@@ -898,7 +898,10 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .expr = for_expr.expr });
             try frames.append(allocator, .{ .write = " in " });
             try frames.append(allocator, .{ .pattern = for_expr.patt });
-            try frames.append(allocator, .{ .write = "for " });
+            try frames.append(allocator, .{ .write = switch (for_expr.kind) {
+                .iter => "for ",
+                .stream => "for! ",
+            } });
         },
         .e_hosted_lambda => try self.write("<hosted_lambda>"),
         .e_run_low_level => |run_ll| try self.output.print(self.allocator, "<run_low_level: {s}>", .{@tagName(run_ll.op)}),

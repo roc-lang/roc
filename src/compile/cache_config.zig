@@ -245,9 +245,13 @@ pub const Constants = struct {
     /// 111: Checked type keys refer to each context-free subtree by its own
     ///      key, use one-byte tags and varint integers, and a synthetic
     ///      function over composed children shares its source key.
-    /// 112: Derived-method markers record their owner type declaration, and a
-    ///      type-rooted dispatch call can dispatch on an explicit type var.
-    pub const CACHE_VERSION = 112;
+    /// 112: `for` nodes carry their `ForKind`, `ForLoopDispatchPlan` records its
+    ///      dispatched method names, and common idents include `Builtin.Stream`.
+    /// 114: Combined with the Stream loop format, derived-method markers record
+    ///      their owner type declaration, and a type-rooted dispatch call can
+    ///      dispatch on an explicit type var. Version 113 is reserved for the
+    ///      separate Stream builtin change.
+    pub const CACHE_VERSION = 114;
 };
 
 /// Configuration for the Roc cache system.

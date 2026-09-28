@@ -2389,14 +2389,14 @@ pub const StaticDispatchPlanTable = struct {
                 const next_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &next_args);
 
                 const iter_call = IteratorDispatchCall{
-                    .method = try names.internMethodName("iter"),
+                    .method = try names.internMethodIdent(module.identStoreConst(), @bitCast(for_plan.iter_method_ident)),
                     .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
                     .callable_ty = iter_callable_ty,
                     .dispatcher_arg_index = 0,
                     .args = iter_ar,
                 };
                 const next_call = IteratorDispatchCall{
-                    .method = try names.internMethodName("next"),
+                    .method = try names.internMethodIdent(module.identStoreConst(), @bitCast(for_plan.next_method_ident)),
                     .dispatcher_ty = iterator_ty,
                     .callable_ty = next_callable_ty,
                     .dispatcher_arg_index = 0,

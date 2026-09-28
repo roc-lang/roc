@@ -4528,8 +4528,8 @@ use checked dispatch plans. Iterator `for` uses its own iterator-dispatch
 operand shape because the `.next` call receives the compiler-created iterator
 state instead of an ordinary checked expression. It contains two plans:
 
-- call `.iter` on the source iterable value
-- call `.next` on the compiler-created iterator state local
+- call `.iter` (`.stream` for `for!`) on the source iterable value
+- call `.next` (`.next!` for `for!`) on the compiler-created iterator state local
 
 `site` identifies the source construct that produced the plan for debug
 verification and source mapping. It is not the call receiver. Expression-shaped
@@ -12200,6 +12200,17 @@ state.
 The exact step tag names and payloads come from the checked/builtin `Iter`
 definition and the monomorphic iterator type. The `.iter` and `.next` calls are
 resolved through the same Monotype static-dispatch path described above.
+
+`for! pattern in iterable { body }` is the same construct with the effectful
+protocol: it calls `iterable.stream()`, requires the result to be the builtin
+`Stream(item)`, and pulls each step with `next!`. The source keyword is the only
+thing that selects the protocol. Parsing records it as the loop's `ForKind`,
+canonicalization carries it on `s_for`/`e_for`, and the checker records the
+selected `iter`/`stream` and `next`/`next!` method names in the loop's
+`ForLoopDispatchPlan`, so the dispatch registry reads the method names from the
+plan instead of assuming them. Checking a `for!` loop always reports an effect,
+so it is accepted only where an effectful call is. The step shape is identical
+to `Iter`'s, so Monotype lowering is the same for both kinds.
 
 A `Skip` carries only `rest`: it signals "advanced one position, produced no
 item this step," which is what keeps adapters like `keep_if` non-recursive. A

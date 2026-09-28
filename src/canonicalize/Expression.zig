@@ -628,6 +628,7 @@ pub const Expr = union(enum) {
     /// for_each! = |items, cb!| for item in items { cb!(item) }
     /// ```
     e_for: struct {
+        kind: CIR.ForKind,
         patt: CIR.Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
@@ -1790,7 +1791,10 @@ pub const Expr = union(enum) {
             },
             .e_for => |for_expr| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-for");
+                try tree.pushStaticAtom(switch (for_expr.kind) {
+                    .iter => "e-for",
+                    .stream => "e-for-bang",
+                });
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

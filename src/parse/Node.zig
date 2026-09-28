@@ -93,6 +93,11 @@ pub const Tag = enum {
     /// * lhs - node index for loop initializing expression
     /// * rhs - node index for loop body expression
     @"for",
+    /// A `for!` statement, laid out like `for`
+    /// * main_token - node index for pattern for loop variable
+    /// * lhs - node index for loop initializing expression
+    /// * rhs - node index for loop body expression
+    for_bang,
     /// A while statement
     /// * main_token - node index for condition expression
     /// * lhs - node index for condition expression
@@ -520,6 +525,11 @@ pub const Tag = enum {
     /// * lhs - node index for loop initializing expression
     /// * rhs - node index for loop body expression
     for_expr,
+    /// A `for!` expression, laid out like `for_expr`
+    /// * main_token - node index for pattern for loop variable
+    /// * lhs - node index for loop initializing expression
+    /// * rhs - node index for loop body expression
+    for_bang_expr,
     /// A break expression.
     /// * lhs - ignored
     /// * rhs - ignored

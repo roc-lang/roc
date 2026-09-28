@@ -50,6 +50,7 @@ const StatementNodeTag = enum {
     import,
     expect,
     @"for",
+    for_bang,
     @"while",
     crash,
     dbg,
@@ -118,6 +119,7 @@ const ExprNodeTag = enum {
     block,
     ellipsis,
     for_expr,
+    for_bang_expr,
     break_expr,
     return_expr,
     malformed,
@@ -779,7 +781,10 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.region = e.region;
         },
         .@"for" => |f| {
-            node.tag = .@"for";
+            node.tag = switch (f.kind) {
+                .iter => .@"for",
+                .stream => .for_bang,
+            };
             node.main_token = @intFromEnum(f.patt);
             node.data.lhs = @intFromEnum(f.expr);
             node.data.rhs = @intFromEnum(f.body);
@@ -1311,7 +1316,10 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.rhs = body.statements.span.len;
         },
         .for_expr => |f| {
-            node.tag = .for_expr;
+            node.tag = switch (f.kind) {
+                .iter => .for_expr,
+                .stream => .for_bang_expr,
+            };
             node.region = f.region;
             node.main_token = @intFromEnum(f.patt);
             node.data.lhs = @intFromEnum(f.expr);
@@ -2023,8 +2031,9 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
             } };
         },
-        .@"for" => {
+        .@"for", .for_bang => {
             return .{ .@"for" = .{
+                .kind = if (tag == .for_bang) .stream else .iter,
                 .patt = @enumFromInt(node.main_token),
                 .expr = @enumFromInt(node.data.lhs),
                 .body = @enumFromInt(node.data.rhs),
@@ -2599,8 +2608,9 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .for_expr => {
+        .for_expr, .for_bang_expr => {
             return .{ .for_expr = .{
+                .kind = if (tag == .for_bang_expr) .stream else .iter,
                 .patt = @enumFromInt(node.main_token),
                 .expr = @enumFromInt(node.data.lhs),
                 .body = @enumFromInt(node.data.rhs),

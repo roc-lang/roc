@@ -4428,7 +4428,10 @@ fn canonicalizeAssociatedItems(
             },
             .crash => |crash_stmt| try self.reportInvalidAssociatedStatement("crash", crash_stmt.region),
             .dbg => |dbg_stmt| try self.reportInvalidAssociatedStatement("dbg", dbg_stmt.region),
-            .@"for" => |for_stmt| try self.reportInvalidAssociatedStatement("for", for_stmt.region),
+            .@"for" => |for_stmt| try self.reportInvalidAssociatedStatement(switch (for_stmt.kind) {
+                .iter => "for",
+                .stream => "for!",
+            }, for_stmt.region),
             .@"while" => |while_stmt| try self.reportInvalidAssociatedStatement("while", while_stmt.region),
             .@"return" => |return_stmt| try self.reportInvalidAssociatedStatement("return", return_stmt.region),
             .@"break" => |break_stmt| try self.reportInvalidAssociatedStatement("break", break_stmt.region),
@@ -4707,7 +4710,10 @@ pub fn canonicalizeFile(
             },
             .@"for" => |for_stmt| {
                 // Not valid at top-level
-                const string_idx = try self.env.insertString("for");
+                const string_idx = try self.env.insertString(switch (for_stmt.kind) {
+                    .iter => "for",
+                    .stream => "for!",
+                });
                 const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
@@ -6833,29 +6839,42 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
         },
     }
 
-    // Check for remaining exposed identifiers
+    const unimplemented_count = self.exposed_ident_texts.count() + self.exposed_type_idents.count();
+    if (unimplemented_count == 0) return;
+
+    // Report every exposed value and type that was never defined, in the order
+    // the header lists them.
+    const Unimplemented = struct {
+        ident: Ident.Idx,
+        region: Region,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            return a.region.start.offset < b.region.start.offset;
+        }
+    };
+    const unimplemented = try self.env.gpa.alloc(Unimplemented, unimplemented_count);
+    defer self.env.gpa.free(unimplemented);
+    var len: usize = 0;
+
     var ident_iter = self.exposed_ident_texts.iterator();
     while (ident_iter.next()) |entry| {
-        const ident_text = entry.key_ptr.*;
-        const region = entry.value_ptr.*;
-        // Create an identifier for error reporting
-        const ident_idx = try self.env.insertIdent(base.Ident.for_text(ident_text));
-
-        // Report error: exposed identifier but not implemented
-        const diag = Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = ident_idx,
-            .region = region,
-        } };
-        try self.env.pushDiagnostic(diag);
+        unimplemented[len] = .{
+            .ident = try self.env.insertIdent(base.Ident.for_text(entry.key_ptr.*)),
+            .region = entry.value_ptr.*,
+        };
+        len += 1;
+    }
+    var type_iter = self.exposed_type_idents.iterator();
+    while (type_iter.next()) |entry| {
+        unimplemented[len] = .{ .ident = entry.key_ptr.*, .region = entry.value_ptr.* };
+        len += 1;
     }
 
-    // Check for remaining exposed types
-    var iter = self.exposed_type_idents.iterator();
-    while (iter.next()) |entry| {
-        // Report error: exposed type but not implemented
+    std.mem.sort(Unimplemented, unimplemented, {}, Unimplemented.lessThan);
+    for (unimplemented) |item| {
         try self.env.pushDiagnostic(Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = entry.key_ptr.*,
-            .region = entry.value_ptr.*,
+            .ident = item.ident,
+            .region = item.region,
         } });
     }
 }
@@ -10903,6 +10922,13 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
     return facts;
 }
 
+fn canonicalForKind(kind: AST.ForKind) CIR.ForKind {
+    return switch (kind) {
+        .iter => .iter,
+        .stream => .stream,
+    };
+}
+
 fn canonicalizeStandaloneForStatement(
     self: *Self,
     for_stmt: @TypeOf(@as(AST.Statement, undefined).@"for"),
@@ -10955,6 +10981,7 @@ fn canonicalizeStandaloneForStatement(
     const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
     const stmt_idx = try self.env.addStatement(Statement{ .s_for = .{
+        .kind = canonicalForKind(for_stmt.kind),
         .patt = ptrn,
         .expr = list_expr.idx,
         .body = body.idx,
@@ -11642,6 +11669,7 @@ fn runExprKernel(
 
                     try stacks.pushForAfterList(frame_allocator, .{
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .kind = canonicalForKind(e.kind),
                         .ast_patt = e.patt,
                         .ast_body = e.body,
                         .list_free_vars_start = self.scratch_free_vars.top(),
@@ -12337,6 +12365,7 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region),
+                        .kind = canonicalForKind(for_stmt.kind),
                         .ast_patt = for_stmt.patt,
                         .ast_body = for_stmt.body,
                         .list_free_vars_start = list_free_vars_start,
@@ -12663,6 +12692,7 @@ fn runExprKernel(
                 .block = state.block,
                 .next = state.next,
                 .region = state.region,
+                .kind = state.kind,
                 .list_expr = list_expr,
                 .patt = ptrn,
                 .body_free_vars_start = body_free_vars_start,
@@ -12701,6 +12731,7 @@ fn runExprKernel(
 
             const stmt_idx = try self.env.addStatement(Statement{
                 .s_for = .{
+                    .kind = state.kind,
                     .patt = state.patt,
                     .expr = state.list_expr.idx,
                     .body = body.idx,
@@ -13737,6 +13768,7 @@ fn runExprKernel(
 
             try stacks.pushFinishForExpr(frame_allocator, .{
                 .region = state.region,
+                .kind = state.kind,
                 .patt = ptrn,
                 .body_free_vars_start = self.scratch_free_vars.top(),
                 .captures_top = state.captures_top,
@@ -13776,6 +13808,7 @@ fn runExprKernel(
 
             const for_expr_idx = try self.env.addExpr(Expr{
                 .e_for = .{
+                    .kind = state.kind,
                     .patt = state.patt,
                     .expr = list_expr.idx,
                     .body = body.idx,
@@ -16401,6 +16434,7 @@ const ExprBlockForAfterListWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
+    kind: CIR.ForKind,
     ast_patt: AST.Pattern.Idx,
     ast_body: AST.Expr.Idx,
     list_free_vars_start: u32,
@@ -16414,6 +16448,7 @@ const ExprFinishBlockForStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
+    kind: CIR.ForKind,
     list_expr: CanonicalizedExpr,
     patt: Pattern.Idx,
     body_free_vars_start: u32,
@@ -16602,6 +16637,7 @@ const ExprFinishNominalApplyWork = struct {
 
 const ExprForAfterListWork = struct {
     region: Region,
+    kind: CIR.ForKind,
     ast_patt: AST.Pattern.Idx,
     ast_body: AST.Expr.Idx,
     list_free_vars_start: u32,
@@ -16613,6 +16649,7 @@ const ExprForAfterListWork = struct {
 
 const ExprFinishForExprWork = struct {
     region: Region,
+    kind: CIR.ForKind,
     patt: Pattern.Idx,
     body_free_vars_start: u32,
     captures_top: u32,
