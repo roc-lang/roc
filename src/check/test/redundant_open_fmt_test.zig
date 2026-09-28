@@ -85,6 +85,23 @@ test "redundant open rows - function results, arguments and callbacks" {
     , .exact);
 }
 
+test "redundant open rows - retained phantom callback arguments" {
+    try expectFormatterMatchesChecker(
+        \\Phantom(a) : {}
+        \\Outer(a) : Phantom(Str -> a)
+        \\Chain(a) : Outer(a)
+        \\Consumer(a) : Phantom(a -> Str)
+        \\use : Outer([E, ..]) -> Str
+        \\use = |_| "ok"
+        \\chain : Chain([E, ..]) -> Str
+        \\chain = |_| "ok"
+        \\direct : Phantom(Str -> [E, ..]) -> Str
+        \\direct = |_| "ok"
+        \\consumer : Consumer([E, ..]) -> Str
+        \\consumer = |_| "ok"
+    , .exact);
+}
+
 test "redundant open rows - values and non-lambda bodies" {
     try expectFormatterMatchesChecker(
         \\boom : [Boom, ..]

@@ -34,7 +34,7 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(20, @sizeOf(Alias));
+    try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
@@ -352,6 +352,8 @@ pub const Rigid = struct {
 pub const Alias = struct {
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
+    /// Source arguments precede hidden implicit-row parameters in `vars`.
+    source_arg_count: u32,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,

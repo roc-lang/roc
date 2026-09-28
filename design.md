@@ -6886,14 +6886,39 @@ joined a generalized scheme is left alone). Local value bindings are not
 grounded: their rows behave like inferred local rows and are sealed by
 Monotype's row defaults.
 
-An ALIAS of a tag union defers the decision to each use site: the alias
-declaration stores a marker rigid (`types.polarity_var_text`, an ordinary
-rigid with a reserved name) as the ext of each extensionless union in its
-body, and instantiation resolves every marker by the polarity of the position
-the alias is used in—a fresh flex (recorded for the audit) in positive
-positions, `[]` in negative ones—with each embedded function establishing
-its own input and output positions (`Instantiator.PolarityVarBehavior`).
-Nominal declaration bodies close as written.
+An ALIAS carries its implicit row variables as hidden ordinary rigid
+parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
+row parameter and the backing `Try(a, [MyError, ..#polarity])`. Hidden
+parameters reuse the existing reserved `#polarity` rigid spelling, each with
+a distinct variable identity. Raw `types.Alias` records
+`source_arg_count`: source arguments precede the hidden suffix. The reserved
+name cannot be written by a user; binding and substitution use variable
+identity, so equal generated names in different declarations never capture
+one another. Every hidden parameter is reachable from the alias backing graph,
+including source argument storage in a nested phantom alias.
+
+Declaration construction collects rows whose position inherits the alias use
+or is a function output. Fixed function inputs are closed. Empty unions and
+explicit named extensions retain their meaning. Each alias use joins all
+backing occurrences of its hidden binders before copying the backing and
+argument bookkeeping. Hidden actuals become fresh flexes, closed rows, or
+ordinary per-use markers under the existing annotation opening policy. A nested alias contributes its
+fresh hidden variables to the enclosing declaration. Source formals retain
+ordinary substitution and sharing; independent uses get independent rows.
+
+NOMINAL declarations never acquire hidden row parameters. Their literal tag
+unions are closed, including under function returns. An alias referenced
+inside a nominal declaration instantiates its hidden rows closed as well;
+this as-written policy overrides function-local output positions.
+
+The hidden suffix belongs only to raw checker types and their serialized
+module stores. Checked type output emits SOURCE arguments in
+`CheckedAliasType.args`; all hidden actuals remain ordinary reachable types
+in the backing. Checked type shape, argument paths, and runtime lowering
+contracts are unchanged. Source-facing arity, printing, diagnostics, docs,
+and API extraction omit the hidden suffix. Structural copying and
+generalization preserve all parameters. Checked type identity traverses
+source arguments and backing, never the duplicate hidden bookkeeping slots.
 
 A row the reference itself WRITES as a type argument is decided the same way,
 by composition rather than by inheritance. A declaration's formal stands
@@ -6911,13 +6936,36 @@ permits it; an inherited occurrence combined with an output occurrence still
 inherits, and any input occurrence closes the argument. A formal the body
 places on both sides is invariant: one variable cannot be open on the output
 side and closed on the input side, so its argument is generated closed wherever the reference stands.
-The current implementation reads these transfers from a bounded walk through
-local declarations. Existing imported-declaration and bound handling remain
-limitations, described under "Two Syntactic Walks" below; this function-local
-change does not establish full alias transparency. Alias propagation must
-replace those approximations with exact declaration information. Argument
-positions must not depend on a declaration's module, chain length, or traversal
-order.
+Source-formal positions are computed exactly from CIR declaration
+structure. Finite worklists solve occurrence sets (inherited, input, output), including
+recursive nominal declarations and imported owners.
+A first pass records source-formal usedness through all retained source
+arguments before any position equation is solved. Proven-unused formals retain
+their actuals at the reference position; an equation that is temporarily empty
+during iteration does not establish unusedness. Function positions reset the
+context; applications compose formal occurrence sets. Recursive-only formals
+collect the positions encountered through recurring nominal argument flow:
+any input occurrence closes the shared row, outputs alone open it, and a cycle
+without function positions inherits its use site. Transparent aliases introduce
+no recurrence boundary and preserve the function resets of their backing.
+
+Inheritance is first solved as a greatest fixed point. A finite source-formal
+dependency graph then orders strongly connected components before their users;
+unrelated parameters of mutually recursive declarations remain separate. Within
+a component, a least fixed point collects position witnesses at its recurring
+nominal boundaries, with transparent alias transfers recomputed normally.
+Completed dependencies keep their exact transfers. The resulting witness sets
+bound a descending fixed point of ordinary position composition, so a reset
+that was overwritten before recurrence cannot survive solely as a speculative
+position. Retained argument syntax is visited even while its equation is empty,
+so nested functions establish their own positions. Every analysis is over
+finite CIR nodes, source formals, and three position bits; invalid growing
+recursion does not require infinite expansion and retains its existing checker
+diagnostic.
+No depth, arity, node budget,
+unknown-declaration approximation, or builtin covariance exemption chooses a
+row's meaning. This data is transient checking machinery, not persisted
+nominal metadata and not hidden nominal parameters.
 
 A WHERE-METHOD signature is a scheme the constrained body instantiates at
 each use, exactly like a call of an annotated function. It is walked like any
@@ -6978,7 +7026,7 @@ as written, exactly as a negative position does, so a body use that tries
 to widen it is an ordinary type mismatch reported at the body use. Keeping
 the set of positions a use may WIDEN equal to the set lowering can ADAPT is
 the rule this axis holds; it is held BY HAND, by a syntactic walk that must
-grow whenever the coercion generator does (see "Two Syntactic Walks"
+grow whenever the coercion generator does (see "Declaration Position and Adapter Reach"
 below). (Decided 2026-09-03 as the converse—open
 everywhere, reject a closed implementation at the enclosing-scheme
 instantiation—and reversed 2026-09-14: that instantiation
@@ -6995,111 +7043,46 @@ in Phase A and emit in Phase B like every other codec body, and the row is
 decided once, by final sealing. (The two Builder-level `*Expr` restores, which
 own a private graph, are the exception noted in the Monotype sealing rule.)
 
-#### Two Syntactic Walks
+#### Declaration Position and Adapter Reach
 
-Two walks over the annotation's own CIR, not over the type graph, decide
-where a use may widen and at what polarity an argument is generated. Each is
-a SEPARATE RULE from the thing it tracks, kept in step by hand: the first
-must match what the coercion generator re-tags, the second what the
-referenced declaration's body does with its formal. Growing either of those
-does not grow the walk.
+`annotation_positions` computes source-formal positions from CIR
+bindings in the referenced declarations, including imported and builtin
+owners. Each formal has inherited, function-input, and function-output
+occurrence bits. Applications compose these finite equations to their inheritance and
+function-position fixed points;
+recursive nominal declarations do not require depth or arity bounds. A shared
+formal takes the closed answer if any occurrence is in a function input, or
+inherits a negative reference position. This transient analysis adds no
+persisted nominal metadata. Literal rows in nominal declarations remain closed.
+Compiler primitive applications and explicit platform for-clause abstract
+aliases retain their source arguments' inherited position. The reserved builtin
+import has its explicit builtin owner, independently of ordinary import identities.
+Rejected declarations and wrong arities retain diagnostic recovery; missing
+invariants for valid CIR declarations are never an unknown-position policy.
 
-`Check.applyTryErrorArgIndex` answers which of a type application's own
-arguments lands in the builtin `Try`'s ERROR cell. It crosses transparent
-alias declarations (`Res(e) : Try(Str, e)`) because lowering crosses the same
-ones: `closedResultRowOrNull` reads the return through `resolvedPayload`,
-which walks alias backings, and `hostedTryNamedOrNull` crosses them by
-design. `Check.applyFormalVariances` answers the polarity an argument is
-generated at, by reading the VARIANCE of the formal it is substituted for out
-of the referenced declaration's own annotation, so `Handler([A, B])` composes
-instead of inheriting.
+Before copying a template, `Instantiator.collectMarkerChoices` joins every
+backing occurrence of each hidden binder using a finite `(Var, polarity,
+adapter position)` walk. The resulting choice constructs one fresh actual per
+binder through the normal variable substitution map. This is immutable
+declaration analysis followed by fresh construction, not a rewrite of the
+solved graph. First-visited occurrence order cannot choose a shared binder's
+meaning. Alias argument storage is not a second backing occurrence; an
+explicitly unused source formal retains its actual solely as source bookkeeping,
+with inherited polarity and no adapter reach. Every reserved rigid in a hidden
+suffix must be reached by this analysis. Nominal actual positions come from the
+same CIR declaration equations, cached only within the checker instance;
+this never traverses or opens nominal literal backing rows during instantiation.
 
-Both stop at the same wall, and it is a MODULE boundary: neither reads a
-declaration reached as `.external` or `.pending`, because that declaration's
-CIR and its formal names live in another module's stores. (The `Try` walk
-declines a `.builtin` reference too, and that one costs nothing: the
-applications the compiler constructs are `List`, `Box` and the numerics, which
-are never the builtin `Try`.) Both also stop on
-the bounds a walk needs in order to answer in bounded time: an arity above
-`max_tracked_alias_formals`, which both share; a declaration chain past
-`max_formal_variance_decl_depth` or a position count past
-`max_formal_variance_nodes` in the variance walk, and a chain longer than the
-CIR node count in the `Try` walk; a declaration cycle; and, for the `Try`
-walk, an argument the declaration computes (`Outer(e) : Inner(List(e))`)
-rather than passes straight through.
-
-Neither stop is free, and the DIRECTION each fails in is the rule. Both fail
-toward the closed row, which is the direction where the annotation keeps
-bounding and a rejected program is the worst outcome.
-
-The variance walk answers UNKNOWN variance by generating the argument, and
-everything beneath it, AS WRITTEN: no row under an unknown formal is
-implicitly opened, at any depth. Unknown must not be answered covariantly:
-covariance is the most permissive variance, and guessing it stops the
-annotation bounding the caller at all. `Handler(e) : e -> Str` declared beside
-the signature that uses it closes the `[A, B]` of `process : Handler([A, B])`,
-so `process(C)` is a mismatch; move that one declaration into an imported
-module, qualify the reference, change nothing else, and the closed answer must
-survive—which it does only because the importer refuses to open what it cannot
-read.
-
-Unknown is deliberately NOT expressed as a polarity. Every function establishes
-its own output return even beneath a negative surrounding position, whereas
-an opening behaviour remains stable under descent. The existing unknown
-policy therefore disables opening throughout the argument; the follow-up
-alias representation must replace that policy with exact declaration data.
-The existing `Lib.Producer([A] -> Str)` regression still requires `[A]` to
-stay closed, now directly because it is a function argument. The remaining
-cost is the covariant case: `Producer(e) : Str -> e` keeps `Producer([A, B])`
-open for callers when it is declared locally and closes it when it is
-imported. Two kinds of reference are exempt, because their variance is KNOWN
-rather than unknown, and both are compiler-owned: a `.builtin` application
-(`List`, `Box`, the numerics) and a reference into the `Builtin` module.
-`Try`'s error row in particular is an EXTERNAL reference from every ordinary
-module, so this exemption is what keeps annotated error rows open at all.
-
-The existing second exemption rests on a property of `Builtin` rather than on
-a list of names: EVERY parameterized
-declaration in `Builtin` is covariant in each of its formals, or leaves that
-formal unused. That holds today across all twelve of them—`Try(ok, err)`,
-`Dict(k, v)`, `DictData(k, v)`, `Set(item)`, `Iter(item)`, `Stream(item)`,
-`Range(num)`, `Box(item)`, `List(_item)`, `FieldName(_shape)`,
-`FieldNames(_shape)` and `ParseTagUnionSpec(_shape)`. Three of them are worth
-naming because they are the near misses: `Iter` and `Stream` each put their
-formal under an arrow (`step : () -> [One({ item : item, ... }), ...]`) and are
-covariant only because it lands in that arrow's RESULT, and `Dict` carries its
-formals inside a `List((k, v))` payload rather than a function at all. A
-`Builtin` declaration that put a formal in an arrow's ARGUMENT—a
-`Consumer(item) :: { push : item -> {} }`—would be contravariant, and this
-exemption would then answer it covariantly and reopen exactly the hole the
-rule above closes. Under function-local positions, inheritance also differs
-from a forced output: `Iter` and `Stream` place their parameters under function
-results. Exact declaration position data must replace this legacy exemption
-as part of alias propagation; mathematical covariance alone is insufficient.
-
-The `Try` walk's stop answer UNDER-OPENS: the opened set becomes
-strictly smaller than the adaptable set, and a use lowering would have
-re-tagged is refused as an ordinary mismatch. That is not a wrong tag layout,
-but it IS an instance of the interchangeability failure this axis exists to
-remove, and the module wall makes it reachable from ordinary source. Declare
-`Res(e) : Try(Str, e)` beside the signature that uses it and
-`load : a -> Res([IoErr, Other]) where [a.fetch : a -> Res([IoErr])]` checks,
-because the `?` widens an error row that was opened per use. Move that one
-declaration into an imported module, qualify its references, change nothing
-else, and the same `?` is a type mismatch: the reference is `.external`, the
-walk declines, and the error row is generated closed.
-
-So the invariant that holds is ONE-SIDED, on both walks. The opened set is
-always a subset of the adaptable set, and the two are equal exactly on the
-shapes the `Try` walk models, which are a `Try` written directly and a chain
-of LOCAL transparent aliases that pass their formals straight through; a use
-is therefore never opened at a position lowering cannot re-tag, only refused
-at one lowering could have. The generated polarity is likewise never more
-permissive than the declaration's real variance, only less. Closing both gaps
-needs the declaration's variance and its `Try` error cell recorded in the
-checked module data an importer already reads, not a deeper walk. Recording
-them is a pure RELAXATION on both axes: it replaces a conservative answer with
-the true one, so it can only ever accept more programs than the rule above.
+`Check.applicationArgumentReaches` follows completed raw declaration backings
+with a visited `(Var, adapter position)` worklist. Alias wrappers are transparent.
+At the signature root a function's return reaches the result; in that result
+only builtin `Try`'s error argument reaches its row. Other children are nested,
+and a shared formal with any nested occurrence stays closed. Source formal
+identities determine the argument mapping; no names, chain limits, or module
+boundary guesses participate. The instantiator carries the same signature,
+result, error-row, and nested positions through hidden alias parameters.
+The reachable set remains exactly the existing result-row adapter contract;
+this does not extend the adapter to nested functions, payloads, or `Try` ok rows.
 
 The HOST-BOUNDARY row above covers two opt-out sites, both genuine
 non-producers: host-boundary annotations (hosted lambdas and `provides` defs,
@@ -9274,6 +9257,12 @@ the SET side of this section's typing frame, realized by the kind-flexible
 update probe (see the record-update bullet in Field Kinds).
 
 ### Rewrite Inventory
+
+- `finishAliasDeclarationParameters`—mechanism: completes an in-progress
+  alias declaration shell after constructing its backing by appending the
+  hidden row variables that construction produced. Source parameters, backing,
+  and all type equalities remain unchanged. Aliases cannot be instantiated
+  while their declaration is generating.
 
 Every solver-mutating rewrite in checking, classified. A change that adds a
 site to any family below must classify it here.

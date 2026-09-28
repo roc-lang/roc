@@ -9091,6 +9091,14 @@ test "check type - polarity - alias and direct annotation graphs use function lo
         \\ReversedFields : { before : [F], callback : Str -> [E] }
         \\Shared(a) : ((a -> [E(a)]), (Str -> [F(a)]))
         \\Wrapped : [Wrap(Str -> [E])]
+        \\Handler(a) : a -> Str
+        \\LiteralProducer : Producer([E])
+        \\LiteralConsumer : Handler([E])
+        \\MyResult(a) : Try(a, [MyError])
+        \\ResultFn : Str -> MyResult(Str)
+        \\N(a) := { produce : Str -> a }
+        \\NominalAlias : N([E])
+        \\Many(a,b,c,d,e,f,g,h,i) : (a,b,c,d,e,f,g,h,(i -> Str))
     ;
     const Case = struct { alias: []const u8, direct: []const u8, open: []const bool };
     const cases = [_]Case{
@@ -9101,6 +9109,13 @@ test "check type - polarity - alias and direct annotation graphs use function lo
         .{ .alias = "Identity(Producer([E]))", .direct = "(Str -> [E])", .open = &.{true} },
         .{ .alias = "(Producer([E]), Producer([E]))", .direct = "((Str -> [E]), (Str -> [E]))", .open = &.{ true, true } },
         .{ .alias = "Wrapped", .direct = "[Wrap(Str -> [E])]", .open = &.{ false, true } },
+        .{ .alias = "LiteralProducer", .direct = "(Str -> [E])", .open = &.{true} },
+        .{ .alias = "LiteralConsumer", .direct = "([E] -> Str)", .open = &.{false} },
+        .{ .alias = "MyResult(Str)", .direct = "Try(Str, [MyError])", .open = &.{false} },
+        .{ .alias = "Many({},{},{},{},{},{},{},{},[E])", .direct = "({},{},{},{},{},{},{},{},([E] -> Str))", .open = &.{false} },
+        .{ .alias = "(NominalAlias,[F])", .direct = "(N([E]),[F])", .open = &.{ true, false } },
+        .{ .alias = "NominalAlias", .direct = "N([E])", .open = &.{true} },
+        .{ .alias = "ResultFn", .direct = "(Str -> Try(Str, [MyError]))", .open = &.{true} },
         .{ .alias = "Pair", .direct = "((Str -> [E]), [F])", .open = &.{ true, false } },
         .{ .alias = "ReversedPair", .direct = "([F], (Str -> [E]))", .open = &.{ false, true } },
         .{ .alias = "Fields", .direct = "{ callback : Str -> [E], tag : [F] }", .open = &.{ true, false } },
@@ -9160,6 +9175,7 @@ test "check type - polarity - mixed inherited and output formal shares its row" 
 const PolarityTestGraph = struct {
     const Error = std.mem.Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual };
 
+    include_alias_arguments: bool = false,
     nodes: std.ArrayList(u64) = .empty,
     leaves: std.ArrayList(types.Var) = .empty,
     open: std.ArrayList(bool) = .empty,
@@ -9190,7 +9206,12 @@ const PolarityTestGraph = struct {
     fn collect(self: *PolarityTestGraph, store: *const types.Store, variable: types.Var) Error!void {
         const resolved = store.resolveVar(variable);
         const content = resolved.desc.content;
-        if (content == .alias) return self.collect(store, store.getAliasBackingVar(content.alias));
+        if (content == .alias) {
+            if (self.include_alias_arguments) {
+                for (store.sliceAliasArgs(content.alias)) |arg| try self.collect(store, arg);
+            }
+            return self.collect(store, store.getAliasBackingVar(content.alias));
+        }
         try self.add(@intFromEnum(std.meta.activeTag(content)));
         switch (content) {
             .flex, .rigid => {
@@ -9438,21 +9459,8 @@ test "check type - polarity - imported invariant alias closes the applied row" {
     try main_env.assertOneTypeError("Type Mismatch");
 }
 
-test "check type - polarity - imported covariant alias closes the applied row too" {
-    // The COST of the rule, pinned deliberately. `Producer(e) : Str -> e` is
-    // covariant, so the local spelling keeps `[A, B]` open for callers ("alias
-    // reference still opens a row the declaration puts in an output
-    // position"). Imported, the walk cannot see that it is covariant, and
-    // unknown variance is invariant, so `consume(produce("s"))` at the wider
-    // union is a Type Mismatch.
-    //
-    // This is the conservative choice, taken because the alternative,
-    // guessing covariance, is the one that accepts programs the annotation
-    // was written to reject. Recording each declaration's formal variances in
-    // the checked module data an importer already reads (design.md
-    // "Polarity") replaces the guess with the real answer and would make this
-    // pass again; that is a pure relaxation, since it can only ever accept
-    // more programs than this rule does.
+test "check type - polarity - imported covariant alias opens the applied row" {
+    // Imported declaration equations preserve exactly the local positions.
     const source_lib =
         \\module [Producer]
         \\
@@ -9474,13 +9482,11 @@ test "check type - polarity - imported covariant alias closes the applied row to
     ;
     var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
     defer main_env.deinit();
-    try main_env.assertOneTypeError("Type Mismatch");
+    try main_env.assertNoErrors();
 }
 
-test "check type - polarity - an unknown formal's row stays closed under a function argument" {
-    // Imported source arguments retain the existing as-written policy until
-    // alias propagation supplies exact declaration positions. Independently
-    // of that policy, this row is a function input and must remain closed.
+test "check type - polarity - an imported formal row stays closed under a function argument" {
+    // A nested function establishes its input independently of the formal.
     const source_lib =
         \\module [Producer]
         \\
@@ -13566,4 +13572,265 @@ test "check type - repeated tag conflict found while resolving a method dispatch
         .start_column = 11,
         .end_column = 44,
     });
+}
+
+test "check type - polarity - imported hidden alias rows match direct graphs" {
+    const source_lib =
+        \\module [Result, Pair, Producer, Deep]
+        \\Result(a) : Try(a, [Failure])
+        \\Pair : ((Str -> [E]), (Str -> [E]))
+        \\Producer(a) : Str -> a
+        \\A0(a) : Producer(a)
+        \\A1(a) : A0(a)
+        \\A2(a) : A1(a)
+        \\A3(a) : A2(a)
+        \\A4(a) : A3(a)
+        \\A5(a) : A4(a)
+        \\A6(a) : A5(a)
+        \\A7(a) : A6(a)
+        \\A8(a) : A7(a)
+        \\A9(a) : A8(a)
+        \\Deep(a) : A9(a)
+    ;
+    var lib = try TestEnv.init("PolarityLib", source_lib);
+    defer lib.deinit();
+    const Case = struct { alias: []const u8, direct: []const u8 };
+    for ([_]Case{
+        .{ .alias = "PolarityLib.Result(Str)", .direct = "Try(Str, [Failure])" },
+        .{ .alias = "PolarityLib.Pair", .direct = "((Str -> [E]), (Str -> [E]))" },
+        .{ .alias = "PolarityLib.Deep([E])", .direct = "(Str -> [E])" },
+        .{ .alias = "PolarityLib.Producer([E])", .direct = "(Str -> [E])" },
+    }) |case| {
+        const source = try std.fmt.allocPrint(testing.allocator, "import PolarityLib\ndirect : {s} -> Str\ndirect = |_| \"ok\"\naliased : {s} -> Str\naliased = |_| \"ok\"\n", .{ case.direct, case.alias });
+        defer testing.allocator.free(source);
+        var env = try TestEnv.initWithImport("PolarityMain", source, "PolarityLib", &lib);
+        defer env.deinit();
+        try env.assertNoErrors();
+        var direct: PolarityTestGraph = .{};
+        defer direct.deinit();
+        var aliased: PolarityTestGraph = .{};
+        defer aliased.deinit();
+        try direct.collectDef(&env, "direct");
+        try aliased.collectDef(&env, "aliased");
+        try testing.expectEqualSlices(u64, direct.nodes.items, aliased.nodes.items);
+        try testing.expectEqualSlices(bool, direct.open.items, aliased.open.items);
+        if (aliased.row_extensions.items.len == 2) {
+            try testing.expect(aliased.row_extensions.items[0] != aliased.row_extensions.items[1]);
+        }
+    }
+}
+
+test "check type - polarity - nominal declarations close direct and alias rows" {
+    const source =
+        \\Rows : [E]
+        \\Function : Str -> Rows
+        \\Direct := [E]
+        \\Aliased := Rows
+        \\DirectFunction := Str -> [E]
+        \\AliasedFunction := Function
+    ;
+    var env = try TestEnv.init("NominalPolarity", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+    var count: usize = 0;
+    for (env.module_env.store.sliceStatements(env.module_env.all_statements)) |statement| {
+        if (env.module_env.store.getStatement(statement) != .s_nominal_decl) continue;
+        const index = env.module_env.types.lookupNominalDeclByKey(env.module_env.selfModuleIdentity(), @intFromEnum(statement)).?;
+        var graph: PolarityTestGraph = .{};
+        defer graph.deinit();
+        try graph.collect(&env.module_env.types, env.module_env.types.getNominalDecl(index).backing);
+        try testing.expectEqualSlices(bool, &.{false}, graph.open.items);
+        count += 1;
+    }
+    try testing.expectEqual(@as(usize, 4), count);
+}
+
+test "check type - polarity - wrapped shared hidden row joins all occurrences" {
+    for ([_][]const u8{ "((Str -> a), a)", "(a, (Str -> a))" }) |body| {
+        for ([_]bool{ false, true }) |output| {
+            const annotation = if (output) "Str -> Wrapped" else "Wrapped -> Str";
+            const source = try std.fmt.allocPrint(testing.allocator, "Mixed(a) : {s}\nWrapped : Mixed([E])\nvalue : {s}\nvalue = |_| crash \"unused\"\n", .{ body, annotation });
+            defer testing.allocator.free(source);
+            var env = try TestEnv.init("WrappedSharedPolarity", source);
+            defer env.deinit();
+            try env.assertNoErrors();
+            var graph: PolarityTestGraph = .{};
+            defer graph.deinit();
+            try graph.collectDef(&env, "value");
+            try testing.expectEqualSlices(bool, &.{ output, output }, graph.open.items);
+            try testing.expectEqual(graph.row_extensions.items[0], graph.row_extensions.items[1]);
+        }
+    }
+}
+
+test "check type - polarity - phantom alias actual retains source argument policy" {
+    const source =
+        \\Phantom(a) : {}
+        \\Wrapped : Phantom([E])
+        \\value : Wrapped -> Str
+        \\value = |_| "ok"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Wrapped -> Str");
+}
+
+test "check type - polarity - retained phantom arguments preserve function positions" {
+    const cases = [_]struct { backing: []const u8, output: bool }{
+        .{ .backing = "Str -> a", .output = true },
+        .{ .backing = "a -> Str", .output = false },
+        .{ .backing = "a", .output = false },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\Phantom(a) : {{}}
+            \\Outer(a) : Phantom({s})
+            \\Chain(a) : Outer(a)
+            \\Wrapped : Chain([E])
+            \\value : Chain([E]) -> Str
+            \\value = |_| "ok"
+            \\wrapped : Wrapped -> Str
+            \\wrapped = |_| "ok"
+        , .{case.backing});
+        defer testing.allocator.free(source);
+        var env = try TestEnv.init("PhantomPositions", source);
+        defer env.deinit();
+        try env.assertNoErrors();
+        // Alias backing erasure alone would see no rows. Inspect the retained
+        // source actual at every wrapper and its copy inside Phantom's argument.
+        for ([_][]const u8{ "value", "wrapped" }) |name| {
+            // The wrapped spelling also exercises hidden-marker choices, which
+            // must agree with source-formal position analysis.
+            var graph: PolarityTestGraph = .{ .include_alias_arguments = true };
+            defer graph.deinit();
+            try graph.collectDef(&env, name);
+            try testing.expectEqualSlices(bool, &.{ case.output, case.output, case.output }, graph.open.items);
+            try testing.expectEqual(graph.row_extensions.items[0], graph.row_extensions.items[1]);
+            try testing.expectEqual(graph.row_extensions.items[1], graph.row_extensions.items[2]);
+        }
+    }
+}
+
+test "check type - polarity - retained phantom callback output accepts wider rows" {
+    for ([_][]const u8{ "Outer([E])", "Phantom(Str -> [E])", "Chain([E])" }) |annotation| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\Phantom(a) : {{}}
+            \\Outer(a) : Phantom(Str -> a)
+            \\Chain(a) : Outer(a)
+            \\use : {s} -> Str
+            \\use = |_| "ok"
+            \\source : Str -> Outer([E, F])
+            \\source = |_| {{}}
+            \\result = use(source(""))
+        , .{annotation});
+        defer testing.allocator.free(source);
+        var env = try TestEnv.init("PhantomCallback", source);
+        defer env.deinit();
+        try env.assertNoErrors();
+    }
+}
+
+test "check type - polarity - recursive retained formals preserve exact position transfers" {
+    const Case = struct { recursive: []const u8, extra: []const u8 = "", argument: []const u8 = "a", direct_argument: []const u8 = "[E]", open: bool };
+    const cases = [_]Case{
+        .{ .recursive = "[Next(Loop(a))]", .open = false },
+        .{ .recursive = "[Next(Loop(a))]", .argument = "Str -> a", .direct_argument = "Str -> [E]", .open = true },
+        .{ .recursive = "[Next(Str -> Loop(a))]", .open = true },
+        .{ .recursive = "[Next(Loop(a) -> Str)]", .open = false },
+        .{ .recursive = "[Next((Loop(a), (Str -> Loop(a))))]", .open = false },
+        .{ .recursive = "[Next(Producer(Loop(a)))]", .open = true },
+        .{ .recursive = "[Next(Other(a))]", .extra = "Other(a) := [Next(Str -> Loop(a))]", .open = true },
+        .{ .recursive = "[Next(Other(a) -> Str)]", .extra = "Other(a) := [Next(Str -> Loop(a))]", .open = false },
+        .{ .recursive = "[Next(Input(Out(a)))]", .extra = "Out(a) : Str -> Loop(a)", .open = true },
+        .{ .recursive = "[Next(Str -> Pass(a))]", .extra = "Pass(a) : Loop(a)", .open = true },
+    };
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(testing.allocator,
+            \\Producer(a) : Str -> a
+            \\Input(a) : a -> Str
+            \\Loop(a) := {s}
+            \\{s}
+            \\Outer(a) : Loop({s})
+            \\Chain(a) : Outer(a)
+            \\Wrapped : Chain([E])
+            \\direct : Loop({s}) -> Str
+            \\direct = |_| "ok"
+            \\outer : Outer([E]) -> Str
+            \\outer = |_| "ok"
+            \\chain : Chain([E]) -> Str
+            \\chain = |_| "ok"
+            \\wrapped : Wrapped -> Str
+            \\wrapped = |_| "ok"
+        , .{ case.recursive, case.extra, case.argument, case.direct_argument });
+        defer testing.allocator.free(source);
+        var env = try TestEnv.init("RecursivePositions", source);
+        defer env.deinit();
+        try env.assertNoErrors();
+        var direct: PolarityTestGraph = .{};
+        defer direct.deinit();
+        try direct.collectDef(&env, "direct");
+        try testing.expectEqualSlices(bool, &.{case.open}, direct.open.items);
+        for ([_][]const u8{ "outer", "chain", "wrapped" }) |name| {
+            var aliased: PolarityTestGraph = .{};
+            defer aliased.deinit();
+            try aliased.collectDef(&env, name);
+            try testing.expectEqualSlices(bool, &.{case.open}, aliased.open.items);
+            try testing.expectEqualSlices(u64, direct.nodes.items, aliased.nodes.items);
+        }
+    }
+}
+
+test "check type - polarity - nonrecurring formal keeps its exact output position" {
+    const source =
+        \\A(a, b) := [Next(B(a, b) -> Str)]
+        \\B(a, b) := [Again(A(a, Str)), Value(Str -> b)]
+        \\Outer(a, b) : A(a, b)
+        \\Chain(a, b) : Outer(a, b)
+        \\Wrapped : Chain([E], [F])
+        \\direct : A([E], [F]) -> Str
+        \\direct = |_| "ok"
+        \\outer : Outer([E], [F]) -> Str
+        \\outer = |_| "ok"
+        \\chain : Chain([E], [F]) -> Str
+        \\chain = |_| "ok"
+        \\wrapped : Wrapped -> Str
+        \\wrapped = |_| "ok"
+    ;
+    var env = try TestEnv.init("SeparateFormalPositions", source);
+    defer env.deinit();
+    try env.assertNoErrors();
+    var direct: PolarityTestGraph = .{};
+    defer direct.deinit();
+    try direct.collectDef(&env, "direct");
+    try testing.expectEqualSlices(bool, &.{ false, true }, direct.open.items);
+    for ([_][]const u8{ "outer", "chain", "wrapped" }) |name| {
+        var aliased: PolarityTestGraph = .{};
+        defer aliased.deinit();
+        try aliased.collectDef(&env, name);
+        try testing.expectEqualSlices(u64, direct.nodes.items, aliased.nodes.items);
+    }
+}
+
+test "check type - polarity - imported alias method result keeps adapter reach" {
+    const library =
+        \\module [Res, Method]
+        \\Res(e) : Try(Str, e)
+        \\Method(a) : a -> Res([NotFound])
+    ;
+    var lib = try TestEnv.init("RowLib", library);
+    defer lib.deinit();
+    for ([_][]const u8{ "a -> RowLib.Res([NotFound])", "RowLib.Method(a)" }) |signature| {
+        const source = try std.fmt.allocPrint(testing.allocator, "import RowLib\nload : a -> Try(Str, [NotFound, Other]) where [a.fetch : {s}]\nload = |x| {{\n    s = x.fetch()?\n    Ok(s)\n}}\n", .{signature});
+        defer testing.allocator.free(source);
+        var env = try TestEnv.initWithImport("RowMain", source, "RowLib", &lib);
+        defer env.deinit();
+        try env.assertNoErrors();
+    }
+}
+
+test "check type - polarity - hidden alias rows do not change source arity" {
+    const source =
+        \\Result(a) : Try(a, [Failure])
+        \\bad : Result(Str, Str)
+        \\bad = Ok("x")
+    ;
+    try checkTypesModule(source, .fail_first, "Too Many Args");
 }

@@ -583,3 +583,32 @@ test "open rows - multiline union keeps a comment after its dropped `..`" {
         \\
     );
 }
+
+test "open rows - deep input alias keeps explicit extension" {
+    const source =
+        \\A0(a) : a -> Str
+        \\
+        \\A1(a) : A0(a)
+        \\
+        \\A2(a) : A1(a)
+        \\
+        \\A3(a) : A2(a)
+        \\
+        \\A4(a) : A3(a)
+        \\
+        \\A5(a) : A4(a)
+        \\
+        \\A6(a) : A5(a)
+        \\
+        \\A7(a) : A6(a)
+        \\
+        \\A8(a) : A7(a)
+        \\
+        \\A9(a) : A8(a)
+        \\
+        \\value : A9([E, ..])
+        \\value = |_| "ok"
+        \\
+    ;
+    try expectFormatsTo(source, source);
+}

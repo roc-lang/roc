@@ -548,9 +548,8 @@ pub const OpenRows = struct {
         }
         for (found.locals) |decl_idx| {
             if (variance_walk.isOpen(decl_idx)) {
-                // A reference back into a declaration being walked is walked
-                // as unmodeled, keeping this position's polarity.
-                try agree(out, &answered, uniformRules(&candidate_rules, arity, .keep));
+                // A cycle cannot prove an explicit row extension redundant.
+                try agree(out, &answered, uniformRules(&candidate_rules, arity, .opaque_variance));
                 continue;
             }
             var variances: [max_tracked_alias_formals]Variance = undefined;
