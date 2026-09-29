@@ -3683,6 +3683,7 @@ pub fn build(b: *std.Build) void {
     const dyld_export_strip_module = b.createModule(.{
         .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
         .imports = &.{
+            .{ .name = "base", .module = roc_modules.base },
             .{ .name = "vendor_macho", .module = roc_modules.vendor_macho },
         },
     });
@@ -4757,6 +4758,9 @@ pub fn build(b: *std.Build) void {
             }),
         });
         configureBackend(echo_wasm, echo_wasm_target);
+        // This embeds the recursive compiler and interpreter, so its linear-memory
+        // stack needs the compiler budget rather than wasm's 1 MiB default.
+        echo_wasm.stack_size = stack_budget.roc_stack_size;
         echo_wasm.entry = .disabled;
         echo_wasm.rdynamic = true;
         echo_wasm.root_module.addImport("compile", roc_modules.compile);
