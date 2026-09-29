@@ -507,7 +507,16 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_type_dispatch_call = .{
-            .type_dispatch_stmt = rand_idx(CIR.Statement.Idx),
+            .owner = .{ .statement = rand_idx(CIR.Statement.Idx) },
+            .method_name = rand_ident_idx(),
+            .method_name_region = rand_region(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+            .constraint_fn_var = rand_idx(types.Var),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_dispatch_call = .{
+            .owner = .{ .dispatcher = rand_idx(types.Var) },
             .method_name = rand_ident_idx(),
             .method_name_region = rand_region(),
             .args = CIR.Expr.Span{ .span = rand_span() },
@@ -576,6 +585,7 @@ test "NodeStore round trip - Expressions" {
         .e_derived_method = .{
             .ident = rand_ident_idx(),
             .kind = .encoder,
+            .owner = rand_idx(CIR.Statement.Idx),
         },
     });
     try expressions.append(gpa, CIR.Expr{

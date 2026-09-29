@@ -493,11 +493,30 @@ fn shimLibraryBytes(kind: ShimLibraryKind, target: ?RocTarget) []const u8 {
     };
 }
 
+/// The SHA-256 digest of an embedded link input, computed when `roc` was built
+/// (see src/build/embedded_digests.zig). Test builds embed empty files.
+fn embeddedDigest(comptime name: []const u8) [32]u8 {
+    // The SHA-256 of an empty file.
+    if (builtin.is_test) return .{
+        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+    };
+    return @field(@import("embedded_digests"), name);
+}
+
+/// The digest of `shimLibraryBytes(kind, target)`.
+fn shimLibraryBytesDigest(kind: ShimLibraryKind, _: ?RocTarget) [32]u8 {
+    return switch (kind) {
+        .lir => embeddedDigest("interpreter_shim"),
+        .machine_code => embeddedDigest("machine_code_shim"),
+    };
+}
+
 fn shimLibraryDigest(kind: ShimLibraryKind, target: ?RocTarget) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-shim-library-cache-v1");
+    var hasher = base.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-shim-library-cache-v2");
     updateHashBytes(&hasher, @tagName(kind));
-    hasher.update(shimLibraryBytes(kind, target));
+    hasher.update(&shimLibraryBytesDigest(kind, target));
     var out: [32]u8 = undefined;
     hasher.final(&out);
     return out;
@@ -760,6 +779,88 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
 
 const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
 const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
+
+/// The digest of `DefaultPlatformRuntimeObjects.forTarget(requested)`.
+fn defaultRuntimeDigest(requested: RocTarget) ?[32]u8 {
+    return switch (requested.defaultCpuTarget()) {
+        inline .x64musl,
+        .arm64musl,
+        .x64glibc,
+        .arm64glibc,
+        .x64mac,
+        .arm64mac,
+        .x64win,
+        .x64mingw,
+        .arm64win,
+        .arm64mingw,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        => |target| embeddedDigest("default_runtime_" ++ @tagName(target)),
+        .x64linux => embeddedDigest("default_runtime_x64glibc"),
+        .arm64linux => embeddedDigest("default_runtime_arm64glibc"),
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1mingw,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64v1win,
+        .arm64v1mingw,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => null,
+    };
+}
+
+/// The digest of `DefaultPlatformCompilerRtObjects.forTarget(requested)`.
+fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
+    return switch (requested.defaultCpuTarget()) {
+        inline .x64musl, .arm64musl, .x64glibc, .arm64glibc => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
+        .x64linux => embeddedDigest("default_compiler_rt_x64glibc"),
+        .arm64linux => embeddedDigest("default_compiler_rt_arm64glibc"),
+        .x64mac,
+        .arm64mac,
+        .x64win,
+        .arm64win,
+        .x64mingw,
+        .arm64mingw,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1mingw,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64v1win,
+        .arm64v1mingw,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => null,
+    };
+}
 
 const DefaultPlatformCompilerRtObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_compiler_rt.o");
@@ -1914,17 +2015,17 @@ fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.Cre
     };
 }
 
-fn updateHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn updateHashU32(hasher: *base.Sha256, value: u32) void {
     var buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &buf, value, .little);
     hasher.update(&buf);
 }
 
-fn updateHashBool(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
+fn updateHashBool(hasher: *base.Sha256, value: bool) void {
     hasher.update(if (value) "\x01" else "\x00");
 }
 
-fn updateHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn updateHashBytes(hasher: *base.Sha256, bytes: []const u8) void {
     var len_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &len_buf, @intCast(bytes.len), .little);
     hasher.update(&len_buf);
@@ -1932,7 +2033,7 @@ fn updateHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void
 }
 
 fn bytesDigest(bytes: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return hasher.finalResult();
 }
@@ -1946,7 +2047,7 @@ fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
     };
     defer file.close(ctx.io.std_io);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     var read_buf: [64 * 1024]u8 = undefined;
     while (true) {
         const bytes_read = file.readStreaming(ctx.io.std_io, &.{&read_buf}) catch |err| switch (err) {
@@ -1976,7 +2077,7 @@ fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
 }
 
 fn platformHostShimIdentity(target: RocTarget, entrypoint_names: []const []const u8, debug: bool) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-platform-host-shim-v1");
     updateHashBytes(&hasher, target.toTriple());
     updateHashBool(&hasher, debug);
@@ -2191,7 +2292,7 @@ const LayoutHashContext = struct {
 
     fn hashIdx(
         self: *LayoutHashContext,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: *base.Sha256,
         idx: layout.Idx,
     ) Allocator.Error!void {
         if (idx == layout.Idx.none) {
@@ -2262,7 +2363,7 @@ const LayoutHashContext = struct {
 
 fn updateLayoutFingerprint(
     allocator: Allocator,
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     layouts: *const layout.Store,
     layout_idx: layout.Idx,
 ) Allocator.Error!void {
@@ -2272,7 +2373,7 @@ fn updateLayoutFingerprint(
 }
 
 fn updatePlatformAppRelationIdentity(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) void {
     // Host-boundary fingerprint: hash the relation/binding SHAPE only, never
@@ -2308,7 +2409,7 @@ fn updatePlatformAppRelationIdentity(
 
 fn updateHostCallableLayoutIdentity(
     allocator: Allocator,
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     store: *const lir.LirStore,
     layouts: *const layout.Store,
     platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
@@ -2338,7 +2439,7 @@ fn checkedInterpreterHostIdentity(
     target_usize: base.target.TargetUsize,
     hosted_table: CheckedHostedTable,
 ) Allocator.Error![32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v2");
     updateHashU32(&hasher, @intFromEnum(target_usize));
 
@@ -2366,7 +2467,7 @@ fn checkedInterpreterHostIdentity(
 }
 
 fn updateInterpreterExeFileLinkInput(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     declared_path: []const u8,
     resolved_path: []const u8,
     content_digest: [32]u8,
@@ -2378,7 +2479,7 @@ fn updateInterpreterExeFileLinkInput(
 }
 
 fn updateInterpreterExeAppLinkInput(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     shim_kind: ShimLibraryKind,
     target: RocTarget,
     entrypoint_names: []const []const u8,
@@ -2414,11 +2515,11 @@ fn entrypointAbiDigestFromLirData(
     else
         return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } });
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-entrypoint-abi-v1");
 
     const hashPlacement = struct {
-        fn go(h: *std.crypto.hash.sha2.Sha256, placement: layout.abi.Placement) void {
+        fn go(h: *base.Sha256, placement: layout.abi.Placement) void {
             switch (placement) {
                 .none => updateHashU32(h, 0),
                 .indirect => updateHashU32(h, 1),
@@ -2478,7 +2579,7 @@ fn interpreterExeLinkInputsIdentity(
     entrypoint_names: []const []const u8,
     debug: bool,
 ) (Allocator.Error || CliError)![32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
 
@@ -2503,7 +2604,7 @@ fn defaultRunCheckedHostIdentity(
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-checked-host-v1");
     updateHashBytes(&hasher, @tagName(target));
     updateHashBytes(&hasher, echo_platform.run_shim_platform_main_source);
@@ -2523,14 +2624,14 @@ fn defaultRunCheckedHostIdentity(
 }
 
 fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
-    const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const compiler_rt_bytes = DefaultPlatformCompilerRtObjects.forTarget(target) orelse return null;
+    const runtime_digest = defaultRuntimeDigest(target) orelse return null;
+    const compiler_rt_digest = defaultCompilerRtDigest(target) orelse return null;
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
-    hasher.update(&bytesDigest(runtime_bytes));
-    hasher.update(&bytesDigest(compiler_rt_bytes));
+    hasher.update(&runtime_digest);
+    hasher.update(&compiler_rt_digest);
 
     return hasher.finalResult();
 }
@@ -2544,7 +2645,7 @@ const ShimHostExeCacheInputs = struct {
 };
 
 fn shimHostExeCacheDigest(inputs: ShimHostExeCacheInputs) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-shim-host-cache-v3");
     updateHashBytes(&hasher, build_options.compiler_version);
     updateHashBytes(&hasher, @tagName(inputs.shim_kind));
@@ -2590,7 +2691,7 @@ fn testLinkInputsIdentityForFiles(
     second_resolved: []const u8,
     second_contents: []const u8,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-link-inputs-v1");
     updateHashBytes(&hasher, @tagName(RocTarget.x64linux));
     updateInterpreterExeFileLinkInput(&hasher, first_declared, first_resolved, bytesDigest(first_contents));
@@ -11901,7 +12002,7 @@ fn cliTestCacheKey(
     artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
     specialization_strategy: base.SpecializationStrategy,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(cli_test_cache_magic);
     hasher.update(build_options.compiler_version);
     hasher.update(@tagName(specialization_strategy));
@@ -14805,7 +14906,7 @@ fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFi
     };
     defer ctx.gpa.free(bytes);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return .{ .hash = hasher.finalResult() };
 }

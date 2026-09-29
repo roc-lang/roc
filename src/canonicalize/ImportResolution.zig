@@ -162,7 +162,7 @@ pub fn resolveDeferredImports(
 
 fn sha256Bytes(bytes: []const u8) [32]u8 {
     var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    base.Sha256.hash(bytes, &digest, .{});
     return digest;
 }
 

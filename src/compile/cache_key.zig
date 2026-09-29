@@ -6,6 +6,7 @@
 //! belong to later target-specific caches only.
 
 const std = @import("std");
+const Sha256 = @import("base").Sha256;
 const Allocator = std.mem.Allocator;
 const can = @import("can");
 const check = @import("check");
@@ -48,7 +49,7 @@ pub const CanonicalizedCacheKeyInput = struct {
 
 /// Compute the canonicalized-module cache key for one module.
 pub fn canonicalizedModuleCacheKey(input: CanonicalizedCacheKeyInput) CanonicalizedModuleCacheKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = Sha256.init(.{});
     hasher.update("roc-canonicalized-module-key-v1");
     hasher.update(&input.entry_version_hash);
     hashLengthPrefixed(&hasher, input.compiler_version);
@@ -70,7 +71,7 @@ pub fn canonicalizedKeyEql(a: CanonicalizedModuleCacheKey, b: CanonicalizedModul
 
 /// Feed `bytes` with an explicit length, so no two different field splits
 /// produce the same hash input.
-fn hashLengthPrefixed(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn hashLengthPrefixed(hasher: *Sha256, bytes: []const u8) void {
     var len_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &len_bytes, bytes.len, .little);
     hasher.update(&len_bytes);

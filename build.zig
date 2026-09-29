@@ -386,7 +386,7 @@ fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
 /// feature added above the architecture baseline: the `sha2` crypto extension,
 /// present on all Apple Silicon, Graviton, Ampere and Raspberry Pi 5, absent on
 /// the Cortex-A53/A72 in Raspberry Pi 4 and earlier. A `-Dcpu` that omits the
-/// feature fails to compile `TypeDigestHasher` rather than silently getting a
+/// feature fails to compile `Sha256` rather than silently getting a
 /// slower binary.
 ///
 /// x86_64 gets no floor here. Its SHA extension is missing from Intel's
@@ -3683,6 +3683,7 @@ pub fn build(b: *std.Build) void {
     const dyld_export_strip_module = b.createModule(.{
         .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
         .imports = &.{
+            .{ .name = "base", .module = roc_modules.base },
             .{ .name = "vendor_macho", .module = roc_modules.vendor_macho },
         },
     });
@@ -7781,11 +7782,26 @@ fn addMainExe(
         }),
     });
     configureBackend(archive_member_names_tool, b.graph.host);
+    // The link inputs `roc` embeds are digested once here (see
+    // src/build/embedded_digests.zig), so `roc run` never rehashes them.
+    const embedded_digests_tool = b.addExecutable(.{
+        .name = "embedded_digests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/embedded_digests.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    configureBackend(embedded_digests_tool, b.graph.host);
+    const embedded_digests = b.addRunArtifact(embedded_digests_tool);
+    const embedded_digests_source = embedded_digests.addOutputFileArg("embedded_digests.zig");
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
     const strip_interpreter_shim_names = b.addRunArtifact(archive_member_names_tool);
     strip_interpreter_shim_names.addArg(@tagName(target.result.os.tag));
     strip_interpreter_shim_names.addFileArg(interpreter_shim_lib.getEmittedBin());
     const bare_interpreter_shim = strip_interpreter_shim_names.addOutputFileArg(interpreter_shim_filename);
+    embedded_digests.addArg("interpreter_shim");
+    embedded_digests.addFileArg(bare_interpreter_shim);
     // Install shim library to the output directory
     const install_interpreter_shim = b.addInstallLibFile(bare_interpreter_shim, interpreter_shim_filename);
     b.getInstallStep().dependOn(&install_interpreter_shim.step);
@@ -7897,6 +7913,8 @@ fn addMainExe(
     strip_machine_code_shim_names.addArg(@tagName(target.result.os.tag));
     strip_machine_code_shim_names.addFileArg(checked_machine_code_shim);
     const bare_machine_code_shim = strip_machine_code_shim_names.addOutputFileArg(machine_code_shim_filename);
+    embedded_digests.addArg("machine_code_shim");
+    embedded_digests.addFileArg(bare_machine_code_shim);
 
     // Cross-check every shipped native ABI from any developer host. No target
     // executable is run: the host checker reads each target's object format.
@@ -8229,6 +8247,8 @@ fn addMainExe(
                 b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_runtime_ext }),
             );
             exe.step.dependOn(&copy_default_platform_runtime.step);
+            embedded_digests.addArg(b.fmt("default_runtime_{s}", .{cross_target.name}));
+            embedded_digests.addFileArg(default_platform_runtime_obj.getEmittedBin());
 
             // A shared-memory run of the synthetic Linux default platform has
             // no external platform host to provide compiler-rt. Keep that
@@ -8256,6 +8276,8 @@ fn addMainExe(
                     b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_default_compiler_rt.o" }),
                 );
                 exe.step.dependOn(&copy_default_platform_compiler_rt.step);
+                embedded_digests.addArg(b.fmt("default_compiler_rt_{s}", .{cross_target.name}));
+                embedded_digests.addFileArg(default_platform_compiler_rt_obj.getEmittedBin());
             }
 
             const default_platform_executable_obj = b.addObject(.{
@@ -8310,6 +8332,7 @@ fn addMainExe(
     config.addOption(bool, "binaryen", use_bundled_deps);
     exe.root_module.addOptions("config", config);
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
+    exe.root_module.addAnonymousImport("embedded_digests", .{ .root_source_file = embedded_digests_source });
 
     const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
     exe.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
