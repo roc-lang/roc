@@ -50,11 +50,20 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
             .next = internal_jump,
         } }, .test_fixture);
+        // Tag fusion copies only arm statements that depend on the matched
+        // union. Releasing it makes each fused variant copy the nested join;
+        // neither variant has a payload, so the copies drop the release.
+        const arm_start = if (phase == .tag_fusion) try store.addCFStmt(.{ .decref = .{
+            .value = outer,
+            .rc = core.LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .bool }),
+            .atomicity = .single_thread,
+            .next = initialize,
+        } }, .test_fixture) else initialize;
         const arm = try store.addCFStmt(.{ .join = .{
             .id = joins.nested,
             .params = try store.addLocalSpan(&.{result}),
             .body = external_jump,
-            .remainder = initialize,
+            .remainder = arm_start,
         } }, .test_fixture);
         const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }, .test_fixture);
         var consumer = arm;

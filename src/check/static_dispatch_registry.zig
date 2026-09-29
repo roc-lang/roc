@@ -168,7 +168,6 @@ pub const IteratorKind = enum(u8) {
     list_rev,
     str,
     single,
-    range,
     numeric_until,
     numeric_to,
     map,
@@ -187,7 +186,7 @@ pub const IteratorKind = enum(u8) {
     pub fn componentTopology(self: IteratorKind) ?IteratorComponentTopology {
         return switch (self) {
             .none, .forced_dynamic => null,
-            .range, .numeric_until, .numeric_to => .source_without_components,
+            .numeric_until, .numeric_to => .source_without_components,
             .custom, .list, .list_rev, .str, .single => .source_with_components,
             .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by => .adapter,
         };
@@ -232,8 +231,12 @@ pub const IteratorProcedureId = enum(u8) {
     iter_append,
     iter_with_index,
     iter_step_by,
+    /// `Range.iter` and the numeric `range_iter` implementations it
+    /// dispatches to. They produce iterators but mint no representation of
+    /// their own: the result is exactly the `Iter.custom` chain the numeric
+    /// implementation builds.
     range_iter,
-    numeric_range_delegate,
+    numeric_range_iter,
     numeric_to,
     numeric_until,
     iter_from_step,
@@ -263,10 +266,43 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_with_index,
             .iter_step_by,
             .range_iter,
-            .numeric_range_delegate,
+            .numeric_range_iter,
             .numeric_to,
             .numeric_until,
             .iter_from_step,
+            => true,
+        };
+    }
+
+    /// Whether Monotype's representation-graph protocol owns this operation's
+    /// result. The delegating range producers are ordinary procedures there:
+    /// their result representation is completed from their bodies, like any
+    /// procedure that returns an iterator. Keep this exhaustive.
+    pub fn participatesInRepresentationGraph(self: IteratorProcedureId) bool {
+        return switch (self) {
+            .range_iter,
+            .numeric_range_iter,
+            => false,
+            .iter_iter,
+            .iter_next,
+            .iter_custom,
+            .iter_single,
+            .list_iter,
+            .list_iter_rev,
+            .str_iter_utf8,
+            .iter_map,
+            .iter_keep_if,
+            .iter_drop_if,
+            .iter_take_first,
+            .iter_drop_first,
+            .iter_concat,
+            .iter_append,
+            .iter_with_index,
+            .iter_step_by,
+            .numeric_to,
+            .numeric_until,
+            .iter_from_step,
+            .range_done,
             => true,
         };
     }
@@ -278,7 +314,7 @@ pub const IteratorProcedureId = enum(u8) {
     /// construction reads it instead of restating kinds beside each arm.
     pub fn iteratorKind(self: IteratorProcedureId) ?IteratorKind {
         return switch (self) {
-            .iter_iter, .iter_next, .numeric_range_delegate, .iter_from_step, .range_done => null,
+            .iter_iter, .iter_next, .range_iter, .numeric_range_iter, .iter_from_step, .range_done => null,
             .iter_custom => .custom,
             .iter_single => .single,
             .list_iter => .list,
@@ -293,7 +329,6 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_append => .append,
             .iter_with_index => .with_index,
             .iter_step_by => .step_by,
-            .range_iter => .range,
             .numeric_to => .numeric_to,
             .numeric_until => .numeric_until,
         };
@@ -326,7 +361,7 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_with_index,
             .iter_step_by,
             .range_iter,
-            .numeric_range_delegate,
+            .numeric_range_iter,
             .numeric_to,
             .numeric_until,
             .iter_from_step,
@@ -362,27 +397,24 @@ const iterator_procedure_base_names = [_]IteratorProcedureNameEntry{
     .{ "Builtin.iter_from_step", .iter_from_step },
     .{ "range_done", .range_done },
     .{ "Builtin.range_done", .range_done },
+    .{ "range_iter_standard", .numeric_range_iter },
+    .{ "Builtin.range_iter_standard", .numeric_range_iter },
+    .{ "range_iter_float", .numeric_range_iter },
+    .{ "Builtin.range_iter_float", .numeric_range_iter },
 };
 
-// Single-sourced from BuiltinLowLevel so the numeric rosters cannot drift from
-// the low-level registration tables. Range iteration covers every numeric
-// type, while `to`/`until` need `minus_try` and therefore exclude IEEE floats.
-const iterator_range_numeric_type_names = can.BuiltinLowLevel.numeric_type_names;
-
+// Single-sourced from BuiltinLowLevel so the numeric roster cannot drift from
+// the low-level registration tables. `to`/`until` need `minus_try` and
+// therefore exclude IEEE floats.
 const iterator_to_until_numeric_type_names = can.BuiltinLowLevel.non_float_numeric_type_names;
 
 const iterator_procedure_name_entries = blk: {
     var entries: [
         iterator_procedure_base_names.len +
-            iterator_range_numeric_type_names.len +
             iterator_to_until_numeric_type_names.len * 2
     ]IteratorProcedureNameEntry = undefined;
     for (iterator_procedure_base_names, 0..) |entry, index| entries[index] = entry;
     var index = iterator_procedure_base_names.len;
-    for (iterator_range_numeric_type_names) |numeric| {
-        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_iter", .numeric_range_delegate };
-        index += 1;
-    }
     for (iterator_to_until_numeric_type_names) |numeric| {
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".to", .numeric_to };
         index += 1;
@@ -476,7 +508,7 @@ pub const MethodKey = struct {
 /// Producer-authored runtime category for an exact procedure method target.
 pub const ProcedureRuntimeTarget = union(enum(u8)) {
     /// A normal Roc procedure specialization.
-    procedure,
+    procedure: OrdinaryProcedureTarget,
     /// One exact producer-authored low-level operation. Monotype emits this
     /// operation directly and must not request a procedure specialization.
     low_level: base.LowLevel,
@@ -494,10 +526,18 @@ pub const ProcedureRuntimeTarget = union(enum(u8)) {
 
     pub fn iteratorProcedure(self: ProcedureRuntimeTarget) ?IteratorProcedureId {
         return switch (self) {
+            .procedure => |target| target.iterator_procedure,
             .graph_participating => |target| target.iterator_procedure,
-            .procedure, .low_level, .intrinsic => null,
+            .low_level, .intrinsic => null,
         };
     }
+};
+
+/// An ordinary procedure target. An iterator producer outside the
+/// representation-graph protocol still records its exact identity here, so
+/// post-check iterator fusion admits calls to it.
+pub const OrdinaryProcedureTarget = struct {
+    iterator_procedure: ?IteratorProcedureId = null,
 };
 
 /// Producer-authored graph requirements for a representation-sensitive target.
@@ -509,7 +549,7 @@ pub const GraphParticipatingTarget = struct {
 pub const ProcedureMethodTarget = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
-    runtime_target: ProcedureRuntimeTarget = .procedure,
+    runtime_target: ProcedureRuntimeTarget = .{ .procedure = .{} },
 };
 
 fn procedureRuntimeTargetForDef(
@@ -520,14 +560,15 @@ fn procedureRuntimeTargetForDef(
     if (intrinsicForProcedureDef(module, def_idx)) |intrinsic| {
         if (intrinsic.callsiteArity() != null) return .{ .intrinsic = intrinsic };
     }
-    if (iteratorProcedureForDef(module, def_idx)) |iterator| return .{ .graph_participating = .{
-        .iterator_procedure = iterator,
-    } };
+    if (iteratorProcedureForDef(module, def_idx)) |iterator| return if (iterator.participatesInRepresentationGraph())
+        .{ .graph_participating = .{ .iterator_procedure = iterator } }
+    else
+        .{ .procedure = .{ .iterator_procedure = iterator } };
     if (std.meta.activeTag(method_owner) == .builtin and isIteratorOwner(method_owner.builtin)) {
         return .{ .graph_participating = .{} };
     }
     if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
-    return .procedure;
+    return .{ .procedure = .{} };
 }
 
 /// Exact compiler-intrinsic identity for an annotation-only builtin procedure.
@@ -563,6 +604,11 @@ pub const MethodTarget = struct {
     def_idx: CIR.Def.Idx,
     kind: MethodTargetKind,
     callable_ty: CheckedTypeId,
+    /// The method is bound to an exact procedure alias (`method = f`), and
+    /// this target is the procedure the alias chain reaches. A dispatch edge
+    /// instantiates the alias's scheme, so the target's own evidence follows
+    /// from its callable, which that instantiation fixes.
+    reached_through_alias: bool = false,
 };
 
 /// What resolving an (owner, method) pair against the checked method
@@ -722,6 +768,7 @@ pub const MethodRegistry = struct {
                 continue;
             }
             var referenced_callable_var: ?Var = null;
+            var reached_through_alias = false;
             const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
                 .{ .structural = generated }
             else if (local_templates.entryForDef(def_idx)) |template_entry| blk: {
@@ -754,6 +801,7 @@ pub const MethodRegistry = struct {
                 method_owner,
             )) |referenced| blk: {
                 referenced_callable_var = referenced.callable_var;
+                reached_through_alias = std.meta.activeTag(referenced.kind) == .procedure;
                 break :blk referenced.kind;
             } else
                 // Associated values that resolve to neither a callable nor an
@@ -770,6 +818,7 @@ pub const MethodRegistry = struct {
                     .def_idx = def_idx,
                     .kind = target_kind,
                     .callable_ty = callable_ty,
+                    .reached_through_alias = reached_through_alias,
                 },
                 .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
                     std.meta.activeTag(target_kind) != .structural)

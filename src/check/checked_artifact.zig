@@ -13337,6 +13337,7 @@ pub const CheckedBodyStore = struct {
         refs: *const ResolvedValueRefTable,
         local_module: CheckedModuleArtifactKey,
         local_procedure_bindings: *const TopLevelProcedureBindingTable,
+        local_callable_eval_templates: *const CallableEvalTemplateTable,
         imports: []const PublishImportArtifact,
         available_modules: []const ImportedModuleView,
         relation_modules: []const ImportedModuleView,
@@ -13422,6 +13423,7 @@ pub const CheckedBodyStore = struct {
                     checked_expr.data.call.func,
                     local_module,
                     local_procedure_bindings,
+                    local_callable_eval_templates,
                     imports,
                     available_modules,
                     relation_modules,
@@ -14571,6 +14573,7 @@ fn directProcedureTargetForCall(
     callee: CheckedExprId,
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    local_callable_eval_templates: *const CallableEvalTemplateTable,
     imports: []const PublishImportArtifact,
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
@@ -14581,30 +14584,51 @@ fn directProcedureTargetForCall(
         checkedArtifactInvariant("checked direct call target referenced a missing resolved value", .{});
     }
     return if (resolvedValueCanBeCalledDirectly(
+        refs,
         refs.records[raw].ref,
         local_module,
         local_procedure_bindings,
+        local_callable_eval_templates,
         imports,
         available_modules,
         relation_modules,
     )) ref_id else null;
 }
 
+/// A call through an exact procedure alias, local or top-level, is direct when
+/// the alias reaches a directly callable procedure: it forwards to the
+/// alias's lookup inside the alias's evidence scope.
 fn resolvedValueCanBeCalledDirectly(
+    refs: *const ResolvedValueRefTable,
     ref: ResolvedValueRef,
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    local_callable_eval_templates: *const CallableEvalTemplateTable,
     imports: []const PublishImportArtifact,
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) bool {
     return switch (ref) {
-        .local_proc => |local| !local.is_alias,
+        .local_proc => |local| if (local.is_alias) blk: {
+            const final = local.alias_target orelse
+                checkedArtifactInvariant("callable alias has no published target", .{});
+            break :blk resolvedValueCanBeCalledDirectly(
+                refs,
+                refs.records[@intFromEnum(final)].ref,
+                local_module,
+                local_procedure_bindings,
+                local_callable_eval_templates,
+                imports,
+                available_modules,
+                relation_modules,
+            );
+        } else true,
         .hosted_proc => true,
         .top_level_proc, .promoted_top_level_proc => |proc| procedureUseCanBeCalledDirectly(
             proc,
             local_module,
             local_procedure_bindings,
+            local_callable_eval_templates,
             imports,
             available_modules,
             relation_modules,
@@ -14613,6 +14637,7 @@ fn resolvedValueCanBeCalledDirectly(
             proc,
             local_module,
             local_procedure_bindings,
+            local_callable_eval_templates,
             imports,
             available_modules,
             relation_modules,
@@ -14621,6 +14646,7 @@ fn resolvedValueCanBeCalledDirectly(
             required.procedure,
             local_module,
             local_procedure_bindings,
+            local_callable_eval_templates,
             imports,
             available_modules,
             relation_modules,
@@ -14643,11 +14669,62 @@ fn procedureUseCanBeCalledDirectly(
     proc: ProcedureUseTemplate,
     local_module: CheckedModuleArtifactKey,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    local_callable_eval_templates: *const CallableEvalTemplateTable,
     imports: []const PublishImportArtifact,
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) bool {
-    return procedureUseKind(proc, local_module, local_procedure_bindings, imports, available_modules, relation_modules) == .direct_template;
+    const body = procedureUseBody(proc, local_module, local_procedure_bindings, imports, available_modules, relation_modules) orelse return true;
+    return switch (body.body) {
+        .direct_template => true,
+        .checked_error => false,
+        .callable_eval_template => |template| (if (body.view) |view|
+            view.callable_eval_templates.templates[@intFromEnum(template)]
+        else
+            local_callable_eval_templates.get(template)).forwarded_lookup != null,
+    };
+}
+
+/// The binding body of a procedure use and the checked module view that owns
+/// it, or null for the local module. Hosted procedures have no binding body.
+const ProcedureUseBody = struct {
+    body: ProcedureBindingBody,
+    view: ?ImportedModuleView,
+};
+
+fn procedureUseBody(
+    proc: ProcedureUseTemplate,
+    local_module: CheckedModuleArtifactKey,
+    local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
+    relation_modules: []const ImportedModuleView,
+) ?ProcedureUseBody {
+    const top_level: ArtifactTopLevelProcedureBindingRef = switch (proc.binding) {
+        .top_level => |top_level| top_level,
+        .platform_required => |required| .{ .artifact = required.artifact, .binding = required.procedure_binding },
+        .hosted => return null,
+        .imported => |imported| {
+            const view = moduleViewForKey(imports, available_modules, relation_modules, imported.artifact) orelse
+                checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
+            for (view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
+                    return .{ .view = view, .body = switch (binding.body) {
+                        .direct_template => |direct| .{ .direct_template = direct },
+                        .callable_eval_template => |template| .{ .callable_eval_template = template },
+                        .checked_error => |expr| .{ .checked_error = expr },
+                    } };
+                }
+            }
+            checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
+        },
+    };
+    if (checkedArtifactKeyEql(top_level.artifact, local_module)) {
+        return .{ .view = null, .body = local_procedure_bindings.get(top_level.binding).body };
+    }
+    const view = moduleViewForKey(imports, available_modules, relation_modules, top_level.artifact) orelse
+        checkedArtifactInvariant("direct-call target referenced an unavailable checked module", .{});
+    return .{ .view = view, .body = view.top_level_procedure_bindings.get(top_level.binding).body };
 }
 
 fn procedureUseKind(
@@ -16364,6 +16441,11 @@ pub const CallableEvalTemplate = struct {
     root: ComptimeRootId,
     source_scheme: canonical.CanonicalTypeSchemeKey,
     checked_fn_root: CheckedTypeId,
+    /// The binding's checked lookup of another procedure when the binding is
+    /// an exact procedure alias (`f = g`). A call through the alias is a
+    /// direct call that forwards to that lookup inside the alias's own
+    /// evidence scope, its entry wrapper; no compile-time evaluator runs.
+    forwarded_lookup: ?CheckedExprId = null,
 };
 
 /// Public `CallableEvalTemplateTableView` declaration.
@@ -16416,6 +16498,48 @@ pub const CallableEvalTemplateTable = struct {
         self.* = .{};
     }
 };
+
+/// Record every callable-eval binding that is an exact procedure alias of a
+/// directly callable procedure. Its root is a lookup that resolves to such a
+/// procedure, so calls through it forward to that lookup instead of calling
+/// an evaluated function value. An alias of another alias forwards once that
+/// alias does, so this runs to a fixed point over alias chains.
+fn publishCallableEvalForwarding(
+    templates: *CallableEvalTemplateTable,
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    roots: *const CompileTimeRootTable,
+    local_module: CheckedModuleArtifactKey,
+    local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
+    relation_modules: []const ImportedModuleView,
+) void {
+    for (templates.templates.items) |*template| template.forwarded_lookup = null;
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (templates.templates.items) |*template| {
+            if (template.forwarded_lookup != null) continue;
+            const root = roots.root(template.root);
+            if (!compileTimeCallableRootIsProcedureReference(checked_bodies, resolved_value_refs, root)) continue;
+            const ref_id = resolved_value_refs.lookupIdByCheckedExpr(root.expr) orelse
+                checkedArtifactInvariant("checked callable lookup root had no resolved value reference", .{});
+            if (!resolvedValueCanBeCalledDirectly(
+                resolved_value_refs,
+                resolved_value_refs.records[@intFromEnum(ref_id)].ref,
+                local_module,
+                local_procedure_bindings,
+                templates,
+                imports,
+                available_modules,
+                relation_modules,
+            )) continue;
+            template.forwarded_lookup = root.expr;
+            changed = true;
+        }
+    }
+}
 
 /// Publication-only index for callable values produced by selected pattern
 /// extraction roots. The durable identity lives in the compile-time root,
@@ -20041,6 +20165,21 @@ const EvidencePass = struct {
             .procedure => self.procedureEvidenceSchema(target),
             .local_proc, .structural => null,
         };
+        if (target.reached_through_alias) {
+            // The dispatch edge instantiated the alias's scheme, whose
+            // requirements are not the target's. The alias's instantiation
+            // fixes the target's callable, and the target's evidence follows
+            // from that callable.
+            const callable = callable_ty orelse
+                checkedArtifactInvariant("method target reached through an alias had no checked callable", .{});
+            return try self.internEvidenceNode(.{
+                .target = target,
+                .dispatcher_ty = dispatcher_ty,
+                .generated_codec_derivation = generated_codec_derivation,
+                .instantiation = .{ .callable = callable },
+                .nested = if (procedure_schema == .none) .{ .resolved = .{} } else .from_callable,
+            });
+        }
         if (record_idx) |idx| {
             const record = self.module.moduleEnvConst().scheme_uses.items.items[idx];
             if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target)) {
@@ -26529,6 +26668,7 @@ pub fn pairCheckedPlatform(
                             call.func,
                             result.key,
                             &result.top_level_procedure_bindings,
+                            &result.callable_eval_templates,
                             &.{},
                             available_artifacts,
                             &relations,
@@ -37617,10 +37757,22 @@ pub fn publishFromTypedModule(
         checked_body_builder.syntheticOrigins(),
     );
     errdefer resolved_value_refs.deinit(allocator);
+    publishCallableEvalForwarding(
+        &callable_eval_templates,
+        checked_bodies,
+        &resolved_value_refs,
+        &compile_time_roots,
+        artifact_key,
+        &top_level_procedure_bindings,
+        inputs.imports,
+        inputs.available_artifacts,
+        inputs.relation_artifacts,
+    );
     const rejected_bindings = checked_bodies.attachResolvedValueRefs(
         &resolved_value_refs,
         artifact_key,
         &top_level_procedure_bindings,
+        &callable_eval_templates,
         inputs.imports,
         inputs.available_artifacts,
         inputs.relation_artifacts,
@@ -38405,10 +38557,22 @@ fn expectProvidedExportKind(
         checked_body_builder.syntheticOrigins(),
     );
     defer resolved_value_refs.deinit(allocator);
+    publishCallableEvalForwarding(
+        &callable_eval_templates,
+        checked_bodies,
+        &resolved_value_refs,
+        &compile_time_roots,
+        artifact_key,
+        &top_level_procedure_bindings,
+        &builtin_imports,
+        &.{},
+        &.{},
+    );
     _ = checked_bodies.attachResolvedValueRefs(
         &resolved_value_refs,
         artifact_key,
         &top_level_procedure_bindings,
+        &callable_eval_templates,
         &builtin_imports,
         &.{},
         &.{},
@@ -40471,8 +40635,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x37, 0x46, 0xCA, 0x40, 0xA9, 0xB8, 0x0B, 0x3A, 0x62, 0x1C, 0xFF, 0x46, 0xF6, 0x50, 0xD6, 0x27,
-        0x18, 0xC6, 0x76, 0xE1, 0xDE, 0xC5, 0xE4, 0x10, 0xC3, 0x90, 0x0B, 0x1D, 0x91, 0x88, 0x07, 0x12,
+        0xD3, 0xC0, 0x2E, 0x6E, 0x23, 0xEC, 0x12, 0x90, 0x98, 0x8C, 0xBF, 0x43, 0x26, 0x89, 0xE3, 0x73,
+        0x47, 0xCA, 0xC5, 0x20, 0x02, 0x63, 0xC0, 0x3E, 0xBE, 0xD9, 0xB6, 0x63, 0x1A, 0xF4, 0x99, 0x84,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
