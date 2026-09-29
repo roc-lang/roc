@@ -868,6 +868,19 @@ where_method_use_record_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// unification.
 dispatch_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
 dispatch_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// Per method name, the constraint names that instantiating any binding of
+/// that name can mint as child dispatch relations. A name is summarized once
+/// every binding's scheme is final, which it then stays. Keys and names are
+/// interned in `method_mint_name_pool`.
+method_name_mints: std.StringHashMapUnmanaged([]const []const u8) = .empty,
+/// Owned method-name text for `method_name_mints`.
+method_mint_name_pool: std.StringHashMapUnmanaged(void) = .empty,
+/// Every other module whose method bindings a dispatch lookup can select,
+/// collected on first use.
+method_binding_envs: ?[]const *const ModuleEnv = null,
+scratch_method_mint_evidence: dispatch_evidence.Scratch = .{},
+scratch_method_mint_params: std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam) = .empty,
+scratch_method_mint_requirements: std.ArrayListUnmanaged(dispatch_evidence.SchemeRequirement) = .empty,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -1389,12 +1402,12 @@ const DispatchTargetInstantiation = struct {
     parent_constraint_fn_var: ?Var,
     /// Canonical receiver+callable digest for this edge, computed at record
     /// time exactly when something can read it: when the edge has a
-    /// same-target ancestor to compare against, or when selecting its target
-    /// minted child relations, so the edge can anchor a descendant's lineage
-    /// walk (a chain root has no parent yet still anchors the chain). Record
-    /// time is the one point that does not depend on which descendant or
-    /// fixpoint pass reads the key first. An edge with neither is a leaf no
-    /// comparison ever reaches, and it carries no key.
+    /// same-target ancestor to compare against, or when its method name is
+    /// reachable from the constraint names its target can mint, so a later
+    /// same-target descendant can compare against it (a chain root has no
+    /// parent yet still anchors the chain). Record time is the one point that
+    /// does not depend on which descendant or fixpoint pass reads the key
+    /// first. Any other edge is never compared, and it carries no key.
     state_type_key: ?[32]u8,
     /// Whether this edge's dispatch state (receiver and required callable)
     /// strictly embeds a same-binding ancestor's state on its own lineage. A
@@ -3267,6 +3280,18 @@ pub fn deinit(self: *Self) void {
     self.where_method_use_record_by_fn_var.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
     self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
+    {
+        var mint_names = self.method_name_mints.valueIterator();
+        while (mint_names.next()) |names| self.gpa.free(names.*);
+        self.method_name_mints.deinit(self.gpa);
+        var pooled_names = self.method_mint_name_pool.keyIterator();
+        while (pooled_names.next()) |name| self.gpa.free(name.*);
+        self.method_mint_name_pool.deinit(self.gpa);
+    }
+    if (self.method_binding_envs) |envs| self.gpa.free(envs);
+    self.scratch_method_mint_evidence.deinit(self.gpa);
+    self.scratch_method_mint_params.deinit(self.gpa);
+    self.scratch_method_mint_requirements.deinit(self.gpa);
     self.scratch_embed_active_pairs.deinit(self.gpa);
     self.scratch_embed_memo.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
@@ -34642,12 +34667,6 @@ fn recordDispatchDerivations(
             constraint.fn_var,
             parent_fn_var,
         ) orelse continue;
-        // A parent edge decides whether to keep its state key from the
-        // children its own target selection mints, so a child can only be
-        // attached to an already recorded edge that kept one.
-        if (self.dispatch_target_instantiation_by_fn_var.get(derived_parent)) |parent_idx| {
-            std.debug.assert(self.dispatch_target_instantiations.items[parent_idx].state_type_key != null);
-        }
         const entry = try self.dispatch_derivation_by_child_fn_var.getOrPut(self.gpa, constraint.fn_var);
         if (entry.found_existing) continue;
         errdefer _ = self.dispatch_derivation_by_child_fn_var.remove(constraint.fn_var);
@@ -34817,8 +34836,10 @@ fn repeatedDispatchStateAncestor(
             std.meta.eql(ancestor.target_binding, method_lookup.binding) and
             ancestor.method_name.eql(constraint.fn_name))
         {
-            // Only a parent edge whose target minted children is an ancestor,
-            // and such an edge is always keyed (`recordDispatchDerivations`).
+            // A same-target descendant carries its ancestor's method name,
+            // which is therefore reachable from what that ancestor's target
+            // mints, so the ancestor was keyed
+            // (`dispatchEdgeCanBeSameTargetAncestor`).
             if (std.meta.eql(state_type_key, ancestor.state_type_key.?)) return ancestor_idx;
         }
         ancestor_fn = ancestor.parent_constraint_fn_var;
@@ -34853,6 +34874,208 @@ fn hasSameTargetDispatchAncestor(
         ancestor_fn = ancestor.parent_constraint_fn_var;
     }
     return false;
+}
+
+/// Whether a new dispatch edge with no same-target ancestor can later be the
+/// same-target ancestor of a descendant, so its state key can be read.
+///
+/// Every descendant relation is a constraint minted by instantiating some
+/// target selected beneath this edge, starting with this edge's own target,
+/// and a same-target descendant carries this edge's method name. The names
+/// such a lineage can carry are therefore contained in the closure of what
+/// this target mints, under what any binding of each minted name can mint in
+/// turn. A local binding whose scheme is not final yet can still gain
+/// constraints, so meeting one keeps the key.
+fn dispatchEdgeCanBeSameTargetAncestor(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+    cycle_method_expr_var: ?Var,
+    predeclared_scheme_for_method: ?Var,
+) Allocator.Error!bool {
+    // Reusing an in-flight cycle var instantiates nothing, so the edge mints
+    // no children.
+    if (cycle_method_expr_var != null) return false;
+    const instantiated_scheme = if (method_lookup.is_this_module)
+        predeclared_scheme_for_method orelse ModuleEnv.varFrom(method_lookup.binding.type_node_idx)
+    else
+        try self.importedMethodScheme(method_lookup);
+
+    var pending: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer pending.deinit(self.gpa);
+    var visited: std.StringHashMapUnmanaged(void) = .empty;
+    defer visited.deinit(self.gpa);
+
+    try self.appendLocalSchemeMintNames(instantiated_scheme, &pending);
+    const target_name = self.cir.getIdent(constraint.fn_name);
+    while (pending.pop()) |name| {
+        if (std.mem.eql(u8, name, target_name)) return true;
+        const seen = try visited.getOrPut(self.gpa, name);
+        if (seen.found_existing) continue;
+        const mints = (try self.methodNameMints(name)) orelse return true;
+        try pending.appendSlice(self.gpa, mints);
+    }
+    return false;
+}
+
+/// The constraint names that instantiating any binding of `name`, in this
+/// module or another, can mint. Null while a binding in this module has a
+/// scheme that is not final yet (its def is unchecked, in flight, or a member
+/// of a still-open recursive group), since that scheme can still gain
+/// constraints. Bindings in other modules are final, and a final local scheme
+/// only retires requirements, so a complete summary is kept for the name.
+fn methodNameMints(self: *Self, name: []const u8) Allocator.Error!?[]const []const u8 {
+    if (self.method_name_mints.get(name)) |names| return names;
+
+    var names: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer names.deinit(self.gpa);
+    var binding_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer binding_names.deinit(self.gpa);
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen.deinit(self.gpa);
+
+    if (self.cir.common.findIdent(name)) |ident| {
+        const ident_bits: u32 = @bitCast(ident);
+        for (self.cir.method_defs.entries.items) |entry| {
+            if (entry.key.method_ident_bits != ident_bits) continue;
+            const binding = entry.value;
+            const def = self.cir.store.getDef(binding.def_idx);
+            if (self.topLevelPattern(def.pattern)) |processing_def| {
+                if (processing_def.status != .processed or self.defInOnStackGroup(binding.def_idx)) return null;
+            }
+            try self.appendLocalSchemeMintNames(ModuleEnv.varFrom(binding.type_node_idx), &binding_names);
+        }
+    }
+
+    for (try self.methodBindingEnvs()) |env| {
+        const ident = env.common.findIdent(name) orelse continue;
+        const ident_bits: u32 = @bitCast(ident);
+        for (env.method_defs.entries.items) |entry| {
+            if (entry.key.method_ident_bits != ident_bits) continue;
+            const binding = entry.value;
+            self.scratch_method_mint_requirements.clearRetainingCapacity();
+            for (env.bindingSchemeCodecRequirementsForNode(binding.type_node_idx)) |requirement| {
+                try self.scratch_method_mint_requirements.append(self.gpa, .{
+                    .receiver = @enumFromInt(requirement.receiver_var),
+                    .constraint = env.types.getStaticDispatchConstraintAt(requirement.constraint_index),
+                    .requires_instantiation = false,
+                });
+            }
+            try self.appendSchemeMintNames(
+                env,
+                &env.types,
+                ModuleEnv.varFrom(binding.type_node_idx),
+                self.scratch_method_mint_requirements.items,
+                &binding_names,
+            );
+        }
+    }
+
+    for (binding_names.items) |binding_name| {
+        const interned = try self.internMethodMintName(binding_name);
+        const entry_seen = try seen.getOrPut(self.gpa, interned);
+        if (!entry_seen.found_existing) try names.append(self.gpa, interned);
+    }
+    const key = try self.internMethodMintName(name);
+    const owned = try names.toOwnedSlice(self.gpa);
+    errdefer self.gpa.free(owned);
+    try self.method_name_mints.put(self.gpa, key, owned);
+    return owned;
+}
+
+/// Append the constraint names that instantiating the scheme rooted at
+/// `root` in this module's store can mint, including its explicit
+/// requirements.
+fn appendLocalSchemeMintNames(
+    self: *Self,
+    root: Var,
+    out: *std.ArrayListUnmanaged([]const u8),
+) Allocator.Error!void {
+    self.scratch_method_mint_requirements.clearRetainingCapacity();
+    if (self.typeSchemeIndexForRoot(root)) |scheme_idx| {
+        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+            try self.scratch_method_mint_requirements.append(self.gpa, .{
+                .receiver = requirement.receiver_var,
+                .constraint = requirement.constraint,
+                .requires_instantiation = false,
+            });
+        }
+    }
+    try self.appendSchemeMintNames(self.cir, self.types, root, self.scratch_method_mint_requirements.items, out);
+}
+
+/// Append the name of every constraint that instantiating the scheme rooted
+/// at `root` can copy onto a fresh variable, and so record as a child
+/// dispatch relation: every constraint the scheme's evidence walk reaches,
+/// every requirement, and every constraint reachable from a requirement's
+/// receiver. Names are `env`'s identifier text.
+fn appendSchemeMintNames(
+    self: *Self,
+    env: *const ModuleEnv,
+    store: *const types_mod.Store,
+    root: Var,
+    requirements: []const dispatch_evidence.SchemeRequirement,
+    out: *std.ArrayListUnmanaged([]const u8),
+) Allocator.Error!void {
+    self.scratch_method_mint_params.clearRetainingCapacity();
+    try dispatch_evidence.enumerateEvidenceParamsWithRequirements(
+        self.gpa,
+        store,
+        root,
+        requirements,
+        &self.scratch_method_mint_evidence,
+        &self.scratch_method_mint_params,
+    );
+    for (requirements) |requirement| {
+        try dispatch_evidence.enumerateEvidenceParams(
+            self.gpa,
+            store,
+            requirement.receiver,
+            &self.scratch_method_mint_evidence,
+            &self.scratch_method_mint_params,
+        );
+    }
+    for (self.scratch_method_mint_params.items) |param| {
+        try out.append(self.gpa, env.getIdent(param.constraint.fn_name));
+    }
+}
+
+fn internMethodMintName(self: *Self, name: []const u8) Allocator.Error![]const u8 {
+    const entry = try self.method_mint_name_pool.getOrPut(self.gpa, name);
+    if (!entry.found_existing) {
+        entry.key_ptr.* = self.gpa.dupe(u8, name) catch |err| {
+            self.method_mint_name_pool.removeByPtr(entry.key_ptr);
+            return err;
+        };
+    }
+    return entry.key_ptr.*;
+}
+
+/// The modules other than this one whose method bindings a dispatch lookup
+/// can select: the Builtin module, imports, and type-owner modules.
+fn methodBindingEnvs(self: *Self) Allocator.Error![]const *const ModuleEnv {
+    if (self.method_binding_envs) |envs| return envs;
+    var envs: std.ArrayListUnmanaged(*const ModuleEnv) = .empty;
+    errdefer envs.deinit(self.gpa);
+    if (self.builtin_ctx.builtin_module) |builtin_env| try appendDistinctEnv(self.gpa, &envs, self.cir, builtin_env);
+    for (self.imported_modules) |env| try appendDistinctEnv(self.gpa, &envs, self.cir, env);
+    for (self.owner_modules) |env| try appendDistinctEnv(self.gpa, &envs, self.cir, env);
+    const owned = try envs.toOwnedSlice(self.gpa);
+    self.method_binding_envs = owned;
+    return owned;
+}
+
+fn appendDistinctEnv(
+    gpa: Allocator,
+    envs: *std.ArrayListUnmanaged(*const ModuleEnv),
+    this_env: *const ModuleEnv,
+    env: *const ModuleEnv,
+) Allocator.Error!void {
+    if (env == this_env) return;
+    for (envs.items) |existing| {
+        if (existing == env) return;
+    }
+    try envs.append(gpa, env);
 }
 
 /// Whether selecting `method_lookup` re-enters an ancestor edge's exact
@@ -35577,14 +35800,6 @@ fn rejectRecursiveStaticDispatch(
 /// Copy the selected method target for a new raw dispatch edge and record its
 /// nested evidence plus canonical state. The cache-aware resolver guarantees
 /// this is called exactly once per edge.
-///
-/// `state_type_key` is present when the edge has a same-target ancestor, whose
-/// comparison needed the key before selection. Otherwise the key is computed
-/// here only if this instantiation minted child relations under the edge,
-/// since only then can a descendant's lineage walk reach it. Instantiation
-/// copies the target's scheme into fresh variables and records side-table
-/// entries; it never changes the receiver or callable graph, so the key
-/// computed after it is the key the edge had at selection.
 fn instantiateDispatchTargetMethodVar(
     self: *Self,
     dispatcher_var: Var,
@@ -35595,7 +35810,6 @@ fn instantiateDispatchTargetMethodVar(
     method_lookup: StaticDispatchMethodBinding,
     cycle_method_expr_var: ?Var,
     predeclared_scheme_for_method: ?Var,
-    dispatch_value: ?Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
@@ -35618,7 +35832,6 @@ fn instantiateDispatchTargetMethodVar(
 
     const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
     const records_before = self.cir.scheme_uses.items.items.len;
-    const derivations_before = self.dispatch_derivations.items.len;
     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
         break :blk expr_var_for_method;
     } else if (method_lookup.is_this_module) blk: {
@@ -35663,19 +35876,13 @@ fn instantiateDispatchTargetMethodVar(
         );
     }
 
-    const recorded_state_type_key = state_type_key orelse
-        if (self.dispatchDerivationsNameParent(derivations_before, constraint.fn_var))
-            try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var, dispatch_value, env)
-        else
-            null;
-
     const raw_index: u32 = @intCast(self.dispatch_target_instantiations.items.len);
     self.dispatch_target_instantiations.appendAssumeCapacity(.{
         .constraint_fn_var = constraint.fn_var,
         .is_literal_conversion = constraint.origin.literalKind() != null,
         .receiver_var = dispatcher_var,
         .parent_constraint_fn_var = parent_constraint_fn_var,
-        .state_type_key = recorded_state_type_key,
+        .state_type_key = state_type_key,
         .grew_from_ancestor = grew_from_ancestor,
         .target_env = method_lookup.env,
         .target_binding = method_lookup.binding,
@@ -35713,19 +35920,29 @@ fn resolveDispatchTargetMethodVar(
 
     // Without a same-target ancestor neither the repeated-state rule nor the
     // growth rule has anything to compare against, so selection proceeds
-    // directly and the edge's key is decided by what selection mints.
+    // directly. The edge keeps its state key only if a later same-target
+    // descendant could compare against it.
     if (!self.hasSameTargetDispatchAncestor(constraint, parent_constraint_fn_var, method_lookup)) {
-        try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
+        const state_type_key: ?[32]u8 = if (try self.dispatchEdgeCanBeSameTargetAncestor(
+            constraint,
+            method_lookup,
+            cycle_method_expr_var,
+            predeclared_scheme_for_method,
+        ))
+            try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var, dispatch_value, env)
+        else blk: {
+            try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
+            break :blk null;
+        };
         return try self.instantiateDispatchTargetMethodVar(
             dispatcher_var,
             parent_constraint_fn_var,
-            null,
+            state_type_key,
             false,
             constraint,
             method_lookup,
             cycle_method_expr_var,
             predeclared_scheme_for_method,
-            dispatch_value,
             env,
             region,
         );
@@ -35777,19 +35994,9 @@ fn resolveDispatchTargetMethodVar(
         method_lookup,
         cycle_method_expr_var,
         predeclared_scheme_for_method,
-        dispatch_value,
         env,
         region,
     );
-}
-
-/// Whether any derivation recorded since `derivations_start` names
-/// `parent_fn_var` as its parent edge.
-fn dispatchDerivationsNameParent(self: *const Self, derivations_start: usize, parent_fn_var: Var) bool {
-    for (self.dispatch_derivations.items[derivations_start..]) |derivation| {
-        if (derivation.parent_fn_var == parent_fn_var) return true;
-    }
-    return false;
 }
 
 /// POLICY: concrete recursive dispatch (design.md). An exact repeated state
