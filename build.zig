@@ -3683,6 +3683,7 @@ pub fn build(b: *std.Build) void {
     const dyld_export_strip_module = b.createModule(.{
         .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
         .imports = &.{
+            .{ .name = "base", .module = roc_modules.base },
             .{ .name = "vendor_macho", .module = roc_modules.vendor_macho },
         },
     });
