@@ -50,6 +50,16 @@ pub const DerivedMethodKind = enum(u8) {
     map_effectful,
 };
 
+/// The type a checked type-rooted dispatch call dispatches on.
+pub const TypeDispatchOwner = union(enum) {
+    /// A type-var alias or type alias statement in this module, as written in
+    /// source (`Fmt.decode_str(format, source)`).
+    statement: CIR.Statement.Idx,
+    /// The instantiated owner type of a compiler-derived associated method
+    /// called through its type (`Flag.encoder_for(encoding)`).
+    dispatcher: TypeVar,
+};
+
 /// Why an annotation-only expression has no Roc implementation.
 pub const AnnotationOnlyKind = enum(u8) {
     ordinary,
@@ -474,7 +484,7 @@ pub const Expr = union(enum) {
         args: Expr.Span,
     },
     e_type_dispatch_call: struct {
-        type_dispatch_stmt: CIR.Statement.Idx,
+        owner: TypeDispatchOwner,
         method_name: Ident.Idx,
         method_name_region: base.Region,
         args: Expr.Span,
@@ -572,9 +582,14 @@ pub const Expr = union(enum) {
     /// An explicit request for a compiler-derived associated method.
     /// Canonicalization records the exact method kind so later phases never
     /// need to infer compiler intent from an annotation or identifier text.
+    ///
+    /// `owner` is the type declaration whose associated block requested the
+    /// method. A reference to the marker is a type-rooted dispatch of the
+    /// method on that type.
     e_derived_method: struct {
         ident: Ident.Idx,
         kind: DerivedMethodKind,
+        owner: CIR.Statement.Idx,
     },
 
     /// Early return expression that exits the enclosing function with a value.
@@ -1598,7 +1613,10 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
-                try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(e.type_dispatch_stmt));
+                switch (e.owner) {
+                    .statement => |stmt| try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(stmt)),
+                    .dispatcher => |dispatcher| try tree.pushU64Pair("dispatcher-var", @intFromEnum(dispatcher)),
+                }
                 try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
                 const attrs = tree.beginNode();
 
