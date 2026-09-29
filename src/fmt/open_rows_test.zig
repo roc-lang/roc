@@ -62,6 +62,29 @@ test "open rows - auto-imported Range uses its source formal positions" {
     );
 }
 
+test "open rows - builtin Hasher resolves its exact declaration despite nested names" {
+    // Hasher has no type parameters. Invalid arity must remain intact for
+    // diagnostics, without confusing the top-level type with crypto Hashers.
+    try expectUnchanged(
+        \\value : Str -> Hasher([E, ..])
+        \\value = |_| crash "unused"
+        \\
+        \\Wrapped(a) : Hasher(a)
+        \\
+        \\wrapped : Str -> Wrapped([E, ..])
+        \\wrapped = |_| crash "unused"
+        \\
+    );
+}
+
+test "open rows - where-method builtin Hasher rejects arity without ambiguous lookup" {
+    try expectUnchanged(
+        \\f : a -> Str where [a.hash : a -> Hasher([E, ..])]
+        \\f = |_| "ok"
+        \\
+    );
+}
+
 test "open rows - function argument keeps its `..`" {
     try expectUnchanged(
         \\handle : [Known, ..] -> Str

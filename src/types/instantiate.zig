@@ -353,13 +353,15 @@ pub const Instantiator = struct {
     /// Hidden parameters copied while constructing an enclosing alias.
     preserved_marker_exts: ?*std.ArrayListUnmanaged(Var) = null,
     /// Exact declaration positions supplied by the checker for nominal actuals.
+    /// Null explicitly reports a rejected declaration; no position is chosen.
     nominal_argument_position: ?struct {
         context: *anyopaque,
-        resolve: *const fn (*anyopaque, NominalType, u32, Polarity) std.mem.Allocator.Error!Polarity,
+        resolve: *const fn (*anyopaque, NominalType, u32, Polarity) std.mem.Allocator.Error!?Polarity,
     } = null,
+    /// Null explicitly reports a rejected declaration, never a phantom formal.
     alias_argument_unused: ?struct {
         context: *anyopaque,
-        resolve: *const fn (*anyopaque, Alias, u32) std.mem.Allocator.Error!bool,
+        resolve: *const fn (*anyopaque, Alias, u32) std.mem.Allocator.Error!?bool,
     } = null,
     marker_choices: ?*std.AutoHashMapUnmanaged(Var, bool) = null,
     /// The polarity of the position currently being instantiated. Starts at
@@ -666,8 +668,8 @@ pub const Instantiator = struct {
 
     /// Resolve shared declaration binders before copying. Every semantic
     /// occurrence contributes; argument storage is not another occurrence.
-    fn collectMarkerChoices(self: *Self, root: Var, choices: *std.AutoHashMapUnmanaged(Var, bool)) std.mem.Allocator.Error!void {
-        const marker_ident = self.polarity_var_ident orelse return;
+    fn collectMarkerChoices(self: *Self, root: Var, choices: *std.AutoHashMapUnmanaged(Var, bool)) std.mem.Allocator.Error!bool {
+        const marker_ident = self.polarity_var_ident orelse return true;
         const Item = struct { var_: Var, polarity: Polarity, reach: AdapterReachPosition };
         const allocator = self.store.gpa;
         var pending: std.ArrayList(Item) = .empty;
@@ -693,7 +695,7 @@ pub const Instantiator = struct {
                     for (self.store.sliceAliasArgs(alias), 0..) |arg, index| {
                         // A phantom actual is retained in source argument
                         // storage, with inherited polarity and no adapter reach.
-                        const unused = if (self.alias_argument_unused) |provider| try provider.resolve(provider.context, alias, @intCast(index)) else blk: {
+                        const unused = if (self.alias_argument_unused) |provider| (try provider.resolve(provider.context, alias, @intCast(index))) orelse return false else blk: {
                             // Raw compiler aliases without a source declaration
                             // retain their arguments as abstract bookkeeping.
                             std.debug.assert(alias.source_decl.toOptional() == null);
@@ -709,7 +711,7 @@ pub const Instantiator = struct {
                         for (self.store.sliceVars(func.effect_deps)) |dep| try pending.append(allocator, .{ .var_ = dep, .polarity = item.polarity, .reach = .nested });
                     },
                     .nominal_type => |nominal| for (self.store.sliceNominalArgs(nominal), 0..) |arg, index| {
-                        const polarity = if (self.nominal_argument_position) |provider| try provider.resolve(provider.context, nominal, @intCast(index), item.polarity) else blk: {
+                        const polarity = if (self.nominal_argument_position) |provider| (try provider.resolve(provider.context, nominal, @intCast(index), item.polarity)) orelse return false else blk: {
                             // A source declaration requires the checker's exact
                             // placement provider; primitives have no body.
                             std.debug.assert(nominal.sourceDeclOptional() == null);
@@ -741,6 +743,7 @@ pub const Instantiator = struct {
             const resolved = self.store.resolveVar(binder);
             if (resolved.desc.content == .rigid and resolved.desc.content.rigid.name.eql(marker_ident)) std.debug.assert(choices.contains(resolved.var_));
         }
+        return true;
     }
 
     fn instantiateVarHelp(
@@ -754,7 +757,13 @@ pub const Instantiator = struct {
         self.marker_choices = &marker_choices;
         defer self.marker_choices = previous_choices;
         switch (self.polarity_var_behavior) {
-            .resolve_by_polarity, .preserve_output, .defer_open => try self.collectMarkerChoices(initial_var, &marker_choices),
+            .resolve_by_polarity, .preserve_output, .defer_open => {
+                if (!try self.collectMarkerChoices(initial_var, &marker_choices)) {
+                    const rejected = try self.store.freshFromContentWithRank(.err, self.current_rank);
+                    try self.var_map.put(self.store.resolveVar(initial_var).var_, rejected);
+                    return rejected;
+                }
+            },
             .close, .preserve => {},
         }
         const machine = self.scratch();
@@ -1343,7 +1352,13 @@ pub const Instantiator = struct {
             if (arrived < frame.args_count) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived];
                 self.current_polarity = if (self.nominal_argument_position) |provider|
-                    try provider.resolve(provider.context, frame.nominal, arrived, frame.saved_polarity)
+                    (try provider.resolve(provider.context, frame.nominal, arrived, frame.saved_polarity)) orelse {
+                        machine.value_stack.items.len = frame.vars_base;
+                        self.current_polarity = frame.saved_polarity;
+                        self.current_reach = frame.saved_reach;
+                        try self.finishFrame(frame.common, .err);
+                        return true;
+                    }
                 else
                     frame.saved_polarity;
                 // A `Try` written as the direct result passes the adapter's

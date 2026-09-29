@@ -17723,24 +17723,24 @@ fn declarationPositions(self: *Self, owner: *const ModuleEnv, statement: CIR.Sta
     return entry.value_ptr.*;
 }
 
-fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, index: u32, surrounding: Polarity) std.mem.Allocator.Error!Polarity {
+fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, index: u32, surrounding: Polarity) std.mem.Allocator.Error!?Polarity {
     const self: *Self = @ptrCast(@alignCast(context));
     // Compiler primitives have no source body; their actuals inherit position.
     const statement = nominal.sourceDeclOptional() orelse return surrounding;
     const owner = self.moduleEnvForIdentity(self.cir, nominal.origin_module).env;
-    const positions = (try self.declarationPositions(owner, @enumFromInt(statement))) orelse return .neg; // Invalid source recovery.
+    const positions = (try self.declarationPositions(owner, @enumFromInt(statement))) orelse return null; // Rejected source has no position transfer.
     std.debug.assert(index < positions.len);
     return positions[index].polarity(surrounding);
 }
 
-fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) std.mem.Allocator.Error!bool {
+fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) std.mem.Allocator.Error!?bool {
     const self: *Self = @ptrCast(@alignCast(context));
     const statement = alias.source_decl.toOptional() orelse return true; // Compiler abstract alias arguments are bookkeeping.
     const owner = self.moduleEnvForIdentity(self.cir, alias.origin_module).env;
     for (owner.for_clause_aliases.items.items) |abstract| {
         if (@intFromEnum(abstract.alias_stmt_idx) == statement) return true;
     }
-    const positions = (try self.declarationPositions(owner, @enumFromInt(statement))) orelse return true; // Invalid source recovery.
+    const positions = (try self.declarationPositions(owner, @enumFromInt(statement))) orelse return null; // Rejected source has no argument-usage facts.
     std.debug.assert(index < positions.len);
     return positions[index].isEmpty();
 }

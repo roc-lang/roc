@@ -95,6 +95,8 @@ pub const OpenRows = struct {
     gpa: Allocator,
     builtin_owner: bool = false,
     builtin_syntax: ?*BuiltinSyntax = null,
+    /// Borrowed invocation-owned builtin analysis, shared across files.
+    shared_builtins: ?*BuiltinFacts = null,
     position_cache: std.AutoHashMapUnmanaged(AST.Statement.Idx, ?[]Positions) = .empty,
     ast: *const AST,
     /// One bit per AST node, set on a tag union whose anonymous `..` is
@@ -189,12 +191,7 @@ pub const OpenRows = struct {
         var positions = self.position_cache.valueIterator();
         while (positions.next()) |value| if (value.*) |items| self.gpa.free(items);
         self.position_cache.deinit(self.gpa);
-        if (self.builtin_syntax) |syntax| {
-            syntax.rows.deinit();
-            syntax.ast.deinit();
-            syntax.env.deinit(self.gpa);
-            self.gpa.destroy(syntax);
-        }
+        if (self.builtin_syntax) |syntax| syntax.destroy(self.gpa);
         var decls_it = self.type_decls.valueIterator();
         while (decls_it.next()) |list| list.deinit(self.gpa);
         self.type_decls.deinit(self.gpa);
@@ -416,16 +413,31 @@ pub const OpenRows = struct {
     fn builtinRows(self: *OpenRows) Allocator.Error!*OpenRows {
         if (self.builtin_owner) return self;
         if (self.builtin_syntax) |syntax| return &syntax.rows;
-        const syntax = try self.gpa.create(BuiltinSyntax);
-        errdefer self.gpa.destroy(syntax);
-        syntax.env = try base.CommonEnv.init(self.gpa, @import("builtin_source").source);
-        errdefer syntax.env.deinit(self.gpa);
-        syntax.ast = try parse.file(self.gpa, &syntax.env);
-        errdefer syntax.ast.deinit();
-        syntax.rows = try OpenRows.init(self.gpa, syntax.ast);
-        syntax.rows.builtin_owner = true;
+        if (self.shared_builtins) |facts| return facts.rows();
+        const syntax = try BuiltinSyntax.create(self.gpa);
         self.builtin_syntax = syntax;
         return &syntax.rows;
+    }
+
+    fn builtinDeclaration(self: *const OpenRows, name: []const u8) AST.Statement.Idx {
+        std.debug.assert(self.builtin_owner);
+        const qualified = for (CIR.builtin_type_specs) |spec| {
+            if (spec.auto_import and std.mem.eql(u8, spec.display_name, name)) break spec.qualified_name;
+        } else unreachable;
+        var path = std.mem.splitScalar(u8, qualified, '.');
+        var statements = self.ast.store.statementSlice(self.ast.store.getFile().statements);
+        while (path.next()) |part| {
+            const statement = for (statements) |index| {
+                const node = self.ast.store.getStatement(index);
+                if (node != .type_decl) continue;
+                const header = self.ast.store.getTypeHeader(node.type_decl.header) catch unreachable;
+                if (std.mem.eql(u8, self.tokenName(header.name), part)) break index;
+            } else unreachable;
+            if (path.peek() == null) return statement;
+            const associated = self.ast.store.getStatement(statement).type_decl.associated orelse unreachable;
+            statements = self.ast.store.statementSlice(associated.statements);
+        }
+        unreachable;
     }
 
     fn declarationPositions(self: *OpenRows, statement: AST.Statement.Idx) Allocator.Error!?[]const Positions {
@@ -464,9 +476,8 @@ pub const OpenRows = struct {
         if (found.builtin) {
             const builtin_rows = try self.builtinRows();
             const name = self.tokenName(self.ast.store.getTypeAnno(head).ty.token);
-            const declarations = builtin_rows.type_decls.get(name) orelse unreachable;
-            std.debug.assert(declarations.items.len == 1);
-            const positions = (try builtin_rows.declarationPositions(declarations.items[0])) orelse {
+            const statement = builtin_rows.builtinDeclaration(name);
+            const positions = (try builtin_rows.declarationPositions(statement)) orelse {
                 if (answer) |items| self.gpa.free(items);
                 return null;
             };
@@ -532,9 +543,8 @@ pub const OpenRows = struct {
         if (found.builtin) {
             const owner = try self.builtinRows();
             const name = self.tokenName(self.ast.store.getTypeAnno(head).ty.token);
-            const declarations = owner.type_decls.get(name) orelse unreachable;
-            std.debug.assert(declarations.items.len == 1);
-            const candidate = (try ReachAnalysis.analyze(self.gpa, .{ .owner = owner, .statement = declarations.items[0] }, reach)) orelse {
+            const declaration = owner.builtinDeclaration(name);
+            const candidate = (try ReachAnalysis.analyze(self.gpa, .{ .owner = owner, .statement = declaration }, reach)) orelse {
                 if (answer) |items| self.gpa.free(items);
                 return null;
             };
@@ -568,7 +578,49 @@ pub const OpenRows = struct {
     }
 };
 
-const BuiltinSyntax = struct { env: base.CommonEnv, ast: *AST, rows: OpenRows };
+/// Invocation-owned lazy builtin syntax and derived declaration facts. A caller
+/// may share this across sequential file formatting operations, then deinit it.
+/// Each concurrent formatting worker must own its own instance.
+pub const BuiltinFacts = struct {
+    allocator: Allocator,
+    syntax: ?*BuiltinSyntax = null,
+
+    /// Release the builtin syntax and cached declaration positions.
+    pub fn deinit(self: *BuiltinFacts) void {
+        if (self.syntax) |syntax| syntax.destroy(self.allocator);
+        self.syntax = null;
+    }
+
+    fn rows(self: *BuiltinFacts) Allocator.Error!*OpenRows {
+        if (self.syntax == null) self.syntax = try BuiltinSyntax.create(self.allocator);
+        return &self.syntax.?.rows;
+    }
+};
+
+const BuiltinSyntax = struct {
+    env: base.CommonEnv,
+    ast: *AST,
+    rows: OpenRows,
+
+    fn create(allocator: Allocator) Allocator.Error!*BuiltinSyntax {
+        const syntax = try allocator.create(BuiltinSyntax);
+        errdefer allocator.destroy(syntax);
+        syntax.env = try base.CommonEnv.init(allocator, @import("builtin_source").source);
+        errdefer syntax.env.deinit(allocator);
+        syntax.ast = try parse.file(allocator, &syntax.env);
+        errdefer syntax.ast.deinit();
+        syntax.rows = try OpenRows.init(allocator, syntax.ast);
+        syntax.rows.builtin_owner = true;
+        return syntax;
+    }
+
+    fn destroy(self: *BuiltinSyntax, allocator: Allocator) void {
+        self.rows.deinit();
+        self.ast.deinit();
+        self.env.deinit(allocator);
+        allocator.destroy(self);
+    }
+};
 const PositionAnalysis = base.annotation_positions.Solver(PositionAdapter);
 const PositionAdapter = struct {
     /// AST ownership is explicit so builtin and user node indices never mix.
@@ -591,9 +643,7 @@ const PositionAdapter = struct {
         if (found.locals.len == 0 and found.builtin) {
             const builtin_rows = try owner.builtinRows();
             const name = owner.tokenName(owner.ast.store.getTypeAnno(head).ty.token);
-            const declarations = builtin_rows.type_decls.get(name) orelse unreachable;
-            std.debug.assert(declarations.items.len == 1);
-            return .{ .declaration = .{ .owner = builtin_rows, .statement = declarations.items[0] } };
+            return .{ .declaration = .{ .owner = builtin_rows, .statement = builtin_rows.builtinDeclaration(name) } };
         }
         // The parser cannot resolve shadowing within a declaration body.
         return .invalid;

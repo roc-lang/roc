@@ -6873,6 +6873,12 @@ formatter may keep a `..` the checker reports, and never deletes one it does
 not; `src/check/test/redundant_open_fmt_test.zig` runs both on the same
 sources to hold that. A change to where the checker opens a row is a change
 to that walk too.
+Builtin candidates use the shared auto-import registry and its exact qualified
+declaration paths, so nested same-named declarations cannot replace the exposed
+binding. A formatter invocation owns lazy builtin syntax and derived declaration
+positions, shared across its sequential files and paths and released at invocation
+exit. Standalone formatting owns the same data for that call; independent
+workers never share mutable analysis state.
 
 The VALUE row above is the pre-polarity behaviour of an inferred value
 (`x = Boom`) extended to annotated ones: the value's body is bounded by the
@@ -7065,8 +7071,11 @@ persisted nominal metadata. Literal rows in nominal declarations remain closed.
 Compiler primitive applications and explicit platform for-clause abstract
 aliases retain their source arguments' inherited position. The reserved builtin
 import has its explicit builtin owner, independently of ordinary import identities.
-Rejected declarations and wrong arities retain diagnostic recovery; missing
-invariants for valid CIR declarations are never an unknown-position policy.
+Rejected declarations and wrong arities produce an explicit invalid analysis
+result. Instantiation consumes that result by constructing an error type; it
+never invents a negative position or an unused formal. The original malformed
+declaration retains its diagnostic. Missing declaration positions for valid
+CIR remain invariant violations, never an unknown-position policy.
 
 Before copying a template, `Instantiator.collectMarkerChoices` joins every
 backing occurrence of each hidden binder using a finite `(Var, polarity,
