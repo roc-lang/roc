@@ -8851,6 +8851,9 @@ const Builder = struct {
                 call_expr.data.numeral.plan
             else
                 boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call");
+            // A generated codec constructor is declared at its checked
+            // contract's roles and has no evidence scheme to substitute.
+            if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
             const node = directDispatchEvidenceNode(site_view, dispatch_plan);
             return self.evidenceEdgeSchemeSubstitution(direct.worker, .{ .module = direct.call.module, .node = node });
         }
@@ -10562,6 +10565,19 @@ const Builder = struct {
             );
             self.plan.direct_calls.items[direct_index].hidden_dict_args = hidden_dict_args;
         }
+    }
+
+    fn dispatchResolutionIsStructural(
+        view: ModuleView,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+    ) bool {
+        const plan_id = maybe_plan orelse
+            boxyPlanInvariant("direct dispatch call had no checked dispatch plan");
+        const raw = @intFromEnum(plan_id);
+        if (raw >= view.static_dispatch_plans.plans.len) {
+            boxyPlanInvariant("direct dispatch call referenced a missing checked dispatch plan");
+        }
+        return view.static_dispatch_plans.plans[raw].resolution == .structural;
     }
 
     /// The evidence node a resolved direct dispatch plan selected.
@@ -12863,6 +12879,12 @@ const Builder = struct {
         return table.site_substitutions[start .. start + len];
     }
 
+    fn repIsBareVariable(self: *const Builder, rep_id: TypeRepId) bool {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        return rep.kind == .dynamic and rep.children.len == 0 and
+            rep.tag_variants.len == 0 and rep.declared_fields.len == 0;
+    }
+
     fn dictionaryMethodHiddenDescriptorSources(
         self: *Builder,
         worker_id: WorkerPlanId,
@@ -12914,9 +12936,7 @@ const Builder = struct {
             // concrete actual gets a static descriptor of the worker's own
             // storage, which differs (a concrete `List(U64)` key reaching a
             // `List(item)` worker stores its items boxed).
-            const param_value = self.plan.representations.items[@intFromEnum(param.rep)];
-            const param_is_bare_variable = param_value.kind == .dynamic and param_value.children.len == 0 and
-                param_value.tag_variants.len == 0 and param_value.declared_fields.len == 0;
+            const param_is_bare_variable = self.repIsBareVariable(param.rep);
             if (argument_source == null and
                 (param_is_bare_variable or try self.repQuery().repSubtreeHasDescriptor(worker_arg.rep)))
             {
@@ -12924,7 +12944,13 @@ const Builder = struct {
                 for (requirement_args, 0..) |requirement_arg, call_index| {
                     const requirement_call_identity = self.repQuery().descriptorArgumentIdentityRep(requirement_arg.rep);
                     if (requirement_call_identity != requirement_source_identity) continue;
-                    if (call_source != null) {
+                    if (call_source) |earlier| {
+                        // Two requirement variables the call instantiates at
+                        // one actual each describe that actual in its own
+                        // storage: the same descriptor.
+                        if (requirement_args[earlier].rep == requirement_arg.rep and
+                            self.repIsBareVariable(requirement_args[earlier].worker_rep) and
+                            self.repIsBareVariable(requirement_arg.worker_rep)) continue;
                         boxyPlanInvariant("dictionary method worker descriptor mapped to multiple call descriptors");
                     }
                     call_source = @intCast(call_index);
@@ -15118,6 +15144,11 @@ const Builder = struct {
         }
         const dispatch = view.static_dispatch_plans.plans[raw];
         const dispatcher_rep = try self.analyzeType(view, dispatch.dispatcher_ty);
+        if (structuralCodecDispatchWorker(view, dispatch)) |codec| {
+            // The checked plan selected the compiler-generated codec for this
+            // structural dispatcher; the call runs that codec's constructor.
+            return try self.planDirectDispatchCall(view, call_expr, dispatch, codec.source, codec.worker_type, typeRef(view, dispatch.callable_ty));
+        }
         const evidence = directDispatchEvidence(view.static_dispatch_plans, dispatch.resolution);
         if (evidence == null) {
             const caller = self.active_worker orelse
@@ -15158,15 +15189,67 @@ const Builder = struct {
             selected.target,
             typeRef(view, dispatch.dispatcher_ty),
         );
+        const source_fn_type = selectedDispatchCallableType(view, lookup.view, selected);
+        try self.planDirectDispatchCall(
+            view,
+            call_expr,
+            dispatch,
+            lookup.source,
+            self.workerCheckedTypeForSource(lookup.source, typeRef(view, dispatch.callable_ty)),
+            source_fn_type,
+        );
+    }
+
+    const StructuralCodecDispatchWorker = struct {
+        source: WorkerSource,
+        worker_type: CheckedTypeIdentity,
+    };
+
+    /// The generated codec constructor a checked structural `parser_for` or
+    /// `encoder_for` call runs, declared at its checked derivation's source
+    /// roles, or null for any other resolution.
+    fn structuralCodecDispatchWorker(
+        view: ModuleView,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+    ) ?StructuralCodecDispatchWorker {
+        const derivation = switch (dispatch.resolution) {
+            .structural => |derivation| derivation,
+            .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => return null,
+        };
+        const kind: GeneratedCodecKind = switch (derivation.kind()) {
+            .parser => .parser_constructor,
+            .encoder => .encoder_constructor,
+            .equality, .hash, .map, .map_effectful => return null,
+        };
+        const derivation_id = dispatch.generated_codec_derivation orelse
+            boxyPlanInvariant("structural codec dispatch had no checked derivation reference");
+        if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
+            boxyPlanInvariant("structural codec dispatch referenced a missing checked derivation");
+        }
+        const contract = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        return .{
+            .source = .{ .generated_codec = .{
+                .kind = kind,
+                .shape = typeRef(view, contract.source_shape_ty),
+                .contract_derivation = derivation_id,
+            } },
+            .worker_type = typeRef(view, contract.source_constructor_ty),
+        };
+    }
+
+    fn planDirectDispatchCall(
+        self: *Builder,
+        view: ModuleView,
+        call_expr: checked.CheckedExprId,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+        source: WorkerSource,
+        worker_type: CheckedTypeIdentity,
+        source_fn_type: CheckedTypeIdentity,
+    ) Allocator.Error!void {
         // The worker is the target's generalized declaration; the call
         // boundary is this edge's instantiation of it. They are separate
         // checked identities and neither substitutes for the other.
-        const worker = try self.ensureWorker(
-            lookup.source,
-            self.workerCheckedTypeForSource(lookup.source, typeRef(view, dispatch.callable_ty)),
-            null,
-        );
-        const source_fn_type = selectedDispatchCallableType(view, lookup.view, selected);
+        const worker = try self.ensureWorker(source, worker_type, null);
         _ = try self.analyzeType(self.moduleForId(source_fn_type.module), source_fn_type.ty);
         const call_ref = CheckedExprIdentity{ .module = view.key, .expr = call_expr };
         const caller = self.active_worker orelse

@@ -16219,6 +16219,11 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const source_payload = try self.generatedParserSingleTagPayloadLocal(source_err);
+        // A method whose error row is empty has no error value, so its Err
+        // arm never runs and contributes nothing to the parent row.
+        if (self.repIsEmptyTagUnion(source_payload.child.rep)) {
+            return try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
+        }
         const target_err = self.generatedParserTagVariant(target_rep, "Err");
         const target_payloads = self.parent.plan.childSlice(target_err.variant.payloads);
         if (target_payloads.len != 1) boxyLowerInvariant("generated parser result Err did not have one payload");
@@ -19981,9 +19986,13 @@ const ProcBodyBuilder = struct {
         switch (dispatch.resolution) {
             .direct_closed, .direct_parametric => {},
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            .evidence_dependent,
-            .structural,
-            => return try self.lowerUnresolvedDispatchCallInto(target, call_expr, dispatch, ret_ty, next),
+            // A structural parser or encoder runs its generated codec
+            // constructor, which planning bound as this call's direct worker.
+            .structural => |derivation| switch (derivation.kind()) {
+                .parser, .encoder => {},
+                .equality, .hash, .map, .map_effectful => return try self.lowerUnresolvedDispatchCallInto(target, call_expr, dispatch, ret_ty, next),
+            },
+            .evidence_dependent => return try self.lowerUnresolvedDispatchCallInto(target, call_expr, dispatch, ret_ty, next),
             .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
             .@"unreachable" => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
         }

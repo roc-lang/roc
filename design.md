@@ -4774,7 +4774,17 @@ representation. When the runtime worker it returns has a different
 representation (for example, a presence slot where the constructor's return
 names an inline required field), the constructor's pack boundary adapts the
 runtime worker to the checked return. Planning never rewrites the
-constructor's representation to match its runtime worker.
+constructor's representation to match its runtime worker. A source call whose
+checked dispatch resolved structurally (`List(Str).parser_for(format)`) is a
+direct call of the generated constructor, declared at its checked derivation's
+source roles and called at the dispatch's callable type; a dictionary slot
+whose evidence is structural reaches the same worker. A format method whose
+error row is empty (`Try(.., [])`) has no error value, so a generated parser's
+`Err` arm for it lowers as unreachable and contributes nothing to the parser's
+row. When two requirement type variables of a dictionary method are
+instantiated at one actual, their call descriptors are the same descriptor, so
+a worker descriptor may take either (`test/cli/JsonGenericCustomParser.roc`
+under `--specialize=no`).
 
 A generated parser or encoder runtime walks its contract's body shape: for a
 declaration-backed nominal that is the checker's own snapshot of the backing,
