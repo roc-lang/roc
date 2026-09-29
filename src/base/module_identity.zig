@@ -27,6 +27,7 @@
 //! cross-artifact identity resolution mechanism—no name matching.
 
 const std = @import("std");
+const Sha256 = @import("Sha256.zig");
 
 /// The deep content hash of a module: SHA-256 of the module name, source
 /// bytes, and the sorted, deduplicated identity hashes of its resolved
@@ -77,7 +78,7 @@ pub fn computeDeep(
     @memcpy(sorted, import_identities);
     std.mem.sortUnstable(Hash, sorted, {}, hashLessThan);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = Sha256.init(.{});
     hasher.update(domain_tag);
     hashLenPrefixed(&hasher, module_name);
     hashLenPrefixed(&hasher, source);
@@ -110,7 +111,7 @@ fn hashLessThan(_: void, a: Hash, b: Hash) bool {
     return std.mem.order(u8, &a, &b) == .lt;
 }
 
-fn hashLenPrefixed(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn hashLenPrefixed(hasher: *Sha256, bytes: []const u8) void {
     var len_bytes: [4]u8 = undefined;
     std.mem.writeInt(u32, &len_bytes, @intCast(bytes.len), .little);
     hasher.update(&len_bytes);

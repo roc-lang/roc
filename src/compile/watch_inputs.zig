@@ -1,6 +1,7 @@
 //! Watch-mode filesystem inputs recorded by compiler runs for refresh checks.
 
 const std = @import("std");
+const Sha256 = @import("base").Sha256;
 
 const Allocator = std.mem.Allocator;
 
@@ -19,7 +20,7 @@ pub const Input = struct {
 
 /// Return the SHA-256 digest used by watch-mode snapshots.
 pub fn hashBytes(bytes: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = Sha256.init(.{});
     hasher.update(bytes);
     return hasher.finalResult();
 }

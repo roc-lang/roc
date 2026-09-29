@@ -1998,7 +1998,7 @@ pub fn scanParsedHeader(
 }
 
 fn sha256Bytes(bytes: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return hasher.finalResult();
 }
