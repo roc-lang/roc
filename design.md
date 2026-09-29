@@ -6201,6 +6201,15 @@ revisits surrounding joins after a rewrite, since a rejected ancestor can
 become eligible when a descendant changes. No analysis cache crosses that
 mutation boundary.
 
+Hoisting a tag consumer's enclosing continuation joins requires exclusive
+structural entry from that consumer. If an outside statement also enters a
+wrapper, fusion first clones the consumer subtree with fresh join identities
+and local binders, preserving its external inputs and enclosing jump targets.
+The original shared continuation keeps its original remainder. Fusion then
+plans against the private clone; it must never copy a shared declaration's
+identity into a second reachable statement or redirect another entry through
+the tag producers.
+
 The clone propagates constructor values through ordinary bindings and solves
 loop fixed points over their leaves. As a result, `.none` mode does not rebuild
 the successor iterator record and callable on each back edge when the producer
@@ -12456,6 +12465,15 @@ The solved type graph is the callable representation source of truth. There is
 no descriptor replacement, no callable repointing, no post-demand payload
 output, and no representation recovery later.
 
+List-map primitives preserve callable flow before layouts are selected. The
+reuse query relates the input list's element type to the transform's argument
+type. An in-place write relates the stored element to both its input buffer's
+element type and its returned list's element type. These are value-flow
+equalities, including nested callable sets; matching checked source types or
+byte sizes cannot replace them. The cast between input and output buffers does
+not equate their different element types. Layout eligibility is computed only
+from the resulting solved representations.
+
 ### Erased Callable Requirements
 
 In `.lss`, `erased` callable requirements are explicit data entering Lambda
@@ -16295,6 +16313,11 @@ against the borrow typing rules:
   refinement is bounded by the name count; balance divergence across
   mode-identical entries is itself a finding—per-iteration accumulation),
   so certification of every procedure runs to completion
+- distinct borrow-lender and holder proofs remain separate at every join;
+  a group-count threshold must never discard provenance and manufacture a
+  borrowed entry with no owner. Valid incoming paths with different owners
+  are certified with their respective owners, and an incoming path that
+  releases its owner before the borrow is used is still rejected
 - explicit initialized-payload control flow refines conditional ownership:
   the initialized edge promotes the payload to ordinary owned state and the
   uninitialized edge removes its possible unit and binding. Presence
