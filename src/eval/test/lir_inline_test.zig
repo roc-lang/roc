@@ -7212,6 +7212,196 @@ test "static primitive list iter append loop avoids direct-list append allocatio
     try expectStaticListIterAppendLoopAvoidsListAppendAllocation(primitive_iter_source, primitive_list_source);
 }
 
+/// One fused pipeline for an iterator operation on one public iterator type.
+/// Each pipeline also maps, so an unfused representation would have to box an
+/// iterator that holds another iterator of its own type.
+const SharedIteratorOperationCase = struct {
+    operation: check.StaticDispatchRegistry.IteratorProcedureId,
+    owner: check.StaticDispatchRegistry.IteratorOwner,
+    source: []const u8,
+};
+
+/// Every operation that both `Iter` and `Stream` provide shares one Monotype
+/// producer path. Each such operation has a pipeline per type here, and the
+/// comptime check below derives the required rows from the registry, so an
+/// operation cannot become shared without both types' pipelines being held to
+/// the same fused, allocation-free lowering.
+const shared_iterator_operation_cases = [_]SharedIteratorOperationCase{
+    .{ .operation = .identity, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().iter().map(|x| x + 1))
+    },
+    .{ .operation = .identity, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().stream().map(|x| x + 1))
+    },
+    .{ .operation = .keep_if, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().keep_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .keep_if, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().keep_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_if, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().drop_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_if, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().drop_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .take_first, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().take_first(2).map(|x| x + 1))
+    },
+    .{ .operation = .take_first, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().take_first(2).map(|x| x + 1))
+    },
+    .{ .operation = .drop_first, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().drop_first(1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_first, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().drop_first(1).map(|x| x + 1))
+    },
+    .{ .operation = .with_index, .owner = .iter, .source =
+    \\main : List(U64) => List((U64, U64))
+    \\main = |items| List.from_iter(items.iter().map(|x| x + 1).with_index())
+    },
+    .{ .operation = .with_index, .owner = .stream, .source =
+    \\main : List(U64) => List((U64, U64))
+    \\main = |items| Stream.collect!(items.iter().stream().map(|x| x + 1).with_index())
+    },
+
+    .{ .operation = .next, .owner = .iter, .source =
+    \\main : () => U64
+    \\main = || {
+    \\    var $rest = [1.U64, 2, 3].iter().map(|x| x + 1)
+    \\    var $sum = 0.U64
+    \\    while Bool.True {
+    \\        match Iter.next($rest) {
+    \\            Done => {
+    \\                break
+    \\            }
+    \\            Skip({ rest }) => {
+    \\                $rest = rest
+    \\            }
+    \\            One({ item, rest }) => {
+    \\                $sum = $sum + item
+    \\                $rest = rest
+    \\            }
+    \\        }
+    \\    }
+    \\    $sum
+    \\}
+    },
+    .{ .operation = .next, .owner = .stream, .source =
+    \\main : () => U64
+    \\main = || {
+    \\    var $rest = [1.U64, 2, 3].iter().stream().map(|x| x + 1)
+    \\    var $sum = 0.U64
+    \\    while Bool.True {
+    \\        match Stream.next!($rest) {
+    \\            Done => {
+    \\                break
+    \\            }
+    \\            Skip({ rest }) => {
+    \\                $rest = rest
+    \\            }
+    \\            One({ item, rest }) => {
+    \\                $sum = $sum + item
+    \\                $rest = rest
+    \\            }
+    \\        }
+    \\    }
+    \\    $sum
+    \\}
+    },
+    .{ .operation = .custom, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter(Iter.custom(0.U64, Known(3), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    },
+    .{ .operation = .custom, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!(Stream.custom(0.U64, Known(3), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    },
+    .{ .operation = .map, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().map(|x| x * 2).map(|x| x + 1))
+    },
+    .{ .operation = .map, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || [1.U64, 2, 3].iter().stream().map(|x| x * 2).map!(|x| x + 1).collect!()
+    },
+    .{ .operation = .from_iter, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().map(|x| x + 1))
+    },
+    .{ .operation = .from_iter, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!(Stream.from_iter([1.U64, 2, 3].iter()).map(|x| x + 1))
+    },
+    .{ .operation = .from_step, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().map(|x| x + 1))
+    },
+    .{ .operation = .from_step, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!(Stream.custom(0.U64, Unknown, |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    },
+};
+
+comptime {
+    const Registry = check.StaticDispatchRegistry;
+    for (std.enums.values(Registry.IteratorProcedureId)) |operation| {
+        const names = operation.builtinNames();
+        if (names.iter.len == 0 or names.stream.len == 0) continue;
+        for (std.enums.values(Registry.IteratorOwner)) |owner| {
+            var covered = false;
+            for (shared_iterator_operation_cases) |case| {
+                if (case.operation == operation and case.owner == owner) covered = true;
+            }
+            if (!covered) {
+                @compileError("shared iterator operation ." ++ @tagName(operation) ++ " has no ." ++ @tagName(owner) ++ " fusion case");
+            }
+        }
+    }
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/11783: a `Stream` pipeline
+// must fuse exactly like its `Iter` counterpart, with no per-item boxed
+// iterator state or erased step dispatch in either inline mode.
+test "operations shared by Iter and Stream fuse without boxed or erased iterator state" {
+    var failures: usize = 0;
+    for (shared_iterator_operation_cases) |case| {
+        expectSharedIteratorOperationFuses(case.source) catch |err| {
+            std.debug.print("shared iterator operation .{s} on .{s} did not fuse: {s}\n", .{ @tagName(case.operation), @tagName(case.owner), @errorName(err) });
+            failures += 1;
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 0), failures);
+}
+
+fn expectSharedIteratorOperationFuses(source: []const u8) TestError!void {
+    const allocator = std.testing.allocator;
+    {
+        var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+        defer ordinary.deinit(allocator);
+        try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &ordinary.lowered);
+    }
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .proc_debug_names = true,
+        .tag_reachability = true,
+    });
+    defer optimized.deinit(allocator);
+    try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &optimized.lowered);
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Stream.next!"));
+}
+
 test "stream from iterator collect keeps finite step callables" {
     const allocator = std.testing.allocator;
     const source =
