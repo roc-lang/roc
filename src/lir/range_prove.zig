@@ -279,7 +279,20 @@ const Fact = struct {
     b: NodeId,
     c: i128,
     origin: FactOrigin,
+    /// The round's pending length assumptions this fact rests on, as bits
+    /// of their seeding order (bit 63 stands for any assumption past the
+    /// first 63). A fact derived through the fact graph inherits the bits of
+    /// every fact the derivation touched.
+    assumed: u64 = 0,
 };
+
+/// Bit for an assumption whose index exceeds the mask; nothing resting on
+/// it can verify this round.
+const unknown_assumption_bit: u64 = 1 << 63;
+
+fn sameStableFact(a: StableFact, b: StableFact) bool {
+    return std.meta.eql(a.a, b.a) and std.meta.eql(a.b, b.b) and a.c == b.c;
+}
 
 const EdgeFact = union(enum) {
     ordering: Fact,
@@ -344,6 +357,8 @@ const ProofRecord = struct {
 const MeetBound = struct {
     root: NodeId,
     c: i128,
+    /// Pending assumptions the bound's derivation touched.
+    assumed: u64 = 0,
 };
 
 /// Bound on synthesized upper bounds per met local.
@@ -379,6 +394,12 @@ const LenInvariant = struct {
     status: enum(u8) { pending, verified, dead },
     /// Re-derived on every captured edge this round.
     hit: bool,
+    /// This round's bit for the assumption, when seeded pending.
+    assume_bit: u64 = 0,
+    /// Assumptions the re-derivations rested on. An invariant verifies once
+    /// every assumption it used is itself or has verified; resting on one
+    /// that died kills it too.
+    hit_deps: u64 = 0,
 };
 
 /// Cross-round bounds of one loop parameter, complete once every jump into
@@ -474,6 +495,7 @@ const StableFact = struct {
     a: StableTerm,
     b: StableTerm,
     c: i128,
+    assumed: u64 = 0,
 };
 
 /// Bound on persisted facts per loop join.
@@ -590,6 +612,11 @@ const Pass = struct {
     max_join_id: u32,
     scratch: std.ArrayList(CFStmtId),
     query_best: collections.DenseMap(NodeId, i128),
+    /// Assumption bits of the facts the current fact-graph query relaxed
+    /// through; reset by each top-level query.
+    query_used: u64 = 0,
+    /// Pending assumptions seeded so far this round.
+    assumption_count: u8 = 0,
     rewrites: u32,
     // Debug-only certification state; unused (and empty) in release builds.
     proof_records: std.ArrayList(ProofRecord),
@@ -701,6 +728,8 @@ const Pass = struct {
     }
 
     fn resetRound(self: *Pass) void {
+        self.assumption_count = 0;
+        self.query_used = 0;
         self.nodes.clearRetainingCapacity();
         self.zero_node = null;
         self.facts.clearRetainingCapacity();
@@ -872,6 +901,7 @@ const Pass = struct {
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
                     try self.query_best.put(fact.b, next_acc);
+                    self.query_used |= fact.assumed;
                     const through = self.nodes.items[fact.b].hi + next_acc;
                     if (through < best) best = through;
                     changed = true;
@@ -898,6 +928,7 @@ const Pass = struct {
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
                     try self.query_best.put(fact.a, next_acc);
+                    self.query_used |= fact.assumed;
                     const through = self.nodes.items[fact.a].lo - next_acc;
                     if (through > best) best = through;
                     changed = true;
@@ -911,6 +942,7 @@ const Pass = struct {
     /// The narrowest offsets make the root-level goal imply the node-level
     /// one for any value in either node's window.
     fn proveLe(self: *Pass, a: NodeId, b: NodeId, k: i128) ResourceError!bool {
+        self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const m = k + self.offLoOf(b) - self.offHiOf(a);
@@ -931,6 +963,7 @@ const Pass = struct {
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
                     try self.query_best.put(fact.b, next_acc);
+                    self.query_used |= fact.assumed;
                     changed = true;
                 }
             }
@@ -956,6 +989,7 @@ const Pass = struct {
     /// Least `c` with `value(a) <= value(b) + c` provable through fact
     /// edges, or null when no fact path relates the two roots.
     fn slackLe(self: *Pass, a: NodeId, b: NodeId) ResourceError!?i128 {
+        self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const shift = self.offHiOf(a) - self.offLoOf(b);
@@ -973,6 +1007,7 @@ const Pass = struct {
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
                     try self.query_best.put(fact.b, next_acc);
+                    self.query_used |= fact.assumed;
                     changed = true;
                 }
             }
@@ -1017,10 +1052,10 @@ const Pass = struct {
             else
                 continue;
             if (try self.slackLe(pair[0], pair[1])) |c| {
-                try self.addFactOnce(.{ .a = root, .b = other.root, .c = c, .origin = .meet });
+                try self.addFactOnce(.{ .a = root, .b = other.root, .c = c, .origin = .meet, .assumed = self.query_used });
             }
             if (try self.slackLe(pair[1], pair[0])) |c| {
-                try self.addFactOnce(.{ .a = other.root, .b = root, .c = c, .origin = .meet });
+                try self.addFactOnce(.{ .a = other.root, .b = root, .c = c, .origin = .meet, .assumed = self.query_used });
             }
         }
         const off_lo = self.offLoOf(lhs) + self.offLoOf(rhs);
@@ -1759,10 +1794,11 @@ const Pass = struct {
             const a = self.stabilizeLoopTerm(fact.a, join_id) orelse continue;
             const b = self.stabilizeLoopTerm(fact.b, join_id) orelse continue;
             if (a == .constant and b == .constant) continue;
-            const candidate = StableFact{ .a = a, .b = b, .c = fact.c };
+            const candidate = StableFact{ .a = a, .b = b, .c = fact.c, .assumed = fact.assumed };
             var known = false;
-            for (stable.items[0..stable.len]) |have| {
-                if (std.meta.eql(have, candidate)) {
+            for (stable.items[0..stable.len]) |*have| {
+                if (sameStableFact(have.*, candidate)) {
+                    have.assumed |= candidate.assumed;
                     known = true;
                     break;
                 }
@@ -1794,8 +1830,9 @@ const Pass = struct {
             var keep_stable: usize = 0;
             for (state.stable.items[0..state.stable.len]) |fact| {
                 for (mine_stable.items[0..mine_stable.len]) |candidate| {
-                    if (std.meta.eql(fact, candidate)) {
+                    if (sameStableFact(fact, candidate)) {
                         state.stable.items[keep_stable] = fact;
+                        state.stable.items[keep_stable].assumed |= candidate.assumed;
                         keep_stable += 1;
                         break;
                     }
@@ -1811,8 +1848,9 @@ const Pass = struct {
                 var keep_entry: usize = 0;
                 for (state.entry_stable.items[0..state.entry_stable.len]) |fact| {
                     for (entry_mine.items[0..entry_mine.len]) |candidate| {
-                        if (std.meta.eql(fact, candidate)) {
+                        if (sameStableFact(fact, candidate)) {
                             state.entry_stable.items[keep_entry] = fact;
+                            state.entry_stable.items[keep_entry].assumed |= candidate.assumed;
                             keep_entry += 1;
                             break;
                         }
@@ -1883,7 +1921,7 @@ const Pass = struct {
                     for (meet.bounds.slice()) |bound| {
                         for (mine.slice()) |candidate| {
                             if (candidate.root == bound.root) {
-                                kept.append(.{ .root = bound.root, .c = @max(bound.c, candidate.c) });
+                                kept.append(.{ .root = bound.root, .c = @max(bound.c, candidate.c), .assumed = bound.assumed | candidate.assumed });
                                 break;
                             }
                         }
@@ -1896,7 +1934,7 @@ const Pass = struct {
                     for (meet.len_bounds.slice()) |bound| {
                         for (mine_len.slice()) |candidate| {
                             if (candidate.root == bound.root) {
-                                kept_len.append(.{ .root = bound.root, .c = @max(bound.c, candidate.c) });
+                                kept_len.append(.{ .root = bound.root, .c = @max(bound.c, candidate.c), .assumed = bound.assumed | candidate.assumed });
                                 break;
                             }
                         }
@@ -1910,6 +1948,7 @@ const Pass = struct {
                         for (meet.len_bounds_any.items[0..meet.len_bounds_any.len]) |*have| {
                             if (have.root == candidate.root) {
                                 have.c = @min(have.c, candidate.c);
+                                have.assumed |= candidate.assumed;
                                 merged = true;
                                 break;
                             }
@@ -2014,7 +2053,7 @@ const Pass = struct {
                     const list_node = (try self.unknownFor(self.localLayout(meet.local))) orelse continue;
                     const len_term = (try self.freshRoot(0, std.math.maxInt(i64))) orelse continue;
                     for (meet.len_bounds.slice()) |bound| {
-                        try self.addFact(.{ .a = bound.root, .b = len_term, .c = bound.c, .origin = .meet });
+                        try self.addFact(.{ .a = bound.root, .b = len_term, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
                     }
                     try self.len_terms.put(list_node, len_term);
                     try self.bind(meet.local, .{ .node = list_node });
@@ -2032,7 +2071,7 @@ const Pass = struct {
                 for (meet.bounds.slice()) |bound| {
                     const root = self.nodes.items[bound.root];
                     if (root.lo == root.hi) continue;
-                    try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet });
+                    try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
                 }
                 try self.bind(meet.local, .{ .node = node });
             }
@@ -2180,10 +2219,11 @@ const Pass = struct {
             const a = self.stabilizeTerm(fact.a) orelse continue;
             const b = self.stabilizeTerm(fact.b) orelse continue;
             if (a == .constant and b == .constant) continue;
-            const candidate = StableFact{ .a = a, .b = b, .c = fact.c };
+            const candidate = StableFact{ .a = a, .b = b, .c = fact.c, .assumed = fact.assumed };
             var known = false;
-            for (stable.items[0..stable.len]) |have| {
-                if (std.meta.eql(have, candidate)) {
+            for (stable.items[0..stable.len]) |*have| {
+                if (sameStableFact(have.*, candidate)) {
+                    have.assumed |= candidate.assumed;
                     known = true;
                     break;
                 }
@@ -2229,7 +2269,7 @@ const Pass = struct {
             const a = (try self.materializeTerm(fact.a)) orelse continue;
             const b = (try self.materializeTerm(fact.b)) orelse continue;
             const c = fact.c + self.offHiOf(b) - self.offLoOf(a);
-            try self.addFact(.{ .a = self.rootOf(a), .b = self.rootOf(b), .c = c, .origin = .meet });
+            try self.addFact(.{ .a = self.rootOf(a), .b = self.rootOf(b), .c = c, .origin = .meet, .assumed = fact.assumed });
         }
     }
 
@@ -2335,6 +2375,7 @@ const Pass = struct {
                             if (self.lenStable(bound)) |candidate| {
                                 if (sameLenBase(candidate.base, item.base) and candidate.c <= item.c) {
                                     item.hit = true;
+                                    item.hit_deps |= bound.assumed;
                                     break;
                                 }
                             }
@@ -2362,8 +2403,11 @@ const Pass = struct {
                 for (meet.len_bounds_any.slice()) |bound| {
                     const candidate = self.lenStable(bound) orelse continue;
                     // A constant bound below one is what any length already
-                    // satisfies; assuming it would cost a round for nothing.
+                    // satisfies, as is a bound slack enough to hold for any
+                    // pair of values; assuming either would cost a round for
+                    // nothing.
                     if (candidate.base == .constant and candidate.c >= 0) continue;
+                    if (candidate.c >= std.math.maxInt(i64)) continue;
                     var known = false;
                     for (stable.len_items[0..stable.len_count]) |item| {
                         if (sameLenBase(candidate.base, item.base)) {
@@ -2398,25 +2442,46 @@ const Pass = struct {
     fn resolvePendingInvariants(self: *Pass) void {
         if (!self.live_pending) return;
         var any_pending = false;
-        var all_hit = true;
+        var dead_mask: u64 = 0;
         var it = self.loop_bounds.valueIterator();
         while (it.next()) |stored| {
-            for (stored.len_items[0..stored.len_count]) |item| {
+            for (stored.len_items[0..stored.len_count]) |*item| {
                 if (item.status != .pending) continue;
                 any_pending = true;
-                if (!item.hit) all_hit = false;
+                if (!item.hit) {
+                    item.status = .dead;
+                    dead_mask |= item.assume_bit;
+                }
             }
         }
         if (!any_pending) return;
+
+        // An assumption verifies once every assumption its re-derivations
+        // rested on is itself or already verified; assumptions may justify
+        // one another, so this iterates to a fixpoint.
+        var verified_mask: u64 = 0;
+        var changed = true;
+        while (changed) {
+            changed = false;
+            it = self.loop_bounds.valueIterator();
+            while (it.next()) |stored| {
+                for (stored.len_items[0..stored.len_count]) |*item| {
+                    if (item.status != .pending) continue;
+                    const deps = item.hit_deps & ~item.assume_bit & ~verified_mask;
+                    if (deps != 0) continue;
+                    item.status = .verified;
+                    verified_mask |= item.assume_bit & ~unknown_assumption_bit;
+                    changed = true;
+                }
+            }
+        }
+        // A survivor resting on a dead assumption can never verify; one
+        // resting on a survivor retries next round.
         it = self.loop_bounds.valueIterator();
         while (it.next()) |stored| {
             for (stored.len_items[0..stored.len_count]) |*item| {
                 if (item.status != .pending) continue;
-                if (all_hit) {
-                    item.status = .verified;
-                } else if (!item.hit) {
-                    item.status = .dead;
-                }
+                if (item.hit_deps & dead_mask != 0) item.status = .dead;
             }
         }
         self.new_loop_bounds = true;
@@ -2498,8 +2563,18 @@ const Pass = struct {
                 },
             };
             const resolved = seed orelse continue;
-            try self.addFact(.{ .a = resolved.root, .b = len_term, .c = resolved.c, .origin = .meet });
-            if (item.status == .pending) self.live_pending = true;
+            item.assume_bit = 0;
+            item.hit_deps = 0;
+            if (item.status == .pending) {
+                self.live_pending = true;
+                if (self.assumption_count < 63) {
+                    item.assume_bit = @as(u64, 1) << @intCast(self.assumption_count);
+                    self.assumption_count += 1;
+                } else {
+                    item.assume_bit = unknown_assumption_bit;
+                }
+            }
+            try self.addFact(.{ .a = resolved.root, .b = len_term, .c = resolved.c, .origin = .meet, .assumed = item.assume_bit });
             seeded = true;
         }
         if (seeded) {
@@ -2512,6 +2587,7 @@ const Pass = struct {
     /// Upper bounds `value <= root + c` provable for a node from the current
     /// path facts, found by walking fact edges forward from its root.
     fn reachableBounds(self: *Pass, node_id: NodeId) ResourceError!MeetBounds {
+        self.query_used = 0;
         var bounds: MeetBounds = .{};
         const node = self.nodes.items[node_id];
         bounds.append(.{ .root = node.root, .c = node.off_hi });
@@ -2528,7 +2604,8 @@ const Pass = struct {
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
                     try self.query_best.put(fact.b, next_acc);
-                    bounds.append(.{ .root = fact.b, .c = next_acc + node.off_hi });
+                    self.query_used |= fact.assumed;
+                    bounds.append(.{ .root = fact.b, .c = next_acc + node.off_hi, .assumed = self.query_used });
                     changed = true;
                 }
             }
@@ -2551,11 +2628,15 @@ const Pass = struct {
         const zero = (try self.constantRoot()) orelse return bounds;
         var out: MeetBounds = .{};
         var best: ?i128 = null;
+        var best_assumed: u64 = 0;
         for (bounds.slice()) |bound| {
             const root = self.nodes.items[bound.root];
             if (root.lo == root.hi) {
                 const c = root.lo + bound.c;
-                if (best == null or c < best.?) best = c;
+                if (best == null or c < best.?) {
+                    best = c;
+                    best_assumed = bound.assumed;
+                }
             } else {
                 out.append(bound);
             }
@@ -2563,9 +2644,12 @@ const Pass = struct {
         const root = self.nodes.items[node.root];
         if (root.hi < std.math.maxInt(u64)) {
             const c = root.hi + node.off_hi;
-            if (best == null or c < best.?) best = c;
+            if (best == null or c < best.?) {
+                best = c;
+                best_assumed = 0;
+            }
         }
-        if (best) |c| out.append(.{ .root = zero, .c = c });
+        if (best) |c| out.append(.{ .root = zero, .c = c, .assumed = best_assumed });
         return out;
     }
 
@@ -2573,16 +2657,20 @@ const Pass = struct {
         const zero = (try self.constantRoot()) orelse return bounds;
         var out: MeetBounds = .{};
         var best: ?i128 = null;
+        var best_assumed: u64 = 0;
         for (bounds.slice()) |bound| {
             const root = self.nodes.items[bound.root];
             if (root.lo == root.hi) {
                 const c = bound.c - root.lo;
-                if (best == null or c < best.?) best = c;
+                if (best == null or c < best.?) {
+                    best = c;
+                    best_assumed = bound.assumed;
+                }
             } else {
                 out.append(bound);
             }
         }
-        if (best) |c| out.append(.{ .root = zero, .c = c });
+        if (best) |c| out.append(.{ .root = zero, .c = c, .assumed = best_assumed });
         return out;
     }
 
@@ -2590,6 +2678,7 @@ const Pass = struct {
     /// path facts, found by walking fact edges backward from the length
     /// term's root. Smaller `c` is the stronger claim.
     fn lenLowerBounds(self: *Pass, len_node: NodeId) ResourceError!MeetBounds {
+        self.query_used = 0;
         var bounds: MeetBounds = .{};
         const node = self.nodes.items[len_node];
         bounds.append(.{ .root = node.root, .c = -node.off_lo });
@@ -2606,7 +2695,8 @@ const Pass = struct {
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
                     try self.query_best.put(fact.a, next_acc);
-                    bounds.append(.{ .root = fact.a, .c = next_acc });
+                    self.query_used |= fact.assumed;
+                    bounds.append(.{ .root = fact.a, .c = next_acc, .assumed = self.query_used });
                     changed = true;
                 }
             }
@@ -3367,8 +3457,16 @@ const Pass = struct {
             try self.addFact(self.orderingFact(edge.b, edge.a, 0, origin));
             return;
         }
-        if (try self.proveLe(edge.a, edge.b, 0)) try self.addFact(self.orderingFact(edge.a, edge.b, -1, origin));
-        if (try self.proveLe(edge.b, edge.a, 0)) try self.addFact(self.orderingFact(edge.b, edge.a, -1, origin));
+        if (try self.proveLe(edge.a, edge.b, 0)) {
+            var fact = self.orderingFact(edge.a, edge.b, -1, origin);
+            fact.assumed = self.query_used;
+            try self.addFact(fact);
+        }
+        if (try self.proveLe(edge.b, edge.a, 0)) {
+            var fact = self.orderingFact(edge.b, edge.a, -1, origin);
+            fact.assumed = self.query_used;
+            try self.addFact(fact);
+        }
     }
 
     /// Fold a switch whose condition is a known constant, splicing the
