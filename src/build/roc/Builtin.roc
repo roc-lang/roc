@@ -3272,12 +3272,15 @@ Builtin :: [].{
 			)
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
-		fold = |iterator, acc, step|
-			match Iter.next(iterator) {
-				Done => acc
-				Skip({ rest }) => Iter.fold(rest, acc, step)
-				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
+		fold = |iterator, init, step| {
+			var $state = init
+
+			for item in iterator {
+				$state = step($state, item)
 			}
+
+			$state
+		}
 
 		## Sum the items of an iterator, without collecting them into a list first.
 		## Works for any type that implements `plus` and `default` methods, such as the
