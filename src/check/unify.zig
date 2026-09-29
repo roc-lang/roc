@@ -4084,6 +4084,9 @@ pub const ChainDuplicateTag = struct {
     repeated: Var.SafeList.Range,
 };
 
+/// An unordered pair of resolved type descriptors.
+const VisitedPairKey = struct { low: u32, high: u32 };
+
 /// A reusable memory arena used across unification calls to avoid per-call allocations.
 ///
 /// `Scratch` owns several typed scratch arrays, each designed to hold a specific type of
@@ -4119,9 +4122,6 @@ pub const ChainDuplicateTag = struct {
 /// itself creates new tag unions that may not be sorted, so partitionFields/partitionTags
 /// still perform a final sort. To fully eliminate these sorts, we would need to ensure
 /// unifySharedTags also produces sorted output.
-/// An unordered pair of resolved type descriptors.
-const VisitedPairKey = struct { low: u32, high: u32 };
-
 pub const Scratch = struct {
     const Self = @This();
 

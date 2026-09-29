@@ -6878,8 +6878,6 @@ pub const InstGraph = struct {
     }
 };
 
-/// Shared finalization state for materializing graph nodes into immutable
-/// Monotype type ids.
 /// Decides a graph node's uninhabitedness proof on explicit stacks. A node
 /// on the active path does not prove anything.
 const GraphUninhabitedScan = struct {
@@ -6958,6 +6956,8 @@ const GraphUninhabitedScan = struct {
     }
 };
 
+/// Shared finalization state for materializing graph nodes into immutable
+/// Monotype type ids.
 pub const GraphTypeFinals = struct {
     const Mode = enum {
         final,

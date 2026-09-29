@@ -2333,47 +2333,6 @@ const SketchedInhabitedItem = union(enum) {
     pattern: struct { pattern: UnresolvedPattern, type_var: Var },
 };
 
-/// Check if an extension variable represents an open union.
-///
-/// An open union is one where additional constructors may exist beyond those
-/// explicitly listed. This occurs when the extension is:
-/// - A flex var: The type is not yet fully constrained, more tags could be added
-/// - A rigid var: The user explicitly said "and potentially more tags"
-/// - A nested tag union: More tags exist in the extension
-///
-/// Open unions require a wildcard pattern or explicit `#Open` constructor to be exhaustive.
-fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
-    var resolved = type_store.resolveVar(ext);
-    // Aliases - resolve further
-    while (resolved.desc.content == .alias) {
-        resolved = type_store.resolveVar(type_store.getAliasBackingVar(resolved.desc.content.alias));
-    }
-
-    return switch (resolved.desc.content) {
-        // Both flex and rigid extensions mean the union is open:
-        // - Flex: type not fully constrained, could unify with more tags
-        // - Rigid: user explicitly marked it as open (e.g., [A, B]a)
-        .flex, .rigid => true,
-        // Empty tag union means it's closed - no additional tags possible
-        .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => false,
-            // A tag union extension (nested tags) means more tags exist
-            .tag_union => true,
-            .record,
-            .tuple,
-            .nominal_type,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            => false,
-        },
-        .alias => unreachable,
-        // A presence variable can never be a tag-union extension tail.
-        .field_presence, .err => false,
-    };
-}
-
 /// Find the tag_id for a tag name within a union.
 /// Uses Ident.Idx equality directly.
 fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {

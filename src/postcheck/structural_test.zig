@@ -403,7 +403,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     const dispatch_selection = sourceSliceBetween(
         lower_source,
         "fn selectExprRepresentationAtNode(",
-        "fn lowerCallExprAtNode(",
+        "fn lowerFieldAccessExprAtNode(",
     );
     try expectContains(dispatch_selection, "selectRequestRepresentation(");
     try expectContains(dispatch_selection, "try self.lowerExprTypeNode(checked_expr)");
@@ -486,7 +486,7 @@ test "Monotype direct uninhabited calls lower argument through graph cell" {
         "fn stepUninhabitedCall(",
         "const SpanMode = enum",
     );
-    try expectContains(direct_call, "lowerUninhabitedScrutineeAtTypeCell");
+    try expectContains(direct_call, "uninhabitedScrutineeStep(self, task.checked_args[task.uninhabited_index], uninhabited_cell)");
     try expectNotContains(direct_call, "activeTypeFromNode");
 }
 
@@ -495,7 +495,7 @@ test "Monotype uninitialized binders retain unresolved graph cells" {
     const uninitialized = sourceSliceBetween(
         lower_source,
         "fn lowerUninitializedPatternStatement",
-        "fn lowerPatternStatement",
+        "fn beginPatternStatementValue",
     );
     try expectContains(uninitialized, "checked_pattern.data != .assign");
     try expectContains(uninitialized, "lowerShapeFreePatternAtCell");
@@ -506,7 +506,7 @@ test "Monotype pattern statements retain graph provenance" {
     const lower_source = @embedFile("monotype/lower.zig");
     const statement = sourceSliceBetween(
         lower_source,
-        "fn lowerPatternStatement(",
+        "fn finishPatternStatement(",
         "fn patternIsShapeFree(",
     );
     try expectContains(statement, "lowerShapeFreePatternAtCell(pattern, value_cell)");
@@ -519,7 +519,7 @@ test "Monotype expanded record-rest statements retain graph provenance" {
     const lower_source = @embedFile("monotype/lower.zig");
     const record_rest = sourceSliceBetween(
         lower_source,
-        "fn appendExpandedPatternStatement(",
+        "fn beginExpandedPatternStatement(",
         "fn checkedStatementHasRuntimeEffect(",
     );
     try expectContains(record_rest, "const value_node = try self.lowerExprTypeNode(expr)");
@@ -537,10 +537,10 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     const lower_source = @embedFile("monotype/lower.zig");
     const divergent_call = sourceSliceBetween(
         lower_source,
-        "fn lowerDivergentCallOperand",
-        "fn instantiateCallNodeFromCallerAtNode",
+        "if (self.divergentCallOperand(call)) |operand| {",
+        "if (call.direct_target) |target| {",
     );
-    try expectContains(divergent_call, "lowerDivergentExprAtTypeCell(operand, ret_cell)");
+    try expectContains(divergent_call, "divergentStep(self, operand, .{ .at_cell = task.divergent_ret_cell })");
     try expectNotContains(divergent_call, "lowerTypeView");
     try expectNotContains(divergent_call, "activeTypeFromNode");
 
@@ -558,17 +558,17 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     const contextual_gate = sourceSliceBetween(
         lower_source,
         "fn lowerExprAtTypeCellWithDemand(",
-        "fn lowerExprAtTypeCellInner(",
+        "fn selectExprRepresentationAtNode(",
     );
     try expectContains(contextual_gate, "self.checkedExprDivergesInLoweredRuntime(checked_expr)");
     try expectContains(contextual_gate, "fn lowerExprAtTypeCellWithKnownDivergence(");
     const contextual_step = sourceSliceBetween(
         lower_source,
         "fn stepAtTypeCell(",
-        "fn finishAtTypeCellNow(",
+        "fn stepLowerExpr(",
     );
     try expectContains(contextual_step, "if (task.diverges)");
-    try expectContains(contextual_step, "lowerDivergentExprAtTypeCell(checked_expr, task.cell)");
+    try expectContains(contextual_step, "divergentStep(self, checked_expr, .{ .at_cell = task.cell })");
 
     const result_lookup = sourceSliceBetween(
         lower_source,
@@ -709,9 +709,16 @@ test "Monotype loop carries remain graph-native through headers and backedges" {
     try expectContains(loop_source, "fn loopStateTypeCell");
     try expectContains(loop_source, "try self.addExprWithTypeCell(carry.ty");
     try expectContains(loop_source, "try self.addPatWithTypeCell(carry.ty");
-    try expectContains(loop_source, "try self.draft.addTypedLocalSpan(params)");
     try expectNotContains(loop_source, "try self.localType(initial)");
     try expectNotContains(loop_source, "fn loopStateType(");
+
+    const loop_task = sourceSliceBetween(
+        lower_source,
+        "const LoopTask = struct",
+        "const IteratorDispatchTask = struct",
+    );
+    try expectContains(loop_task, "try self.addExprWithTypeCell(carry.ty, .{ .local = carry.initial_local })");
+    try expectContains(loop_task, "try self.draft.addTypedLocalSpan(params)");
 }
 
 test "Monotype indirect calls retain graph-native function provenance" {
@@ -787,32 +794,43 @@ test "Monotype open specialization lookup covers the complete function interface
 
 test "Monotype match lowering relates patterns before specialization and projects graph cells" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const match_source = sourceSliceBetween(
+    const match_step = sourceSliceBetween(
         lower_source,
-        "fn lowerMatch(",
-        "fn savePatternBinders(",
+        "fn stepMatch(",
+        "fn beginMatchBranches(",
     );
-    try expectContains(match_source, "const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node)");
-    try expectContains(match_source, "try relateRequestComponent(");
-    try expectContains(match_source, "try entry.ctx.preRegisterPatternBindersAtNode");
-    try expectContains(match_source, "entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame");
-    try expectContains(match_source, "try entry.ctx.lowerMatchBranchBody");
-    try expectContains(match_source, "try entry.ctx.lowerMatchPatternAtNode");
-    try expectNotContains(match_source, "resolvedTypeViewForNode(scrutinee_node)");
-    try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
+    const match_begin = sourceSliceBetween(
+        lower_source,
+        "fn beginMatchBranches(",
+        "fn matchBranchBodyStep(",
+    );
+    const match_finish = sourceSliceBetween(
+        lower_source,
+        "fn finishMatch(",
+        "const WithTypeTask = struct",
+    );
+    try expectContains(match_step, "const scrutinee_cell = DraftTypeCell.fromGraphNode(task.scrutinee_node)");
+    try expectContains(match_begin, "try relateRequestComponent(");
+    try expectContains(match_begin, "try entry.ctx.preRegisterPatternBindersAtNode");
+    try expectContains(match_step, "entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame");
+    try expectContains(match_step, "self.matchBranchBodyStep(task)");
+    try expectContains(match_finish, "try entry.ctx.lowerMatchPatternAtNode");
+    try expectNotContains(match_begin, "resolvedTypeViewForNode");
+    try expectNotContains(match_finish, "lowerPatternAtType(entry.pattern.pattern");
     try expectNotContains(lower_source, "rebindPreRegisteredPatternBindersAtNode");
 
-    const relate = std.mem.find(u8, match_source, "try relateRequestComponent(").?;
-    const prepare_binders = std.mem.find(u8, match_source, "try entry.ctx.preRegisterPatternBindersAtNode").?;
-    const prepare_result = std.mem.find(u8, match_source, "try entry.ctx.prepareControlFlowResultSelection").?;
-    const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
-    const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
-    const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchPatternAtNode").?;
+    const relate = std.mem.find(u8, match_begin, "try relateRequestComponent(").?;
+    const prepare_binders = std.mem.find(u8, match_begin, "try entry.ctx.preRegisterPatternBindersAtNode").?;
+    const prepare_result = std.mem.find(u8, match_begin, "try entry.ctx.prepareControlFlowResultSelection").?;
     try std.testing.expect(relate < prepare_binders);
     try std.testing.expect(prepare_binders < prepare_result);
-    try std.testing.expect(prepare_result < guards);
-    try std.testing.expect(guards < lower_body);
-    try std.testing.expect(lower_body < lower_pattern);
+    // Branch patterns and binders settle before any guard or body lowers,
+    // and each branch's guard frame is installed before its guard and body.
+    const begin = std.mem.find(u8, match_step, "try self.beginMatchBranches(task)").?;
+    const guards = std.mem.find(u8, match_step, "entry.ctx.runtime_demand_guard_frames =").?;
+    const guard_child = std.mem.find(u8, match_step, "requestLowerTask(entry.ctx, .{ .expr = .{ .expr = guard_expr } })").?;
+    try std.testing.expect(begin < guards);
+    try std.testing.expect(guards < guard_child);
 
     const binder_source = sourceSliceBetween(
         lower_source,
@@ -879,7 +897,7 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     const cell_boundary = sourceSliceBetween(
         lower_source,
         "fn lowerExprAtTypeCell(",
-        "fn lowerExprAtTypeCellInner(",
+        "fn lowerExprAtTypeCellWithDemand(",
     );
     try expectContains(cell_boundary, "self.lowerExprAtTypeCellWithDemand(checked_expr, cell, .runtime_value)");
     const source_location = sourceSliceBetween(
@@ -893,7 +911,7 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     const cell_step = sourceSliceBetween(
         lower_source,
         "fn stepAtTypeCell(",
-        "fn finishAtTypeCellNow(",
+        "fn stepLowerExpr(",
     );
     try expectContains(cell_step, "return switch (task.cell)");
     try expectContains(cell_step, ".sealed => |ty|");
@@ -974,12 +992,18 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
 
     const pattern_statement = sourceSliceBetween(
         lower_source,
-        "fn lowerPatternStatement(",
-        "fn patternIsShapeFree(",
+        "fn beginPatternStatementValue(",
+        "fn finishPatternStatement(",
     );
     try expectContains(pattern_statement, "self.graphFreeResultTypeForExpr(expr)");
     try expectContains(pattern_statement, ".{ .sealed = ty }");
-    try expectContains(pattern_statement, "lowerExprAtTypeCellWithKnownDivergence(");
+    const pattern_statement_step = sourceSliceBetween(
+        lower_source,
+        "fn beginPatternStatementStep(",
+        "fn beginExpectStatement(",
+    );
+    try expectContains(pattern_statement_step, "task.requested_cell = try self.beginPatternStatementValue(pattern, expr)");
+    try expectContains(pattern_statement_step, ".at_type_cell = .{");
 
     const binder_map = sourceSliceBetween(
         lower_source,
@@ -1151,12 +1175,13 @@ test "Monotype iterator One bodies preserve explicit reachability guard frames" 
     const lower_source = @embedFile("monotype/lower.zig");
     const iterator = sourceSliceBetween(
         lower_source,
-        "fn iteratorOneBranch(",
-        "fn uninhabitedIteratorOneBranch(",
+        "fn beginIteratorOneBranch(",
+        "fn finishIteratorLoop(",
     );
     try expectContains(iterator, "self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell)");
     try expectContains(iterator, "self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step)");
-    try expectContains(iterator, "defer self.runtime_demand_guard_frames = previous_runtime_demand_guard_frames");
+    try expectContains(iterator, "task.one_guard_frames = self.runtime_demand_guard_frames");
+    try expectContains(lower_source, "self.runtime_demand_guard_frames = task.one_guard_frames");
     const relate = std.mem.find(u8, iterator, "self.constrainCheckedInterfaceToCell").?;
     const frame = std.mem.find(u8, iterator, "self.withIteratorOneRuntimeDemandGuardFrame").?;
     try std.testing.expect(relate < frame);
@@ -1185,12 +1210,12 @@ test "Monotype materialized success continuations use one root-pattern guard fra
 
     const continuation = sourceSliceBetween(
         lower_source,
-        "fn lowerPatternSuccessContinuation(",
-        "fn lowerMaterializedPatternValueThen(",
+        ".success => |success| {",
+        ".success_done => |done| {",
     );
     try expectContains(continuation, "self.withPatternSuccessRuntimeDemandGuardFrame(guard)");
-    try expectContains(continuation, "defer self.runtime_demand_guard_frames = previous_runtime_demand_guard_frames");
-    try expectContains(continuation, "self.lowerBindingContinuation(continuation, result_cell)");
+    try expectContains(continuation, ".success_done.guard_frames = self.runtime_demand_guard_frames");
+    try expectContains(continuation, "switch (success.continuation)");
     try expectNotContains(continuation, "recordRuntimeResultSuccessGuards");
     try expectNotContains(continuation, "lowerPatternShellAtNode");
     try expectNotContains(continuation, "applyPatternLiteralGuardsAtCell");
@@ -1218,7 +1243,7 @@ test "Monotype materialized success continuations use one root-pattern guard fra
         "fn beginLambdaLowering(",
         "fn freeLambdaLoweringArgs(",
     );
-    try expectContains(lambda, ".materialized_args = .{");
+    try expectContains(lambda, "self.materializedArgsRequest(");
     try expectNotContains(lambda, "result_producer_guards");
     try expectNotContains(lower_source, "result_producer_guards");
 }
@@ -1311,7 +1336,7 @@ test "Monotype lambda argument patterns retain graph provenance" {
     try expectContains(lambda_args, "self.lowerShapeFreePatternAtCell(pattern_id, arg_cell)");
     try expectContains(lambda_args, "self.lowerPatternAtNode(pattern_id, arg_node)");
     try expectContains(lambda_args, ".ty = arg_cell");
-    try expectContains(lambda_args, "} }, body_ret_cell) };");
+    try expectContains(lambda_args, "body_ret_cell,\n            ) };");
     try expectNotContains(lambda_args, "activeTypeFromNode(arg_node)");
     try expectNotContains(lambda_args, "activeTypeFromNode(ret_node)");
     try expectNotContains(lambda_args, "lowerPatternAtType(pattern_id");
@@ -1321,18 +1346,18 @@ test "Monotype returns consume the active specialization return cell" {
     const lower_source = @embedFile("monotype/lower.zig");
     const lower_return = sourceSliceBetween(
         lower_source,
-        "fn lowerReturn(",
-        "fn lowerComptimeRootExprAtCell(",
+        "fn stepReturn(",
+        "const InspectedTask = struct",
     );
     try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell }");
-    try expectContains(lower_return, "ret.lambda != target.lambda");
-    try expectContains(lower_return, "self.lowerExprAtTypeCell(ret.expr, target.cell)");
+    try expectContains(lower_return, "task.lambda != target.lambda");
+    try expectContains(lower_return, "requestLowerChild(self, task.expr, target.cell)");
     try expectNotContains(lower_source, "returnTargetTypeCell");
 
     const lambda_node = sourceSliceBetween(
         lower_source,
         "fn lambdaFunctionNode(",
-        "fn lowerLambdaExprAtNode(",
+        "fn ensureNestedCallableAtNode(",
     );
     try expectContains(lambda_node, "const fn_node = try self.instNode(source_fn_ty)");
     try expectNotContains(lambda_node, "lowerExprTypeNode(lambda.body)");

@@ -1131,10 +1131,6 @@ const Solver = struct {
         try self.runPatternBinds(.{ .pattern = .{ .pat = pat_id, .value_ty = value_ty } });
     }
 
-    fn bindPatternAtType(self: *Solver, pat_id: Lifted.PatId, pat_ty: Type.TypeVarId) Allocator.Error!void {
-        try self.runPatternBinds(.{ .at_type = .{ .pat = pat_id, .ty = pat_ty } });
-    }
-
     /// One pending step of binding a pattern.
     const PatternBind = union(enum) {
         /// Bind a pattern against the value type it matches.
@@ -1885,6 +1881,13 @@ const Solver = struct {
                 .relate => |relate| try self.processRelate(&self.unify_stack, relate.public, relate.private),
                 .relate_exit => |pair| _ = self.active_private_evidence_relations.remove(pair),
             }
+        }
+        // Every pair retires as its frame finishes, so an empty stack leaves
+        // both active sets empty; clearing them drops the removal markers
+        // that would otherwise lengthen every later probe.
+        if (self.unify_stack.items.len == 0) {
+            if (self.active_unifications.count() == 0) self.active_unifications.clearRetainingCapacity();
+            if (self.active_private_evidence_relations.count() == 0) self.active_private_evidence_relations.clearRetainingCapacity();
         }
     }
 

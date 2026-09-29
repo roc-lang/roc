@@ -13135,7 +13135,7 @@ const ProcBodyBuilder = struct {
     current_lambda: ?checked.CheckedExprId,
     /// Provenance of the construct this builder is currently lowering. The
     /// body's creator states it explicitly (scaffold or derived, naming the
-    /// construct that demanded the body), and `lowerExprInto`/`lowerStatement`
+    /// construct that demanded the body), and `lowerExprInto`/`beginStatement`
     /// restate it as `source` for the checked node they lower, restoring the
     /// enclosing origin when that node is done.
     origin: LIR.StmtOrigin,
@@ -14964,7 +14964,7 @@ const ProcBodyBuilder = struct {
         var copy = task;
         switch (copy) {
             .chain => |*chain| chain.current = next,
-            inline else => |*payload| payload.next = next,
+            inline .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .module_expr, .statement, .if_, .bool_binop, .match_, .match_branch, .shared_rep, .while_, .iter_dispatch, .iterator_for, .iterator_loop_body, .iterator_one_branch, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .planned_call => |*payload| payload.next = next,
         }
         return copy;
     }
@@ -18215,16 +18215,6 @@ const ProcBodyBuilder = struct {
         );
     }
 
-    fn lowerExprExpectedInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        expected_ty: checked.CheckedTypeId,
-        expr_id: checked.CheckedExprId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginExprExpected(target, expected_ty, expr_id, next));
-    }
-
     fn lowerExprExpectedTypeRefInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -20091,7 +20081,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
 
         if (tag.payloads.len == 1) {
-            return .{ .tail = constStorageItem(payload.local, store_module, type_module, tag.payloads[0], payload_tys[0], payloads[0].rep).lower };
+            return .{ .tail = withNext(constStorageItem(payload.local, store_module, type_module, tag.payloads[0], payload_tys[0], payloads[0].rep).lower, continuation) };
         }
 
         const field_locals = try self.parent.allocator.alloc(LIR.LocalId, tag.payloads.len);
@@ -20198,7 +20188,7 @@ const ProcBodyBuilder = struct {
             } }, self.scaffoldOrigin());
 
         if (tag.payloads.len == 1) {
-            return .{ .tail = constStorageItem(payload_local, store_module, type_module, tag.payloads[0], payload_tys[0], payload_children[0].rep).lower };
+            return .{ .tail = withNext(constStorageItem(payload_local, store_module, type_module, tag.payloads[0], payload_tys[0], payload_children[0].rep).lower, assign_tag) };
         }
 
         const field_locals = try self.parent.allocator.alloc(LIR.LocalId, tag.payloads.len);
@@ -22212,17 +22202,6 @@ const ProcBodyBuilder = struct {
         return local;
     }
 
-    fn lowerDispatchCallInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        call_expr: checked.CheckedExprId,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const checked_ret_ty = self.module.checked_bodies.expr(call_expr).ty;
-        return try self.runExprStep(try self.beginDispatchCall(target, call_expr, maybe_plan, checked_ret_ty, next));
-    }
-
     fn lowerDispatchCallIntoWithRetType(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -22639,23 +22618,6 @@ const ProcBodyBuilder = struct {
         expected: []const u8,
     ) bool {
         return std.mem.eql(u8, self.module.canonical_names.methodNameText(method), expected);
-    }
-
-    fn lowerPlannedWorkerCallInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        checked_ret_ty: checked.CheckedTypeId,
-        direct_plan: Plan.DirectCallPlan,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprTasks(.{ .planned_call = .{
-            .target = target,
-            .target_rep = target_rep,
-            .checked_ret_ty = checked_ret_ty,
-            .direct_plan = direct_plan,
-            .next = next,
-        } });
     }
 
     fn directCallOperandStorageRep(
@@ -24372,23 +24334,6 @@ const ProcBodyBuilder = struct {
         target_layout: layout.Idx,
     ) Allocator.Error!LIR.BoxyAdapterId {
         return try self.internAdapter(operation, source_layout, target_layout, true);
-    }
-
-    fn lowerMatchInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        match_ty: checked.CheckedTypeId,
-        cond: checked.CheckedExprId,
-        branches: []const checked.CheckedMatchBranch,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprTasks(.{ .match_ = .{
-            .target = target,
-            .match_ty = match_ty,
-            .cond = cond,
-            .branches = branches,
-            .next = next,
-        } });
     }
 
     /// Lower the branches from the last, each falling through to the one
@@ -30900,15 +30845,6 @@ const ProcBodyBuilder = struct {
         } }, self.glueOrigin());
     }
 
-    fn lowerInspectExprInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        expr_id: checked.CheckedExprId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginInspectExpr(target, expr_id, next));
-    }
-
     fn lowerInspectLocalInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -31561,18 +31497,6 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
     }
 
-    fn lowerStructuralEqInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        lhs_id: checked.CheckedExprId,
-        rhs_id: checked.CheckedExprId,
-        planned_operand_rep: ?Plan.TypeRepId,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginStructuralEq(target, lhs_id, rhs_id, planned_operand_rep, negated, next));
-    }
-
     fn lowerEqRepLocalsInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -32093,16 +32017,6 @@ const ProcBodyBuilder = struct {
             );
         }
         return current;
-    }
-
-    fn lowerStructuralHashInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value_id: checked.CheckedExprId,
-        hasher_id: checked.CheckedExprId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginStructuralHash(target, value_id, hasher_id, next));
     }
 
     /// Lower `body` as a derived method over `rep_id` whose component

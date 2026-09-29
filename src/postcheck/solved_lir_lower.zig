@@ -742,7 +742,7 @@ const Lowerer = struct {
     fn_queue_index: usize,
     initializer_queue_index: usize,
     layout_request_const_plans: bool,
-    /// Match sites statically resolved by `foldListMapCanReuseMatch`,
+    /// Match sites whose `list_map_can_reuse` branch `matchStep` resolved statically,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
     /// Source functions indexed by their stage-stable symbols.
@@ -3448,7 +3448,7 @@ const Lowerer = struct {
                     try path.append(self.allocator, root);
                     root = access.tuple;
                 },
-                else => break,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
             }
         }
         var ty = try self.lowerExprTy(root);
@@ -3469,7 +3469,7 @@ const Lowerer = struct {
                     if (access.elem_index >= items.len) Common.invariant("tuple access index exceeded tuple type");
                     ty = GuardedList.at(items, @intCast(access.elem_index));
                 },
-                else => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             }
         }
         return ty;
@@ -3499,9 +3499,9 @@ const Lowerer = struct {
         fn_spec: FnSpecTask,
         /// `captureRecordType`
         capture_record: CaptureRecordTask,
-        /// `lowerFnMembers` and `lowerFnMembersFromOwnTypes`
+        /// A function type's members.
         members: MembersTask,
-        /// `lowerDeclaredOrder`
+        /// A nominal's members in declared order.
         declared_order: DeclaredOrderTask,
     };
 
@@ -3636,10 +3636,6 @@ const Lowerer = struct {
         } })).fn_id;
     }
 
-    fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Common.LowerError!Type.TypeId {
-        return (try self.runTypeTasks(.{ .capture_record = .{ .captures = captures } })).ty;
-    }
-
     fn lowerTypeSpan(self: *Lowerer, items: []const SolvedType.TypeVarId) Common.LowerError![]Type.TypeId {
         const lowered = try self.allocator.alloc(Type.TypeId, items.len);
         errdefer self.allocator.free(lowered);
@@ -3747,7 +3743,7 @@ const Lowerer = struct {
                         .members = members,
                     } },
                     .lambda_set => .{ .callable = members },
-                    else => unreachable,
+                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .mono => unreachable,
                 });
             },
             TypeVarCursor.children => try self.acceptTypeChild(frame, task, input.?.ty),
@@ -3768,7 +3764,7 @@ const Lowerer = struct {
                 frame.cursor = TypeVarCursor.named_declared_order;
                 return .{ .call = .{ .declared_order = .{ .span = named.declared_order } } };
             },
-            else => {
+            TypeVarCursor.named_declared_order => {
                 const named = self.solved.types.get(task.root).named;
                 return try self.finishTypeVar(task, .{ .named = .{
                     .named_type = named.named_type,
@@ -3784,6 +3780,7 @@ const Lowerer = struct {
                     .declared_order = input.?.span,
                 } });
             },
+            TypeVarCursor.named_declared_order + 1...std.math.maxInt(u8) => unreachable,
         }
         return try self.nextTypeChild(frame, task);
     }
@@ -3808,7 +3805,7 @@ const Lowerer = struct {
                 frame.index += 1;
             },
             .tag_union => try task.tys.append(self.allocator, lowered),
-            else => unreachable,
+            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .mono => unreachable,
         }
     }
 
@@ -3864,10 +3861,10 @@ const Lowerer = struct {
                     frame.cursor = TypeVarCursor.named_backing;
                     return typeVarStep(backing.ty);
                 }
-                frame.cursor = TypeVarCursor.named_declared_order + 1;
+                frame.cursor = TypeVarCursor.named_declared_order;
                 return .{ .call = .{ .declared_order = .{ .span = named.declared_order } } };
             },
-            else => unreachable,
+            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .mono => unreachable,
         }
     }
 
@@ -4256,10 +4253,8 @@ const Lowerer = struct {
         capture_slots: []const LirProgram.CaptureSlot,
 
         fn get(self: ConstResult, comptime tag: std.meta.Tag(ConstResult)) @FieldType(ConstResult, @tagName(tag)) {
-            return switch (self) {
-                tag => |payload| payload,
-                else => Common.invariant("ConstStore schema frame received the wrong result kind"),
-            };
+            if (std.meta.activeTag(self) != tag) Common.invariant("ConstStore schema frame received the wrong result kind");
+            return @field(self, @tagName(tag));
         }
     };
 
@@ -4439,7 +4434,7 @@ const Lowerer = struct {
                 if (task.index < task.plans.len) return .{ .call = .{ .plan = .{ .ty = switch (content) {
                     .tuple => |items| self.types.typeAt(items, task.index),
                     .record => |fields| self.types.fieldAt(fields, task.index).ty,
-                    else => unreachable,
+                    .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => unreachable,
                 } } } };
                 const plans = task.plans;
                 task.plans = &.{};
@@ -4628,13 +4623,14 @@ const Lowerer = struct {
                     .declared_order = try self.result.const_types.appendDeclaredFieldSpan(task.declared.items),
                 } });
             },
-            else => {
+            ConstTypeCursor.callable_ret => {
                 // A callable's return type.
                 return self.finishConstType(task, .{ .func = .{
                     .args = task.args_span,
                     .ret = input.?.get(.ty),
                 } });
             },
+            ConstTypeCursor.callable_ret + 1...std.math.maxInt(u8) => unreachable,
         }
 
         switch (content) {
@@ -5865,16 +5861,6 @@ const Lowerer = struct {
 
     fn exprTask(parent: LowerSite, target: LIR.LocalId, expr: Lifted.ExprId, ty: ?Type.TypeId, next: LIR.CFStmtId) LowerTask {
         return .{ .expr = .{ .parent = parent, .target = target, .expr = expr, .ty = ty, .next = next } };
-    }
-
-    fn lowerExprInto(
-        self: *Lowerer,
-        parent: LowerSite,
-        target: LIR.LocalId,
-        expr_id: Lifted.ExprId,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        return try self.runLowerTasks(exprTask(parent, target, expr_id, null, next));
     }
 
     fn lowerExprIntoAtType(
@@ -10279,7 +10265,7 @@ const Lowerer = struct {
                     if (items.len != self.tupleItemTypes(task.source_ty).len) Common.invariant("tuple pattern arity differed from target tuple type");
                     break :blk items.len;
                 },
-                else => unreachable,
+                .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
             };
         }
         if (task.index == 0) return .{ .ret = task.current };
@@ -10297,7 +10283,7 @@ const Lowerer = struct {
                 task.part_ty = GuardedList.at(self.tupleItemTypes(task.source_ty), i);
                 break :blk GuardedList.at(self.solved.lifted.patSpan(span), i);
             },
-            else => unreachable,
+            .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
         };
         task.part_local = try self.addTemp(task.part_ty);
         return .{ .call = subpatternTask(task, child_pat, task.part_ty, task.part_local, task.current) };
@@ -10419,7 +10405,7 @@ const Lowerer = struct {
                     task.current = try self.lenMinusConst(where, keep_after_front, task.len_local, @intCast(rest.index), task.current);
                 }
             },
-            else => {
+            ListPatternCursor.element => {
                 const i = task.index;
                 task.current = input.?;
                 const index_local = try self.addLocalForLayout(.u64);
@@ -10433,6 +10419,7 @@ const Lowerer = struct {
                     task.current = try self.assignU64Literal(where, index_local, @intCast(i), task.current);
                 }
             },
+            ListPatternCursor.element + 1...std.math.maxInt(u8) => unreachable,
         }
 
         if (task.index != 0) {
@@ -11463,10 +11450,6 @@ const Lowerer = struct {
         return (try self.runBoundary(where, .{ .typed_ref_read = .{ .target = target, .target_ty = target_ty, .source_ty = source_ty, .storage_layout = storage_layout, .op = op, .next = next } })).?;
     }
 
-    fn assignTypedValueIntoStorage(self: *Lowerer, where: LowerSite, target_storage: LIR.LocalId, target_ty: Type.TypeId, source_storage: LIR.LocalId, source_ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        return (try self.runBoundary(where, .{ .into_storage = .{ .target = target_storage, .target_ty = target_ty, .source = source_storage, .source_ty = source_ty, .next = next } })).?;
-    }
-
     fn assignRecordBoundary(self: *Lowerer, where: LowerSite, target: LIR.LocalId, target_span: Type.Span, source: LIR.LocalId, source_span: Type.Span, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         return (try self.runBoundary(where, .{ .fields = .{ .kind = .record, .target = target, .target_span = target_span, .source = source, .source_span = source_span, .next = next } })).?;
     }
@@ -11853,7 +11836,8 @@ const Lowerer = struct {
                 frame.cursor = IntoStorageCursor.unboxed;
                 return .{ .call = .{ .box = .{ .target = frame.first, .source = task.source, .source_layout = self.result.store.getLocal(task.source).layout_idx, .next = current } } };
             },
-            else => return .{ .ret = input.?.? },
+            IntoStorageCursor.unboxed => return .{ .ret = input.?.? },
+            IntoStorageCursor.unboxed + 1...std.math.maxInt(u8) => unreachable,
         }
     }
 
@@ -11895,7 +11879,8 @@ const Lowerer = struct {
                 }
             },
             BoxCursor.struct_layout => if (input.?) |converted| return .{ .ret = converted },
-            else => if (input.?) |converted| return .{ .ret = converted },
+            BoxCursor.tag_union_layout => if (input.?) |converted| return .{ .ret = converted },
+            BoxCursor.tag_union_layout + 1...std.math.maxInt(u8) => unreachable,
         }
         if (frame.cursor != BoxCursor.tag_union_layout and target_content.tag == .tag_union and source_content.tag == .tag_union) {
             frame.cursor = BoxCursor.tag_union_layout;
@@ -12103,7 +12088,7 @@ const Lowerer = struct {
                 backing_task.next = input.?.?;
                 return .{ .tail = .{ .variant = backing_task } };
             },
-            else => return .{ .tail = .{ .ref_read = .{
+            VariantCursor.payload => return .{ .tail = .{ .ref_read = .{
                 .target = frame.second,
                 .storage_layout = frame.layout_idx,
                 .op = .{ .tag_payload_struct = .{
@@ -12113,6 +12098,7 @@ const Lowerer = struct {
                 } },
                 .next = input.?.?,
             } } },
+            VariantCursor.payload + 1...std.math.maxInt(u8) => unreachable,
         }
         const target = task.target;
         const next = task.next;

@@ -260,30 +260,6 @@ fn isForcedDynamicIteratorType(program: *const Ast.Program, ty: Type.TypeId) boo
     return type_ == .named and type_.named.def.iterator_representation == .forced_dynamic;
 }
 
-/// The error set of a span-walk visitor: `visit`'s own error set merged with
-/// the allocation failure raised while copying the span.
-fn WalkSpanError(comptime visit: anytype) type {
-    const ret = @typeInfo(@TypeOf(visit)).@"fn".return_type.?;
-    return Allocator.Error || @typeInfo(ret).error_union.error_set;
-}
-
-/// Copy `slice` into scratch memory, then invoke `visit` for every element.
-/// The copy is a mutation-during-iteration guard: element callbacks append to the
-/// span stores they walk, so the traversal must iterate a snapshot taken before
-/// any element is visited rather than the live span. `context` carries whatever
-/// state the callback needs (visitor `self`, owner ids, done markers).
-fn walkSpanCloned(
-    allocator: Allocator,
-    comptime T: type,
-    slice: anytype,
-    context: anytype,
-    comptime visit: anytype,
-) WalkSpanError(visit)!void {
-    const source = try GuardedList.dupe(allocator, T, slice);
-    defer allocator.free(source);
-    for (source) |item| try visit(context, item);
-}
-
 /// Exact post-SpecConstr use information for one lifted procedure.
 pub const ProcedureUse = struct {
     external_calls: usize = 0,
@@ -1159,6 +1135,10 @@ const Pass = struct {
     /// Phase-entry eligibility is independent of coordinator admission in earlier waves.
     discovery_admission: ?[]const SpecAdmission = null,
     borrowed_worker: bool = false,
+    /// What each frozen source loop body contains, keyed by the body. One
+    /// walk of an outer loop records every loop nested in it, so nested
+    /// loops never rescan their bodies.
+    loop_body_contents: std.AutoHashMapUnmanaged(Ast.ExprId, LoopBodyContents) = .empty,
 
     const PatternRequest = struct { fn_id: Ast.FnId, pattern: CallPattern };
     const RequestSink = struct {
@@ -1216,6 +1196,7 @@ const Pass = struct {
             defer pass.arena.deinit();
             defer pass.static_data_structure.deinit();
             defer pass.callable_workers.deinit();
+            defer pass.loop_body_contents.deinit(scratch);
             if (self.phase == .discovery) pass.pattern_requests = &output.requests;
             switch (self.phase) {
                 .discovery => {
@@ -1617,7 +1598,7 @@ const Pass = struct {
             .record => |span| for (0..span.len) |i| try components.append(self.allocator, GuardedList.at(self.program.fieldExprSpan(span), i).value),
             .nominal => |backing| try components.append(self.allocator, backing),
             .fn_ref => |ref| for (0..ref.captures.len) |i| try components.append(self.allocator, self.program.captureOperandAt(ref.captures, i).value),
-            else => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         }
         const owned = try components.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(owned);
@@ -1669,7 +1650,7 @@ const Pass = struct {
                 }
                 break :blk .{ .callable = .{ .ty = expr.ty, .fn_id = ref.fn_id, .captures = captures } };
             },
-            else => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         };
         return try self.storeStaticDataStructure(expr_id, value);
     }
@@ -1700,7 +1681,18 @@ const Pass = struct {
         self.next_join_point = mark.next_join_point;
     }
 
+    /// The contents of a loop body with the given initial values, walked at
+    /// most once for each frozen body.
+    fn loopBodyContents(self: *Pass, body: Ast.ExprId, initial_values: []const Ast.ExprId) Allocator.Error!LoopBodyContents {
+        if (self.loop_body_contents.get(body)) |contents| return contents;
+        const uses = try initialLocalUses(self.arena.allocator(), self.program, initial_values, initial_values.len);
+        const contents = try walkLoopBodyContents(self, body, uses);
+        if (self.program.isFrozenExpr(body)) try self.loop_body_contents.put(self.allocator, body, contents);
+        return contents;
+    }
+
     fn deinit(self: *Pass) void {
+        self.loop_body_contents.deinit(self.allocator);
         self.static_data_structure.deinit();
         self.callable_sources.deinit();
         self.callable_workers.deinit();
@@ -2296,7 +2288,7 @@ const Pass = struct {
                     // argument specialization; the standard child list
                     // excludes them.
                     .join_point => {},
-                    else => {},
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                 }
                 try Ast.appendChildren(self.allocator, self.program, id, &stack);
             },
@@ -2336,7 +2328,7 @@ const Pass = struct {
                         (if (@intFromEnum(callee) < visitor.pass.plans.len) .descend_then_exit else .descend)
                     else
                         .descend,
-                    else => .descend,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
                 };
             }
 
@@ -2989,7 +2981,7 @@ const Pass = struct {
             switch (expr.data) {
                 .continue_ => |continue_| return self.program.exprSpan(continue_.values),
                 .block => |block| current = block.final_expr,
-                else => return null,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return null,
             }
         }
     }
@@ -4066,7 +4058,7 @@ const Pass = struct {
                 .block => .{ .block = try clone.blockData(children) },
                 .if_ => .{ .if_ = try clone.ifData(children) },
                 .match_ => |match| .{ .match_ = try clone.matchData(match, children) },
-                else => Common.invariant("new-carry clone finished an expression it does not rebuild"),
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => Common.invariant("new-carry clone finished an expression it does not rebuild"),
             };
             try clone.replaceResults(base, @intFromEnum(try program.addExpr(.{ .ty = loop_parts.value_ty, .data = data })));
         }
@@ -4396,7 +4388,7 @@ const Pass = struct {
                     .fn_def,
                     => Common.invariant("pre-lift function expression reached call-pattern specialization"),
                     .call_proc => .descend_then_exit,
-                    else => .descend,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
                 };
             }
 
@@ -4467,78 +4459,6 @@ const Pass = struct {
             try cloner.appendExprsFromValue(shape, cloned.value, out);
         }
         matched = true;
-        return true;
-    }
-
-    /// Append each expression a shape's `.any` positions select, in shape
-    /// order; false when the expression does not have the shape. Shapes
-    /// nest as deeply as their constructors, so positions are visited from a
-    /// worklist, last-first so the first is visited next.
-    fn appendExistingExprsForShape(
-        self: *Pass,
-        root_shape: Shape,
-        root_expr: Ast.ExprId,
-        out: *std.ArrayList(Ast.ExprId),
-    ) Allocator.Error!bool {
-        const Pending = struct { shape: Shape, expr_id: Ast.ExprId };
-        var pending = std.ArrayList(Pending).empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .shape = root_shape, .expr_id = root_expr });
-        while (pending.pop()) |item| {
-            const expr_id = item.expr_id;
-            const mark = pending.items.len;
-            switch (item.shape) {
-                .any => try out.append(self.allocator, expr_id),
-                .tag => |tag| {
-                    const expr = self.program.getExpr(expr_id);
-                    const expr_tag = switch (expr.data) {
-                        .tag => |expr_tag| expr_tag,
-                        _ => return false,
-                    };
-                    if (!sameType(self.program, expr.ty, tag.ty) or !self.program.names.tagLabelTextEql(expr_tag.name, tag.name)) return false;
-                    const payloads = self.program.exprSpan(expr_tag.payloads);
-                    if (payloads.len != tag.payloads.len) Common.invariant("tag call pattern arity differed from tag expression arity");
-                    for (tag.payloads, 0..) |payload_shape, index| {
-                        try pending.append(self.allocator, .{ .shape = payload_shape, .expr_id = GuardedList.at(payloads, index) });
-                    }
-                },
-                .record => |record| {
-                    const expr = self.program.getExpr(expr_id);
-                    const fields = switch (expr.data) {
-                        .record => |fields| self.program.fieldExprSpan(fields),
-                        _ => return false,
-                    };
-                    if (!sameType(self.program, expr.ty, record.ty) or fields.len != record.fields.len) return false;
-                    for (record.fields, 0..) |field_shape, index| {
-                        const field = GuardedList.at(fields, index);
-                        if (!self.program.names.recordFieldLabelTextEql(field_shape.name, field.name)) return false;
-                        try pending.append(self.allocator, .{ .shape = field_shape.shape, .expr_id = field.value });
-                    }
-                },
-                .tuple => |tuple| {
-                    const expr = self.program.getExpr(expr_id);
-                    const items = switch (expr.data) {
-                        .tuple => |items| self.program.exprSpan(items),
-                        _ => return false,
-                    };
-                    if (!sameType(self.program, expr.ty, tuple.ty) or items.len != tuple.items.len) return false;
-                    for (tuple.items, 0..) |item_shape, index| {
-                        try pending.append(self.allocator, .{ .shape = item_shape, .expr_id = GuardedList.at(items, index) });
-                    }
-                },
-                .nominal => |nominal| {
-                    const expr = self.program.getExpr(expr_id);
-                    const backing = switch (expr.data) {
-                        .nominal => |backing| backing,
-                        _ => return false,
-                    };
-                    if (!sameType(self.program, expr.ty, nominal.ty)) return false;
-                    try pending.append(self.allocator, .{ .shape = nominal.backing.*, .expr_id = backing });
-                },
-                .callable => return false,
-            }
-            std.mem.reverse(Pending, pending.items[mark..]);
-        }
         return true;
     }
 
@@ -4802,7 +4722,7 @@ const Pass = struct {
                     .captures = capture_shapes,
                 } };
             },
-            else => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         };
     }
 
@@ -4991,7 +4911,7 @@ const Subst = struct {
     /// scope inside the loop body: the state-merge lowering binds a merged
     /// copy in a nested `let` whose lexical remainder is only the merge's
     /// syntactic result, yet the loop back edge reads that copy through its
-    /// binder. `cloneLetValue` floats any update to a carried binder past its
+    /// binder. Cloning a `let` value floats any update to a carried binder past its
     /// own restore so a later reference resolves to the merged value rather
     /// than the loop-entry value pinned at loop setup.
     loop_carried_binders: std.AutoHashMap(BinderIdentity, u32),
@@ -5593,10 +5513,8 @@ const Cloner = struct {
         pieces: ?LetCaseJoinPieces,
 
         fn get(self: CloneResult, comptime tag: std.meta.Tag(CloneResult)) @FieldType(CloneResult, @tagName(tag)) {
-            return switch (self) {
-                tag => |payload| payload,
-                else => Common.invariant("SpecConstr clone frame received the wrong result kind"),
-            };
+            if (std.meta.activeTag(self) != tag) Common.invariant("SpecConstr clone frame received the wrong result kind");
+            return @field(self, @tagName(tag));
         }
     };
 
@@ -5686,7 +5604,7 @@ const Cloner = struct {
                 task.scopes.deinit(allocator);
                 task.scopes = .empty;
             },
-            else => {},
+            .expr, .keeping, .parts, .without_reuse, .expr_value_owned, .expr_value, .demanding, .callable_from_function_value, .wrapped_value, .plain, .join_point, .let_value, .let_with_value, .bind_let_value, .positioned_reusable, .loop_exit_values, .loop_body, .selected_loop_exit, .make_reusable, .let_of_case, .let_of_case_shared, .divergent_tail, .capture_let_case_jump, .inline_let_case_join, .finalize_let_case_join, .rebuild_let_case_join_value, .emit_block_with_tail, .append_exprs_from_value, .supply_loop_slot, .field_access_value, .tuple_access, .match, .select_known_match, .bind_pat_to_match_value, .local_value, .inline_value, .case_of_case, .distribute_value, .inline_callable, .inline_direct, .wrap_typed_boundary, .stmt, .expr_span, .capture_span, .field_span, .span, .branch_span, .if_branch_span, .materialize, .materialize_callable, .materialize_worker, .materialize_with_captures, .value_flow_bind => {},
         }
     }
 
@@ -5744,10 +5662,6 @@ const Cloner = struct {
         return (try self.runClone(.{ .materialize = .{ .value = value } })).get(.expr);
     }
 
-    fn makeReusableForMatch(self: *Cloner, value: Value, bindings: *BindingChain) Common.LowerError!Value {
-        return (try self.runClone(try self.makeReusableTask(value, bindings))).get(.value);
-    }
-
     fn collectCallPatternsInExpr(self: *Cloner, owner: Ast.FnId, expr_id: Ast.ExprId) Common.LowerError!void {
         _ = (try self.runClone(.{ .collect = .{ .owner = owner, .expr = expr_id } })).get(.none);
     }
@@ -5766,7 +5680,7 @@ const Cloner = struct {
         fn_ref: @import("../monotype/ast.zig").LiftedFunctionValue,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
-        return (try self.runClone(.{ .callable_from_ref = .{ .ty = ty, .fn_ref = fn_ref, .bindings = bindings } })).get(.value);
+        return (try self.runClone(.{ .callable_from_function_value = .{ .ty = ty, .fn_ref = fn_ref, .bindings = bindings } })).get(.value);
     }
 
     fn simplifyKnownMatchValue(self: *Cloner, scrutinee: Value, branches: Ast.Span(Ast.Branch), bindings: *BindingChain) Common.LowerError!?Value {
@@ -5785,18 +5699,19 @@ const Cloner = struct {
     const CloneTask = union(enum) {
         /// `cloneExpr`
         expr: Ast.ExprId,
-        /// `cloneExprKeepingValue`
+        /// An expression cloned together with its value.
         keeping: KeepingTask,
-        /// `cloneExprParts`
+        /// An expression's parts cloned into a rebuilt expression.
         parts: PartsTask,
         without_reuse: WithoutReuseTask,
         /// `cloneExprValue` and `cloneExprValueDemandingShape`
         expr_value_owned: ExprValueOwnedTask,
-        /// `cloneExprValueInto`
+        /// An expression's value cloned into a caller's slot.
         expr_value: ExprValueTask,
-        /// `cloneExprValueDemandingShapeInto`
+        /// An expression's value cloned into a caller's slot, demanding its
+        /// shape.
         demanding: DemandingTask,
-        callable_from_ref: CallableFromRefTask,
+        callable_from_function_value: CallableFromFunctionValueTask,
         wrapped_value: WrappedValueTask,
         /// `cloneExprPlain`
         plain: PlainTask,
@@ -5831,9 +5746,9 @@ const Cloner = struct {
         match: MatchTask,
         select_known_match: SelectKnownMatchTask,
         bind_pat_to_match_value: BindPatToMatchValueTask,
-        /// `valueForMatchLocal` and `valueForInlineLocal`
+        /// The value of a local bound by a match or an inlined call.
         local_value: LocalValueTask,
-        /// `cloneInlineValueBoundingCycles`
+        /// An inlined value cloned without following a cyclic definition.
         inline_value: InlineValueTask,
         case_of_case: CaseOfCaseTask,
         distribute_arm: DistributeArmTask,
@@ -5866,7 +5781,7 @@ const Cloner = struct {
             .expr_value_owned => |*task| self.stepExprValueOwned(frame, task, input),
             .expr_value => |*task| self.stepExprValue(frame, task, input),
             .demanding => |*task| self.stepDemanding(frame, task, input),
-            .callable_from_ref => |*task| self.stepCallableFromRef(frame, task, input),
+            .callable_from_function_value => |*task| self.stepCallableFromFunctionValue(frame, task, input),
             .wrapped_value => |*task| self.stepWrappedValue(frame, task, input),
             .plain => |*task| self.stepPlain(frame, task, input),
             .join_point => |*task| self.stepJoinPoint(frame, task, input),
@@ -6076,7 +5991,7 @@ const Cloner = struct {
             .fn_ref => |fn_ref| {
                 if (frame.cursor != 0) return self.finishExprValue(task, input.?.get(.value));
                 frame.cursor = 1;
-                return .{ .call = .{ .callable_from_ref = .{ .ty = expr.ty, .fn_ref = fn_ref, .bindings = bindings } } };
+                return .{ .call = .{ .callable_from_function_value = .{ .ty = expr.ty, .fn_ref = fn_ref, .bindings = bindings } } };
             },
             .static_data_candidate => return self.finishExprValue(task, (try self.pass.staticDataStructure(expr_id)).*),
             .inline_expects_enabled => return self.finishExprValue(task, .{ .expr = expr_id }),
@@ -6646,14 +6561,14 @@ const Cloner = struct {
         }
     }
 
-    const CallableFromRefTask = struct {
+    const CallableFromFunctionValueTask = struct {
         ty: Type.TypeId,
         fn_ref: @import("../monotype/ast.zig").LiftedFunctionValue,
         bindings: *BindingChain,
         captures: []CaptureValue = &.{},
     };
 
-    fn stepCallableFromRef(self: *Cloner, frame: *CloneFrame, task: *CallableFromRefTask, input: ?CloneResult) Common.LowerError!CloneStep {
+    fn stepCallableFromFunctionValue(self: *Cloner, frame: *CloneFrame, task: *CallableFromFunctionValueTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const fn_ref = task.fn_ref;
         switch (frame.cursor) {
             0 => {
@@ -7363,11 +7278,9 @@ const Cloner = struct {
 
     fn stepPositionedReusable(self: *Cloner, frame: *CloneFrame, task: *PositionedReusableTask, input: ?CloneResult) Common.LowerError!CloneStep {
         if (frame.cursor == 0) {
-            const pat = self.pass.program.getPat(task.pat);
-            const self_referential = if (pat.data == .bind)
-                try localUseCountInExpr(self.pass.allocator, self.pass.program, pat.data.bind, task.source_value) != 0
-            else
-                task.recursive;
+            // A binding refers to itself exactly when its producer marked it
+            // recursive.
+            const self_referential = task.recursive;
             if (self_referential) return .{ .ret = .{ .flag = false } };
 
             task.bindings_before = task.bindings.mark();
@@ -7804,7 +7717,7 @@ const Cloner = struct {
                         task.if_branches = try GuardedList.dupe(arena, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
                         task.if_rewritten = try arena.alloc(Ast.IfBranch, task.if_branches.len);
                     },
-                    else => unreachable,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
                 }
                 frame.cursor = 1;
             },
@@ -7839,7 +7752,7 @@ const Cloner = struct {
                             } };
                         }
                     },
-                    else => unreachable,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
                 }
                 frame.index += 1;
             },
@@ -7894,7 +7807,7 @@ const Cloner = struct {
                     } } };
                 }
             },
-            else => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         }
 
         // Wrap the rewritten case in its live join points, innermost last so
@@ -8015,7 +7928,7 @@ const Cloner = struct {
                     .final_else = final_else,
                 } } });
             },
-            else => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         };
 
         return .{ .join_point = .{
@@ -8088,7 +8001,7 @@ const Cloner = struct {
                     // thrown away.
                     switch (self.pass.program.getExpr(block.final_expr).data) {
                         .match_, .if_, .loop_ => return .{ .ret = .{ .maybe_expr = null } },
-                        else => {},
+                        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                     }
 
                     task.change_start = self.subst.watermark();
@@ -8136,7 +8049,7 @@ const Cloner = struct {
                 },
             },
             .match_, .if_, .loop_ => return .{ .ret = .{ .maybe_expr = null } },
-            else => switch (frame.cursor) {
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => switch (frame.cursor) {
                 0 => {
                     frame.cursor = 1;
                     return .{ .call = .{ .expr_value_owned = .{ .expr = task.branch_body, .demand_shape = false } } };
@@ -8194,7 +8107,7 @@ const Cloner = struct {
                     .target = ret.target,
                 } } });
             },
-            else => null,
+            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .comptime_branch_taken, .dbg, .expect_err, .expect, .literal_rejected => null,
         } } };
     }
 
@@ -8747,7 +8660,7 @@ const Cloner = struct {
                 frame.index += 1;
                 return try self.nextLoopWholeInitial(frame, task);
             },
-            else => {
+            LoopValueCursor.whole_body => {
                 const body = input.?.get(.expr);
                 if (self.loop_stack.pop() == null) Common.invariant("loop stack underflow after whole-state body clone");
                 return self.finishLoopValue(task, .{ .expr = try self.addExpr(.{ .ty = task.ty, .data = .{ .loop_ = .{
@@ -8756,6 +8669,7 @@ const Cloner = struct {
                     .body = body,
                 } } }) });
             },
+            LoopValueCursor.whole_body + 1...std.math.maxInt(u8) => unreachable,
         }
         if (frame.index < task.initial_values.len) {
             return .{ .call = .{ .demanding = .{ .expr = task.initial_values[frame.index], .bindings = task.bindings } } };
@@ -8785,11 +8699,12 @@ const Cloner = struct {
         // initial's exact local is the signature of that alias shape—a
         // consumed pre-loop version is never read again—so claim (and drop)
         // the carried binder only when the body does not.
+        const contents = try self.pass.loopBodyContents(task.loop.body, task.initial_values);
         task.carried_identities = try arena.alloc(?BinderIdentity, task.initial_values.len);
         for (task.initial_values, task.carried_identities) |initial, *identity| {
             identity.* = null;
             const initial_local = localExpr(self.pass.program, initial) orelse continue;
-            if (try exprReferencesLocal(self.pass.allocator, self.pass.program, task.loop.body, initial_local)) continue;
+            if (contents.references(initial_local)) continue;
             identity.* = try self.subst.dropCarriedBinder(self.pass.program, initial);
         }
 
@@ -8817,7 +8732,7 @@ const Cloner = struct {
         // Shape splitting is proved only by the local `continue` edges below.
         // A `return` exits the enclosing function outside that fixed point, so
         // a loop containing one must retain its whole runtime slots.
-        if (task.has_constructor and try exprContainsReturn(self.pass.allocator, self.pass.program, task.loop.body)) task.has_constructor = false;
+        if (task.has_constructor and contents.contains_return) task.has_constructor = false;
         return try self.nextLoopAttempt(frame, task);
     }
 
@@ -9057,12 +8972,13 @@ const Cloner = struct {
                     .value = value,
                 } } } };
             },
-            else => {
+            BlockValueCursor.finish => {
                 // The block's own emitted expression.
                 if (task.stmt_context) |context| context.restore(self);
                 task.stmt_context = null;
                 return self.finishBlockValueTask(task, .{ .expr = input.?.get(.expr) });
             },
+            BlockValueCursor.finish + 1...std.math.maxInt(u8) => unreachable,
         }
         return try self.nextBlockStatementStep(frame, task);
     }
@@ -9447,7 +9363,7 @@ const Cloner = struct {
                 frame.index += 1;
                 return try self.nextResidualCallArg(frame, task);
             },
-            else => {
+            CallProcCursor.residual_captures => {
                 const residual = try self.addExpr(.{ .ty = task.ty, .data = .{ .call_proc = .{
                     .callee = call.callee,
                     .args = task.expr_span,
@@ -9457,6 +9373,7 @@ const Cloner = struct {
                 } } });
                 return retExpr(try self.wrapBindings(task.chain.*, residual));
             },
+            CallProcCursor.residual_captures + 1...std.math.maxInt(u8) => unreachable,
         }
         const raw = @intFromEnum(Ast.localDirectCallee(call).?);
         if (frame.index < task.args.len) {
@@ -9725,8 +9642,7 @@ const Cloner = struct {
     }
 
     /// Carry the whole slot value as one runtime scalar.
-    fn demoteLoopSlotLeaf(self: *Cloner, task: *SupplyLoopSlotTask) CloneStep {
-        _ = self;
+    fn demoteLoopSlotLeaf(_: *Cloner, task: *SupplyLoopSlotTask) CloneStep {
         task.mode = .demote;
         return .{ .call = .{ .materialize = .{ .value = task.value } } };
     }
@@ -10059,12 +9975,12 @@ const Cloner = struct {
                             const prepared = switch (child) {
                                 .maybe_value => |maybe| maybe orelse return .{ .ret = .{ .maybe_value = null } },
                                 .value => |reusable| reusable,
-                                else => Common.invariant("record match field received the wrong result kind"),
+                                .none, .expr, .maybe_expr, .data, .maybe_data, .parts, .arm, .maybe_arm, .cloned, .flag, .stmt, .expr_span, .stmt_span, .capture_span, .field_span, .branches, .if_branches, .supplied, .pieces => Common.invariant("record match field received the wrong result kind"),
                             };
                             task.fields[index] = .{ .name = record.fields[index].name, .value = prepared };
                         },
                         .tuple, .tag => task.values[index] = child.get(.maybe_value) orelse return .{ .ret = .{ .maybe_value = null } },
-                        else => unreachable,
+                        .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
                     }
                     frame.index += 1;
                 },
@@ -10254,7 +10170,7 @@ const Cloner = struct {
                 }
                 return .{ .call = .{ .bind_pat_to_match_value = .{ .pat = GuardedList.at(pats, index), .value = tag.payloads[index], .body = task.body, .bindings = bindings } } };
             },
-            else => unreachable,
+            .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
         }
     }
 
@@ -10364,7 +10280,7 @@ const Cloner = struct {
             const branch_work = switch (scrutinee_data) {
                 .match_ => |inner_match| self.pass.program.branchSpan(inner_match.branches).len,
                 .if_ => |inner_if| self.pass.program.ifBranchSpan(inner_if.branches).len + 1,
-                else => return .{ .ret = .{ .maybe_value = null } },
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return .{ .ret = .{ .maybe_value = null } },
             };
             task.recorded = self.arm_values.get(task.scrutinee_expr);
             if (task.recorded == null and @intFromEnum(task.scrutinee_expr) >= self.output_start) return .{ .ret = .{ .maybe_value = null } };
@@ -10381,7 +10297,7 @@ const Cloner = struct {
                     task.if_rewritten = try arena.alloc(Ast.IfBranch, task.if_branches.len);
                     task.values = try arena.alloc(Value, task.if_branches.len + 1);
                 },
-                else => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             }
             frame.cursor = 1;
         } else {
@@ -10411,7 +10327,7 @@ const Cloner = struct {
                     try self.recordArmValues(distributed, task.values);
                     return .{ .ret = .{ .maybe_value = .{ .expr = distributed } } };
                 },
-                else => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             }
             task.values[index] = arm.value;
             frame.index += 1;
@@ -10445,7 +10361,7 @@ const Cloner = struct {
                 .source_scope = null,
                 .outer_branches = task.outer_branches,
             } } },
-            else => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         }
     }
 
@@ -10695,7 +10611,8 @@ const Cloner = struct {
                 }
                 return self.finishInlinedCall(task, inlined, callable.fn_id);
             },
-            else => return self.finishInlinedCall(task, input.?.get(.value), callable.fn_id),
+            InlineCallableCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callable.fn_id),
+            InlineCallableCursor.boundary + 1...std.math.maxInt(u8) => unreachable,
         }
         if (frame.cursor == InlineCallableCursor.capture) {
             if (frame.index < task.source_captures.len) {
@@ -10846,7 +10763,8 @@ const Cloner = struct {
                 }
                 return self.finishInlinedCall(task, inlined, callee);
             },
-            else => return self.finishInlinedCall(task, input.?.get(.value), callee),
+            InlineDirectCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callee),
+            InlineDirectCursor.boundary + 1...std.math.maxInt(u8) => unreachable,
         }
         if (frame.cursor == InlineDirectCursor.capture_value) {
             if (frame.index < task.operands.len) {
@@ -11011,11 +10929,9 @@ const Cloner = struct {
                         try self.leaveRecursiveStmt(task, let_);
                         return try self.finishStmt(task, cloned);
                     }
-                    const pat = self.pass.program.getPat(let_.pat);
-                    const self_referential = if (pat.data == .bind)
-                        try localUseCountInExpr(self.pass.allocator, self.pass.program, pat.data.bind, let_.value) != 0
-                    else
-                        let_.recursive;
+                    // A binding refers to itself exactly when its producer
+                    // marked it recursive.
+                    const self_referential = let_.recursive;
                     if (!self_referential) {
                         // The drained bindings sit exactly where the statement
                         // sat, so no evaluation moves and no gate is needed.
@@ -11371,8 +11287,8 @@ const Cloner = struct {
         root: Ast.ExprId,
         replacement: Ast.ExprId,
     ) Common.LowerError!Ast.ExprId {
-        // Collect the read chain from `source` down to `root`, then rebuild
-        // it bottom-up over `replacement`.
+        // Collect the read chain from `source` down to `root`, then emit it
+        // again bottom-up over `replacement`.
         var chain: std.ArrayList(Ast.ExprId) = .empty;
         defer chain.deinit(self.pass.allocator);
         var current = source;
@@ -11382,7 +11298,7 @@ const Cloner = struct {
             current = switch (data) {
                 .field_access => |field| field.receiver,
                 .tuple_access => |access| access.tuple,
-                else => Common.invariant("recursive field/tuple read replacement reached a non-access expression before its root"),
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => Common.invariant("recursive field/tuple read replacement reached a non-access expression before its root"),
             };
         }
         var rebuilt = replacement;
@@ -11406,7 +11322,7 @@ const Cloner = struct {
                     .tuple = rebuilt,
                     .elem_index = access.elem_index,
                 } } }),
-                else => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             };
         }
         return rebuilt;
@@ -11660,11 +11576,9 @@ const Cloner = struct {
             self.subst.restore(task.change_before);
             task.bindings.rewind(task.bindings_before);
 
-            const pat = self.pass.program.getPat(task.pat);
-            const self_referential = if (pat.data == .bind)
-                try localUseCountInExpr(self.pass.allocator, self.pass.program, pat.data.bind, task.source_value) != 0
-            else
-                task.recursive;
+            // A binding refers to itself exactly when its producer marked it
+            // recursive.
+            const self_referential = task.recursive;
             if (self_referential) return .{ .ret = .{ .flag = false } };
 
             frame.cursor = 1;
@@ -12115,7 +12029,7 @@ const Cloner = struct {
                 .static_data_candidate => |candidate| expr_id = candidate.runtime_expr,
                 .typed_boundary => |boundary| expr_id = boundary.value,
                 .comptime_branch_taken => |taken| expr_id = taken.body,
-                else => break,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .comptime_value, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
             }
         }
         const expr = self.pass.program.getExpr(expr_id);
@@ -12968,7 +12882,7 @@ const Cloner = struct {
                     self.pass.program.fieldAccessSegmentSpan(field.segments),
                 ),
                 .tuple_access => |access| itemFromValue(value, access.elem_index),
-                else => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             } orelse return null;
         }
         return value;
@@ -13982,7 +13896,7 @@ const Cloner = struct {
             budget.* -= 1;
             switch (value) {
                 .runtime_anchor => |anchor| value = anchor.structure.*,
-                else => break,
+                .expr, .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => break,
             }
         }
         switch (value) {
@@ -14230,7 +14144,7 @@ const Cloner = struct {
 /// reference must resolve to a binding still in scope; the initial scope is
 /// seeded with the function's arguments and recomputed captures. Binders enter
 /// scope as the walk descends into the region they govern and leave when it
-/// ascends, mirroring `lift.zig`'s capture walk (`collectExpr`/`collectStmt`/
+/// ascends, mirroring `lift.zig`'s capture walk (`collectExpr`/
 /// `bindPat`) so the same reference set is judged, but asserting membership
 /// rather than recording free variables.
 const BodyLocalScope = struct {
@@ -14599,7 +14513,7 @@ fn exprBodySizeWithin(allocator: Allocator, program: *const Ast.Program, expr_id
                 .def_ref,
                 .fn_def,
                 => Common.invariant("pre-lift function expression reached SpecConstr body-size counting"),
-                else => try Ast.appendChildren(allocator, program, id, &stack),
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &stack),
             }
         },
     };
@@ -14699,7 +14613,7 @@ fn collectAllFnUsesInExpr(
                         summary.external_call_owner = owner;
                     }
                 },
-                else => {},
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
             }
             try Ast.appendChildren(allocator, program, id, &stack);
         },
@@ -14861,7 +14775,7 @@ fn exprContainsIteratorProducer(allocator: Allocator, program: *const Ast.Progra
                     try pushExprSpanSearch(search.allocator, search.program, jump.args, stack);
                     break :blk .children;
                 },
-                else => .descend,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -14882,7 +14796,7 @@ fn exprCallsFn(allocator: Allocator, program: *const Ast.Program, expr_id: Ast.E
                 .inline_expects_enabled, .comptime_value => .skip,
                 .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached recursive-call scan"),
                 .call_proc => |call| if (Ast.localDirectCallee(call) == search.fn_id) .found else .descend,
-                else => .descend,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -14926,7 +14840,7 @@ fn exprContainsReturn(allocator: Allocator, program: *const Ast.Program, expr_id
             return switch (search.program.getExpr(id).data) {
                 .return_ => .found,
                 .lambda, .def_ref, .fn_def, .inline_expects_enabled, .comptime_value => .skip,
-                else => .descend,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -14955,7 +14869,7 @@ fn exprReferencesLocal(allocator: Allocator, program: *const Ast.Program, expr_i
                 .uninitialized_payload => |payload| if (payload.condition == search.local) .found else .skip,
                 .join_point => |join_point| if (typedLocalSpanContains(search.program, join_point.retained, search.local)) .found else .descend,
                 .lambda, .def_ref, .fn_def, .inline_expects_enabled, .comptime_value => .skip,
-                else => .descend,
+                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -14964,6 +14878,169 @@ fn exprReferencesLocal(allocator: Allocator, program: *const Ast.Program, expr_i
         }
     };
     return Ast.anyExpr(allocator, program, expr_id, Search{ .program = program, .local = local });
+}
+
+/// What a loop body contains: whether it returns from the enclosing
+/// function (`exprContainsReturn`), and which of the loop's initial locals it
+/// references (`exprReferencesLocal`).
+const LoopBodyContents = struct {
+    contains_return: bool,
+    initial_locals: []const InitialLocalUse,
+
+    fn references(contents: LoopBodyContents, local: Ast.LocalId) bool {
+        for (contents.initial_locals) |use| {
+            if (use.local == local) return use.referenced;
+        }
+        Common.invariant("loop body contents queried a local that is not one of the loop's initial locals");
+    }
+};
+
+const InitialLocalUse = struct { local: Ast.LocalId, referenced: bool };
+
+fn initialLocalUses(arena: Allocator, program: *const Ast.Program, initial_values: anytype, len: usize) Allocator.Error![]InitialLocalUse {
+    var uses: std.ArrayList(InitialLocalUse) = .empty;
+    for (0..len) |index| {
+        const local = localExpr(program, GuardedList.at(initial_values, index)) orelse continue;
+        try uses.append(arena, .{ .local = local, .referenced = false });
+    }
+    return uses.items;
+}
+
+/// A loop whose body the contents walk is inside.
+const OpenLoop = struct {
+    body: Ast.ExprId,
+    contains_return: bool = false,
+    uses: []InitialLocalUse,
+};
+
+/// One open loop's initial local, awaiting a reference in its body.
+const LocalRegistration = struct { open_index: usize, use_index: usize };
+
+/// Walk one loop body on an explicit stack, recording the contents of it and
+/// of every loop nested in it. A reference marks each open loop whose initial
+/// locals include the referenced local, and a return marks every open loop,
+/// each at most once, so the walk is linear in the body.
+fn walkLoopBodyContents(pass: *Pass, root_body: Ast.ExprId, root_uses: []InitialLocalUse) Allocator.Error!LoopBodyContents {
+    const allocator = pass.allocator;
+    const program: *const Ast.Program = pass.program;
+    const Item = union(enum) {
+        enter: Ast.ExprChild,
+        open: struct { body: Ast.ExprId, uses: []InitialLocalUse },
+        close,
+    };
+    var stack: std.ArrayList(Item) = .empty;
+    defer stack.deinit(allocator);
+    var children: std.ArrayList(Ast.ExprChild) = .empty;
+    defer children.deinit(allocator);
+    var open: std.ArrayList(OpenLoop) = .empty;
+    defer open.deinit(allocator);
+    var registered: std.AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)) = .empty;
+    defer {
+        var lists = registered.valueIterator();
+        while (lists.next()) |list| list.deinit(allocator);
+        registered.deinit(allocator);
+    }
+    var root_contents: LoopBodyContents = undefined;
+
+    try stack.append(allocator, .{ .open = .{ .body = root_body, .uses = root_uses } });
+    while (stack.pop()) |item| {
+        children.clearRetainingCapacity();
+        switch (item) {
+            .open => |loop| {
+                const open_index = open.items.len;
+                try open.append(allocator, .{ .body = loop.body, .uses = loop.uses });
+                for (loop.uses, 0..) |use, use_index| {
+                    const entry = try registered.getOrPut(allocator, use.local);
+                    if (!entry.found_existing) entry.value_ptr.* = .empty;
+                    try entry.value_ptr.append(allocator, .{ .open_index = open_index, .use_index = use_index });
+                }
+                try stack.append(allocator, .close);
+                try stack.append(allocator, .{ .enter = .{ .expr = loop.body } });
+                continue;
+            },
+            .close => {
+                const loop = open.pop().?;
+                const open_index = open.items.len;
+                for (loop.uses) |use| {
+                    const list = registered.getPtr(use.local).?;
+                    while (list.items.len > 0 and list.items[list.items.len - 1].open_index == open_index) _ = list.pop();
+                }
+                const contents: LoopBodyContents = .{ .contains_return = loop.contains_return, .initial_locals = loop.uses };
+                if (open_index == 0) {
+                    root_contents = contents;
+                } else if (program.isFrozenExpr(loop.body)) {
+                    try pass.loop_body_contents.put(allocator, loop.body, contents);
+                }
+                continue;
+            },
+            .enter => |child| switch (child) {
+                .stmt => |stmt_id| {
+                    if (program.getStmt(stmt_id) == .return_) markOpenLoopsReturn(open.items);
+                    try Ast.appendStmtChildren(allocator, program, stmt_id, &children);
+                },
+                .expr => |expr_id| switch (program.getExpr(expr_id).data) {
+                    .lambda, .def_ref, .fn_def, .inline_expects_enabled, .comptime_value => continue,
+                    .local => |local| {
+                        markLocalReferenced(open.items, &registered, local);
+                        continue;
+                    },
+                    .uninitialized_payload => |payload| {
+                        markLocalReferenced(open.items, &registered, payload.condition);
+                        continue;
+                    },
+                    .join_point => |join_point| {
+                        const retained = program.typedLocalSpan(join_point.retained);
+                        for (0..retained.len) |index| {
+                            markLocalReferenced(open.items, &registered, GuardedList.at(retained, index).local);
+                        }
+                        try Ast.appendChildren(allocator, program, expr_id, &children);
+                    },
+                    .return_ => {
+                        markOpenLoopsReturn(open.items);
+                        try Ast.appendChildren(allocator, program, expr_id, &children);
+                    },
+                    .loop_ => |nested| {
+                        const initial_values = program.exprSpan(nested.initial_values);
+                        try stack.append(allocator, .{ .open = .{
+                            .body = nested.body,
+                            .uses = try initialLocalUses(pass.arena.allocator(), program, initial_values, initial_values.len),
+                        } });
+                        for (0..initial_values.len) |index| {
+                            try children.append(allocator, .{ .expr = GuardedList.at(initial_values, index) });
+                        }
+                    },
+                    .unit, .@"unreachable", .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, expr_id, &children),
+                },
+            },
+        }
+        var index = children.items.len;
+        while (index > 0) {
+            index -= 1;
+            try stack.append(allocator, .{ .enter = children.items[index] });
+        }
+    }
+    return root_contents;
+}
+
+fn markOpenLoopsReturn(open: []OpenLoop) void {
+    var index = open.len;
+    while (index > 0) {
+        index -= 1;
+        if (open[index].contains_return) return;
+        open[index].contains_return = true;
+    }
+}
+
+/// Mark every open loop that has `local` as an initial local. Each
+/// registration is marked once, then dropped.
+fn markLocalReferenced(
+    open: []OpenLoop,
+    registered: *std.AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)),
+    local: Ast.LocalId,
+) void {
+    const list = registered.getPtr(local) orelse return;
+    for (list.items) |registration| open[registration.open_index].uses[registration.use_index].referenced = true;
+    list.clearRetainingCapacity();
 }
 
 fn typedLocalSpanContains(program: *const Ast.Program, span: Ast.Span(Ast.TypedLocal), local: Ast.LocalId) bool {
@@ -14999,7 +15076,7 @@ fn exprContainsFreeLoopControl(allocator: Allocator, program: *const Ast.Program
                     if (item.loop_depth == 0) return true;
                     try Ast.appendChildren(allocator, program, id, &children);
                 },
-                else => try Ast.appendChildren(allocator, program, id, &children),
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &children),
             },
         }
         for (children.items) |child| try stack.append(allocator, .{ .child = child, .loop_depth = item.loop_depth });
@@ -15067,7 +15144,7 @@ fn collectTupleLocalDemand(
                     try stack.append(search.allocator, .{ .expr = sequence.try_expr });
                     break :blk .children;
                 },
-                else => .descend,
+                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -15130,7 +15207,7 @@ fn localUseCount(allocator: Allocator, program: *const Ast.Program, local: Ast.L
                     try stack.append(counter.allocator, .{ .expr = sequence.try_expr });
                     break :blk .children;
                 },
-                else => .descend,
+                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 

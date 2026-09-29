@@ -613,10 +613,8 @@ const Lowerer = struct {
         slice: []Ast.ExprId,
 
         fn get(self: Result, comptime tag: std.meta.Tag(Result)) @FieldType(Result, @tagName(tag)) {
-            return switch (self) {
-                tag => |payload| payload,
-                else => Common.invariant("Lambda Mono lowering frame received the wrong result kind"),
-            };
+            if (std.meta.activeTag(self) != tag) Common.invariant("Lambda Mono lowering frame received the wrong result kind");
+            return @field(self, @tagName(tag));
         }
     };
 
@@ -1496,7 +1494,7 @@ const Lowerer = struct {
                 if (variant.source == fn_symbol) break variant;
             } else switch (ty_content) {
                 .callable => Common.invariant("finite callable type did not contain referenced function"),
-                else => Common.invariant("erased callable type did not contain referenced function"),
+                .primitive, .named, .record, .capture_record, .tuple, .tag_union, .list, .box, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("erased callable type did not contain referenced function"),
             };
             task.variant = found;
             if (found.capture_ty) |capture_ty| {
@@ -1806,7 +1804,7 @@ const Lowerer = struct {
                 frame.cursor = TypeVarCursor.named_declared_order;
                 return .{ .call = .{ .declared_order = .{ .span = solved_types.get(task.root).named.declared_order } } };
             },
-            else => {
+            TypeVarCursor.named_declared_order => {
                 const named = solved_types.get(task.root).named;
                 return self.finishTypeVar(task, .{ .named = .{
                     .named_type = named.named_type,
@@ -1822,6 +1820,7 @@ const Lowerer = struct {
                     .declared_order = input.?.get(.type_span),
                 } });
             },
+            TypeVarCursor.named_declared_order + 1...std.math.maxInt(u8) => unreachable,
         }
         switch (solved_types.get(task.root)) {
             .list => |elem| {

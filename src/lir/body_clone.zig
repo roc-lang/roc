@@ -1267,7 +1267,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     },
                     .literal_rejection = s.literal_rejection,
                 } }, origin),
-                else => null,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
             };
         }
 
@@ -1634,7 +1634,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
                     },
                 },
-                else => {
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .loop_continue, .loop_break, .jump, .ret, .crash => {
                     if (step == 0) return .{ .clone = linearNext(frame.source) };
                     setLinearNext(&frame.built, returned.?);
                     return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
@@ -1974,25 +1974,106 @@ pub const InterceptChildren = struct {
 };
 
 fn linearNext(stmt: LIR.CFStmt) CFStmtId {
-    switch (stmt) {
-        inline else => |s| {
-            const T = @TypeOf(s);
-            if (@typeInfo(T) == .@"struct" and @hasField(T, "next")) return s.next;
-            unreachable;
-        },
-    }
+    return switch (stmt) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => |s| s.next,
+        .boxy_tag_match,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => unreachable,
+    };
 }
 
 fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
     switch (stmt.*) {
-        inline else => |*s| {
-            const T = @TypeOf(s.*);
-            if (@typeInfo(T) == .@"struct" and @hasField(T, "next")) {
-                s.next = next;
-                return;
-            }
-            unreachable;
-        },
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => |*s| s.next = next,
+        .boxy_tag_match,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => unreachable,
     }
 }
 

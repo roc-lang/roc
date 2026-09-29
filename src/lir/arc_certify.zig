@@ -2905,7 +2905,7 @@ const Certifier = struct {
     fn collectBorrowSummaryAnchorValues(self: *Certifier, state: *const State, value: ValueId, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
         const seen = try self.valueWalkScratch();
         anchors.clearRetainingCapacity();
-        if (try self.collectBorrowSummaryAbiAnchorsSeen(state, value, seen, anchors)) {
+        if (try self.collectBorrowSummaryAbiAnchorsSeen(value, seen, anchors)) {
             return true;
         }
         anchors.clearRetainingCapacity();
@@ -2934,8 +2934,7 @@ const Certifier = struct {
     }
 
     /// Anchors of a borrow whose every lender chain reaches ABI-live values.
-    fn collectBorrowSummaryAbiAnchorsSeen(self: *Certifier, state: *const State, root: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
-        _ = state;
+    fn collectBorrowSummaryAbiAnchorsSeen(self: *Certifier, root: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
         var frames = std.ArrayList(AnchorFrame).empty;
         defer self.releaseAnchorFrames(&frames, seen);
         var answer = try self.enterAbiAnchor(&frames, root, seen, anchors);

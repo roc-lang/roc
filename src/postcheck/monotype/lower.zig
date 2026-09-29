@@ -8685,40 +8685,6 @@ const Builder = struct {
         };
     }
 
-    fn typeIsBuiltinJsonEncoding(self: *Builder, ty: Type.TypeId) bool {
-        var current = ty;
-        while (true) switch (self.activeTypeStore().get(current)) {
-            .named => |named| {
-                if (self.typeDefIsBuiltinJsonEncoding(named.def)) return true;
-                if (named.kind != .alias) return false;
-                current = (named.backing orelse return false).ty;
-            },
-            else => return false,
-        };
-    }
-
-    fn typeDefIsBuiltinJsonEncoding(self: *Builder, def: Type.TypeDef) bool {
-        const type_name = self.activeNameStore().typeNameText(def.type_name);
-        if (!Ident.textEql(type_name, "JsonEncoding") and !Ident.textEql(type_name, "Builtin.Encoding.JsonEncoding")) return false;
-        return self.moduleIdentityIsBuiltin(def.module);
-    }
-
-    fn moduleIdentityIsBuiltin(self: *Builder, module: names.ModuleIdentityId) bool {
-        const origin_hash = self.activeNameStore().moduleIdentityBytes(module);
-        if (self.moduleViewHasBuiltinIdentity(moduleView(self.root_view), origin_hash)) return true;
-        for (self.modules.imports) |imported| {
-            if (self.moduleViewHasBuiltinIdentity(moduleView(imported), origin_hash)) return true;
-        }
-        for (self.modules.root.relation_modules) |relation| {
-            if (self.moduleViewHasBuiltinIdentity(moduleView(relation), origin_hash)) return true;
-        }
-        return false;
-    }
-
-    fn moduleViewHasBuiltinIdentity(_: *Builder, view: ModuleView, origin_hash: *const [32]u8) bool {
-        return view.module_env.module_role == .builtin and moduleViewIdentityMatches(view, origin_hash);
-    }
-
     fn recordFieldByTextOptional(self: *Builder, ty: Type.TypeId, text: []const u8) ?Type.Field {
         const fields = switch (self.shapeContent(ty)) {
             .record => |span| self.activeTypeStore().fieldSpan(span),
@@ -8963,15 +8929,6 @@ const Builder = struct {
             .module = try self.activeNameStore().internModuleIdentity(view.names.moduleIdentityBytes(origin_module)),
             .expr_node = default.expr_node,
         };
-    }
-
-    fn lowerTypeSlice(self: *Builder, view: ModuleView, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]Type.TypeId {
-        const out = try self.allocator.alloc(Type.TypeId, checked_tys.len);
-        errdefer self.allocator.free(out);
-        for (checked_tys, 0..) |ty, i| {
-            out[i] = try self.lowerType(view, ty);
-        }
-        return out;
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
@@ -20074,7 +20031,6 @@ const BodyContext = struct {
 
     const BindingContinuation = union(enum) {
         expr: DraftExprId,
-        checked_expr: checked.CheckedExprId,
         materialized_args: struct {
             args: []const MaterializedArg,
             index: usize,
@@ -20800,7 +20756,7 @@ const BodyContext = struct {
     /// of the witness type, matching `addConstructorExprAtNode`, whose
     /// non-named arm types a structural expression at its original (possibly
     /// alias-wrapped) node.
-    /// Rebuild `node`'s named layers, nominal and then alias, around
+    /// Wrap `node`'s named layers, nominal and then alias, around
     /// `structural_node`, innermost last.
     fn constructorWitnessWithStructuralNode(
         self: *BodyContext,
@@ -23046,7 +23002,7 @@ const BodyContext = struct {
         source: NominalInstantiationSource,
         args: []NodeId,
     ) Allocator.Error!NodeId {
-        return (try self.runInst(.{ .decl_backing = .{ .source = source, .args = args } })).get(.node);
+        return (try self.runInst(.{ .decl_backing = try self.boxInstTask(InstDeclBackingTask, .{ .source = source, .args = args }) })).get(.node);
     }
 
     // Instantiation //
@@ -23064,8 +23020,10 @@ const BodyContext = struct {
         fields: InstFieldsTask,
         tags: InstTagsTask,
         nominal: InstNominalTask,
-        declared_order: InstDeclaredOrderTask,
-        decl_backing: InstDeclBackingTask,
+        /// Boxed, like `decl_backing`: both are far larger than every other
+        /// task, and pooled frame stacks hold one frame per nesting level.
+        declared_order: *InstDeclaredOrderTask,
+        decl_backing: *InstDeclBackingTask,
     };
 
     const InstResult = union(enum) {
@@ -23076,10 +23034,8 @@ const BodyContext = struct {
         declared_order: []const InstDeclaredField,
 
         fn get(self: InstResult, comptime tag: std.meta.Tag(InstResult)) @FieldType(InstResult, @tagName(tag)) {
-            return switch (self) {
-                tag => |payload| payload,
-                else => Common.invariant("Monotype instantiation frame received the wrong result kind"),
-            };
+            if (std.meta.activeTag(self) != tag) Common.invariant("Monotype instantiation frame received the wrong result kind");
+            return @field(self, @tagName(tag));
         }
     };
 
@@ -23113,23 +23069,44 @@ const BodyContext = struct {
             while (index > 0) {
                 index -= 1;
                 self.releaseInstFrame(&frames.items[index]);
+                self.destroyInstTaskBox(frames.items[index].task);
             }
         }
-        try frames.append(self.allocator, .{ .task = root });
+        frames.append(self.allocator, .{ .task = root }) catch |err| {
+            self.destroyInstTaskBox(root);
+            return err;
+        };
         var input: ?InstResult = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
             switch (try self.stepInst(frame, input)) {
                 .call => |task| {
-                    try frames.append(self.allocator, .{ .task = task });
+                    frames.append(self.allocator, .{ .task = task }) catch |err| {
+                        self.destroyInstTaskBox(task);
+                        return err;
+                    };
                     input = null;
                 },
                 .ret => |result| {
-                    _ = frames.pop();
+                    self.destroyInstTaskBox(frames.pop().?.task);
                     if (frames.items.len == 0) return result;
                     input = result;
                 },
             }
+        }
+    }
+
+    fn boxInstTask(self: *BodyContext, comptime T: type, task: T) Allocator.Error!*T {
+        const boxed = try self.allocator.create(T);
+        boxed.* = task;
+        return boxed;
+    }
+
+    fn destroyInstTaskBox(self: *BodyContext, task: InstTask) void {
+        switch (task) {
+            .declared_order => |boxed| self.allocator.destroy(boxed),
+            .decl_backing => |boxed| self.allocator.destroy(boxed),
+            .node, .slice, .fields, .tags, .nominal => {},
         }
     }
 
@@ -23140,7 +23117,7 @@ const BodyContext = struct {
                 const removed = self.scopedNodeMap(task.scoped_ty).remove(task.scoped_ty);
                 std.debug.assert(removed);
             },
-            .decl_backing => |*task| self.leaveDeclBackingScopes(task),
+            .decl_backing => |task| self.leaveDeclBackingScopes(task),
             .slice, .fields, .tags, .nominal, .declared_order => {},
         }
     }
@@ -23152,8 +23129,8 @@ const BodyContext = struct {
             .fields => |*task| self.stepInstFields(frame, task, input),
             .tags => |*task| self.stepInstTags(frame, task, input),
             .nominal => |*task| self.stepInstNominal(frame, task, input),
-            .declared_order => |*task| self.stepInstDeclaredOrder(frame, task, input),
-            .decl_backing => |*task| self.stepInstDeclBacking(frame, task, input),
+            .declared_order => |task| self.stepInstDeclaredOrder(frame, task, input),
+            .decl_backing => |task| self.stepInstDeclBacking(frame, task, input),
         };
     }
 
@@ -23439,7 +23416,7 @@ const BodyContext = struct {
                         const source = self.nominalInstantiationSource(nominal) orelse
                             Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
                         frame.cursor = InstNominalCursor.backing;
-                        return .{ .call = .{ .decl_backing = .{ .source = source, .args = task.args } } };
+                        return .{ .call = .{ .decl_backing = try self.boxInstTask(InstDeclBackingTask, .{ .source = source, .args = task.args }) } };
                     },
                 }
                 return self.instNominalDeclaredOrder(frame, task);
@@ -23451,7 +23428,7 @@ const BodyContext = struct {
                 };
                 return self.instNominalDeclaredOrder(frame, task);
             },
-            else => return .{ .ret = .{ .node = try self.graph.newNode(try self.graph.namedContent(.{
+            InstNominalCursor.declared_order => return .{ .ret = .{ .node = try self.graph.newNode(try self.graph.namedContent(.{
                 .named_type = task.named_type,
                 .def = task.def,
                 .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
@@ -23460,6 +23437,7 @@ const BodyContext = struct {
                 .backing = task.backing,
                 .declared_order = input.?.get(.declared_order),
             })) } },
+            InstNominalCursor.declared_order + 1...std.math.maxInt(u8) => unreachable,
         }
     }
 
@@ -23469,7 +23447,7 @@ const BodyContext = struct {
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
         task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty };
         frame.cursor = InstNominalCursor.declared_order;
-        return .{ .call = .{ .declared_order = .{ .nominal = nominal } } };
+        return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal }) } };
     }
 
     const InstDeclaredOrderTask = struct {
@@ -25719,7 +25697,8 @@ const BodyContext = struct {
         /// materialized argument bindings), or as a child at `cell`.
         body: union(enum) {
             immediate_result: LoweredLambdaArgs,
-            immediate_body: DraftExprId,
+            /// Materialized argument bindings around the body.
+            materialized: MaterializeRequest,
             child: struct { cell: DraftTypeCell, return_boundary: bool },
         } = undefined,
         restored: bool = false,
@@ -25750,7 +25729,8 @@ const BodyContext = struct {
     /// Lower a lambda body that lowers as a child, directly.
     fn lowerLambdaLoweringBody(self: *BodyContext, lowering: *const LambdaLowering) Allocator.Error!?DraftExprId {
         return switch (lowering.body) {
-            .immediate_result, .immediate_body => null,
+            .immediate_result => null,
+            .materialized => |request| try self.runMaterialize(request),
             .child => |child| try self.lowerExprAtTypeCell(lowering.checked_body, child.cell),
         };
     }
@@ -25916,15 +25896,16 @@ const BodyContext = struct {
         const body_ret_cell = lowering.body_ret_cell;
         self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell };
         if (lowering.materialized_args.items.len != 0) {
-            lowering.body = .{ .immediate_body = try self.lowerBindingContinuation(.{ .materialized_args = .{
-                .args = lowering.materialized_args.items,
-                .index = 0,
-                .lambda = lambda_id,
-                .body = checked_body,
-            } }, body_ret_cell) };
+            lowering.body = .{ .materialized = try self.materializedArgsRequest(
+                lowering.materialized_args.items,
+                0,
+                lambda_id,
+                checked_body,
+                body_ret_cell,
+            ) };
             return lowering;
         }
-        // `lowerLambdaBodyAtCell`: a body whose checked type is not the
+        // A body whose checked type is not the
         // function's checked result is a composed `?` result (design.md "Try
         // Return-Row Composition"), lowered at its own type's cell and
         // returned across the function's return boundary.
@@ -25963,7 +25944,7 @@ const BodyContext = struct {
                 .body = result.body,
                 .ret = result.ret,
             },
-            .immediate_body => |body| body,
+            .materialized => child_body.?,
             .child => |child| if (child.return_boundary)
                 try self.addExprWithTypeCell(body_ret_cell, .{ .return_ = .{ .value = child_body.?, .target = body_ret_cell } })
             else
@@ -26112,7 +26093,11 @@ const BodyContext = struct {
                 const draft = &task.draft.?;
                 task.lambda = try draft.nested_ctx.beginNestedLambdaLowering(expr_id, draft.request_fn_node, draft.capture_entry_guards);
                 switch (task.lambda.?.body) {
-                    .immediate_result, .immediate_body => break :blk null,
+                    .immediate_result => break :blk null,
+                    .materialized => |request| {
+                        task.stage = .body;
+                        return requestLowerTask(draft.nested_ctx, .{ .materialize = .{ .root = request } });
+                    },
                     .child => |child| {
                         task.stage = .body;
                         return requestLowerChild(draft.nested_ctx, task.lambda.?.checked_body, child.cell);
@@ -26140,38 +26125,6 @@ const BodyContext = struct {
                 .captures = task.capture_span,
             } else .{ .fn_id = fn_id } },
         ));
-    }
-
-    /// Lower a lambda body at its function's return cell.
-    ///
-    /// A divergent body uses the function's return cell without requesting
-    /// its checked value type. Otherwise, a body whose checked type is not the
-    /// function's checked result is a composed `?` result
-    /// (design.md "Try Return-Row Composition"):
-    /// the function's error row includes the body's rather than equalling it.
-    /// Such a body is lowered at its own type and crosses the explicit return
-    /// boundary to the return cell exactly as a `?` return does, so the
-    /// composed row is never forced onto the value's producer.
-    fn lowerLambdaBodyAtCell(
-        self: *BodyContext,
-        lambda_id: checked.CheckedExprId,
-        checked_body: checked.CheckedExprId,
-        ret_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
-            return try self.lowerExprAtTypeCell(checked_body, ret_cell);
-        }
-        const body_ty = self.view.bodies.expr(checked_body).ty;
-        const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
-        if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root) {
-            return try self.lowerExprAtTypeCell(checked_body, ret_cell);
-        }
-        // The body's residual error extension is shared with the return row
-        // and settles when the return settles, so the body is lowered at its
-        // own type's cell rather than at a type demanded up front.
-        const body_cell = DraftTypeCell.fromGraphNode(try self.lowerTypeNode(body_ty));
-        const value = try self.lowerExprAtTypeCell(checked_body, body_cell);
-        return try self.addExprWithTypeCell(ret_cell, .{ .return_ = .{ .value = value, .target = ret_cell } });
     }
 
     // Expression evidence //
@@ -26466,9 +26419,9 @@ const BodyContext = struct {
             .instantiate_dispatch => |*task| self.stepInstantiateDispatch(frame, task, input),
             .field_access => |task| self.stepFieldAccess(frame, task.checked_ty, task.access, task.expected_ty, input),
             .tuple_access => |task| self.stepTupleAccess(frame, task.checked_ty, task.tuple, task.elem_index, task.expected_ty, input),
-            .completed_result => |task| self.stepCompletedResult(frame, task, input),
-            .prepare_direct_args => |*task| self.stepPrepareArgs(frame, task, input, true),
-            .prepare_span => |*task| self.stepPrepareArgs(frame, task, input, false),
+            .completed_result => |task| self.stepCompletedResult(frame, task),
+            .prepare_direct_args => |*task| self.stepPrepareArgs(frame, task, true),
+            .prepare_span => |*task| self.stepPrepareArgs(frame, task, false),
             .relate => |*task| self.stepRelate(frame, task, input),
         };
     }
@@ -26701,13 +26654,13 @@ const BodyContext = struct {
                     },
                     .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
                 }
-                return try self.nextProducedValueChild(frame, task, expr);
+                return try self.nextProducedValueChild(task, expr);
             },
             // A record update's base evidence.
             3 => {
                 task.base_node = input.?.maybeNodeValue();
                 frame.cursor = 2;
-                return try self.nextProducedValueChild(frame, task, expr);
+                return try self.nextProducedValueChild(task, expr);
             },
             else => {
                 // A child's produced evidence.
@@ -26778,15 +26731,14 @@ const BodyContext = struct {
                     .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
                 }
                 task.index += 1;
-                return try self.nextProducedValueChild(frame, task, expr);
+                return try self.nextProducedValueChild(task, expr);
             },
         }
     }
 
     /// Request the next constructor child's produced evidence, or finish the
     /// constructor's witness once every child has contributed.
-    fn nextProducedValueChild(self: *BodyContext, frame: *EvidenceFrame, task: *ProducedValueTask, expr: checked.CheckedExpr) Allocator.Error!EvidenceStep {
-        _ = frame;
+    fn nextProducedValueChild(self: *BodyContext, task: *ProducedValueTask, expr: checked.CheckedExpr) Allocator.Error!EvidenceStep {
         const request_node = task.request_node;
         switch (expr.data) {
             .tuple => |items| {
@@ -27354,8 +27306,7 @@ const BodyContext = struct {
 
     /// The result cell of a direct call is the selected specialization's
     /// result (see `directCallCompletedResultNode`).
-    fn stepCompletedResult(self: *BodyContext, frame: *EvidenceFrame, task: CompletedResultTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
-        _ = input;
+    fn stepCompletedResult(self: *BodyContext, frame: *EvidenceFrame, task: CompletedResultTask) Allocator.Error!EvidenceStep {
         const checked_expr = task.expr;
         const target = task.target;
         const call = task.call;
@@ -27399,8 +27350,7 @@ const BodyContext = struct {
 
     /// Relate each checked argument to its request node, then prepare nested
     /// callables. A direct call prepares its shared request's arguments once.
-    fn stepPrepareArgs(self: *BodyContext, frame: *EvidenceFrame, task: *PrepareArgsTask, input: ?EvidenceResult, direct_call: bool) Allocator.Error!EvidenceStep {
-        _ = input;
+    fn stepPrepareArgs(self: *BodyContext, frame: *EvidenceFrame, task: *PrepareArgsTask, direct_call: bool) Allocator.Error!EvidenceStep {
         if (frame.cursor == 0) {
             if (direct_call) {
                 if (self.direct_call_requests.get(task.expr)) |request| {
@@ -27453,7 +27403,7 @@ const BodyContext = struct {
                     const key = RelatedConstructor{ .expr = checked_expr, .node = self.graph.rootNode(expected_node) };
                     if ((try self.related_constructors.getOrPut(self.allocator, key)).found_existing) return self.finishRelate(task);
                 },
-                else => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .call, .empty_record, .block, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
             frame.cursor = 1;
             switch (expr.data) {
@@ -27519,7 +27469,7 @@ const BodyContext = struct {
                 try self.graph.unify(expected_node, input.?.nodeValue());
                 return self.finishRelate(task);
             },
-            .call => |call| return try self.resumeRelateCall(frame, task, expr.ty, call, input),
+            .call => |call| return try self.resumeRelateCall(frame, task, call, input),
             .tag, .tuple, .list, .record => {
                 task.index += 1;
                 return try self.nextRelateChild(task, expr);
@@ -27529,8 +27479,7 @@ const BodyContext = struct {
         }
     }
 
-    fn finishRelate(self: *BodyContext, task: *RelateTask) EvidenceStep {
-        _ = self;
+    fn finishRelate(_: *BodyContext, task: *RelateTask) EvidenceStep {
         task.timing.end();
         return .{ .ret = .none };
     }
@@ -27572,7 +27521,7 @@ const BodyContext = struct {
         return self.finishRelate(task);
     }
 
-    /// `relateCallExprAtNode`: a shareable direct call relates its shared
+    /// A shareable direct call relates its shared
     /// request; any other call instantiates its callee on a call context.
     fn beginRelateCall(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall) Allocator.Error!EvidenceStep {
         if (call.direct_target) |target| {
@@ -27619,8 +27568,7 @@ const BodyContext = struct {
 
     /// Continue relating a call: after its request node, relate each
     /// argument to its request slot, then an indirect call's callee.
-    fn resumeRelateCall(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
-        _ = checked_ret_ty;
+    fn resumeRelateCall(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, call: CheckedCall, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
         switch (frame.cursor) {
             // The call's request node.
             2, 3 => {
@@ -27719,11 +27667,11 @@ const BodyContext = struct {
     /// Lower a producer-marked divergent expression before any value
     /// representation or type relation is requested for it. The continuation's
     /// context is the result cell for a value that can never materialize.
-    fn lowerDivergentExprInContext(
+    fn divergentExprInContextStep(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
         context: DivergentExprContext,
-    ) Allocator.Error!?DraftExprId {
+    ) Allocator.Error!?LowerStep {
         if (!self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
 
         return switch (context) {
@@ -27734,15 +27682,12 @@ const BodyContext = struct {
                 // an unobservable continuation cell; asking for expression
                 // value evidence here would instantiate a rejected dispatch.
                 if (self.view.types.payload(expr.ty) == .err) {
-                    break :blk try self.lowerDivergentExprAtType(expr_id, try self.unitType());
+                    break :blk divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 }
-                break :blk try self.lowerDivergentExprAtTypeCell(
-                    expr_id,
-                    DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)),
-                );
+                break :blk divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
             },
-            .mono_type => |ty| try self.lowerDivergentExprAtType(expr_id, ty),
-            .type_cell => |cell| try self.lowerDivergentExprAtTypeCell(expr_id, cell),
+            .mono_type => |ty| divergentStep(self, expr_id, .{ .at_type = ty }),
+            .type_cell => |cell| divergentStep(self, expr_id, .{ .at_cell = cell }),
         };
     }
     // Expression lowering //
@@ -27764,46 +27709,62 @@ const BodyContext = struct {
         maybe_call: ?LoweredCall,
         span: DraftSpan(DraftExprId),
         closed_operands: ClosedDispatchOperands,
+        statement: LoweredStatement,
+        data: BodyExprData,
 
         fn exprValue(self: LowerResult) DraftExprId {
             return switch (self) {
                 .expr => |expr| expr,
-                .maybe_expr, .call, .maybe_call, .span, .closed_operands => unreachable,
+                .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .data => unreachable,
             };
         }
 
         fn maybeExprValue(self: LowerResult) ?DraftExprId {
             return switch (self) {
                 .maybe_expr => |expr| expr,
-                .expr, .call, .maybe_call, .span, .closed_operands => unreachable,
+                .expr, .call, .maybe_call, .span, .closed_operands, .statement, .data => unreachable,
             };
         }
 
         fn callValue(self: LowerResult) LoweredCall {
             return switch (self) {
                 .call => |call| call,
-                .expr, .maybe_expr, .maybe_call, .span, .closed_operands => unreachable,
+                .expr, .maybe_expr, .maybe_call, .span, .closed_operands, .statement, .data => unreachable,
             };
         }
 
         fn maybeCallValue(self: LowerResult) ?LoweredCall {
             return switch (self) {
                 .maybe_call => |call| call,
-                .expr, .maybe_expr, .call, .span, .closed_operands => unreachable,
+                .expr, .maybe_expr, .call, .span, .closed_operands, .statement, .data => unreachable,
             };
         }
 
         fn spanValue(self: LowerResult) DraftSpan(DraftExprId) {
             return switch (self) {
                 .span => |span| span,
-                .expr, .maybe_expr, .call, .maybe_call, .closed_operands => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .closed_operands, .statement, .data => unreachable,
             };
         }
 
         fn closedOperandsValue(self: LowerResult) ClosedDispatchOperands {
             return switch (self) {
                 .closed_operands => |operands| operands,
-                .expr, .maybe_expr, .call, .maybe_call, .span => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .statement, .data => unreachable,
+            };
+        }
+
+        fn statementValue(self: LowerResult) LoweredStatement {
+            return switch (self) {
+                .statement => |statement| statement,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .data => unreachable,
+            };
+        }
+
+        fn dataValue(self: LowerResult) BodyExprData {
+            return switch (self) {
+                .data => |data| data,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement => unreachable,
             };
         }
     };
@@ -27837,7 +27798,7 @@ const BodyContext = struct {
         expr: struct { expr: checked.CheckedExprId },
         /// `lowerExprInner`
         expr_inner: struct { expr: checked.CheckedExprId, saved: ?SavedSourceLocation = null },
-        /// `lowerExprWithType`
+        /// An expression lowered at a sealed type.
         with_type: WithTypeTask,
         /// `lowerDispatchExprAtType`
         dispatch: DispatchLowerTask,
@@ -27881,14 +27842,35 @@ const BodyContext = struct {
         /// `lowerCallExpr`
         call_expr: struct { expr: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall },
         constructor: ConstructorTask,
-        /// `lowerBlockAtTypeCell`
+        /// A block.
         block: BlockTask,
-        /// `lowerIfExprAtTypeCell`
+        /// An `if`.
         if_task: IfTask,
-        /// `lowerMatchExprAtTypeCell`
+        /// A `match`.
         match_task: MatchTask,
         /// `lowerLambdaExprAtNode` and `lowerClosureAtNode`
         nested_fn: NestedFnTask,
+        /// A control-flow branch body lowered for its output.
+        branch_body: BranchBodyTask,
+        /// A branch value composed into the enclosing branch state.
+        value_then_state: ValueThenStateTask,
+        /// An expression lowered as a statement whose value is discarded.
+        discarded: DiscardedTask,
+        /// A block statement.
+        statement: StatementTask,
+        /// A `return`'s value.
+        return_value: ReturnTask,
+        /// A value lowered for diagnostic rendering.
+        inspected: InspectedTask,
+        /// A divergent expression lowered for its effect.
+        divergent: DivergentTask,
+        /// A loop statement.
+        loop: LoopTask,
+        /// An iterator method call. Boxed: its method lookup is far larger
+        /// than every other task.
+        iterator_dispatch: *IteratorDispatchTask,
+        /// A pattern binding before its continuation.
+        materialize: MaterializeTask,
     };
 
     /// A block whose statements and final expression lower as child tasks,
@@ -27896,12 +27878,17 @@ const BodyContext = struct {
     const BlockTask = struct {
         statements: []const checked.CheckedStatementId,
         final_expr: checked.CheckedExprId,
+        /// The cell the block's own expression is built at.
         result_cell: DraftTypeCell,
-        /// Lowering at a sealed type (`lowerBlock`) rather than at a cell:
+        /// What the block produces after its statements.
+        tail: BlockTail = .value,
+        /// Lowering at a sealed type rather than at a cell:
         /// the block's final expression and value use the type directly.
         typed: ?Type.TypeId = null,
+        /// Produce a typed block's expression data rather than its expression.
+        as_data: bool = false,
         result_node: NodeId = undefined,
-        stage: enum { start, statements, pattern_value, expr_statement, final_expr, finished } = .start,
+        stage: enum { start, statements, statement, uninhabited_statement, expanded, final_expr, discarded_final, finished } = .start,
         saved_guard_frames: RuntimeDemandGuardFrameStack = undefined,
         lowered: LoweredStatements = .{ .items = &.{}, .len = 0, .termination = .none },
         index: usize = 0,
@@ -27910,16 +27897,59 @@ const BodyContext = struct {
         statement_start: usize = 0,
         statement_diverges: bool = false,
         statement_saved: ?SavedSourceLocation = null,
-        requested_cell: DraftTypeCell = undefined,
+        /// A pattern statement expanded into several block statements.
+        expanded: ExpandedPatternStatement = undefined,
+        /// The binders an expanded stateful pattern statement reassigns. Owned.
+        expanded_merge_binders: []MergeBinder = &.{},
+        /// The cell of the zero-branch match consuming a proven-uninhabited
+        /// final value's scrutinee.
+        final_wrap: ?DraftTypeCell = null,
+    };
+
+    /// What a block produces after its statements.
+    const BlockTail = union(enum) {
+        /// Its final expression's value.
+        value,
+        /// Its final expression as a discarded statement, then the loop's
+        /// continue edge: carrying the iterator's rest when there is one.
+        loop_continue: struct { rest_expr: ?DraftExprId, carries: []const LoopCarry },
+        /// Its final expression as a discarded statement, then the state of
+        /// the binders it reassigns.
+        state_only: @FieldType(BranchOutput, "state_only"),
+        /// Its final expression's value paired with the state of the
+        /// binders it reassigns.
+        state_result: struct { state: @FieldType(BranchOutput, "state_result"), result_node: NodeId },
+    };
+
+    /// A pattern statement that binds several block statements rather than
+    /// one: a statement-position `if`/`match`/`for` that also reassigns
+    /// surrounding binders, or a record destructure with an explicit rest or
+    /// an optional field.
+    const ExpandedPatternStatement = union(enum) {
+        stateful: struct {
+            pattern: checked.CheckedPatternId,
+            value_cell: DraftTypeCell,
+            state_cell: DraftTypeCell,
+        },
+        record: struct {
+            pattern: checked.CheckedPatternId,
+            destructs: []const checked.CheckedRecordDestruct,
+            value_node: NodeId,
+            value_cell: DraftTypeCell,
+        },
     };
 
     /// An `if` whose conditions and branch bodies lower as child tasks, so
-    /// nested conditionals never nest native lowering calls. An `if` that
-    /// merges reassigned state lowers through `lowerIfExprAtTypeCell`.
+    /// nested conditionals never nest native lowering calls.
     const IfTask = struct {
         expr_id: checked.CheckedExprId,
         if_: @FieldType(checked.CheckedExprData, "if_"),
         result_cell: DraftTypeCell,
+        /// What each branch produces; null lowers the `if` as a value,
+        /// merging any state it reassigns. A value output selects one
+        /// runtime representation from every branch unless `select` is false.
+        output: ?BranchOutput = null,
+        select: bool = true,
         stage: enum { start, cond, body, else_body } = .start,
         comptime_site: ?DraftComptimeSiteId = null,
         selection: ControlFlowResultSelection = undefined,
@@ -27927,6 +27957,10 @@ const BodyContext = struct {
         index: usize = 0,
         /// The context the branch body in progress lowers in.
         branch_ctx: ?*BodyContext = null,
+        /// The reassigned binders a value `if` merges. Owned.
+        merge_binders: []MergeBinder = &.{},
+        /// The state tuple cell unwrapped into the value once the `if` is built.
+        unwrap_state: ?DraftTypeCell = null,
     };
 
     fn releaseIfTask(self: *BodyContext, task: *IfTask) void {
@@ -27937,6 +27971,8 @@ const BodyContext = struct {
         }
         self.allocator.free(task.branches);
         task.branches = &.{};
+        self.allocator.free(task.merge_binders);
+        task.merge_binders = &.{};
     }
 
     fn createBranchContext(self: *BodyContext) Allocator.Error!*BodyContext {
@@ -27953,53 +27989,78 @@ const BodyContext = struct {
         slot.* = null;
     }
 
-    /// `lowerBranchValueAtTypeCell` as a step: lower a branch body in
-    /// `branch_ctx`, as a child task when it produces a value.
-    fn branchValueStep(branch_ctx: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell) Allocator.Error!union(enum) { now: DraftExprId, child: LowerStep } {
-        if (branch_ctx.checkedExprDivergesInLoweredRuntime(body)) {
-            return .{ .now = try branch_ctx.lowerDivergentExprAtTypeCell(body, result_cell) };
-        }
-        const result_node = try result_cell.toGraphNode(branch_ctx.graph);
-        if (try branch_ctx.nodeIsProvenUninhabited(result_node)) {
-            return .{ .now = try branch_ctx.lowerExplicitUninhabitedInvocationAtTypeCell(body, result_cell) };
-        }
-        return .{ .child = requestLowerTask(branch_ctx, .{ .at_type_cell = .{
-            .expr = body,
-            .cell = result_cell,
-            .demand = .runtime_value,
-            .diverges = false,
-        } }) };
+    /// Lower a branch body in `branch_ctx` for its output, as a child task.
+    fn branchBodyStep(branch_ctx: *BodyContext, body: checked.CheckedExprId, output: BranchOutput) LowerStep {
+        return requestLowerTask(branch_ctx, .{ .branch_body = .{ .body = body, .output = output } });
+    }
+
+    /// The output a control-flow branch lowers for: the shared selected
+    /// representation of a selecting value output, else the output itself.
+    fn controlFlowBranchOutput(output: BranchOutput, select: bool, selection: ControlFlowResultSelection) BranchOutput {
+        return if (select) .{ .value = selection.selected } else output;
+    }
+
+    /// Decide how a control-flow expression lowered as a value produces it:
+    /// directly with a selected representation, or, when it reassigns
+    /// surrounding binders, as a state tuple unwrapped into the value.
+    fn beginControlFlowValueOutput(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        result_cell: DraftTypeCell,
+        merge_binders: *[]MergeBinder,
+        select: *bool,
+        unwrap_state: *?DraftTypeCell,
+    ) Allocator.Error!BranchOutput {
+        merge_binders.* = try self.stateMergeBinders(expr_id);
+        if (merge_binders.len == 0) return .{ .value = result_cell };
+        const state_cell = try self.stateResultTypeCell(merge_binders.*, result_cell);
+        select.* = false;
+        unwrap_state.* = state_cell;
+        return .{ .state_result = .{
+            .result_cell = result_cell,
+            .state_cell = state_cell,
+            .merge_binders = merge_binders.*,
+        } };
     }
 
     fn stepIf(self: *BodyContext, task: *IfTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const if_ = task.if_;
         switch (task.stage) {
             .start => {
-                if (try self.exprHasStateMergeBinders(task.expr_id)) {
-                    return loweredExprStep(try self.lowerIfExprAtTypeCell(task.expr_id, if_, task.result_cell));
-                }
                 task.comptime_site = try self.ifComptimeSite(task.expr_id, if_);
-                task.selection = .{
-                    .declared = task.result_cell,
-                    .selected = task.result_cell,
-                };
-                // Conditions do not bind names visible in branch bodies, so all result
-                // producers can contribute their representation evidence up front.
-                // Branch emission below then consumes one settled request.
-                for (if_.branches) |branch| {
-                    try self.prepareControlFlowResultSelection(&task.selection, branch.body);
+                if (task.output == null) {
+                    task.output = try self.beginControlFlowValueOutput(
+                        task.expr_id,
+                        task.result_cell,
+                        &task.merge_binders,
+                        &task.select,
+                        &task.unwrap_state,
+                    );
                 }
-                try self.prepareControlFlowResultSelection(&task.selection, if_.final_else);
+                if (task.select) {
+                    task.selection = .{
+                        .declared = task.result_cell,
+                        .selected = task.result_cell,
+                    };
+                    // Conditions do not bind names visible in branch bodies, so all result
+                    // producers can contribute their representation evidence up front.
+                    // Branch emission below then consumes one settled request.
+                    for (if_.branches) |branch| {
+                        try self.prepareControlFlowResultSelection(&task.selection, branch.body);
+                    }
+                    try self.prepareControlFlowResultSelection(&task.selection, if_.final_else);
+                }
                 task.branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
             },
             .cond => {
                 task.branches[task.index].cond = input.?.exprValue();
                 task.branch_ctx = try self.createBranchContext();
                 task.stage = .body;
-                switch (try branchValueStep(task.branch_ctx.?, if_.branches[task.index].body, task.selection.selected)) {
-                    .child => |step| return step,
-                    .now => |body| try self.finishIfBranch(task, body),
-                }
+                return branchBodyStep(
+                    task.branch_ctx.?,
+                    if_.branches[task.index].body,
+                    controlFlowBranchOutput(task.output.?, task.select, task.selection),
+                );
             },
             .body => try self.finishIfBranch(task, input.?.exprValue()),
             .else_body => return self.finishIf(task, input.?.exprValue()),
@@ -28011,49 +28072,74 @@ const BodyContext = struct {
         }
         task.branch_ctx = try self.createBranchContext();
         task.stage = .else_body;
-        switch (try branchValueStep(task.branch_ctx.?, if_.final_else, task.selection.selected)) {
-            .child => |step| return step,
-            .now => |final_else| return self.finishIf(task, final_else),
-        }
+        return branchBodyStep(
+            task.branch_ctx.?,
+            if_.final_else,
+            controlFlowBranchOutput(task.output.?, task.select, task.selection),
+        );
     }
 
     fn finishIfBranch(self: *BodyContext, task: *IfTask, body: DraftExprId) Allocator.Error!void {
         const branch_ctx = task.branch_ctx.?;
         task.branches[task.index].body = try branch_ctx.wrapComptimeBranch(task.comptime_site, task.index, body);
-        try self.includeControlFlowResult(&task.selection, task.branches[task.index].body);
+        if (task.select) try self.includeControlFlowResult(&task.selection, task.branches[task.index].body);
         self.destroyBranchContext(&task.branch_ctx);
         task.index += 1;
     }
 
     fn finishIf(self: *BodyContext, task: *IfTask, else_body: DraftExprId) Allocator.Error!LowerStep {
         const final_else = try task.branch_ctx.?.wrapComptimeBranch(task.comptime_site, task.if_.branches.len, else_body);
-        try self.includeControlFlowResult(&task.selection, final_else);
-        for (task.branches) |branch| {
-            if (self.exprImpossibilityProof(branch.body) == null) {
-                self.draft.exprs.items[@intFromEnum(branch.body)].ty = task.selection.selected;
+        if (task.select) {
+            try self.includeControlFlowResult(&task.selection, final_else);
+            for (task.branches) |branch| {
+                if (self.exprImpossibilityProof(branch.body) == null) {
+                    self.draft.exprs.items[@intFromEnum(branch.body)].ty = task.selection.selected;
+                }
             }
-        }
-        if (self.exprImpossibilityProof(final_else) == null) {
-            self.draft.exprs.items[@intFromEnum(final_else)].ty = task.selection.selected;
+            if (self.exprImpossibilityProof(final_else) == null) {
+                self.draft.exprs.items[@intFromEnum(final_else)].ty = task.selection.selected;
+            }
         }
         const data: BodyExprData = .{ .if_ = .{
             .branches = try self.addIfBranchSpan(task.branches),
             .final_else = final_else,
         } };
         self.destroyBranchContext(&task.branch_ctx);
-        return loweredExprStep(try self.addExprWithTypeCell(
-            try self.finishControlFlowResultSelection(task.selection),
-            data,
-        ));
+        if (task.select) {
+            return loweredExprStep(try self.addExprWithTypeCell(
+                try self.finishControlFlowResultSelection(task.selection),
+                data,
+            ));
+        }
+        return self.finishControlFlowOutput(task.output.?, task.unwrap_state, task.result_cell, task.merge_binders, data);
+    }
+
+    /// Build a non-selecting control-flow expression at its output's cell,
+    /// unwrapping a value `if`/`match`'s state tuple into its value.
+    fn finishControlFlowOutput(
+        self: *BodyContext,
+        output: BranchOutput,
+        unwrap_state: ?DraftTypeCell,
+        result_cell: DraftTypeCell,
+        merge_binders: []const MergeBinder,
+        data: BodyExprData,
+    ) Allocator.Error!LowerStep {
+        const expr = try self.addExprWithTypeCell(self.branchOutputCell(output), data);
+        const state_cell = unwrap_state orelse return loweredExprStep(expr);
+        return loweredExprStep(try self.unwrapStateResultAtTypeCells(expr, state_cell, result_cell, merge_binders));
     }
 
     /// A `match` whose guards, branch bodies, and scrutinee lower as child
-    /// tasks, so nested matches never nest native lowering calls. A `match`
-    /// that merges reassigned state lowers through `lowerMatchExprAtTypeCell`.
+    /// tasks, so nested matches never nest native lowering calls.
     const MatchTask = struct {
         expr_id: checked.CheckedExprId,
         match: @FieldType(checked.CheckedExprData, "match_"),
         result_cell: DraftTypeCell,
+        /// What each branch produces; null lowers the `match` as a value,
+        /// merging any state it reassigns. A value output selects one
+        /// runtime representation from every branch unless `select` is false.
+        output: ?BranchOutput = null,
+        select: bool = true,
         stage: enum { start, guard, body, scrutinee } = .start,
         comptime_site: ?DraftComptimeSiteId = null,
         selection: ControlFlowResultSelection = undefined,
@@ -28061,6 +28147,10 @@ const BodyContext = struct {
         branches: []DraftBranch = &.{},
         pending: std.ArrayListUnmanaged(MatchPendingBranch) = .empty,
         index: usize = 0,
+        /// The reassigned binders a value `match` merges. Owned.
+        merge_binders: []MergeBinder = &.{},
+        /// The state tuple cell unwrapped into the value once the `match` is built.
+        unwrap_state: ?DraftTypeCell = null,
     };
 
     const MatchPendingBranch = struct {
@@ -28082,26 +28172,36 @@ const BodyContext = struct {
         task.pending = .empty;
         self.allocator.free(task.branches);
         task.branches = &.{};
+        self.allocator.free(task.merge_binders);
+        task.merge_binders = &.{};
     }
 
     fn stepMatch(self: *BodyContext, task: *MatchTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const match = task.match;
         switch (task.stage) {
             .start => {
-                if (try self.exprHasStateMergeBinders(task.expr_id)) {
-                    return loweredExprStep(try self.lowerMatchExprAtTypeCell(task.expr_id, match, task.result_cell));
-                }
                 task.comptime_site = try self.matchComptimeSite(task.expr_id, match);
-                task.selection = .{
-                    .declared = task.result_cell,
-                    .selected = task.result_cell,
-                };
+                if (task.output == null) {
+                    task.output = try self.beginControlFlowValueOutput(
+                        task.expr_id,
+                        task.result_cell,
+                        &task.merge_binders,
+                        &task.select,
+                        &task.unwrap_state,
+                    );
+                }
+                if (task.select) {
+                    task.selection = .{
+                        .declared = task.result_cell,
+                        .selected = task.result_cell,
+                    };
+                }
                 try self.beginMatchBranches(task);
             },
             .guard => {
                 task.pending.items[task.index].user_guard = input.?.exprValue();
                 task.stage = .body;
-                if (try self.matchBranchBodyStep(task)) |step| return step;
+                return self.matchBranchBodyStep(task);
             },
             .body => try self.finishMatchBranchBody(task, input.?.exprValue()),
             .scrutinee => return self.finishMatch(task, input.?.exprValue()),
@@ -28109,7 +28209,7 @@ const BodyContext = struct {
 
         // All checked pattern evidence must reach the shared scrutinee before
         // any branch body can request another specialization.
-        while (task.index < task.pending.items.len) {
+        if (task.index < task.pending.items.len) {
             const entry = &task.pending.items[task.index];
             entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame(
                 entry.pattern.pattern,
@@ -28121,19 +28221,21 @@ const BodyContext = struct {
             }
             entry.user_guard = null;
             task.stage = .body;
-            if (try self.matchBranchBodyStep(task)) |step| return step;
+            return self.matchBranchBodyStep(task);
         }
-        for (task.pending.items) |entry| {
-            if (self.exprImpossibilityProof(entry.body) == null) {
-                self.draft.exprs.items[@intFromEnum(entry.body)].ty = task.selection.selected;
+        if (task.select) {
+            for (task.pending.items) |entry| {
+                if (self.exprImpossibilityProof(entry.body) == null) {
+                    self.draft.exprs.items[@intFromEnum(entry.body)].ty = task.selection.selected;
+                }
             }
         }
 
         const scrutinee_cell = DraftTypeCell.fromGraphNode(task.scrutinee_node);
-        if (try self.nodeIsProvenUninhabited(task.scrutinee_node)) {
-            return self.finishMatch(task, try self.lowerUninhabitedScrutineeAtTypeCell(match.cond, scrutinee_cell));
-        }
         task.stage = .scrutinee;
+        if (try self.nodeIsProvenUninhabited(task.scrutinee_node)) {
+            return uninhabitedScrutineeStep(self, match.cond, scrutinee_cell);
+        }
         return requestLowerChild(self, match.cond, scrutinee_cell);
     }
 
@@ -28182,27 +28284,26 @@ const BodyContext = struct {
         // before any branch body is emitted. Match patterns supplied their
         // exact binder cells above, so branch-local lookups participate in this
         // relation-production pass as ordinary producer evidence.
-        for (task.pending.items) |*entry| {
-            try entry.ctx.prepareControlFlowResultSelection(&task.selection, entry.checked_body);
+        if (task.select) {
+            for (task.pending.items) |*entry| {
+                try entry.ctx.prepareControlFlowResultSelection(&task.selection, entry.checked_body);
+            }
         }
     }
 
-    /// Lower the current branch's body, as a child task when it produces a
-    /// value; null when the body was lowered at once.
-    fn matchBranchBodyStep(self: *BodyContext, task: *MatchTask) Allocator.Error!?LowerStep {
+    /// Lower the current branch's body as a child task.
+    fn matchBranchBodyStep(_: *BodyContext, task: *MatchTask) LowerStep {
         const entry = &task.pending.items[task.index];
-        switch (try branchValueStep(entry.ctx, entry.checked_body, task.selection.selected)) {
-            .child => |step| return step,
-            .now => |body| {
-                try self.finishMatchBranchBody(task, body);
-                return null;
-            },
-        }
+        return branchBodyStep(
+            entry.ctx,
+            entry.checked_body,
+            controlFlowBranchOutput(task.output.?, task.select, task.selection),
+        );
     }
 
     fn finishMatchBranchBody(self: *BodyContext, task: *MatchTask, body: DraftExprId) Allocator.Error!void {
         task.pending.items[task.index].body = body;
-        try self.includeControlFlowResult(&task.selection, body);
+        if (task.select) try self.includeControlFlowResult(&task.selection, body);
         task.index += 1;
     }
 
@@ -28253,11 +28354,1397 @@ const BodyContext = struct {
             .branches = try self.addBranchSpan(task.branches[0..index]),
             .comptime_site = task.comptime_site,
         } };
+        if (task.select) {
+            const cell = try self.finishControlFlowResultSelection(task.selection);
+            self.releaseMatchTask(task);
+            return loweredExprStep(try self.addExprWithTypeCell(cell, data));
+        }
+        const step = try self.finishControlFlowOutput(task.output.?, task.unwrap_state, task.result_cell, task.merge_binders, data);
         self.releaseMatchTask(task);
-        return loweredExprStep(try self.addExprWithTypeCell(
-            try self.finishControlFlowResultSelection(task.selection),
-            data,
-        ));
+        return step;
+    }
+
+    fn uninhabitedScrutineeStep(ctx: *BodyContext, expr: checked.CheckedExprId, cell: DraftTypeCell) LowerStep {
+        return requestLowerTask(ctx, .{ .at_type_cell = .{
+            .expr = expr,
+            .cell = cell,
+            .demand = .uninhabited_result,
+            .diverges = ctx.checkedExprDivergesInLoweredRuntime(expr),
+        } });
+    }
+
+    /// A control-flow branch body lowered for its output.
+    const BranchBodyTask = struct {
+        body: checked.CheckedExprId,
+        output: BranchOutput,
+        /// The cell of the zero-branch match consuming a proven-uninhabited
+        /// result's scrutinee.
+        zero_branch_cell: ?DraftTypeCell = null,
+    };
+
+    fn stepBranchBody(self: *BodyContext, frame: *LowerFrame, task: *BranchBodyTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor != 0) {
+            const lowered = input.?.exprValue();
+            const cell = task.zero_branch_cell orelse return loweredExprStep(lowered);
+            return loweredExprStep(try self.zeroBranchMatchAtTypeCell(lowered, cell));
+        }
+        frame.cursor = 1;
+        const body = task.body;
+        const diverges = self.checkedExprDivergesInLoweredRuntime(body);
+        switch (task.output) {
+            .value => |result_cell| {
+                if (diverges) return divergentStep(self, body, .{ .at_cell = result_cell });
+                const result_node = try result_cell.toGraphNode(self.graph);
+                if (try self.nodeIsProvenUninhabited(result_node)) {
+                    task.zero_branch_cell = result_cell;
+                    return uninhabitedScrutineeStep(self, body, result_cell);
+                }
+                return requestLowerTask(self, .{ .at_type_cell = .{
+                    .expr = body,
+                    .cell = result_cell,
+                    .demand = .runtime_value,
+                    .diverges = false,
+                } });
+            },
+            .state_result => |state| {
+                if (diverges) return divergentStep(self, body, .{ .at_cell = state.state_cell });
+                const result_node = try state.result_cell.toGraphNode(self.graph);
+                switch (self.view.bodies.expr(body).data) {
+                    .block => |block| return requestLowerTask(self, .{ .block = .{
+                        .statements = block.statements,
+                        .final_expr = block.final_expr,
+                        .result_cell = state.state_cell,
+                        .tail = .{ .state_result = .{ .state = state, .result_node = result_node } },
+                    } }),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                }
+                if (try self.nodeIsProvenUninhabited(result_node)) {
+                    task.zero_branch_cell = state.state_cell;
+                    return uninhabitedScrutineeStep(self, body, state.result_cell);
+                }
+                return requestLowerTask(self, .{ .value_then_state = .{
+                    .body = body,
+                    .result_cell = state.result_cell,
+                    .state_cell = state.state_cell,
+                    .merge_binders = state.merge_binders,
+                } });
+            },
+            .state_only => |state| {
+                if (diverges) return divergentStep(self, body, .{ .at_cell = state.state_cell });
+                return requestLowerTask(self, .{ .block = self.discardingBlockTask(body, state.state_cell, .{ .state_only = state }) });
+            },
+        }
+    }
+
+    /// A body lowered as statements whose final expression is discarded: a
+    /// block's statements and final expression, or any other expression as
+    /// the final expression of an empty statement list.
+    fn discardingBlockTask(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, tail: BlockTail) BlockTask {
+        return switch (self.view.bodies.expr(body).data) {
+            .block => |block| .{
+                .statements = block.statements,
+                .final_expr = block.final_expr,
+                .result_cell = result_cell,
+                .tail = tail,
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => .{
+                .statements = &.{},
+                .final_expr = body,
+                .result_cell = result_cell,
+                .tail = tail,
+            },
+        };
+    }
+
+    /// One branch result with its state composed directly into the enclosing
+    /// branch state. A nested
+    /// `if`/`match` owns a smaller lexical state tuple containing only the
+    /// binders that expression reassigns. Its result must be destructured and
+    /// repacked while those binder locals are still in scope; unwrapping it
+    /// as an ordinary value would let the outer tuple refer to a local
+    /// outside the `let` that defines it.
+    const ValueThenStateTask = struct {
+        body: checked.CheckedExprId,
+        result_cell: DraftTypeCell,
+        state_cell: DraftTypeCell,
+        merge_binders: []const MergeBinder,
+        stage: enum { start, loop, value, nested_state } = .start,
+        /// The binders a nested `if`/`match` reassigns. Owned.
+        nested_merge_binders: []MergeBinder = &.{},
+        nested_state_cell: DraftTypeCell = undefined,
+    };
+
+    fn releaseValueThenStateTask(self: *BodyContext, task: *ValueThenStateTask) void {
+        self.allocator.free(task.nested_merge_binders);
+        task.nested_merge_binders = &.{};
+    }
+
+    fn stepValueThenState(self: *BodyContext, task: *ValueThenStateTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        switch (task.stage) {
+            .start => {},
+            .loop => {
+                const stmt = input.?.statementValue().stmt.?;
+                const unit = try self.addExprWithTypeCell(task.result_cell, .unit);
+                return loweredExprStep(try self.addExprWithTypeCell(task.state_cell, .{ .block = .{
+                    .statements = try self.addStmtSpan(&.{stmt}),
+                    .final_expr = try self.stateResultTupleExprAtTypeCells(task.state_cell, task.merge_binders, unit),
+                } }));
+            },
+            .value => return loweredExprStep(try self.stateResultAfterValueAtTypeCells(
+                task.state_cell,
+                task.result_cell,
+                task.merge_binders,
+                input.?.exprValue(),
+            )),
+            .nested_state => return loweredExprStep(try self.composeNestedStateResultAtTypeCells(
+                input.?.exprValue(),
+                task.nested_state_cell,
+                task.result_cell,
+                task.nested_merge_binders,
+                task.state_cell,
+                task.merge_binders,
+            )),
+        }
+        const body = task.body;
+        switch (self.view.bodies.expr(body).data) {
+            .for_ => |for_| {
+                task.stage = .loop;
+                return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(for_) } } });
+            },
+            .if_, .match_ => {
+                task.nested_merge_binders = try self.stateMergeBinders(body);
+                const output: BranchOutput = if (task.nested_merge_binders.len == 0) blk: {
+                    task.stage = .value;
+                    break :blk .{ .value = task.result_cell };
+                } else blk: {
+                    task.nested_state_cell = try self.stateResultTypeCell(task.nested_merge_binders, task.result_cell);
+                    task.stage = .nested_state;
+                    break :blk .{ .state_result = .{
+                        .result_cell = task.result_cell,
+                        .state_cell = task.nested_state_cell,
+                        .merge_binders = task.nested_merge_binders,
+                    } };
+                };
+                return self.controlFlowOutputStep(body, task.result_cell, output);
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => {
+                task.stage = .value;
+                return branchBodyStep(self, body, .{ .value = task.result_cell });
+            },
+        }
+    }
+
+    /// Lower a checked `if` or `match` for an explicit output, without
+    /// selecting a shared value representation.
+    fn controlFlowOutputStep(self: *BodyContext, expr_id: checked.CheckedExprId, result_cell: DraftTypeCell, output: BranchOutput) LowerStep {
+        return switch (self.view.bodies.expr(expr_id).data) {
+            .if_ => |if_| requestLowerTask(self, .{ .if_task = .{
+                .expr_id = expr_id,
+                .if_ = if_,
+                .result_cell = result_cell,
+                .output = output,
+                .select = false,
+            } }),
+            .match_ => |match| requestLowerTask(self, .{ .match_task = .{
+                .expr_id = expr_id,
+                .match = match,
+                .result_cell = result_cell,
+                .output = output,
+                .select = false,
+            } }),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
+        };
+    }
+
+    /// An expression lowered as a statement whose value is discarded.
+    const DiscardedTask = struct {
+        expr: checked.CheckedExprId,
+        stage: enum { start, passthrough, state_only, divergent, uninhabited, value } = .start,
+        /// The binders a stateful `if`/`match` reassigns. Owned.
+        merge_binders: []MergeBinder = &.{},
+        state_cell: DraftTypeCell = undefined,
+    };
+
+    fn releaseDiscardedTask(self: *BodyContext, task: *DiscardedTask) void {
+        self.allocator.free(task.merge_binders);
+        task.merge_binders = &.{};
+    }
+
+    fn stepDiscarded(self: *BodyContext, task: *DiscardedTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        switch (task.stage) {
+            .start => {},
+            .passthrough => return .{ .ret = input.? },
+            .state_only => return statementStep(.{
+                .stmt = try self.addStmt(.{ .let_ = .{
+                    .pat = try self.stateOnlyPatternAtTypeCell(task.state_cell, task.merge_binders),
+                    .value = input.?.exprValue(),
+                } }),
+                .termination = .none,
+            }),
+            .divergent => return statementStep(.{
+                .stmt = try self.addStmt(.{ .expr = input.?.exprValue() }),
+                .termination = .checked_control_transfer,
+            }),
+            .uninhabited => return statementStep(.{
+                .stmt = null,
+                .termination = .{ .uninhabited = input.?.exprValue() },
+            }),
+            .value => return statementStep(.{
+                .stmt = try self.addStmt(.{ .expr = input.?.exprValue() }),
+                .termination = .none,
+            }),
+        }
+        const expr_id = task.expr;
+        const checked_expr = self.view.bodies.expr(expr_id);
+        if (checked_expr.data == .for_ and !self.checkedExprDivergesInLoweredRuntime(expr_id)) {
+            task.stage = .passthrough;
+            return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(checked_expr.data.for_) } } });
+        }
+        switch (checked_expr.data) {
+            .if_, .match_ => {
+                task.merge_binders = try self.stateMergeBinders(expr_id);
+                if (task.merge_binders.len != 0) {
+                    task.state_cell = try self.stateOnlyTypeCell(task.merge_binders);
+                    task.stage = .state_only;
+                    return self.controlFlowOutputStep(expr_id, task.state_cell, .{ .state_only = .{
+                        .state_cell = task.state_cell,
+                        .merge_binders = task.merge_binders,
+                    } });
+                }
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+        }
+
+        const cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
+        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
+            task.stage = .divergent;
+            return divergentStep(self, expr_id, .{ .at_cell = cell });
+        }
+        const node = try cell.toGraphNode(self.graph);
+        if (try self.nodeIsProvenUninhabited(node)) {
+            task.stage = .uninhabited;
+            return uninhabitedScrutineeStep(self, expr_id, cell);
+        }
+        task.stage = .value;
+        return requestLowerChild(self, expr_id, cell);
+    }
+
+    fn statementStep(statement: LoweredStatement) LowerStep {
+        return .{ .ret = .{ .statement = statement } };
+    }
+
+    /// One block statement whose expressions lower as child tasks. Its source location stays current until the statement is built.
+    const StatementTask = struct {
+        statement: checked.CheckedStatementId,
+        diverges: bool,
+        saved: ?SavedSourceLocation = null,
+        stage: enum { start, pattern_value, divergent_value, expr_value, state_only, dbg, expect, stateful_expect, loop, return_value } = .start,
+        requested_cell: DraftTypeCell = undefined,
+        /// The binders a stateful statement reassigns. Owned.
+        merge_binders: []MergeBinder = &.{},
+        state_cell: DraftTypeCell = undefined,
+        condition_cell: DraftTypeCell = undefined,
+        condition_state_cell: DraftTypeCell = undefined,
+        unit_cell: DraftTypeCell = undefined,
+        unit: DraftExprId = undefined,
+        omitted: ?DraftExprId = null,
+    };
+
+    fn releaseStatementTask(self: *BodyContext, task: *StatementTask) void {
+        self.restoreSourceLocation(&task.saved);
+        self.allocator.free(task.merge_binders);
+        task.merge_binders = &.{};
+    }
+
+    fn stepStatement(self: *BodyContext, task: *StatementTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const statement = self.view.bodies.statement(task.statement);
+        switch (task.stage) {
+            .start => {},
+            .pattern_value => {
+                const pattern = switch (statement.data) {
+                    .decl => |decl| decl.pattern,
+                    .var_ => |decl| decl.pattern,
+                    .reassign => |decl| decl.pattern,
+                    .pending, .promoted_proc, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => unreachable,
+                };
+                const lowered = try self.finishPatternStatement(pattern, statement.source_region, task.requested_cell, input.?.exprValue());
+                const stmt = lowered.stmt orelse {
+                    self.restoreSourceLocation(&task.saved);
+                    return statementStep(.{ .stmt = null, .termination = lowered.termination });
+                };
+                return self.finishStatement(task, stmt, lowered.termination);
+            },
+            .divergent_value, .expr_value => return self.finishStatement(task, .{ .expr = input.?.exprValue() }, .none),
+            .state_only => return self.finishStatement(task, .{ .let_ = .{
+                .pat = try self.stateOnlyPatternAtTypeCell(task.state_cell, task.merge_binders),
+                .value = input.?.exprValue(),
+            } }, .none),
+            .dbg => return self.finishStatement(task, .{ .dbg = input.?.exprValue() }, .none),
+            .expect => return self.finishStatement(task, .{ .expect = input.?.exprValue() }, .none),
+            .stateful_expect => return self.finishStatement(task, try self.finishStatefulExpectStatement(task, input.?.exprValue()), .none),
+            .loop => {
+                const lowered = input.?.statementValue();
+                self.restoreSourceLocation(&task.saved);
+                return statementStep(.{
+                    .stmt = lowered.stmt,
+                    .termination = if (task.diverges) .checked_control_transfer else .none,
+                });
+            },
+            .return_value => return self.finishStatement(task, .{ .return_ = input.?.dataValue().return_ }, .none),
+        }
+
+        task.saved = try self.enterStatementSourceLocation(statement.source_region);
+        switch (statement.data) {
+            .pending,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .promoted_proc,
+            => Common.invariant("non-runtime checked statement reached Monotype lowering"),
+            .runtime_error => return self.finishStatement(task, .{ .crash = try self.addStringLiteral("runtime error") }, .none),
+            .decl => |decl| {
+                if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
+                    const binder = self.localProcBinder(decl.pattern);
+                    if (self.view.bodies.patternBinder(binder).is_scheme_alias) {
+                        self.restoreSourceLocation(&task.saved);
+                        return statementStep(.{ .stmt = null, .termination = .none });
+                    }
+                    try self.registerLocalProc(decl.pattern, decl.expr, task.statement);
+                    const unit_ty = try self.unitType();
+                    return self.finishStatement(task, .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) }, .none);
+                }
+                return self.beginPatternStatementStep(task, decl.pattern, decl.expr);
+            },
+            .var_ => |decl| return self.beginPatternStatementStep(task, decl.pattern, decl.expr),
+            .var_uninitialized => |decl| return self.finishStatement(task, .{ .uninitialized = try self.lowerUninitializedPatternStatement(decl.pattern) }, .none),
+            .reassign => |decl| return self.beginPatternStatementStep(task, decl.pattern, decl.expr),
+            .crash => |msg| return self.finishStatement(task, .{ .crash = try self.lowerStringLiteral(msg) }, .none),
+            .dbg => |child| {
+                task.stage = .dbg;
+                return requestLowerTask(self, .{ .inspected = .{ .expr = child } });
+            },
+            .expr => |child| {
+                task.merge_binders = try self.stateMergeBinders(child);
+                if (task.merge_binders.len == 0) {
+                    task.stage = .expr_value;
+                    return requestLowerTask(self, .{ .expr = .{ .expr = child } });
+                }
+                task.state_cell = try self.stateOnlyTypeCell(task.merge_binders);
+                task.stage = .state_only;
+                const output: BranchOutput = .{ .state_only = .{
+                    .state_cell = task.state_cell,
+                    .merge_binders = task.merge_binders,
+                } };
+                return switch (self.view.bodies.expr(child).data) {
+                    .if_, .match_ => self.controlFlowOutputStep(child, task.state_cell, output),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => branchBodyStep(self, child, output),
+                };
+            },
+            .expect => |child| {
+                if (self.builder.inline_expects == .omit) {
+                    const unit_ty = try self.unitType();
+                    return self.finishStatement(task, .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) }, .none);
+                }
+                return self.beginExpectStatement(task, child);
+            },
+            .for_ => |for_| {
+                task.stage = .loop;
+                return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(for_) } } });
+            },
+            .while_ => |loop| {
+                task.stage = .loop;
+                return requestLowerTask(self, .{ .loop = .{ .kind = .{ .condition = .{ .loop = loop, .condition = .checked } } } });
+            },
+            .infinite_loop, .breakable_loop => |loop| {
+                task.stage = .loop;
+                return requestLowerTask(self, .{ .loop = .{ .kind = .{ .condition = .{ .loop = loop, .condition = .always_true } } } });
+            },
+            .break_ => return self.finishStatement(task, .{ .expr = try self.breakCurrentLoopExpr() }, .none),
+            .return_ => |ret| {
+                task.stage = .return_value;
+                return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = .return_expr } });
+            },
+        }
+    }
+
+    fn finishStatement(self: *BodyContext, task: *StatementTask, stmt: DraftStmt, termination: StatementTermination) Allocator.Error!LowerStep {
+        const lowered = try self.finishLoweredStatement(stmt, termination, task.diverges);
+        self.restoreSourceLocation(&task.saved);
+        return statementStep(lowered);
+    }
+
+    /// A pattern statement's value lowers as a child: a divergent initializer
+    /// for its effect alone, since it never produces a value to bind and
+    /// emitting a pattern or reading its dead checked type would invent a
+    /// relation for a value that cannot exist.
+    fn beginPatternStatementStep(
+        self: *BodyContext,
+        task: *StatementTask,
+        pattern: checked.CheckedPatternId,
+        expr: checked.CheckedExprId,
+    ) Allocator.Error!LowerStep {
+        if (task.diverges) {
+            task.stage = .divergent_value;
+            return divergentStep(self, expr, .{ .at_type = try self.unitType() });
+        }
+        task.requested_cell = try self.beginPatternStatementValue(pattern, expr);
+        task.stage = .pattern_value;
+        return requestLowerTask(self, .{ .at_type_cell = .{
+            .expr = expr,
+            .cell = task.requested_cell,
+            .demand = .runtime_value,
+            .diverges = false,
+        } });
+    }
+
+    fn beginExpectStatement(self: *BodyContext, task: *StatementTask, child: checked.CheckedExprId) Allocator.Error!LowerStep {
+        task.merge_binders = try self.stateMergeBinders(child);
+        if (task.merge_binders.len == 0) {
+            task.stage = .expect;
+            return requestLowerTask(self, .{ .expr = .{ .expr = child } });
+        }
+        const merges = task.merge_binders;
+        task.unit_cell = .{ .sealed = try self.unitType() };
+        task.condition_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child));
+        task.state_cell = try self.stateResultTypeCell(merges, task.unit_cell);
+        task.condition_state_cell = try self.stateResultTypeCell(merges, task.condition_cell);
+        task.unit = try self.addExprWithTypeCell(task.unit_cell, .unit);
+        task.omitted = if (self.builder.inline_expects == .shared)
+            try self.stateResultTupleExprAtTypeCells(task.state_cell, merges, task.unit)
+        else
+            null;
+        task.stage = .stateful_expect;
+        return branchBodyStep(self, child, .{ .state_result = .{
+            .result_cell = task.condition_cell,
+            .state_cell = task.condition_state_cell,
+            .merge_binders = merges,
+        } });
+    }
+
+    fn finishStatefulExpectStatement(self: *BodyContext, task: *StatementTask, condition_state: DraftExprId) Allocator.Error!DraftStmt {
+        const merges = task.merge_binders;
+        const unit_cell = task.unit_cell;
+        const condition_cell = task.condition_cell;
+        const state_cell = task.state_cell;
+        const condition_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
+        defer self.allocator.free(condition_pattern);
+        for (merges, 0..) |merge, i| {
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try self.bindLocalName(local, merge.binder);
+            try self.binders.put(merge.binder, local);
+            condition_pattern[i] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+        }
+        const condition_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), condition_cell, null);
+        condition_pattern[merges.len] = try self.addPatWithTypeCell(condition_cell, .{ .bind = condition_local });
+        const run_statements = [_]DraftStmtId{
+            try self.addStmt(.{ .let_ = .{
+                .pat = try self.addPatWithTypeCell(task.condition_state_cell, .{ .tuple = try self.addPatSpan(condition_pattern) }),
+                .value = condition_state,
+            } }),
+            try self.addStmt(.{ .expect = try self.addExprWithTypeCell(condition_cell, .{ .local = condition_local }) }),
+        };
+        const executed = try self.addExprWithTypeCell(state_cell, .{ .block = .{
+            .statements = try self.addStmtSpan(&run_statements),
+            .final_expr = try self.stateResultTupleExprAtTypeCells(state_cell, merges, task.unit),
+        } });
+        const choice = if (task.omitted) |omitted_state| blk: {
+            const enabled = try self.addExpr(.{ .ty = try self.primitiveType(.bool), .data = .inline_expects_enabled });
+            break :blk try self.addExprWithTypeCell(state_cell, .{ .if_ = .{
+                .branches = try self.addIfBranchSpan(&.{.{ .cond = enabled, .body = executed }}),
+                .final_else = omitted_state,
+            } });
+        } else executed;
+        const output_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
+        defer self.allocator.free(output_pattern);
+        for (merges, 0..) |merge, i| {
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try self.bindLocalName(local, merge.binder);
+            try self.binders.put(merge.binder, local);
+            output_pattern[i] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+        }
+        output_pattern[merges.len] = try self.addPatWithTypeCell(unit_cell, .wildcard);
+        return .{ .let_ = .{
+            .pat = try self.addPatWithTypeCell(state_cell, .{ .tuple = try self.addPatSpan(output_pattern) }),
+            .value = choice,
+        } };
+    }
+
+    /// A return's value lowered as a child task, producing the return's
+    /// expression data.
+    const ReturnTask = struct {
+        expr: checked.CheckedExprId,
+        lambda: checked.CheckedExprId,
+        context: checked.CheckedReturnContext,
+        target: DraftTypeCell = undefined,
+    };
+
+    fn stepReturn(self: *BodyContext, frame: *LowerFrame, task: *ReturnTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor != 0) {
+            return .{ .ret = .{ .data = .{ .return_ = .{
+                .value = input.?.exprValue(),
+                .target = task.target,
+            } } } };
+        }
+        frame.cursor = 1;
+        const target = self.current_return_target orelse
+            Common.invariant("checked return reached lowering without an active specialization return target");
+        if (task.lambda != target.lambda) {
+            Common.invariant("checked return target disagreed with the active lambda specialization");
+        }
+        task.target = target.cell;
+        // `?` contributes its source error row to the enclosing result;
+        // it does not equate those rows. Keep the checked source type so
+        // the explicit return boundary can convert it to the target.
+        return switch (task.context) {
+            .try_suffix => requestLowerTask(self, .{ .expr = .{ .expr = task.expr } }),
+            .return_expr => requestLowerChild(self, task.expr, target.cell),
+        };
+    }
+
+    /// A value lowered for diagnostic rendering without
+    /// materializing an open instantiation graph. Unresolved children retain
+    /// their exact graph cells until the shared final snapshot drives
+    /// inspect-helper emission.
+    const InspectedTask = struct {
+        expr: checked.CheckedExprId,
+        /// The `expect_err` snippet whose failure message wraps the rendering.
+        expect_err_snippet: ?checked.CheckedStringLiteralId = null,
+        str_ty: Type.TypeId = undefined,
+        value_node: NodeId = undefined,
+    };
+
+    fn stepInspected(self: *BodyContext, frame: *LowerFrame, task: *InspectedTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const rendered = switch (frame.cursor) {
+            0 => {
+                task.str_ty = try self.primitiveType(.str);
+                if (self.view.bodies.expr(task.expr).data == .runtime_error) {
+                    frame.cursor = 2;
+                    return requestLowerTask(self, .{ .with_type = .{ .expr = task.expr, .ty = task.str_ty } });
+                }
+                task.value_node = try self.lowerExprTypeNode(task.expr);
+                frame.cursor = 1;
+                return requestLowerChild(self, task.expr, DraftTypeCell.fromGraphNode(task.value_node));
+            },
+            1 => if (try self.graph.typeIsResolved(task.value_node))
+                try self.inspectCall(input.?.exprValue(), try self.activeTypeFromNode(task.value_node), task.str_ty)
+            else
+                try self.deferInspectAtNode(input.?.exprValue(), task.value_node, task.str_ty),
+            else => input.?.exprValue(),
+        };
+        const snippet = task.expect_err_snippet orelse return loweredExprStep(rendered);
+        return loweredExprStep(try self.expectErrMessage(rendered, snippet, task.str_ty));
+    }
+
+    fn expectErrMessage(
+        self: *BodyContext,
+        rendered: DraftExprId,
+        snippet: checked.CheckedStringLiteralId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const snippet_index = @intFromEnum(snippet);
+        if (snippet_index >= self.view.bodies.stringLiteralCount()) {
+            Common.invariant("checked string literal id outside checked body string store");
+        }
+        const snippet_text = self.view.bodies.stringLiteral(@enumFromInt(snippet_index));
+        const prefix_text = try std.fmt.allocPrint(
+            self.builder.allocator,
+            "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(",
+            .{snippet_text},
+        );
+        defer self.builder.allocator.free(prefix_text);
+        const prefix = try self.stringExpr(prefix_text, str_ty);
+        const with_value = try self.concatExpr(prefix, rendered, str_ty);
+        const suffix = try self.stringExpr(")", str_ty);
+        return try self.concatExpr(with_value, suffix, str_ty);
+    }
+
+    /// A divergent expression lowered for its effect: at a cell, at a type,
+    /// as expression data followed by an unreachable continuation, or as its
+    /// own expression data. Each nested divergent operand lowers as a child
+    /// task.
+    const DivergentTask = struct {
+        expr: checked.CheckedExprId,
+        form: DivergentForm,
+        finish: union(enum) {
+            passthrough,
+            /// Wrap the child's data as an expression of this type.
+            add_expr: Type.TypeId,
+            /// The child's effect, then an unreachable continuation at this cell.
+            effect_at_cell: DraftTypeCell,
+            /// The child's effect, then an unreachable continuation of this type.
+            effect_data: Type.TypeId,
+            /// The child's rendered message as an `expect_err`.
+            expect_err: base.Region,
+            /// A control-flow value as block data.
+            expr_as_data,
+            /// A low-level crash over the child's argument span.
+            low_level: can.CIR.Expr.LowLevel,
+        } = .passthrough,
+    };
+
+    const DivergentForm = union(enum) {
+        at_cell: DraftTypeCell,
+        at_type: Type.TypeId,
+        effect_data: Type.TypeId,
+        data: Type.TypeId,
+    };
+
+    fn divergentStep(ctx: *BodyContext, expr: checked.CheckedExprId, form: DivergentForm) LowerStep {
+        return requestLowerTask(ctx, .{ .divergent = .{ .expr = expr, .form = form } });
+    }
+
+    fn stepDivergent(self: *BodyContext, frame: *LowerFrame, task: *DivergentTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor != 0) {
+            const child = input.?;
+            return switch (task.finish) {
+                .passthrough => .{ .ret = child },
+                .add_expr => |ty| loweredExprStep(try self.addExpr(.{ .ty = ty, .data = child.dataValue() })),
+                .effect_at_cell => |cell| blk: {
+                    const stmt = try self.addStmt(.{ .expr = child.exprValue() });
+                    break :blk loweredExprStep(try self.addExprWithTypeCell(cell, .{ .block = .{
+                        .statements = try self.addStmtSpan(&.{stmt}),
+                        .final_expr = try self.addExprWithTypeCell(cell, .@"unreachable"),
+                    } }));
+                },
+                .effect_data => |ty| blk: {
+                    const stmt = try self.addStmt(.{ .expr = child.exprValue() });
+                    break :blk .{ .ret = .{ .data = .{ .block = .{
+                        .statements = try self.addStmtSpan(&[_]DraftStmtId{stmt}),
+                        .final_expr = try self.unreachableAfterTerminatingStatementExpr(ty),
+                    } } } };
+                },
+                .expect_err => |region| .{ .ret = .{ .data = .{ .expect_err = .{
+                    .msg = child.exprValue(),
+                    .region = region,
+                } } } },
+                .expr_as_data => .{ .ret = .{ .data = try self.exprIdAsDivergentData(child.exprValue()) } },
+                .low_level => |op| .{ .ret = .{ .data = .{ .low_level = .{
+                    .op = op,
+                    .args = child.spanValue(),
+                } } } },
+            };
+        }
+        frame.cursor = 1;
+        const expr_id = task.expr;
+        const checked_expr = self.view.bodies.expr(expr_id);
+        switch (task.form) {
+            .at_cell => |cell| switch (checked_expr.data) {
+                .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } }),
+                .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } }),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
+                    task.finish = .{ .effect_at_cell = cell };
+                    return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
+                },
+            },
+            .at_type => |ty| {
+                switch (checked_expr.data) {
+                    .match_ => |match| {
+                        if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+                            task.finish = .{ .add_expr = ty };
+                            return divergentStep(self, match.cond, .{ .effect_data = ty });
+                        }
+                        return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = .{ .sealed = ty } } });
+                    },
+                    .if_ => |if_| {
+                        if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                            task.finish = .{ .add_expr = ty };
+                            return divergentStep(self, if_.branches[0].cond, .{ .effect_data = ty });
+                        }
+                        return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } });
+                    },
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                }
+                task.finish = .{ .add_expr = ty };
+                return divergentStep(self, expr_id, .{ .data = ty });
+            },
+            .effect_data => |ty| {
+                // A divergent expression never returns a value, so its checked result
+                // variable can legitimately remain unconstrained; the continuation's
+                // explicit type stands in for a result that cannot exist. An explicit
+                // checked runtime error lowers its crash path at unit because its
+                // deliberately erroneous source type has no monotype.
+                const effect_ty = if (checked_expr.data == .runtime_error)
+                    try self.unitType()
+                else
+                    ty;
+                task.finish = .{ .effect_data = ty };
+                return divergentStep(self, expr_id, .{ .at_type = effect_ty });
+            },
+            .data => |ty| return self.divergentDataStep(task, checked_expr, ty),
+        }
+    }
+
+    fn divergentEffectStep(self: *BodyContext, child: checked.CheckedExprId, ty: Type.TypeId) LowerStep {
+        return divergentStep(self, child, .{ .effect_data = ty });
+    }
+
+    fn divergentDataStep(self: *BodyContext, task: *DivergentTask, checked_expr: checked.CheckedExpr, ty: Type.TypeId) Allocator.Error!LowerStep {
+        const expr_id = task.expr;
+        const data: BodyExprData = switch (checked_expr.data) {
+            .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
+            .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
+            .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
+            .break_ => try self.breakCurrentLoopExprData(),
+            .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
+            .expect_err => |expect_err| {
+                task.finish = .{ .expect_err = checked_expr.source_region };
+                return requestLowerTask(self, .{ .inspected = .{ .expr = expect_err.expr, .expect_err_snippet = expect_err.snippet } });
+            },
+            .str => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
+            .list => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
+            .tuple => |items| return self.divergentEffectStep(self.firstDivergentChild(items), ty),
+            .block => |block| return requestLowerTask(self, .{ .block = .{
+                .statements = block.statements,
+                .final_expr = block.final_expr,
+                .result_cell = .{ .sealed = ty },
+                .typed = ty,
+                .as_data = true,
+            } }),
+            .match_ => |match| {
+                task.finish = .expr_as_data;
+                return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = .{ .sealed = ty } } });
+            },
+            .if_ => |if_| {
+                task.finish = .expr_as_data;
+                return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } });
+            },
+            .call => |call| {
+                if (self.checkedExprDivergesInLoweredRuntime(call.func)) {
+                    return self.divergentEffectStep(call.func, ty);
+                }
+                return self.divergentEffectStep(self.firstDivergentChild(call.args), ty);
+            },
+            .record => |record| return self.divergentEffectStep(self.divergentRecordChild(record), ty),
+            .tag => |tag| return self.divergentEffectStep(self.firstDivergentChild(tag.args), ty),
+            .nominal => |nominal| return self.divergentEffectStep(nominal.backing_expr, ty),
+            .binop => |binop| {
+                if (self.checkedExprDivergesInLoweredRuntime(binop.lhs)) return self.divergentEffectStep(binop.lhs, ty);
+                if (self.checkedExprDivergesInLoweredRuntime(binop.rhs)) return self.divergentEffectStep(binop.rhs, ty);
+                Common.invariant("checked binary expression was marked divergent but no divergent child was found");
+            },
+            .unary_minus,
+            .unary_not,
+            .dbg,
+            => |child| return self.divergentEffectStep(child, ty),
+            .expect => |child| if (self.builder.inline_expects == .run)
+                return self.divergentEffectStep(child, ty)
+            else
+                Common.invariant("omitted checked expect reached divergent runtime lowering"),
+            .field_access => |field| return self.divergentEffectStep(field.receiver, ty),
+            .structural_eq => |eq| {
+                if (self.checkedExprDivergesInLoweredRuntime(eq.lhs)) return self.divergentEffectStep(eq.lhs, ty);
+                if (self.checkedExprDivergesInLoweredRuntime(eq.rhs)) return self.divergentEffectStep(eq.rhs, ty);
+                Common.invariant("checked structural equality was marked divergent but no divergent child was found");
+            },
+            .structural_hash => |hash| {
+                if (self.checkedExprDivergesInLoweredRuntime(hash.value)) return self.divergentEffectStep(hash.value, ty);
+                if (self.checkedExprDivergesInLoweredRuntime(hash.hasher)) return self.divergentEffectStep(hash.hasher, ty);
+                Common.invariant("checked structural hash was marked divergent but no divergent child was found");
+            },
+            .tuple_access => |access| return self.divergentEffectStep(access.tuple, ty),
+            .for_ => |for_| return self.divergentEffectStep(for_.expr, ty),
+            .run_low_level => |low_level| {
+                for (low_level.args) |arg| {
+                    if (self.checkedExprDivergesInLoweredRuntime(arg)) return self.divergentEffectStep(arg, ty);
+                }
+                if (low_level.op != .crash) {
+                    Common.invariant("checked low-level expression was marked divergent but no divergent argument was found");
+                }
+                task.finish = .{ .low_level = low_level.op };
+                return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } });
+            },
+            .dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
+            .interpolation => |interpolation| return self.divergentEffectStep(self.divergentInterpolationChild(interpolation), ty),
+            .method_eq => |plan| return try self.divergentDispatchStep(plan, ty),
+            .type_dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
+            .numeral => |numeral| return try self.divergentDispatchStep(numeral.plan, ty),
+            .str_from_quote => |quote| return try self.divergentDispatchStep(quote.plan, ty),
+            .pending,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .anno_only,
+            .hosted_lambda,
+            => Common.invariant("non-divergent checked expression reached divergent lowering"),
+        };
+        return .{ .ret = .{ .data = data } };
+    }
+
+    fn firstDivergentChild(self: *BodyContext, items: []const checked.CheckedExprId) checked.CheckedExprId {
+        for (items) |item| {
+            if (self.checkedExprDivergesInLoweredRuntime(item)) return item;
+        }
+        Common.invariant("checked expression was marked divergent but no divergent child was found");
+    }
+
+    fn divergentRecordChild(self: *BodyContext, record: anytype) checked.CheckedExprId {
+        if (record.ext) |ext| {
+            if (self.checkedExprDivergesInLoweredRuntime(ext)) return ext;
+        }
+        for (record.fields) |field| {
+            if (self.checkedExprDivergesInLoweredRuntime(field.value)) return field.value;
+        }
+        Common.invariant("checked record expression was marked divergent but no divergent child was found");
+    }
+
+    fn divergentInterpolationChild(self: *BodyContext, interpolation: checked.CheckedInterpolation) checked.CheckedExprId {
+        if (self.checkedExprDivergesInLoweredRuntime(interpolation.first)) return interpolation.first;
+        for (interpolation.parts) |part| {
+            if (self.checkedExprDivergesInLoweredRuntime(part.value)) return part.value;
+            if (self.checkedExprDivergesInLoweredRuntime(part.following_segment)) return part.following_segment;
+        }
+        Common.invariant("checked interpolation was marked divergent but no divergent child was found");
+    }
+
+    fn divergentDispatchStep(
+        self: *BodyContext,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        ty: Type.TypeId,
+    ) Allocator.Error!LowerStep {
+        const plan_id = maybe_plan orelse Common.invariant("divergent checked dispatch expression did not contain its checked plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        switch (self.dispatchRuntimePlan(plan)) {
+            .callable => {},
+            .crash => |reason| return .{ .ret = .{ .data = .{ .crash = try self.addStringLiteral(dispatchCrashMessage(reason)) } } },
+        }
+        for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| if (self.checkedExprDivergesInLoweredRuntime(expr)) {
+                return self.divergentEffectStep(expr, ty);
+            },
+            .generated_interpolation_iter => |expr| {
+                const interpolation = switch (self.view.bodies.expr(expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("divergent interpolation iterator referenced a non-interpolation expression"),
+                };
+                return self.divergentEffectStep(self.divergentInterpolationChild(interpolation), ty);
+            },
+            .generated_numeral, .generated_quote => {},
+        };
+        Common.invariant("checked dispatch expression was marked divergent but no divergent operand was found");
+    }
+
+    /// A `for` loop's checked fields, shared by its statement and expression
+    /// forms.
+    const CheckedForLoop = struct {
+        pattern: checked.CheckedPatternId,
+        expr: checked.CheckedExprId,
+        body: checked.CheckedExprId,
+        plan: ?static_dispatch.IteratorForPlanId,
+        mutations: ?checked.LoopMutationPlanId,
+    };
+
+    fn checkedForLoop(for_: anytype) CheckedForLoop {
+        return .{
+            .pattern = for_.pattern,
+            .expr = for_.expr,
+            .body = for_.body,
+            .plan = for_.plan,
+            .mutations = for_.mutations,
+        };
+    }
+
+    /// A loop statement whose iterator dispatches, condition, and body lower
+    /// as child tasks, so nested loops never nest native lowering calls. Both
+    /// source loop forms bind their exit state in the enclosing
+    /// continuation; the task produces that binding statement.
+    const LoopTask = struct {
+        kind: union(enum) {
+            for_: CheckedForLoop,
+            condition: struct { loop: checked.CheckedConditionLoop, condition: WhileCondition },
+        },
+        stage: enum { start, initial_iterator, step_expr, one_body, cond, body } = .start,
+        carries: []LoopCarry = &.{},
+        loop_cell: DraftTypeCell = undefined,
+        /// The binder mappings the loop parameters replace.
+        saved: std.ArrayList(BinderRestore) = .empty,
+        binders_replaced: bool = false,
+        loop_context_pushed: bool = false,
+        plan: static_dispatch.IteratorForPlan = undefined,
+        iterator_cell: DraftTypeCell = undefined,
+        iterator_param: DraftTypedLocal = undefined,
+        initial_iterator: DraftExprId = undefined,
+        step: IterStepShape = undefined,
+        step_expr: DraftExprId = undefined,
+        done_body: DraftExprId = undefined,
+        branches: [3]DraftBranch = undefined,
+        /// The binder mappings the `One` branch's pattern and carries replace.
+        one_saved: std.ArrayList(BinderRestore) = .empty,
+        one_scope_entered: bool = false,
+        one_guard_frames: RuntimeDemandGuardFrameStack = undefined,
+        one_tag_pat: DraftPatId = undefined,
+        cond: DraftExprId = undefined,
+        break_body: DraftExprId = undefined,
+    };
+
+    fn releaseLoopTask(self: *BodyContext, task: *LoopTask) void {
+        self.leaveIteratorOneScope(task);
+        task.one_saved.deinit(self.allocator);
+        task.one_saved = .empty;
+        self.leaveLoopScope(task);
+        task.saved.deinit(self.allocator);
+        task.saved = .empty;
+        self.allocator.free(task.carries);
+        task.carries = &.{};
+    }
+
+    /// Map each carried binder to its loop parameter and make the loop the
+    /// current `break` target.
+    fn enterLoopScope(self: *BodyContext, task: *LoopTask) Allocator.Error!void {
+        for (task.carries) |carry| {
+            try self.saveBinder(carry.binder, &task.saved);
+            try self.binders.put(carry.binder, carry.param_local);
+        }
+        task.binders_replaced = true;
+        try self.pushLoopContext(task.loop_cell, task.carries);
+        task.loop_context_pushed = true;
+    }
+
+    fn leaveLoopScope(self: *BodyContext, task: *LoopTask) void {
+        if (task.loop_context_pushed) {
+            self.popLoopContext();
+            task.loop_context_pushed = false;
+        }
+        if (task.binders_replaced) {
+            self.restoreBinders(task.saved.items);
+            task.binders_replaced = false;
+        }
+    }
+
+    fn leaveIteratorOneScope(self: *BodyContext, task: *LoopTask) void {
+        if (!task.one_scope_entered) return;
+        self.runtime_demand_guard_frames = task.one_guard_frames;
+        self.restoreBinders(task.one_saved.items);
+        task.one_scope_entered = false;
+    }
+
+    fn stepLoop(self: *BodyContext, task: *LoopTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        switch (task.stage) {
+            .start => {
+                const mutations = switch (task.kind) {
+                    .for_ => |for_| for_.mutations,
+                    .condition => |condition| condition.loop.mutations,
+                };
+                task.carries = try self.prepareLoopCarries(mutations);
+                task.loop_cell = try self.loopStateTypeCell(try self.unitType(), task.carries);
+                switch (task.kind) {
+                    .for_ => |for_| {
+                        const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
+                        task.plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
+                        if (self.dispatchCrashReason(task.plan.iter.resolution) orelse self.dispatchCrashReason(task.plan.next.resolution)) |reason| {
+                            return self.finishLoop(task, .{ .crash = try self.addStringLiteral(dispatchCrashMessage(reason)) });
+                        }
+                        task.stage = .initial_iterator;
+                        return self.iteratorDispatchStep(.{
+                            .plan = task.plan.iter,
+                            .loop_iterator = null,
+                            .expected_ret_ty = null,
+                        });
+                    },
+                    .condition => |condition| {
+                        try self.enterLoopScope(task);
+                        // Checked entry edges observe the loop parameters at the start of an
+                        // iteration. Lower both the condition and its false-edge result before
+                        // the body, whose branch merges replace binder mappings with post-body
+                        // locals used only by the continuation edge.
+                        switch (condition.condition) {
+                            .checked => {
+                                task.stage = .cond;
+                                return requestLowerTask(self, .{ .expr = .{ .expr = condition.loop.cond } });
+                            },
+                            .always_true => return self.beginConditionLoopBody(task),
+                        }
+                    },
+                }
+            },
+            .initial_iterator => {
+                const plan = task.plan;
+                task.initial_iterator = input.?.exprValue();
+                task.iterator_cell = self.exprTypeCell(task.initial_iterator);
+                try self.constrainCheckedInterfaceToCell(plan.iterator_ty, task.iterator_cell);
+                task.step = try self.iteratorStepShape(plan, task.iterator_cell);
+                try self.constrainCheckedInterfaceToCell(plan.iterator_ty, DraftTypeCell.fromGraphNode(task.step.one_rest.node));
+                try self.constrainCheckedInterfaceToCell(plan.iterator_ty, DraftTypeCell.fromGraphNode(task.step.skip_rest.node));
+                try self.constrainCheckedInterfaceToCell(plan.item_ty, DraftTypeCell.fromGraphNode(task.step.one_item.node));
+                const iterator_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), task.iterator_cell, null);
+                task.iterator_param = .{ .local = iterator_local, .ty = task.iterator_cell };
+                try self.enterLoopScope(task);
+                task.stage = .step_expr;
+                return self.iteratorDispatchStep(.{
+                    .plan = plan.next,
+                    .loop_iterator = task.iterator_param,
+                    .expected_ret_ty = DraftTypeCell.fromGraphNode(task.step.step_node),
+                });
+            },
+            .step_expr => {
+                task.step_expr = input.?.exprValue();
+                try self.constrainCheckedInterfaceToCell(task.plan.step_ty, self.exprTypeCell(task.step_expr));
+                task.done_body = if (task.carries.len == 0)
+                    try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = null })
+                else
+                    try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = try self.loopStateExpr(task.loop_cell, task.carries) });
+                task.branches[0] = .{
+                    .pat = try self.iteratorDonePattern(task.step),
+                    .body = task.done_body,
+                };
+                if (try self.nodeIsProvenUninhabited(task.step.one_item.node)) {
+                    task.branches[1] = try self.uninhabitedIteratorOneBranch(task.step, task.done_body);
+                    return self.finishIteratorLoop(task);
+                }
+                return self.beginIteratorOneBranch(task);
+            },
+            .one_body => {
+                task.branches[1] = .{ .pat = task.one_tag_pat, .body = input.?.exprValue() };
+                self.leaveIteratorOneScope(task);
+                return self.finishIteratorLoop(task);
+            },
+            .cond => {
+                task.cond = input.?.exprValue();
+                task.break_body = try self.breakCurrentLoopExpr();
+                return self.beginConditionLoopBody(task);
+            },
+            .body => return self.finishConditionLoop(task, input.?.exprValue()),
+        }
+    }
+
+    /// A loop body lowered as statements whose final expression is
+    /// discarded, then the loop's continue edge.
+    fn loopBodyStep(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, rest_expr: ?DraftExprId, carries: []const LoopCarry) LowerStep {
+        return requestLowerTask(self, .{ .block = self.discardingBlockTask(body, result_cell, .{ .loop_continue = .{
+            .rest_expr = rest_expr,
+            .carries = carries,
+        } }) });
+    }
+
+    fn beginIteratorOneBranch(self: *BodyContext, task: *LoopTask) Allocator.Error!LowerStep {
+        const for_ = task.kind.for_;
+        const step = task.step;
+        try self.savePatternBinders(for_.pattern, &task.one_saved);
+        for (task.carries) |carry| try self.saveBinder(carry.binder, &task.one_saved);
+        task.one_guard_frames = self.runtime_demand_guard_frames;
+        task.one_scope_entered = true;
+
+        const item_cell = DraftTypeCell.fromGraphNode(step.one_item.node);
+        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell);
+        self.runtime_demand_guard_frames = try self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step);
+
+        const rest_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), task.iterator_cell, null);
+        const item_local: ?DraftLocalId = if (try self.patternNeedsExplicitBinding(for_.pattern))
+            try self.addLocalWithBinderCell(self.builder.symbols.fresh(), item_cell, null)
+        else
+            null;
+        const record_pat = try self.iteratorOnePayloadPattern(for_.pattern, step, task.iterator_cell, rest_local, item_local);
+        task.one_tag_pat = try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(step.step_node), .{ .tag = .{
+            .name = try self.tagName(self.view, step.one_tag),
+            .payloads = try self.addPatSpan(&[_]DraftPatId{record_pat}),
+        } });
+
+        const rest_expr = try self.addExprWithTypeCell(task.iterator_cell, .{ .local = rest_local });
+        task.stage = .one_body;
+        const local = item_local orelse return self.loopBodyStep(for_.body, task.loop_cell, rest_expr, task.carries);
+        const item_expr = try self.addExprWithTypeCell(item_cell, .{ .local = local });
+        const miss = try self.addExprWithTypeCell(task.loop_cell, .{ .crash = try self.addStringLiteral("pattern match failed") });
+        return requestLowerTask(self, .{ .materialize = .{ .root = .{
+            .pattern = for_.pattern,
+            .value = item_expr,
+            .value_cell = item_cell,
+            .result_cell = task.loop_cell,
+            .continuation = .{ .iterator_body = .{
+                .body = for_.body,
+                .result_cell = task.loop_cell,
+                .rest_expr = rest_expr,
+                .carries = task.carries,
+            } },
+            .miss = miss,
+            .success_guard = null,
+            .mode = .then_root,
+        } } });
+    }
+
+    fn finishIteratorLoop(self: *BodyContext, task: *LoopTask) Allocator.Error!LowerStep {
+        const carries = task.carries;
+        task.branches[2] = try self.iteratorSkipBranch(task.loop_cell, task.step, task.iterator_cell, carries);
+
+        const match_expr = try self.addExprWithTypeCell(task.loop_cell, .{ .match_ = .{
+            .scrutinee = task.step_expr,
+            .branches = try self.addBranchSpan(&task.branches),
+        } });
+
+        const params = try self.allocator.alloc(DraftTypedLocal, 1 + carries.len);
+        defer self.allocator.free(params);
+        params[0] = task.iterator_param;
+        for (carries, 0..) |carry, i| params[i + 1] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(DraftExprId, 1 + carries.len);
+        defer self.allocator.free(initial_values);
+        initial_values[0] = task.initial_iterator;
+        for (carries, 0..) |carry, i| {
+            initial_values[i + 1] = try self.addExprWithTypeCell(carry.ty, .{ .local = carry.initial_local });
+        }
+
+        return self.finishLoop(task, .{ .loop_ = .{
+            .params = try self.draft.addTypedLocalSpan(params),
+            .initial_values = try self.addExprSpan(initial_values),
+            .body = match_expr,
+        } });
+    }
+
+    fn beginConditionLoopBody(self: *BodyContext, task: *LoopTask) LowerStep {
+        task.stage = .body;
+        return self.loopBodyStep(task.kind.condition.loop.body, task.loop_cell, null, task.carries);
+    }
+
+    fn finishConditionLoop(self: *BodyContext, task: *LoopTask, continue_body: DraftExprId) Allocator.Error!LowerStep {
+        const carries = task.carries;
+        const body = switch (task.kind.condition.condition) {
+            .always_true => continue_body,
+            .checked => blk: {
+                const branches = [_]DraftIfBranch{.{ .cond = task.cond, .body = continue_body }};
+                break :blk try self.addExprWithTypeCell(task.loop_cell, .{ .if_ = .{
+                    .branches = try self.addIfBranchSpan(&branches),
+                    .final_else = task.break_body,
+                } });
+            },
+        };
+
+        const params = try self.allocator.alloc(DraftTypedLocal, carries.len);
+        defer self.allocator.free(params);
+        for (carries, 0..) |carry, i| params[i] = .{ .local = carry.param_local, .ty = carry.ty };
+
+        const initial_values = try self.allocator.alloc(DraftExprId, carries.len);
+        defer self.allocator.free(initial_values);
+        for (carries, 0..) |carry, i| {
+            initial_values[i] = try self.addExprWithTypeCell(carry.ty, .{ .local = carry.initial_local });
+        }
+
+        return self.finishLoop(task, .{ .loop_ = .{
+            .params = try self.draft.addTypedLocalSpan(params),
+            .initial_values = try self.addExprSpan(initial_values),
+            .body = body,
+        } });
+    }
+
+    /// Build the loop expression once its scope is left, and the statement
+    /// binding its exit state.
+    fn finishLoop(self: *BodyContext, task: *LoopTask, data: BodyExprData) Allocator.Error!LowerStep {
+        self.leaveLoopScope(task);
+        const expr = try self.addExprWithTypeCell(task.loop_cell, data);
+        const stmt = try self.loopExitStatement(expr, task.carries, task.loop_cell);
+        return statementStep(.{ .stmt = try self.addStmt(stmt), .termination = .none });
+    }
+
+    /// An iterator method call whose operands lower
+    /// as child tasks.
+    const IteratorDispatchTask = struct {
+        plan: static_dispatch.IteratorDispatchCall,
+        loop_iterator: ?DraftTypedLocal,
+        expected_ret_ty: ?DraftTypeCell,
+        call_ctx: ?*BodyContext = null,
+        /// The generated `Iter.iter`/`Iter.next` path's procedure and
+        /// dispatcher node.
+        generated: ?struct { procedure: checked.IteratorProcedureId, dispatcher_node: NodeId } = null,
+        lookup: MethodLookup = undefined,
+        callee: DraftFnSlot = undefined,
+        ret_node: NodeId = undefined,
+        arg_nodes: []const NodeId = &.{},
+        /// Each lowered operand. Owned.
+        args: []DraftExprId = &.{},
+        index: usize = 0,
+    };
+
+    fn iteratorDispatchStep(self: *BodyContext, task: IteratorDispatchTask) Allocator.Error!LowerStep {
+        const boxed = try self.allocator.create(IteratorDispatchTask);
+        boxed.* = task;
+        return requestLowerTask(self, .{ .iterator_dispatch = boxed });
+    }
+
+    fn releaseIteratorDispatchTask(self: *BodyContext, task: *IteratorDispatchTask) void {
+        if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
+        task.call_ctx = null;
+        self.allocator.free(task.args);
+        task.args = &.{};
+    }
+
+    fn stepIteratorDispatch(self: *BodyContext, frame: *LowerFrame, task: *IteratorDispatchTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const plan = task.plan;
+        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        if (frame.cursor != 0) {
+            if (task.generated) |generated| return self.finishGeneratedIteratorDispatch(task, generated.procedure, generated.dispatcher_node, input.?.exprValue());
+            task.args[task.index] = input.?.exprValue();
+            task.index += 1;
+            return self.nextIteratorDispatchOperand(task, plan_args);
+        }
+        frame.cursor = 1;
+        if (plan.dispatcher_arg_index >= plan_args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
+
+        const lookup = self.iteratorMethodLookup(plan);
+        task.lookup = lookup;
+        task.call_ctx = try self.createCallContext();
+        const call_ctx = task.call_ctx.?;
+
+        var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, task.loop_iterator, task.expected_ret_ty);
+        const initial_plan_fn = try self.graph.functionNodes(callable_node);
+        // Instantiating the caller-authored request completes any procedure
+        // operands that return iterator evidence. Only then is the producer's
+        // representation available for the generated Iter.iter/Iter.next path.
+        if (self.iteratorProcedureForMethodTarget(lookup.target)) |procedure| {
+            const dispatcher_node = initial_plan_fn.args[plan.dispatcher_arg_index];
+            if ((procedure == .iter_iter or procedure == .iter_next) and self.isGeneratedIteratorEvidenceNode(dispatcher_node)) {
+                try self.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
+                task.generated = .{ .procedure = procedure, .dispatcher_node = dispatcher_node };
+                switch (try self.iteratorOperandStep(plan_args[plan.dispatcher_arg_index], task.loop_iterator, dispatcher_node)) {
+                    .now => |iterator| return self.finishGeneratedIteratorDispatch(task, procedure, dispatcher_node, iterator),
+                    .child => |step| return step,
+                }
+            }
+        }
+        const target_node = try self.methodTargetNodeFromPlan(lookup, call_ctx, plan.callable_ty);
+        try self.relateDispatchTargetRequestInterface(lookup, target_node, callable_node);
+        if (try self.generatedIteratorPlanRequestNode(
+            lookup,
+            target_node,
+            callable_node,
+            plan_args,
+        )) |private_node| {
+            callable_node = private_node;
+        }
+        // The generated request owns the operand slots used to lower this
+        // call. Completing the callee may replace the callable result, but it
+        // must not move these request-authored operands.
+        const plan_fn = try self.graph.functionNodes(callable_node);
+        task.callee = try self.methodTargetCalleeAtNodeWithEvidence(
+            lookup,
+            callable_node,
+            self.iteratorTargetEvidenceSource(plan),
+        );
+        const completed_callable_node = try self.draftFnSlotTypeNode(task.callee, callable_node);
+        if (task.expected_ret_ty) |expected| {
+            if (!self.graph.sameClass(plan_fn.ret, try expected.toGraphNode(self.graph))) {
+                Common.invariant("checked iterator dispatch plan return type differed from iterator-for expected type");
+            }
+        }
+
+        const dispatcher_node = plan_fn.args[plan.dispatcher_arg_index];
+        try call_ctx.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
+        const actual_dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], task.loop_iterator);
+        try relateRequestComponent(self.graph, dispatcher_node, actual_dispatcher_node);
+        // A producer-authored request intentionally remains in a different
+        // class from its checked-public operand. The directed relation above
+        // validates their complete public interface; ordinary operands still
+        // require the single checked class.
+        if (!self.graph.sameClass(dispatcher_node, actual_dispatcher_node) and
+            !try self.graph.containsGeneratedPrivate(dispatcher_node) and
+            !try self.graph.containsGeneratedPrivate(actual_dispatcher_node))
+        {
+            Common.invariant("iterator dispatch plan dispatcher operand differed from the checked dispatcher type");
+        }
+        const fn_nodes = try self.graph.functionNodes(completed_callable_node);
+        if (fn_nodes.args.len != plan_args.len) {
+            Common.invariant("completed iterator dispatch target changed its argument arity");
+        }
+        if (task.expected_ret_ty) |expected| {
+            const expected_node = try expected.toGraphNode(self.graph);
+            // Completion may replace the public return with a producer-minted
+            // private representation that is directionally related to the
+            // request instead of sharing its class, so a generated-private
+            // side is exempt exactly like the dispatcher operand check above.
+            if (!self.graph.sameClass(fn_nodes.ret, expected_node) and
+                !try self.graph.containsGeneratedPrivate(fn_nodes.ret) and
+                !try self.graph.containsGeneratedPrivate(expected_node))
+            {
+                Common.invariant("checked iterator dispatch target return type differed from iterator-for expected type");
+            }
+        }
+        task.ret_node = fn_nodes.ret;
+        task.arg_nodes = plan_fn.args;
+        task.args = try self.allocator.alloc(DraftExprId, plan_args.len);
+        return self.nextIteratorDispatchOperand(task, plan_args);
+    }
+
+    fn nextIteratorDispatchOperand(
+        self: *BodyContext,
+        task: *IteratorDispatchTask,
+        plan_args: []const static_dispatch.IteratorDispatchOperand,
+    ) Allocator.Error!LowerStep {
+        while (task.index < plan_args.len) {
+            switch (try self.iteratorOperandStep(plan_args[task.index], task.loop_iterator, task.arg_nodes[task.index])) {
+                .now => |arg| {
+                    task.args[task.index] = arg;
+                    task.index += 1;
+                },
+                .child => |step| return step,
+            }
+        }
+        const lowered = try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(task.ret_node),
+            .{ .call_proc = .{
+                .callee = draftProcCalleeForSlot(task.callee),
+                .args = try self.addExprSpan(task.args),
+                .iterator_procedure = self.iteratorProcedureForMethodTarget(task.lookup.target),
+                .captures = try self.methodTargetCaptureSpan(task.lookup),
+            } },
+        );
+        self.releaseIteratorDispatchTask(task);
+        return loweredExprStep(lowered);
+    }
+
+    fn finishGeneratedIteratorDispatch(
+        self: *BodyContext,
+        task: *IteratorDispatchTask,
+        procedure: checked.IteratorProcedureId,
+        dispatcher_node: NodeId,
+        iterator: DraftExprId,
+    ) Allocator.Error!LowerStep {
+        const lowered = switch (procedure) {
+            .iter_iter => blk: {
+                if (task.expected_ret_ty) |expected| {
+                    try relateRequestComponent(self.graph, dispatcher_node, try expected.toGraphNode(self.graph));
+                }
+                break :blk iterator;
+            },
+            .iter_next => blk: {
+                const step_ret_node = try self.generatedIteratorStepReturnNode(dispatcher_node);
+                if (task.expected_ret_ty) |expected| {
+                    try relateRequestComponent(self.graph, step_ret_node, try expected.toGraphNode(self.graph));
+                }
+                break :blk try self.addExprWithTypeCell(
+                    DraftTypeCell.fromGraphNode(step_ret_node),
+                    try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
+                );
+            },
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
+        };
+        self.releaseIteratorDispatchTask(task);
+        return loweredExprStep(lowered);
+    }
+
+    /// Lower one iterator dispatch operand at its instantiated argument node:
+    /// the loop's iterator local at once, a checked expression as a child.
+    fn iteratorOperandStep(
+        self: *BodyContext,
+        operand: static_dispatch.IteratorDispatchOperand,
+        loop_iterator: ?DraftTypedLocal,
+        node: NodeId,
+    ) Allocator.Error!union(enum) { now: DraftExprId, child: LowerStep } {
+        return switch (operand) {
+            .checked_expr => |expr| .{ .child = requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(node)) },
+            .loop_iterator_state => blk: {
+                const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
+                const iterator_node = try iterator.ty.toGraphNode(self.graph);
+                try self.graph.unify(iterator_node, node);
+                if (!self.graph.sameClass(iterator_node, node)) Common.invariant("iterator .next operand type differed from instantiated callable argument type");
+                break :blk .{ .now = try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local }) };
+            },
+        };
     }
 
     const WithTypeTask = struct {
@@ -28268,6 +29755,9 @@ const BodyContext = struct {
         receiver_ty: Type.TypeId = undefined,
         tag_name: names.TagNameId = undefined,
         nominal_named: Type.TypeId = undefined,
+        /// A nominal's proven-uninhabited backing type, whose scrutinee is
+        /// lowering as a child.
+        uninhabited_backing: ?Type.TypeId = null,
     };
 
     const DispatchLowerTask = struct {
@@ -28325,6 +29815,8 @@ const BodyContext = struct {
         uninhabited_index: usize = 0,
         prior: []DraftExprId = &.{},
         index: usize = 0,
+        /// The uninhabited argument's scrutinee is lowering as a child.
+        scrutinee_requested: bool = false,
     };
 
     const SpanTask = struct {
@@ -28339,6 +29831,9 @@ const BodyContext = struct {
         /// returns its slots.
         reserving: bool = false,
         index: usize = 0,
+        /// The proven-uninhabited type of the element whose scrutinee is
+        /// lowering as a child.
+        uninhabited_ty: ?Type.TypeId = null,
     };
 
     const CallLowerTask = struct {
@@ -28356,6 +29851,8 @@ const BodyContext = struct {
         iterator_procedure: ?checked.IteratorProcedureId = null,
         fn_ty: Type.TypeId = undefined,
         callee_expr: DraftExprId = undefined,
+        /// The result cell a divergent operand's effect lowers at.
+        divergent_ret_cell: DraftTypeCell = undefined,
     };
 
     const LowerFrame = struct {
@@ -28455,6 +29952,9 @@ const BodyContext = struct {
         /// A list's selected element witness and the child that chose it.
         produced_element: ?NodeId = null,
         selected_index: usize = 0,
+        /// The slot cell of a proven-uninhabited child, whose lowered
+        /// scrutinee a zero-branch match consumes.
+        uninhabited_slot: ?DraftTypeCell = null,
     };
 
     fn releaseConstructorTask(self: *BodyContext, task: *ConstructorTask) void {
@@ -28488,18 +29988,22 @@ const BodyContext = struct {
             try self.beginConstructor(task);
             frame.cursor = 1;
         } else {
-            task.lowered[task.index] = input.?.exprValue();
+            task.lowered[task.index] = if (task.uninhabited_slot) |cell|
+                try self.zeroBranchMatchAtTypeCell(input.?.exprValue(), cell)
+            else
+                input.?.exprValue();
+            task.uninhabited_slot = null;
             try self.constructorChildLowered(task);
         }
-        while (task.index < task.slots.len) {
+        if (task.index < task.slots.len) {
             const slot = task.slots[task.index];
             const child = self.constructorChild(task, task.index);
+            const slot_cell = DraftTypeCell.fromGraphNode(slot);
             if (try self.nodeIsProvenUninhabited(slot)) {
-                task.lowered[task.index] = try self.lowerExplicitUninhabitedInvocationAtTypeCell(child, DraftTypeCell.fromGraphNode(slot));
-                try self.constructorChildLowered(task);
-                continue;
+                task.uninhabited_slot = slot_cell;
+                return uninhabitedScrutineeStep(self, child, slot_cell);
             }
-            return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(slot));
+            return requestLowerChild(self, child, slot_cell);
         }
         const lowered = try self.finishConstructor(task);
         self.releaseConstructorTask(task);
@@ -28728,6 +30232,16 @@ const BodyContext = struct {
             .if_task => |*task| self.releaseIfTask(task),
             .match_task => |*task| self.releaseMatchTask(task),
             .nested_fn => |*task| self.releaseNestedFnTask(task),
+            .value_then_state => |*task| self.releaseValueThenStateTask(task),
+            .discarded => |*task| self.releaseDiscardedTask(task),
+            .statement => |*task| self.releaseStatementTask(task),
+            .loop => |*task| self.releaseLoopTask(task),
+            .iterator_dispatch => |task| {
+                self.releaseIteratorDispatchTask(task);
+                self.allocator.destroy(task);
+            },
+            .materialize => |*task| self.releaseMaterializeTask(task),
+            .branch_body, .return_value, .inspected, .divergent => {},
             .prepared_operands => |*task| {
                 if (task.reserving) self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
                 task.reserving = false;
@@ -28774,6 +30288,16 @@ const BodyContext = struct {
             .if_task => |*task| self.stepIf(task, input),
             .match_task => |*task| self.stepMatch(task, input),
             .nested_fn => |*task| self.stepNestedFn(task, input),
+            .branch_body => |*task| self.stepBranchBody(frame, task, input),
+            .value_then_state => |*task| self.stepValueThenState(task, input),
+            .discarded => |*task| self.stepDiscarded(task, input),
+            .statement => |*task| self.stepStatement(task, input),
+            .return_value => |*task| self.stepReturn(frame, task, input),
+            .inspected => |*task| self.stepInspected(frame, task, input),
+            .divergent => |*task| self.stepDivergent(frame, task, input),
+            .loop => |*task| self.stepLoop(task, input),
+            .iterator_dispatch => |task| self.stepIteratorDispatch(frame, task, input),
+            .materialize => |*task| self.stepMaterialize(task, input),
         };
     }
 
@@ -28802,23 +30326,14 @@ const BodyContext = struct {
         frame.cursor = 1;
         return switch (task.cell) {
             .sealed => |ty| if (task.diverges)
-                .{ .ret = .{ .expr = try self.finishAtTypeCellNow(task, expr, try self.lowerDivergentExprAtTypeCell(checked_expr, task.cell)) } }
+                divergentStep(self, checked_expr, .{ .at_cell = task.cell })
             else
                 requestLowerTask(self, .{ .type_inner = .{ .expr = checked_expr, .ty = ty } }),
             .graph_node => |expected_node| if (task.diverges)
-                .{ .ret = .{ .expr = try self.finishAtTypeCellNow(task, expr, try self.lowerDivergentExprAtTypeCell(checked_expr, task.cell)) } }
+                divergentStep(self, checked_expr, .{ .at_cell = task.cell })
             else
                 requestLowerTask(self, .{ .cell_inner = .{ .expr = checked_expr, .cell = task.cell, .expected_node = expected_node } }),
         };
-    }
-
-    fn finishAtTypeCellNow(self: *BodyContext, task: anytype, expr: checked.CheckedExpr, lowered: DraftExprId) Allocator.Error!DraftExprId {
-        const result = switch (task.cell) {
-            .sealed => try self.requireLoweredExprAtCell(expr, task.cell, task.demand, lowered),
-            .graph_node => |expected_node| try self.requireLoweredExpr(expr, expected_node, task.demand, lowered),
-        };
-        self.restoreSourceLocation(&task.saved);
-        return result;
     }
 
     fn stepLowerExpr(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -29117,7 +30632,10 @@ const BodyContext = struct {
             return .{ .ret = input.? };
         }
         task.saved = try self.saveSourceLocation(expr);
-        if (try self.lowerDivergentExprInContext(expr_id, .uncontextual)) |lowered| return self.exprInnerDone(task, lowered);
+        if (try self.divergentExprInContextStep(expr_id, .uncontextual)) |step| {
+            frame.cursor = 1;
+            return step;
+        }
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
                 expr.ty,
@@ -29320,7 +30838,10 @@ const BodyContext = struct {
                     .name = task.tag_name,
                     .payloads = child.spanValue(),
                 } })),
-                .nominal => self.withTypeDone(task, try self.addExpr(.{ .ty = task.nominal_named, .data = .{ .nominal = child.exprValue() } })),
+                .nominal => self.withTypeDone(task, try self.addExpr(.{ .ty = task.nominal_named, .data = .{ .nominal = if (task.uninhabited_backing) |backing_ty|
+                    try self.zeroBranchMatch(child.exprValue(), backing_ty)
+                else
+                    child.exprValue() } })),
                 .field_access => |field| try self.withTypeData(task, .{ .field_access = .{
                     .receiver = child.exprValue(),
                     .segments = .{ .start = task.field_access_start, .len = @intCast(field.segments.len) },
@@ -29330,9 +30851,19 @@ const BodyContext = struct {
                     .elem_index = access.elem_index,
                 } }),
                 .expect => try self.withTypeData(task, .{ .expect = child.exprValue() }),
+                .dbg => try self.withTypeData(task, .{ .dbg = child.exprValue() }),
+                .expect_err => try self.withTypeData(task, .{ .expect_err = .{
+                    .msg = child.exprValue(),
+                    .region = expr.source_region,
+                } }),
+                .return_ => try self.withTypeData(task, child.dataValue()),
+                .for_ => try self.withTypeData(task, .{ .block = .{
+                    .statements = try self.addStmtSpan(&.{child.statementValue().stmt.?}),
+                    .final_expr = try self.addExpr(.{ .ty = ty, .data = .unit }),
+                } }),
                 .run_low_level => |low_level| try self.withTypeData(task, .{ .low_level = .{ .op = low_level.op, .args = child.spanValue() } }),
                 .match_, .if_, .block, .closure, .lambda => self.withTypeDone(task, child.exprValue()),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .call, .record, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => unreachable,
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .call, .record, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable,
             };
         }
         task.saved = try self.saveSourceLocation(expr);
@@ -29390,8 +30921,8 @@ const BodyContext = struct {
                     .{ ty, self.namedBackingType(ty) orelse ty };
                 task.nominal_named = named;
                 if (try self.typeIsProvenUninhabited(backing_ty)) {
-                    const backing = try self.lowerExplicitUninhabitedInvocation(nominal.backing_expr, backing_ty);
-                    return self.withTypeDone(task, try self.addExpr(.{ .ty = named, .data = .{ .nominal = backing } }));
+                    task.uninhabited_backing = backing_ty;
+                    return uninhabitedScrutineeStep(self, nominal.backing_expr, .{ .sealed = backing_ty });
                 }
                 return requestLowerChild(self, nominal.backing_expr, .{ .sealed = backing_ty });
             },
@@ -29441,21 +30972,18 @@ const BodyContext = struct {
             => Common.invariant("desugared operator expression reached Monotype without checked dispatch or low-level form"),
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
-            .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
-            .expect_err => |expect_err| .{ .expect_err = .{
-                .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
-                .region = expr.source_region,
-            } },
+            .dbg => |child| return requestLowerTask(self, .{ .inspected = .{ .expr = child } }),
+            .expect_err => |expect_err| return requestLowerTask(self, .{ .inspected = .{
+                .expr = expect_err.expr,
+                .expect_err_snippet = expect_err.snippet,
+            } }),
             .expect => |child| if (self.builder.inline_expects == .omit)
                 .unit
             else
                 return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
-            .for_ => |for_| .{ .block = .{
-                .statements = try self.addStmtSpan(&.{try self.addStmt(try self.lowerForStatement(for_))}),
-                .final_expr = try self.addExpr(.{ .ty = ty, .data = .unit }),
-            } },
+            .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
+            .for_ => |for_| return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(for_) } } }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
         };
@@ -29818,6 +31346,7 @@ const BodyContext = struct {
                 }
                 frame.cursor = 1;
             },
+            2 => return self.finishClosedOperandsAtUninhabited(task, input.?.exprValue()),
             else => {
                 const lowered = input.?.exprValue();
                 if (task.uninhabited_index != null) {
@@ -29834,18 +31363,29 @@ const BodyContext = struct {
             return requestLowerTask(self, .{ .operand_at_type = .{ .operand = operands[task.index], .ty = stable_types[task.index] } });
         }
 
-        defer {
-            self.allocator.free(task.stable_types);
-            task.stable_types = &.{};
-            self.allocator.free(task.prior);
-            task.prior = &.{};
-        }
         task.reserving = false;
-        const uninhabited_index = task.uninhabited_index orelse return .{ .ret = .{ .closed_operands = .{ .args = task.reserved.span } } };
-        const checked_arg = operands[uninhabited_index].checked_expr;
-        const arg_ty = stable_types[uninhabited_index];
+        const uninhabited_index = task.uninhabited_index orelse {
+            self.releaseClosedOperandsAtTypes(task);
+            return .{ .ret = .{ .closed_operands = .{ .args = task.reserved.span } } };
+        };
+        frame.cursor = 2;
+        return uninhabitedScrutineeStep(self, operands[uninhabited_index].checked_expr, .{ .sealed = stable_types[uninhabited_index] });
+    }
+
+    fn releaseClosedOperandsAtTypes(self: *BodyContext, task: *ClosedOperandsAtTypesTask) void {
+        self.allocator.free(task.stable_types);
+        task.stable_types = &.{};
+        self.allocator.free(task.prior);
+        task.prior = &.{};
+    }
+
+    /// Bind the operands before a proven-uninhabited one, then match on its
+    /// lowered scrutinee with no branches.
+    fn finishClosedOperandsAtUninhabited(self: *BodyContext, task: *ClosedOperandsAtTypesTask, scrutinee: DraftExprId) Allocator.Error!LowerStep {
+        defer self.releaseClosedOperandsAtTypes(task);
+        const stable_types = task.stable_types;
+        const uninhabited_index = task.uninhabited_index.?;
         const ret_cell = task.ret_cell;
-        const scrutinee = try self.lowerUninhabitedScrutinee(checked_arg, arg_ty);
         var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
         var index = uninhabited_index;
         while (index > 0) {
@@ -30100,7 +31640,7 @@ const BodyContext = struct {
             task.uninhabited_index = uninhabited_index;
             task.prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
             frame.cursor = 1;
-        } else {
+        } else if (!task.scrutinee_requested) {
             task.prior[task.index] = input.?.exprValue();
             task.index += 1;
         }
@@ -30116,13 +31656,17 @@ const BodyContext = struct {
             };
         }
 
+        if (!task.scrutinee_requested) {
+            task.scrutinee_requested = true;
+            const arg_cell = DraftTypeCell.fromGraphNode(arg_nodes[task.uninhabited_index]);
+            return uninhabitedScrutineeStep(self, operands[task.uninhabited_index].checked_expr, arg_cell);
+        }
         defer {
             self.allocator.free(task.prior);
             task.prior = &.{};
         }
         const uninhabited_index = task.uninhabited_index;
-        const arg_cell = DraftTypeCell.fromGraphNode(arg_nodes[uninhabited_index]);
-        const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(operands[uninhabited_index].checked_expr, arg_cell);
+        const scrutinee = input.?.exprValue();
         const ret_cell = task.ret_cell;
         var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
         var index = uninhabited_index;
@@ -30150,7 +31694,7 @@ const BodyContext = struct {
             task.uninhabited_index = uninhabited_index;
             task.prior = try self.allocator.alloc(DraftExprId, uninhabited_index);
             frame.cursor = 1;
-        } else {
+        } else if (!task.scrutinee_requested) {
             task.prior[task.index] = input.?.exprValue();
             task.index += 1;
         }
@@ -30159,16 +31703,17 @@ const BodyContext = struct {
             return requestLowerChild(self, task.checked_args[task.index], DraftTypeCell.fromGraphNode(arg_nodes[task.index]));
         }
 
+        if (!task.scrutinee_requested) {
+            task.scrutinee_requested = true;
+            const uninhabited_cell = DraftTypeCell.fromGraphNode(arg_nodes[task.uninhabited_index]);
+            return uninhabitedScrutineeStep(self, task.checked_args[task.uninhabited_index], uninhabited_cell);
+        }
         defer {
             self.allocator.free(task.prior);
             task.prior = &.{};
         }
         const uninhabited_index = task.uninhabited_index;
-        const uninhabited_cell = DraftTypeCell.fromGraphNode(arg_nodes[uninhabited_index]);
-        const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(
-            task.checked_args[uninhabited_index],
-            uninhabited_cell,
-        );
+        const scrutinee = input.?.exprValue();
         const ret_cell = task.ret_cell;
         var result = try self.addExprWithTypeCell(ret_cell, .{ .match_ = .{
             .scrutinee = scrutinee,
@@ -30228,10 +31773,15 @@ const BodyContext = struct {
             task.reserving = true;
             frame.cursor = 1;
         } else {
-            self.draft.setReservedExprSpanItem(task.reserved, task.index, input.?.exprValue());
+            const lowered = if (task.uninhabited_ty) |ty|
+                try self.zeroBranchMatch(input.?.exprValue(), ty)
+            else
+                input.?.exprValue();
+            task.uninhabited_ty = null;
+            self.draft.setReservedExprSpanItem(task.reserved, task.index, lowered);
             task.index += 1;
         }
-        while (task.index < exprs.len) {
+        if (task.index < exprs.len) {
             const child = exprs[task.index];
             const ty = switch (mode) {
                 .typed_by_expr => return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child))),
@@ -30240,8 +31790,8 @@ const BodyContext = struct {
                 .list_elements => task.elem_ty,
             };
             if (!try self.typeIsProvenUninhabited(ty)) return requestLowerChild(self, child, .{ .sealed = ty });
-            self.draft.setReservedExprSpanItem(task.reserved, task.index, try self.lowerExplicitUninhabitedInvocation(child, ty));
-            task.index += 1;
+            task.uninhabited_ty = ty;
+            return uninhabitedScrutineeStep(self, child, .{ .sealed = ty });
         }
         task.reserving = false;
         self.releaseSpanTask(task);
@@ -30267,18 +31817,33 @@ const BodyContext = struct {
         return .{ .ret = .{ .call = lowered } };
     }
 
+    /// The call task's cursor while a divergent operand's effect lowers.
+    const divergent_call_cursor: u8 = 0xff;
+
     /// `lowerCallAtExpectedNode`
     fn stepCallLower(self: *BodyContext, frame: *LowerFrame, task: *CallLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const checked_expr = task.expr;
         const checked_ret_ty = task.checked_ret_ty;
         const call = task.call;
         switch (frame.cursor) {
+            divergent_call_cursor => return self.callLowerDone(task, .{
+                .ret_ty = task.divergent_ret_cell,
+                .data = try self.exprIdAsDivergentData(input.?.exprValue()),
+            }),
             0 => {
                 const expected_ret_node = task.expected_ret_node;
                 const expected_ret_ty = task.expected_ret_ty;
                 task.timing = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
                 self.builder.countBodyDiagnostic("call_expressions");
-                if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return self.callLowerDone(task, lowered);
+                if (self.divergentCallOperand(call)) |operand| {
+                    task.divergent_ret_cell = if (expected_ret_node) |expected|
+                        DraftTypeCell.fromGraphNode(expected)
+                    else
+                        try self.lowerTypeCell(checked_ret_ty);
+                    try self.constrainCheckedInterfaceToCell(checked_ret_ty, task.divergent_ret_cell);
+                    frame.cursor = divergent_call_cursor;
+                    return divergentStep(self, operand, .{ .at_cell = task.divergent_ret_cell });
+                }
 
                 if (call.direct_target) |target| {
                     const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
@@ -30533,28 +32098,6 @@ const BodyContext = struct {
         return (try self.runLower(.{ .expr = .{ .expr = expr_id } })).exprValue();
     }
 
-    fn lowerExprInner(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .expr_inner = .{ .expr = expr_id } })).exprValue();
-    }
-
-    fn lowerReturn(self: *BodyContext, ret: anytype, context: checked.CheckedReturnContext) Allocator.Error!DraftReturn {
-        const target = self.current_return_target orelse
-            Common.invariant("checked return reached lowering without an active specialization return target");
-        if (ret.lambda != target.lambda) {
-            Common.invariant("checked return target disagreed with the active lambda specialization");
-        }
-        return .{
-            // `?` contributes its source error row to the enclosing result;
-            // it does not equate those rows. Keep the checked source type so
-            // the explicit return boundary can convert it to the target.
-            .value = switch (context) {
-                .try_suffix => try self.lowerExpr(ret.expr),
-                .return_expr => try self.lowerExprAtTypeCell(ret.expr, target.cell),
-            },
-            .target = target.cell,
-        };
-    }
-
     fn lowerComptimeRootExprAtCell(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
@@ -30744,14 +32287,6 @@ const BodyContext = struct {
         return try self.restoredHoistedConstAtType(entry, ty);
     }
 
-    fn lowerExprWithType(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .with_type = .{ .expr = expr_id, .ty = ty } })).exprValue();
-    }
-
     fn requireLoweredExpr(
         self: *BodyContext,
         expr: checked.CheckedExpr,
@@ -30867,55 +32402,6 @@ const BodyContext = struct {
         return try PatternUninhabitedScan.Evaluation.run(self.allocator, &scan, pattern_id);
     }
 
-    fn lowerDbgMessage(self: *BodyContext, child: checked.CheckedExprId) Allocator.Error!DraftExprId {
-        const str_ty = try self.primitiveType(.str);
-        return try self.lowerInspectedExpr(child, str_ty);
-    }
-
-    /// Lower a value for diagnostic rendering without materializing an open
-    /// instantiation graph. Unresolved children retain their exact graph cells
-    /// until the shared final snapshot drives inspect-helper emission.
-    fn lowerInspectedExpr(
-        self: *BodyContext,
-        child: checked.CheckedExprId,
-        str_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        if (self.view.bodies.expr(child).data == .runtime_error) {
-            return try self.lowerExprWithType(child, str_ty);
-        }
-        const value_node = try self.lowerExprTypeNode(child);
-        const value = try self.lowerExprAtTypeCell(child, DraftTypeCell.fromGraphNode(value_node));
-        return if (try self.graph.typeIsResolved(value_node))
-            try self.inspectCall(value, try self.activeTypeFromNode(value_node), str_ty)
-        else
-            try self.deferInspectAtNode(value, value_node, str_ty);
-    }
-
-    fn lowerExpectErrMessage(
-        self: *BodyContext,
-        child: checked.CheckedExprId,
-        snippet: checked.CheckedStringLiteralId,
-    ) Allocator.Error!DraftExprId {
-        const str_ty = try self.primitiveType(.str);
-        const rendered = try self.lowerInspectedExpr(child, str_ty);
-
-        const snippet_index = @intFromEnum(snippet);
-        if (snippet_index >= self.view.bodies.stringLiteralCount()) {
-            Common.invariant("checked string literal id outside checked body string store");
-        }
-        const snippet_text = self.view.bodies.stringLiteral(@enumFromInt(snippet_index));
-        const prefix_text = try std.fmt.allocPrint(
-            self.builder.allocator,
-            "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(",
-            .{snippet_text},
-        );
-        defer self.builder.allocator.free(prefix_text);
-        const prefix = try self.stringExpr(prefix_text, str_ty);
-        const with_value = try self.concatExpr(prefix, rendered, str_ty);
-        const suffix = try self.stringExpr(")", str_ty);
-        return try self.concatExpr(with_value, suffix, str_ty);
-    }
-
     fn lowerStr(self: *BodyContext, segments: []const checked.CheckedExprId) Allocator.Error!BodyExprData {
         const str_ty = try self.primitiveType(.str);
         if (segments.len == 0) {
@@ -30940,15 +32426,6 @@ const BodyContext = struct {
             id,
             self.view.bodies.stringLiteral(@enumFromInt(index)),
         );
-    }
-
-    fn lowerCallExpr(
-        self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .call_expr = .{ .expr = checked_expr_id, .checked_ret_ty = checked_ret_ty, .call = call } })).exprValue();
     }
 
     fn producedResultCell(
@@ -38563,52 +40040,6 @@ const BodyContext = struct {
         } } });
     }
 
-    fn lowerCall(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-    ) Allocator.Error!LoweredCall {
-        return try self.lowerCallAtExpectedNode(checked_expr, checked_ret_ty, call, null, null);
-    }
-
-    fn lowerCallAtType(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-        expected_ret_ty: ?Type.TypeId,
-    ) Allocator.Error!LoweredCall {
-        return try self.lowerCallAtExpectedNode(
-            checked_expr,
-            checked_ret_ty,
-            call,
-            if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
-            expected_ret_ty,
-        );
-    }
-
-    fn lowerCallAtNode(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-        expected_ret_node: NodeId,
-    ) Allocator.Error!LoweredCall {
-        return try self.lowerCallAtExpectedNode(checked_expr, checked_ret_ty, call, expected_ret_node, null);
-    }
-
-    fn lowerCallAtExpectedNode(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-        expected_ret_node: ?NodeId,
-        expected_ret_ty: ?Type.TypeId,
-    ) Allocator.Error!LoweredCall {
-        return (try self.runLower(.{ .call = .{ .expr = checked_expr, .checked_ret_ty = checked_ret_ty, .call = call, .expected_ret_node = expected_ret_node, .expected_ret_ty = expected_ret_ty } })).callValue();
-    }
-
     fn lowerGeneratedIteratorNextCall(
         self: *BodyContext,
         procedure: checked.IteratorProcedureId,
@@ -38652,14 +40083,6 @@ const BodyContext = struct {
             .callee = step,
             .args = .empty(),
         } };
-    }
-
-    fn lowerDirectCallWithUninhabitedArgument(
-        self: *BodyContext,
-        checked_args: []const checked.CheckedExprId,
-        fn_nodes: FunctionNodes,
-    ) Allocator.Error!?LoweredCall {
-        return (try self.runLower(.{ .uninhabited_call = .{ .checked_args = checked_args, .arg_nodes = fn_nodes.args, .ret_cell = DraftTypeCell.fromGraphNode(fn_nodes.ret) } })).maybeCallValue();
     }
 
     /// Materialize an indirect callee only when a binding use already provides
@@ -38781,39 +40204,14 @@ const BodyContext = struct {
         return try self.builder.hostedTryAdapterCapability(view, template.hosted_try_adapter);
     }
 
-    fn lowerCallThatCannotReachCallee(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-        expected_ret_node: ?NodeId,
-    ) Allocator.Error!?LoweredCall {
-        if (self.checkedExprDivergesInLoweredRuntime(call.func)) {
-            return try self.lowerDivergentCallOperand(checked_ret_ty, call.func, expected_ret_node);
-        }
+    /// A call whose callee or argument diverges never reaches the callee:
+    /// the first divergent operand, whose effect the call lowers to.
+    fn divergentCallOperand(self: *BodyContext, call: anytype) ?checked.CheckedExprId {
+        if (self.checkedExprDivergesInLoweredRuntime(call.func)) return call.func;
         for (call.args) |arg| {
-            if (self.checkedExprDivergesInLoweredRuntime(arg)) {
-                return try self.lowerDivergentCallOperand(checked_ret_ty, arg, expected_ret_node);
-            }
+            if (self.checkedExprDivergesInLoweredRuntime(arg)) return arg;
         }
         return null;
-    }
-
-    fn lowerDivergentCallOperand(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        operand: checked.CheckedExprId,
-        expected_ret_node: ?NodeId,
-    ) Allocator.Error!LoweredCall {
-        const ret_cell = if (expected_ret_node) |expected|
-            DraftTypeCell.fromGraphNode(expected)
-        else
-            try self.lowerTypeCell(checked_ret_ty);
-        try self.constrainCheckedInterfaceToCell(checked_ret_ty, ret_cell);
-        const divergent = try self.lowerDivergentExprAtTypeCell(operand, ret_cell);
-        return .{
-            .ret_ty = ret_cell,
-            .data = try self.exprIdAsDivergentData(divergent),
-        };
     }
 
     /// Unify a callee formal with the caller's checked argument type. The
@@ -39345,32 +40743,6 @@ const BodyContext = struct {
             if (request.fn_node == fn_node) request.completed = completed;
         }
         return completed;
-    }
-
-    /// The result cell of a direct call is the selected specialization's
-    /// result. The caller's checked result type only describes what the
-    /// call site observed while the callee's own result was still open: a
-    /// bare tag compared against the call, for instance, is recorded as an
-    /// anonymous tag union that the callee's body completes to a nominal.
-    /// Relating the callee's interface before answering makes the result
-    /// class carry that completion, so a consumer that seals the type from
-    /// this cell agrees with the type the lowered call produces. The
-    /// arguments are related to the request first and the callee is drafted
-    /// after, in the order lowering itself follows, and the calls lowering
-    /// never routes through a callee template (a divergent callee or
-    /// argument expression, an argument proven uninhabited, `Iter.next` on
-    /// generated iterator evidence, or `Str.inspect`) answer with the
-    /// request cell, exactly as their lowering does. Call-site intrinsics
-    /// apply their checked result-source relation without drafting a wrapper.
-    fn directCallCompletedResultNode(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        target: checked.ResolvedValueId,
-        call: anytype,
-        source_fn_ty: checked.CheckedTypeId,
-        fn_node: NodeId,
-    ) Allocator.Error!NodeId {
-        return (try self.runEvidence(.{ .completed_result = .{ .expr = checked_expr, .target = target, .call = call, .source_fn_ty = source_fn_ty, .fn_node = fn_node } })).nodeValue();
     }
 
     fn directCallTypeNode(
@@ -40231,7 +41603,7 @@ const BodyContext = struct {
     /// "Static Dispatch In Monotype").
     ///
     /// Trust boundary: the quantification half is not checked here. It is
-    /// guaranteed by the two sealed-cell producers—`lowerPatternStatement`
+    /// guaranteed by the two sealed-cell producers—`beginPatternStatementValue`
     /// through `closedDirectGraphFreeResultType`, whose cell only a
     /// `direct_closed` plan's result fills, and `lowerShapeFreePatternAtCell`
     /// fed by that same cell—together with digest-closed types, which reach
@@ -43188,10 +44560,6 @@ const BodyContext = struct {
         try self.ensureNestedCallablesAtNodes(checked_exprs, nodes);
     }
 
-    fn lowerExprSpan(self: *BodyContext, checked_exprs: []const checked.CheckedExprId) Allocator.Error!DraftSpan(DraftExprId) {
-        return (try self.runLower(.{ .span = .{ .exprs = checked_exprs } })).spanValue();
-    }
-
     fn prepareExprSpanAtNodes(
         self: *BodyContext,
         checked_exprs: []const checked.CheckedExprId,
@@ -43206,18 +44574,6 @@ const BodyContext = struct {
         nodes: []const NodeId,
     ) Allocator.Error!DraftSpan(DraftExprId) {
         return (try self.runLower(.{ .prepared_span = .{ .exprs = checked_exprs, .nodes = nodes } })).spanValue();
-    }
-
-    fn lowerListExpr(self: *BodyContext, checked_exprs: []const checked.CheckedExprId, ty: Type.TypeId) Allocator.Error!DraftSpan(DraftExprId) {
-        return (try self.runLower(.{ .list_span = .{ .exprs = checked_exprs, .list_ty = ty } })).spanValue();
-    }
-
-    fn lowerExprSpanAtTypes(
-        self: *BodyContext,
-        checked_exprs: []const checked.CheckedExprId,
-        tys: anytype,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        return (try self.runLower(try self.spanAtTypesTask(checked_exprs, tys))).spanValue();
     }
 
     const PreLoweredOperand = struct {
@@ -43645,15 +45001,6 @@ const BodyContext = struct {
         return (try self.runLower(.{ .at_type_cell = .{ .expr = checked_expr, .cell = cell, .demand = demand, .diverges = expr_diverges } })).exprValue();
     }
 
-    fn lowerExprAtTypeCellInner(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        cell: DraftTypeCell,
-        expected_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .cell_inner = .{ .expr = checked_expr, .cell = cell, .expected_node = expected_node } })).exprValue();
-    }
-
     fn selectExprRepresentationAtNode(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
@@ -43664,14 +45011,6 @@ const BodyContext = struct {
             expected_node,
             try self.lowerExprTypeNode(checked_expr),
         );
-    }
-
-    fn lowerCallExprAtNode(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        expected_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .call_expr_at_node = .{ .expr = checked_expr, .expected_node = expected_node } })).exprValue();
     }
 
     fn lowerFieldAccessExprAtNode(
@@ -43721,14 +45060,6 @@ const BodyContext = struct {
         demand: LoweringDemand,
     ) Allocator.Error!DraftExprId {
         return try self.lowerExprAtTypeCellWithDemand(checked_expr, .{ .sealed = ty }, demand);
-    }
-
-    fn lowerExprAtTypeWithDemandInner(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .type_inner = .{ .expr = checked_expr, .ty = ty } })).exprValue();
     }
 
     fn sameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId) bool {
@@ -43977,7 +45308,7 @@ const BodyContext = struct {
             self.in_default_expr = true;
             // The default is a closed expression: it binds nothing from the
             // consuming body, so it gets fresh binder state even in its own
-            // module (the same rule boxy's `lowerModuleExprInto` applies).
+            // module (the same rule boxy's `stepModuleExpr` applies).
             // Without this, a second materialization of the same default in
             // one body would capture the first's (or the consuming body's)
             // lexical binder entries into its local-procedure declaration
@@ -45071,28 +46402,6 @@ const BodyContext = struct {
         return null;
     }
 
-    fn lowerClosureAtNode(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        closure: anytype,
-        request_fn_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
-        const capture_nodes = try self.graph.arena().alloc(NodeId, capture_span.len);
-        for (self.fnDefCaptureSpan(capture_span), capture_nodes) |capture, *node| {
-            node.* = try self.exprTypeCell(capture.value).toGraphNode(self.graph);
-        }
-        const fn_id = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, capture_nodes);
-        const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(fn_node),
-            .{ .fn_def = .{
-                .fn_id = fn_id,
-                .captures = capture_span,
-            } },
-        );
-    }
-
     fn ensureClosureAtNode(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
@@ -45176,19 +46485,6 @@ const BodyContext = struct {
             );
         }
         return fn_node;
-    }
-
-    fn lowerLambdaExprAtNode(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        request_fn_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const fn_id = try self.ensureLambdaAtNode(expr_id, request_fn_node);
-        const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(fn_node),
-            .{ .fn_def = .{ .fn_id = fn_id } },
-        );
     }
 
     fn ensureNestedCallableAtNode(
@@ -45387,61 +46683,10 @@ const BodyContext = struct {
         return (try self.runLower(.{ .dispatch = .{ .checked_ret_ty = checked_ret_ty, .maybe_plan = maybe_plan, .expected_ret_cell = expected_ret_cell } })).exprValue();
     }
 
-    fn lowerClosedDirectLowLevelDispatch(
-        self: *BodyContext,
-        _: checked.CheckedTypeId,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        op: can.CIR.Expr.LowLevel,
-        expected_ret_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .closed_low_level = .{ .plan = plan, .op = op, .expected_ret_cell = expected_ret_cell } })).exprValue();
-    }
-
-    fn lowerClosedDispatchOperandsAtTypes(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        arg_types: anytype,
-        ret_cell: DraftTypeCell,
-    ) Allocator.Error!ClosedDispatchOperands {
-        if (operands.len != GuardedList.borrowLen(arg_types)) {
-            Common.invariant("closed dispatch argument arity differed from its sealed callable type");
-        }
-        return (try self.runLower(.{ .closed_operands_at_types = .{ .operands = operands, .stable_types = try GuardedList.dupe(self.allocator, Type.TypeId, arg_types), .ret_cell = ret_cell } })).closedOperandsValue();
-    }
-
-    fn lowerClosedDirectProcedureDispatch(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        evidence_id: static_dispatch.EvidenceNodeId,
-        procedure: static_dispatch.ProcedureMethodTarget,
-        expected_ret_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .closed_procedure = .{ .checked_ret_ty = checked_ret_ty, .plan = plan, .evidence_id = evidence_id, .procedure = procedure, .expected_ret_cell = expected_ret_cell } })).exprValue();
-    }
-
     const ClosedDispatchOperands = union(enum) {
         args: DraftSpan(DraftExprId),
         uninhabited: DraftExprId,
     };
-
-    fn lowerClosedDispatchOperandsAtNode(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        callable_node: NodeId,
-        expected_ret_cell: DraftTypeCell,
-    ) Allocator.Error!ClosedDispatchOperands {
-        return (try self.runLower(.{ .closed_operands_at_node = .{ .operands = operands, .callable_node = callable_node, .expected_ret_cell = expected_ret_cell } })).closedOperandsValue();
-    }
-
-    fn lowerDispatchWithUninhabitedArgument(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        arg_nodes: []const NodeId,
-        ret_cell: DraftTypeCell,
-    ) Allocator.Error!?DraftExprId {
-        return (try self.runLower(.{ .uninhabited_dispatch = .{ .operands = operands, .arg_nodes = arg_nodes, .ret_cell = ret_cell } })).maybeExprValue();
-    }
 
     fn applyDispatchResultMode(
         self: *BodyContext,
@@ -55693,7 +56938,7 @@ const BodyContext = struct {
         return try self.lowLevelExpr(.hasher_write_u64, &.{ hasher, value_expr }, hasher_ty);
     }
 
-    const MatchOutput = union(enum) {
+    const BranchOutput = union(enum) {
         value: DraftTypeCell,
         state_result: struct {
             result_cell: DraftTypeCell,
@@ -55706,99 +56951,12 @@ const BodyContext = struct {
         },
     };
 
-    fn matchOutputCell(_: *BodyContext, output: MatchOutput) DraftTypeCell {
+    fn branchOutputCell(_: *BodyContext, output: BranchOutput) DraftTypeCell {
         return switch (output) {
             .value => |cell| cell,
             .state_result => |state| state.state_cell,
             .state_only => |state| state.state_cell,
         };
-    }
-
-    fn lowerMatchBranchBody(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        output: MatchOutput,
-    ) Allocator.Error!DraftExprId {
-        return switch (output) {
-            .value => |result_cell| try self.lowerBranchValueAtTypeCell(body, result_cell),
-            .state_result => |state| try self.lowerBodyThenStateResultAtTypeCells(
-                body,
-                state.result_cell,
-                state.state_cell,
-                state.merge_binders,
-            ),
-            .state_only => |state| try self.lowerBodyThenStateOnlyAtTypeCell(
-                body,
-                state.state_cell,
-                state.merge_binders,
-            ),
-        };
-    }
-
-    fn lowerBranchValueAtTypeCell(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        result_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        if (self.checkedExprDivergesInLoweredRuntime(body)) {
-            return try self.lowerDivergentExprAtTypeCell(body, result_cell);
-        }
-        const result_node = try result_cell.toGraphNode(self.graph);
-        if (try self.nodeIsProvenUninhabited(result_node)) {
-            return try self.lowerExplicitUninhabitedInvocationAtTypeCell(body, result_cell);
-        }
-        return try self.lowerExprAtTypeCell(body, result_cell);
-    }
-
-    fn lowerMatchExpr(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype, result_ty: Type.TypeId) Allocator.Error!DraftExprId {
-        return try self.lowerMatchExprAtTypeCell(expr_id, match, .{ .sealed = result_ty });
-    }
-
-    fn lowerMatchExprAtTypeCell(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        match: anytype,
-        result_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        const comptime_site = try self.matchComptimeSite(expr_id, match);
-        const merge_binders = try self.stateMergeBinders(expr_id);
-        defer self.allocator.free(merge_binders);
-        if (merge_binders.len == 0) {
-            var selection: ControlFlowResultSelection = .{
-                .declared = result_cell,
-                .selected = result_cell,
-            };
-            const data = try self.lowerMatch(
-                match,
-                .{ .value = selection.selected },
-                comptime_site,
-                &selection,
-            );
-            return try self.addExprWithTypeCell(
-                try self.finishControlFlowResultSelection(selection),
-                data,
-            );
-        }
-
-        const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
-        const state_expr = try self.lowerMatchExprWithOutput(match, .{ .state_result = .{
-            .result_cell = result_cell,
-            .state_cell = state_cell,
-            .merge_binders = merge_binders,
-        } }, comptime_site);
-        return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
-    }
-
-    fn lowerMatchExprWithOutput(
-        self: *BodyContext,
-        match: anytype,
-        output: MatchOutput,
-        comptime_site: ?DraftComptimeSiteId,
-    ) Allocator.Error!DraftExprId {
-        return try self.addExprWithTypeCell(
-            self.matchOutputCell(output),
-            try self.lowerMatch(match, output, comptime_site, null),
-        );
     }
 
     /// Whether any node of the pattern must materialize on its own. Each
@@ -56101,100 +57259,6 @@ const BodyContext = struct {
         return try self.lowLevelExpr(op, &.{ len, required }, bool_ty);
     }
 
-    /// Register every binder of `pattern_id` at its concrete type, in source
-    /// order, from an explicit work list.
-    fn preRegisterPatternBinders(
-        self: *BodyContext,
-        root_pattern: checked.CheckedPatternId,
-        root_ty: Type.TypeId,
-    ) Allocator.Error!void {
-        const Visit = struct { pattern: checked.CheckedPatternId, ty: Type.TypeId };
-        var pending: std.ArrayListUnmanaged(Visit) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .pattern = root_pattern, .ty = root_ty });
-        while (pending.pop()) |visit| {
-            const ty = visit.ty;
-            const start = pending.items.len;
-            const pattern = self.view.bodies.pattern(visit.pattern);
-            switch (pattern.data) {
-                .assign => |binder| {
-                    if (self.currentOwnerPatternBinderLocal(binder) == null) {
-                        const local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
-                        try self.bindLocalName(local, binder);
-                        try self.binders.put(binder, local);
-                    }
-                },
-                .as => |as| {
-                    if (self.currentOwnerPatternBinderLocal(as.binder) == null) {
-                        const local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
-                        try self.bindLocalName(local, as.binder);
-                        try self.binders.put(as.binder, local);
-                    }
-                    try pending.append(self.allocator, .{ .pattern = as.pattern, .ty = ty });
-                },
-                .applied_tag => |tag| {
-                    const name = try self.tagName(self.view, tag.name);
-                    const payload_tys = self.tagPayloadTypes(ty, name);
-                    if (tag.args.len != payload_tys.len) Common.invariant("pattern arity differs from concrete checked type");
-                    for (tag.args, payload_tys) |arg, arg_ty| {
-                        try pending.append(self.allocator, .{ .pattern = arg, .ty = arg_ty });
-                    }
-                },
-                .nominal => |nominal| {
-                    try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern, .ty = self.namedBackingType(ty) orelse ty });
-                },
-                .record_destructure => |destructs| {
-                    for (destructs) |destruct| {
-                        switch (destruct.kind) {
-                            .required, .sub_pattern => |child| {
-                                const name = try self.recordFieldName(self.view, destruct.label);
-                                const child_ty = self.recordFieldType(ty, name);
-                                try pending.append(self.allocator, .{ .pattern = child, .ty = child_ty });
-                            },
-                            .rest => |rest_pattern| {
-                                if (!self.patternIsIgnored(rest_pattern)) {
-                                    Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
-                                }
-                            },
-                        }
-                    }
-                },
-                .list => |list| {
-                    const elem_ty = self.constListElemType(ty);
-                    for (list.patterns) |child| {
-                        try pending.append(self.allocator, .{ .pattern = child, .ty = elem_ty });
-                    }
-                    if (list.rest) |rest| {
-                        if (rest.pattern) |rest_pattern| {
-                            try pending.append(self.allocator, .{ .pattern = rest_pattern, .ty = ty });
-                        }
-                    }
-                },
-                .tuple => |items| {
-                    const item_tys = self.tupleItemTypes(ty);
-                    if (items.len != item_tys.len) Common.invariant("pattern arity differs from concrete checked type");
-                    for (items, item_tys) |item, item_ty| {
-                        try pending.append(self.allocator, .{ .pattern = item, .ty = item_ty });
-                    }
-                },
-                .str_interpolation => |str| {
-                    for (str.steps) |step| {
-                        if (step.capture) |capture| {
-                            try pending.append(self.allocator, .{ .pattern = capture, .ty = ty });
-                        }
-                    }
-                },
-                .pending,
-                .numeral_literal,
-                .str_literal,
-                .underscore,
-                .runtime_error,
-                => {},
-            }
-            std.mem.reverse(Visit, pending.items[start..]);
-        }
-    }
-
     fn wrapPatternMatch(
         self: *BodyContext,
         value: DraftExprId,
@@ -56215,58 +57279,33 @@ const BodyContext = struct {
         } });
     }
 
-    fn lowerBindingContinuation(
+    /// The binding of a lambda's `index`th materialized argument, continuing
+    /// with the remaining arguments and then the lambda body.
+    fn materializedArgsRequest(
         self: *BodyContext,
-        continuation: BindingContinuation,
+        args: []const MaterializedArg,
+        index: usize,
+        lambda: checked.CheckedExprId,
+        body: checked.CheckedExprId,
         result_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        return switch (continuation) {
-            .expr => |expr| expr,
-            .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, result_cell),
-            .materialized_args => |args| blk: {
-                if (args.index >= args.args.len) break :blk try self.lowerLambdaBodyAtCell(args.lambda, args.body, result_cell);
-                const arg = args.args[args.index];
-                const miss = try self.addExprWithTypeCell(result_cell, .{ .crash = try self.addStringLiteral("pattern match failed") });
-                break :blk try self.lowerMaterializedPatternThen(
-                    arg.pattern,
-                    arg.value,
-                    arg.ty,
-                    result_cell,
-                    .{ .materialized_args = .{
-                        .args = args.args,
-                        .index = args.index + 1,
-                        .lambda = args.lambda,
-                        .body = args.body,
-                    } },
-                    miss,
-                );
-            },
-            .iterator_body => |body| try self.lowerIteratorBodyThenContinue(
-                body.body,
-                body.result_cell,
-                body.rest_expr,
-                body.carries,
-            ),
+    ) Allocator.Error!MaterializeRequest {
+        const arg = args[index];
+        const miss = try self.addExprWithTypeCell(result_cell, .{ .crash = try self.addStringLiteral("pattern match failed") });
+        return .{
+            .pattern = arg.pattern,
+            .value = arg.value,
+            .value_cell = arg.ty,
+            .result_cell = result_cell,
+            .continuation = .{ .materialized_args = .{
+                .args = args,
+                .index = index + 1,
+                .lambda = lambda,
+                .body = body,
+            } },
+            .miss = miss,
+            .success_guard = null,
+            .mode = .then_root,
         };
-    }
-
-    fn lowerPatternSuccessContinuation(
-        self: *BodyContext,
-        continuation: BindingContinuation,
-        result_cell: DraftTypeCell,
-        success_guard: ?PatternSuccessGuard,
-    ) Allocator.Error!DraftExprId {
-        // Pre-registered binders are reused only while emitting this pattern's
-        // shell. Its continuation is a distinct lexical lowering boundary:
-        // declarations and reassignments there must allocate their own locals.
-        const previous_reuse = self.reuse_pre_registered_pattern_binders;
-        self.reuse_pre_registered_pattern_binders = false;
-        defer self.reuse_pre_registered_pattern_binders = previous_reuse;
-        const guard = success_guard orelse return try self.lowerBindingContinuation(continuation, result_cell);
-        const previous_runtime_demand_guard_frames = self.runtime_demand_guard_frames;
-        self.runtime_demand_guard_frames = try self.withPatternSuccessRuntimeDemandGuardFrame(guard);
-        defer self.runtime_demand_guard_frames = previous_runtime_demand_guard_frames;
-        return try self.lowerBindingContinuation(continuation, result_cell);
     }
 
     /// One pattern to bind against a value before a continuation.
@@ -56304,6 +57343,31 @@ const BodyContext = struct {
         let_value: struct { local: DraftLocalId, value: DraftExprId, cell: DraftTypeCell },
         /// Replace the continuation with this request's binding.
         request: MaterializeRequest,
+        /// Lower the binding's continuation. It is a distinct lexical
+        /// lowering boundary: declarations and reassignments there allocate
+        /// their own locals rather than reuse the pattern's pre-registered
+        /// binders, and it lowers under the pattern's success guard.
+        success: struct {
+            continuation: BindingContinuation,
+            result_cell: DraftTypeCell,
+            success_guard: ?PatternSuccessGuard,
+        },
+        /// Leave the continuation's lowering boundary: restore the settings
+        /// its `success` step replaced.
+        success_done: struct {
+            entered: bool,
+            reuse: bool,
+            guard_frames: ?RuntimeDemandGuardFrameStack,
+        },
+        /// Match a directly bound pattern around the continuation, applying
+        /// its optional-field binds and literal guards. Owns both slices.
+        leaf: struct {
+            value: DraftExprId,
+            cell: DraftTypeCell,
+            pat: DraftPatId,
+            literal_guards: []PatternLiteralGuard,
+            optional_binds: []OptionalDestructBind,
+        },
     };
 
     const MaterializeFrame = struct {
@@ -56348,39 +57412,71 @@ const BodyContext = struct {
         });
     }
 
-    fn lowerMaterializedPatternThen(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        value: DraftExprId,
-        value_cell: DraftTypeCell,
-        result_cell: DraftTypeCell,
-        continuation: BindingContinuation,
-        miss: DraftExprId,
-    ) Allocator.Error!DraftExprId {
-        return try self.runMaterialize(.{
-            .pattern = pattern_id,
-            .value = value,
-            .value_cell = value_cell,
-            .result_cell = result_cell,
-            .continuation = continuation,
-            .miss = miss,
-            .success_guard = null,
-            .mode = .then_root,
-        });
+    fn runMaterialize(self: *BodyContext, root: MaterializeRequest) Allocator.Error!DraftExprId {
+        return (try self.runLower(.{ .materialize = .{ .root = root } })).exprValue();
     }
 
     /// Bind a pattern and every descendant plan it materializes. Each
     /// binding is an explicit frame whose continuation program runs step by
-    /// step, so pattern depth never becomes native call depth.
-    fn runMaterialize(self: *BodyContext, root: MaterializeRequest) Allocator.Error!DraftExprId {
-        var materialize_run = MaterializeRun{};
-        defer materialize_run.deinit(self.allocator);
-        errdefer while (materialize_run.frames.pop()) |frame| {
-            if (frame.saved_reuse) |saved| self.reuse_pre_registered_pattern_binders = saved;
-        };
+    /// step, and a continuation that lowers checked code lowers as a child
+    /// task, so neither pattern depth nor the continuation's nesting becomes
+    /// native call depth.
+    const MaterializeTask = struct {
+        root: MaterializeRequest,
+        run: MaterializeRun = .{},
+        started: bool = false,
+        /// The return boundary a composed lambda body continuation crosses.
+        return_boundary: ?DraftTypeCell = null,
+    };
 
-        var delivered: DraftExprId = (try self.enterMaterialize(&materialize_run, root)) orelse undefined;
-        if (materialize_run.frames.items.len == 0) return delivered;
+    /// Restore what unfinished frames and continuation boundaries replaced,
+    /// innermost first, and free unexecuted leaf steps' slices.
+    fn releaseMaterializeTask(self: *BodyContext, task: *MaterializeTask) void {
+        const materialize_run = &task.run;
+        var frame_index = materialize_run.frames.items.len;
+        while (frame_index > 0) {
+            frame_index -= 1;
+            const frame = materialize_run.frames.items[frame_index];
+            const end = if (frame_index + 1 < materialize_run.frames.items.len)
+                materialize_run.frames.items[frame_index + 1].steps_start
+            else
+                materialize_run.steps.items.len;
+            var step_index = end;
+            while (step_index > frame.steps_start) {
+                step_index -= 1;
+                switch (materialize_run.steps.items[step_index]) {
+                    .success_done => |done| if (done.entered) {
+                        self.reuse_pre_registered_pattern_binders = done.reuse;
+                        if (done.guard_frames) |frames| self.runtime_demand_guard_frames = frames;
+                    },
+                    .leaf => |leaf| if (step_index >= frame.next) {
+                        self.allocator.free(leaf.literal_guards);
+                        self.allocator.free(leaf.optional_binds);
+                    },
+                    .plan, .wrap, .list_cond, .let_value, .request, .success => {},
+                }
+            }
+            if (frame.saved_reuse) |saved| self.reuse_pre_registered_pattern_binders = saved;
+        }
+        materialize_run.deinit(self.allocator);
+        task.run = .{};
+    }
+
+    fn stepMaterialize(self: *BodyContext, task: *MaterializeTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const materialize_run = &task.run;
+        if (!task.started) {
+            task.started = true;
+            if (try self.enterMaterialize(materialize_run, task.root)) |expr| return loweredExprStep(expr);
+        } else {
+            var lowered = input.?.exprValue();
+            if (task.return_boundary) |ret_cell| {
+                lowered = try self.addExprWithTypeCell(ret_cell, .{ .return_ = .{ .value = lowered, .target = ret_cell } });
+                task.return_boundary = null;
+            }
+            self.currentMaterializeFrame(materialize_run).continuation = lowered;
+        }
+
+        var delivered: DraftExprId = undefined;
         var has_delivery = false;
         while (true) {
             const index = materialize_run.frames.items.len - 1;
@@ -56390,7 +57486,8 @@ const BodyContext = struct {
             }
             const frame = materialize_run.frames.items[index];
             if (frame.next < materialize_run.steps.items.len) {
-                const step = materialize_run.steps.items[frame.next];
+                const step_index = frame.next;
+                const step = materialize_run.steps.items[step_index];
                 materialize_run.frames.items[index].next += 1;
                 const request: MaterializeRequest = switch (step) {
                     .plan => |plan| .{
@@ -56434,8 +57531,56 @@ const BodyContext = struct {
                         } });
                         continue;
                     },
+                    .success => |success| {
+                        materialize_run.steps.items[step_index + 1].success_done = .{
+                            .entered = true,
+                            .reuse = self.reuse_pre_registered_pattern_binders,
+                            .guard_frames = null,
+                        };
+                        self.reuse_pre_registered_pattern_binders = false;
+                        if (success.success_guard) |guard| {
+                            materialize_run.steps.items[step_index + 1].success_done.guard_frames = self.runtime_demand_guard_frames;
+                            self.runtime_demand_guard_frames = try self.withPatternSuccessRuntimeDemandGuardFrame(guard);
+                        }
+                        switch (success.continuation) {
+                            .expr => |expr| materialize_run.frames.items[index].continuation = expr,
+                            .materialized_args => |args| {
+                                if (args.index >= args.args.len) {
+                                    return try self.materializedLambdaBodyStep(task, args.lambda, args.body, success.result_cell);
+                                }
+                                const next = try self.materializedArgsRequest(args.args, args.index, args.lambda, args.body, success.result_cell);
+                                if (try self.enterMaterialize(materialize_run, next)) |expr| {
+                                    materialize_run.frames.items[index].continuation = expr;
+                                }
+                            },
+                            .iterator_body => |body| return self.loopBodyStep(body.body, body.result_cell, body.rest_expr, body.carries),
+                        }
+                        continue;
+                    },
+                    .success_done => |done| {
+                        self.reuse_pre_registered_pattern_binders = done.reuse;
+                        if (done.guard_frames) |frames| self.runtime_demand_guard_frames = frames;
+                        materialize_run.steps.items[step_index].success_done.entered = false;
+                        continue;
+                    },
+                    .leaf => |leaf| {
+                        defer self.allocator.free(leaf.literal_guards);
+                        defer self.allocator.free(leaf.optional_binds);
+                        var success = frame.continuation;
+                        if (leaf.optional_binds.len > 0) {
+                            success = try self.applyOptionalDestructBinds(leaf.optional_binds, success);
+                        }
+                        const rest = try self.applyPatternLiteralGuardsAtCell(
+                            leaf.literal_guards,
+                            success,
+                            frame.miss,
+                            frame.result_cell,
+                        );
+                        materialize_run.frames.items[index].continuation = try self.wrapPatternMatch(leaf.value, leaf.cell, leaf.pat, rest, frame.miss, frame.result_cell);
+                        continue;
+                    },
                 };
-                if (try self.enterMaterialize(&materialize_run, request)) |expr| {
+                if (try self.enterMaterialize(materialize_run, request)) |expr| {
                     materialize_run.frames.items[index].continuation = expr;
                 }
                 continue;
@@ -56444,10 +57589,50 @@ const BodyContext = struct {
             _ = materialize_run.frames.pop();
             materialize_run.steps.shrinkRetainingCapacity(frame.steps_start);
             if (frame.saved_reuse) |saved| self.reuse_pre_registered_pattern_binders = saved;
-            if (materialize_run.frames.items.len == 0) return frame.continuation;
+            if (materialize_run.frames.items.len == 0) return loweredExprStep(frame.continuation);
             delivered = frame.continuation;
             has_delivery = true;
         }
+    }
+
+    /// Lower a lambda body at its function's return cell once every
+    /// materialized argument is bound. A body whose
+    /// checked type is not the function's checked result lowers at its own
+    /// type's cell: its residual error extension is shared with the return
+    /// row and settles when the return settles. It crosses the explicit
+    /// return boundary once lowered.
+    fn materializedLambdaBodyStep(
+        self: *BodyContext,
+        task: *MaterializeTask,
+        lambda_id: checked.CheckedExprId,
+        checked_body: checked.CheckedExprId,
+        ret_cell: DraftTypeCell,
+    ) Allocator.Error!LowerStep {
+        if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
+            return requestLowerChild(self, checked_body, ret_cell);
+        }
+        const body_ty = self.view.bodies.expr(checked_body).ty;
+        const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
+        if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root) {
+            return requestLowerChild(self, checked_body, ret_cell);
+        }
+        const body_cell = DraftTypeCell.fromGraphNode(try self.lowerTypeNode(body_ty));
+        task.return_boundary = ret_cell;
+        return requestLowerChild(self, checked_body, body_cell);
+    }
+
+    /// Lower a binding's continuation first among its frame's steps.
+    fn appendMaterializeSuccessSteps(self: *BodyContext, materialize_run: *MaterializeRun, request: MaterializeRequest) Allocator.Error!void {
+        try materialize_run.steps.append(self.allocator, .{ .success = .{
+            .continuation = request.continuation,
+            .result_cell = request.result_cell,
+            .success_guard = request.success_guard,
+        } });
+        try materialize_run.steps.append(self.allocator, .{ .success_done = .{
+            .entered = false,
+            .reuse = false,
+            .guard_frames = null,
+        } });
     }
 
     fn pushMaterializeFrame(
@@ -56475,7 +57660,8 @@ const BodyContext = struct {
                 const value_node = try request.value_cell.toGraphNode(self.graph);
                 try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(request.pattern).ty, request.value_cell);
                 if (!try self.patternNeedsExplicitBinding(request.pattern)) {
-                    return try self.lowerMaterializedPatternValueLeaf(request, value_node);
+                    try self.pushMaterializedPatternValueLeaf(materialize_run, request, value_node, null);
+                    return null;
                 }
 
                 const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), request.value_cell, null);
@@ -56540,13 +57726,14 @@ const BodyContext = struct {
             => if (try self.patternNeedsExplicitBinding(request.pattern)) .wrapped else .value,
         };
         if (variant == .value) {
-            defer self.reuse_pre_registered_pattern_binders = saved_reuse;
+            errdefer self.reuse_pre_registered_pattern_binders = saved_reuse;
             const leaf_node = try request.value_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(pattern.ty, request.value_cell);
             if (try self.patternNeedsExplicitBinding(request.pattern)) {
                 Common.invariant("explicitly materialized pattern reached direct value binding");
             }
-            return try self.lowerMaterializedPatternValueLeaf(request, leaf_node);
+            try self.pushMaterializedPatternValueLeaf(materialize_run, request, leaf_node, saved_reuse);
+            return null;
         }
 
         try self.pushMaterializeFrame(materialize_run, request, saved_reuse);
@@ -56561,7 +57748,7 @@ const BodyContext = struct {
                 if (pending.items.len == 0) {
                     Common.invariant("recursive materialized wrapper produced no explicit descendant plan");
                 }
-                self.currentMaterializeFrame(materialize_run).continuation = try self.lowerPatternSuccessContinuation(request.continuation, request.result_cell, request.success_guard);
+                try self.appendMaterializeSuccessSteps(materialize_run, request);
                 try self.appendPendingMaterializeSteps(materialize_run, pending.items);
                 try materialize_run.steps.append(self.allocator, .{ .wrap = .{ .value = request.value, .cell = request.value_cell, .pat = shell } });
             },
@@ -56588,26 +57775,33 @@ const BodyContext = struct {
     }
 
     /// Bind a pattern that needs no explicit descendant plans directly
-    /// against its value.
-    fn lowerMaterializedPatternValueLeaf(self: *BodyContext, request: MaterializeRequest, value_node: NodeId) Allocator.Error!DraftExprId {
+    /// against its value: a frame whose program lowers the continuation and
+    /// then matches the pattern around it.
+    fn pushMaterializedPatternValueLeaf(
+        self: *BodyContext,
+        materialize_run: *MaterializeRun,
+        request: MaterializeRequest,
+        value_node: NodeId,
+        saved_reuse: ?bool,
+    ) Allocator.Error!void {
         const guards_start = self.pattern_literal_guards.items.len;
         const binds_start = self.optional_destruct_binds.items.len;
         const pat = try self.lowerPatternAtNode(request.pattern, value_node);
         const literal_guards = try self.drainPatternLiteralGuards(guards_start);
-        defer self.allocator.free(literal_guards);
+        errdefer self.allocator.free(literal_guards);
         const optional_binds = try self.drainOptionalDestructBinds(binds_start);
-        defer self.allocator.free(optional_binds);
-        var success = try self.lowerPatternSuccessContinuation(request.continuation, request.result_cell, request.success_guard);
-        if (optional_binds.len > 0) {
-            success = try self.applyOptionalDestructBinds(optional_binds, success);
-        }
-        const rest = try self.applyPatternLiteralGuardsAtCell(
-            literal_guards,
-            success,
-            request.miss,
-            request.result_cell,
-        );
-        return try self.wrapPatternMatch(request.value, request.value_cell, pat, rest, request.miss, request.result_cell);
+        errdefer self.allocator.free(optional_binds);
+        try materialize_run.frames.ensureUnusedCapacity(self.allocator, 1);
+        try materialize_run.steps.ensureUnusedCapacity(self.allocator, 3);
+        try self.pushMaterializeFrame(materialize_run, request, saved_reuse);
+        try self.appendMaterializeSuccessSteps(materialize_run, request);
+        materialize_run.steps.appendAssumeCapacity(.{ .leaf = .{
+            .value = request.value,
+            .cell = request.value_cell,
+            .pat = pat,
+            .literal_guards = literal_guards,
+            .optional_binds = optional_binds,
+        } });
     }
 
     fn prepareListPatternBinding(
@@ -56663,7 +57857,7 @@ const BodyContext = struct {
             }
         }
 
-        self.currentMaterializeFrame(materialize_run).continuation = try self.lowerPatternSuccessContinuation(request.continuation, request.result_cell, request.success_guard);
+        try self.appendMaterializeSuccessSteps(materialize_run, request);
         const has_rest_plan = rest_pat != null;
         const rest_index = if (list.rest) |rest| rest.index else 0;
         var sequence_index = patterns.len + @intFromBool(has_rest_plan);
@@ -56769,7 +57963,7 @@ const BodyContext = struct {
             }
         }
 
-        self.currentMaterializeFrame(materialize_run).continuation = try self.lowerPatternSuccessContinuation(request.continuation, request.result_cell, request.success_guard);
+        try self.appendMaterializeSuccessSteps(materialize_run, request);
         var i = destructs.len;
         while (i > 0) {
             i -= 1;
@@ -57024,153 +58218,6 @@ const BodyContext = struct {
                 try self.lowerExprTypeNode(checked_expr),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerExprTypeNode(checked_expr),
         };
-    }
-
-    fn lowerMatch(
-        self: *BodyContext,
-        match: anytype,
-        output: MatchOutput,
-        comptime_site: ?DraftComptimeSiteId,
-        value_selection: ?*ControlFlowResultSelection,
-    ) Allocator.Error!BodyExprData {
-        const PendingBranch = struct {
-            ctx: BodyContext,
-            pattern: checked.CheckedMatchBranchPattern,
-            checked_guard: ?checked.CheckedExprId,
-            checked_body: checked.CheckedExprId,
-            source_index: usize,
-            user_guard: ?DraftExprId = null,
-            body: DraftExprId = undefined,
-        };
-
-        // Pattern binders are projected before the scrutinee expression is
-        // emitted. Ask the scrutinee producer for exact value evidence now so
-        // a nested iterator payload is not projected from the checked-public
-        // tag or record shape and permanently loses the callee's witness.
-        const scrutinee_node = try self.matchScrutineeTypeNode(match.cond);
-        const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node);
-        const branches = try self.allocator.alloc(DraftBranch, branchCount(match.branches));
-        defer self.allocator.free(branches);
-        var pending = std.ArrayListUnmanaged(PendingBranch).empty;
-        defer {
-            for (pending.items) |*entry| entry.ctx.deinit();
-            pending.deinit(self.allocator);
-        }
-        var source_index: usize = 0;
-        for (match.branches) |branch| {
-            for (branch.patternsSlice(self.view.bodies)) |pattern| {
-                defer source_index += 1;
-                if (try self.checkedPatternIsProvenUninhabited(pattern.pattern)) continue;
-                var branch_ctx = try self.childContext(self.current_fn_key);
-                errdefer branch_ctx.deinit();
-                try relateRequestComponent(
-                    self.graph,
-                    scrutinee_node,
-                    try branch_ctx.instNode(branch_ctx.view.bodies.pattern(pattern.pattern).ty),
-                );
-                try pending.append(self.allocator, .{
-                    .ctx = branch_ctx,
-                    .pattern = pattern,
-                    .checked_guard = branch.guard,
-                    .checked_body = branch.value,
-                    .source_index = source_index,
-                });
-            }
-        }
-
-        // Every pattern relation must settle before binder cells are projected.
-        // This gives derived binders such as record rest their exact graph node
-        // without allocating a checked-type approximation and rebinding it later.
-        for (pending.items) |*entry| {
-            try entry.ctx.preRegisterPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
-            try entry.ctx.applyAlternativeBinderRemaps(entry.pattern.binderRemapsSlice(self.view.bodies));
-        }
-
-        // Select the shared result representation from every inhabited branch
-        // before any branch body is emitted. Match patterns supplied their
-        // exact binder cells above, so branch-local lookups participate in this
-        // relation-production pass as ordinary producer evidence.
-        if (value_selection) |selection| {
-            for (pending.items) |*entry| {
-                try entry.ctx.prepareControlFlowResultSelection(selection, entry.checked_body);
-            }
-        }
-
-        // All checked pattern evidence must reach the shared scrutinee before
-        // any branch body can request another specialization.
-        for (pending.items) |*entry| {
-            entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame(
-                entry.pattern.pattern,
-                scrutinee_node,
-            );
-            entry.user_guard = if (entry.checked_guard) |guard_expr| try entry.ctx.lowerExpr(guard_expr) else null;
-            const branch_output: MatchOutput = if (value_selection) |selection|
-                .{ .value = selection.selected }
-            else
-                output;
-            entry.body = try entry.ctx.lowerMatchBranchBody(entry.checked_body, branch_output);
-            if (value_selection) |selection| {
-                try self.includeControlFlowResult(selection, entry.body);
-            }
-        }
-        if (value_selection) |selection| {
-            for (pending.items) |entry| {
-                if (self.exprImpossibilityProof(entry.body) == null) {
-                    self.draft.exprs.items[@intFromEnum(entry.body)].ty = selection.selected;
-                }
-            }
-        }
-
-        const scrutinee = if (try self.nodeIsProvenUninhabited(scrutinee_node))
-            try self.lowerUninhabitedScrutineeAtTypeCell(match.cond, scrutinee_cell)
-        else
-            try self.lowerExprAtTypeCell(match.cond, scrutinee_cell);
-        var index: usize = 0;
-        for (pending.items) |*entry| {
-            entry.ctx.reuse_pre_registered_pattern_binders = true;
-            entry.ctx.allow_recursive_pattern_lowering_for_match = true;
-            var record_rests = std.ArrayList(PendingMatchRecordRestBinding).empty;
-            defer record_rests.deinit(self.allocator);
-            const pat = try entry.ctx.lowerMatchPatternAtNode(
-                entry.pattern.pattern,
-                scrutinee_node,
-                entry.user_guard,
-                entry.body,
-                &record_rests,
-            );
-            if (try entry.ctx.checkedPatternIsProvenUninhabited(entry.pattern.pattern)) continue;
-            // Translated optional-field destructs bound their raw slots in
-            // the flat pattern; compute the user binders' Try values as
-            // preludes around the branch body—and the guard, which may
-            // also reference them (the pattern's slot locals are bound
-            // before either runs).
-            const optional_binds = try entry.ctx.drainOptionalDestructBinds(0);
-            defer entry.ctx.allocator.free(optional_binds);
-            if (optional_binds.len > 0) {
-                entry.body = try entry.ctx.applyOptionalDestructBinds(optional_binds, entry.body);
-                if (entry.user_guard) |user_guard| {
-                    entry.user_guard = try entry.ctx.applyOptionalDestructBinds(optional_binds, user_guard);
-                }
-            }
-            const guard = try entry.ctx.conjoinPatternLiteralGuards(entry.user_guard);
-            const materialized = try entry.ctx.lowerMatchRecordRestBindings(record_rests.items, entry.body);
-            branches[index] = .{
-                .pat = pat,
-                .bindings = materialized.guard_bindings,
-                .guard = guard,
-                .body = try entry.ctx.wrapComptimeBranch(
-                    comptime_site,
-                    entry.source_index,
-                    materialized.body,
-                ),
-            };
-            index += 1;
-        }
-        return .{ .match_ = .{
-            .scrutinee = scrutinee,
-            .branches = try self.addBranchSpan(branches[0..index]),
-            .comptime_site = comptime_site,
-        } };
     }
 
     fn runtimeDemandGuardFrameAddress(
@@ -57528,51 +58575,6 @@ const BodyContext = struct {
         }
     }
 
-    fn lowerIfExpr(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        if_: anytype,
-        result_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        return try self.lowerIfExprAtTypeCell(expr_id, if_, .{ .sealed = result_ty });
-    }
-
-    fn lowerIfExprAtTypeCell(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        if_: anytype,
-        result_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        const comptime_site = try self.ifComptimeSite(expr_id, if_);
-        const merge_binders = try self.stateMergeBinders(expr_id);
-        defer self.allocator.free(merge_binders);
-        if (merge_binders.len == 0) {
-            var selection: ControlFlowResultSelection = .{
-                .declared = result_cell,
-                .selected = result_cell,
-            };
-            const data = try self.lowerIfAtTypeCells(
-                if_,
-                result_cell,
-                result_cell,
-                &.{},
-                comptime_site,
-                &selection,
-            );
-            return try self.addExprWithTypeCell(
-                try self.finishControlFlowResultSelection(selection),
-                data,
-            );
-        }
-
-        const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
-        const state_expr = try self.addExprWithTypeCell(
-            state_cell,
-            try self.lowerIfAtTypeCells(if_, result_cell, state_cell, merge_binders, comptime_site, null),
-        );
-        return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
-    }
-
     /// Start from the exact specialized request so branch constructors retain
     /// its type constraints before selecting nested-callable evidence. Producer
     /// selection may replace `selected` with a distinct private representation;
@@ -57814,314 +58816,6 @@ const BodyContext = struct {
         return DraftTypeCell.fromGraphNode(try self.graph.newNode(.{ .tuple = nodes }));
     }
 
-    fn lowerIfAtTypeCells(
-        self: *BodyContext,
-        if_: anytype,
-        result_cell: DraftTypeCell,
-        branch_cell: DraftTypeCell,
-        merge_binders: []const MergeBinder,
-        comptime_site: ?DraftComptimeSiteId,
-        value_selection: ?*ControlFlowResultSelection,
-    ) Allocator.Error!BodyExprData {
-        // Conditions do not bind names visible in branch bodies, so all result
-        // producers can contribute their representation evidence up front.
-        // Branch emission below then consumes one settled request.
-        if (value_selection) |selection| {
-            for (if_.branches) |branch| {
-                try self.prepareControlFlowResultSelection(selection, branch.body);
-            }
-            try self.prepareControlFlowResultSelection(selection, if_.final_else);
-        }
-
-        const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
-        defer self.allocator.free(branches);
-        for (if_.branches, 0..) |branch, index| {
-            const cond = try self.lowerExpr(branch.cond);
-            var branch_ctx = try self.childContext(self.current_fn_key);
-            defer branch_ctx.deinit();
-            const requested_result_cell = if (value_selection) |selection| selection.selected else result_cell;
-            const requested_branch_cell = if (value_selection != null) requested_result_cell else branch_cell;
-            branches[index] = .{
-                .cond = cond,
-                .body = try branch_ctx.wrapComptimeBranch(
-                    comptime_site,
-                    index,
-                    try branch_ctx.lowerIfBranchBodyAtTypeCells(
-                        branch.body,
-                        requested_result_cell,
-                        requested_branch_cell,
-                        merge_binders,
-                    ),
-                ),
-            };
-            if (value_selection) |selection| {
-                try self.includeControlFlowResult(selection, branches[index].body);
-            }
-        }
-        var else_ctx = try self.childContext(self.current_fn_key);
-        defer else_ctx.deinit();
-        const requested_result_cell = if (value_selection) |selection| selection.selected else result_cell;
-        const requested_branch_cell = if (value_selection != null) requested_result_cell else branch_cell;
-        const final_else = try else_ctx.wrapComptimeBranch(
-            comptime_site,
-            if_.branches.len,
-            try else_ctx.lowerIfBranchBodyAtTypeCells(
-                if_.final_else,
-                requested_result_cell,
-                requested_branch_cell,
-                merge_binders,
-            ),
-        );
-        if (value_selection) |selection| {
-            try self.includeControlFlowResult(selection, final_else);
-            for (branches) |branch| {
-                if (self.exprImpossibilityProof(branch.body) == null) {
-                    self.draft.exprs.items[@intFromEnum(branch.body)].ty = selection.selected;
-                }
-            }
-            if (self.exprImpossibilityProof(final_else) == null) {
-                self.draft.exprs.items[@intFromEnum(final_else)].ty = selection.selected;
-            }
-        }
-        return .{ .if_ = .{
-            .branches = try self.addIfBranchSpan(branches),
-            .final_else = final_else,
-        } };
-    }
-
-    fn lowerIfBranchBodyAtTypeCells(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        result_cell: DraftTypeCell,
-        branch_cell: DraftTypeCell,
-        merge_binders: []const MergeBinder,
-    ) Allocator.Error!DraftExprId {
-        if (merge_binders.len == 0) return try self.lowerBranchValueAtTypeCell(body, result_cell);
-        return try self.lowerBodyThenStateResultAtTypeCells(body, result_cell, branch_cell, merge_binders);
-    }
-
-    fn lowerIfStateOnlyAtTypeCell(
-        self: *BodyContext,
-        if_: anytype,
-        state_cell: DraftTypeCell,
-        merge_binders: []const MergeBinder,
-        comptime_site: ?DraftComptimeSiteId,
-    ) Allocator.Error!BodyExprData {
-        const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
-        defer self.allocator.free(branches);
-        for (if_.branches, 0..) |branch, index| {
-            const cond = try self.lowerExpr(branch.cond);
-            var branch_ctx = try self.childContext(self.current_fn_key);
-            defer branch_ctx.deinit();
-            branches[index] = .{
-                .cond = cond,
-                .body = try branch_ctx.wrapComptimeBranch(
-                    comptime_site,
-                    index,
-                    try branch_ctx.lowerBodyThenStateOnlyAtTypeCell(branch.body, state_cell, merge_binders),
-                ),
-            };
-        }
-        var else_ctx = try self.childContext(self.current_fn_key);
-        defer else_ctx.deinit();
-        return .{ .if_ = .{
-            .branches = try self.addIfBranchSpan(branches),
-            .final_else = try else_ctx.wrapComptimeBranch(
-                comptime_site,
-                if_.branches.len,
-                try else_ctx.lowerBodyThenStateOnlyAtTypeCell(if_.final_else, state_cell, merge_binders),
-            ),
-        } };
-    }
-
-    fn lowerBodyThenStateResultAtTypeCells(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        result_cell: DraftTypeCell,
-        state_cell: DraftTypeCell,
-        merge_binders: []const MergeBinder,
-    ) Allocator.Error!DraftExprId {
-        if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtTypeCell(body, state_cell);
-
-        const result_node = try result_cell.toGraphNode(self.graph);
-        const checked_body = self.view.bodies.expr(body);
-        switch (checked_body.data) {
-            .block => |block| {
-                const previous_statement_success_frames = self.runtime_demand_guard_frames;
-                defer self.runtime_demand_guard_frames = previous_statement_success_frames;
-                const statements = try self.lowerBlockStatements(block.statements);
-                defer self.allocator.free(statements.items);
-                switch (statements.termination) {
-                    .uninhabited => |scrutinee| return try self.addExprWithTypeCell(state_cell, .{ .block = .{
-                        .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                        .final_expr = try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell),
-                    } }),
-                    .checked_control_transfer => return try self.addExprWithTypeCell(state_cell, .{ .block = .{
-                        .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                        .final_expr = try self.addExprWithTypeCell(state_cell, .@"unreachable"),
-                    } }),
-                    .none => {},
-                }
-                if (statementTerminationIsNone(statements.termination) and try self.nodeIsProvenUninhabited(result_node)) {
-                    const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(block.final_expr, result_cell);
-                    return try self.addExprWithTypeCell(state_cell, .{ .block = .{
-                        .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                        .final_expr = try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell),
-                    } });
-                }
-                return try self.addExprWithTypeCell(state_cell, .{ .block = .{
-                    .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                    .final_expr = try self.lowerValueThenStateResultAtTypeCells(
-                        block.final_expr,
-                        result_cell,
-                        state_cell,
-                        merge_binders,
-                    ),
-                } });
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
-                if (try self.nodeIsProvenUninhabited(result_node)) {
-                    const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(body, result_cell);
-                    return try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell);
-                }
-                return try self.lowerValueThenStateResultAtTypeCells(body, result_cell, state_cell, merge_binders);
-            },
-        }
-    }
-
-    /// Lower one branch result and compose its state directly into the
-    /// enclosing branch state. A nested `if`/`match` owns a smaller lexical
-    /// state tuple containing only the binders that expression reassigns. Its
-    /// result must be destructured and repacked while those binder locals are
-    /// still in scope; unwrapping it as an ordinary value would let the outer
-    /// tuple refer to a local outside the `let` that defines it.
-    fn lowerValueThenStateResultAtTypeCells(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        result_cell: DraftTypeCell,
-        outer_state_cell: DraftTypeCell,
-        outer_merge_binders: []const MergeBinder,
-    ) Allocator.Error!DraftExprId {
-        const checked_body = self.view.bodies.expr(body);
-        if (checked_body.data == .for_) {
-            return try self.lowerForThenStateResult(checked_body.data.for_, result_cell, outer_state_cell, outer_merge_binders);
-        }
-        switch (checked_body.data) {
-            .if_ => |if_| return try self.lowerNestedIfThenStateResultAtTypeCells(
-                body,
-                if_,
-                result_cell,
-                outer_state_cell,
-                outer_merge_binders,
-            ),
-            .match_ => |match| return try self.lowerNestedMatchThenStateResultAtTypeCells(
-                body,
-                match,
-                result_cell,
-                outer_state_cell,
-                outer_merge_binders,
-            ),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
-
-        const value = try self.lowerBranchValueAtTypeCell(body, result_cell);
-        return try self.stateResultAfterValueAtTypeCells(
-            outer_state_cell,
-            result_cell,
-            outer_merge_binders,
-            value,
-        );
-    }
-
-    fn lowerNestedIfThenStateResultAtTypeCells(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        if_: anytype,
-        result_cell: DraftTypeCell,
-        outer_state_cell: DraftTypeCell,
-        outer_merge_binders: []const MergeBinder,
-    ) Allocator.Error!DraftExprId {
-        const nested_merge_binders = try self.stateMergeBinders(expr_id);
-        defer self.allocator.free(nested_merge_binders);
-        if (nested_merge_binders.len == 0) {
-            const value = try self.addExprWithTypeCell(
-                result_cell,
-                try self.lowerIfAtTypeCells(
-                    if_,
-                    result_cell,
-                    result_cell,
-                    &.{},
-                    try self.ifComptimeSite(expr_id, if_),
-                    null,
-                ),
-            );
-            return try self.stateResultAfterValueAtTypeCells(
-                outer_state_cell,
-                result_cell,
-                outer_merge_binders,
-                value,
-            );
-        }
-
-        const nested_state_cell = try self.stateResultTypeCell(nested_merge_binders, result_cell);
-        const nested_state = try self.addExprWithTypeCell(
-            nested_state_cell,
-            try self.lowerIfAtTypeCells(
-                if_,
-                result_cell,
-                nested_state_cell,
-                nested_merge_binders,
-                try self.ifComptimeSite(expr_id, if_),
-                null,
-            ),
-        );
-        return try self.composeNestedStateResultAtTypeCells(
-            nested_state,
-            nested_state_cell,
-            result_cell,
-            nested_merge_binders,
-            outer_state_cell,
-            outer_merge_binders,
-        );
-    }
-
-    fn lowerNestedMatchThenStateResultAtTypeCells(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        match: anytype,
-        result_cell: DraftTypeCell,
-        outer_state_cell: DraftTypeCell,
-        outer_merge_binders: []const MergeBinder,
-    ) Allocator.Error!DraftExprId {
-        const nested_merge_binders = try self.stateMergeBinders(expr_id);
-        defer self.allocator.free(nested_merge_binders);
-        const comptime_site = try self.matchComptimeSite(expr_id, match);
-        if (nested_merge_binders.len == 0) {
-            const value = try self.lowerMatchExprWithOutput(match, .{ .value = result_cell }, comptime_site);
-            return try self.stateResultAfterValueAtTypeCells(
-                outer_state_cell,
-                result_cell,
-                outer_merge_binders,
-                value,
-            );
-        }
-
-        const nested_state_cell = try self.stateResultTypeCell(nested_merge_binders, result_cell);
-        const nested_state = try self.lowerMatchExprWithOutput(match, .{ .state_result = .{
-            .result_cell = result_cell,
-            .state_cell = nested_state_cell,
-            .merge_binders = nested_merge_binders,
-        } }, comptime_site);
-        return try self.composeNestedStateResultAtTypeCells(
-            nested_state,
-            nested_state_cell,
-            result_cell,
-            nested_merge_binders,
-            outer_state_cell,
-            outer_merge_binders,
-        );
-    }
-
     fn composeNestedStateResultAtTypeCells(
         self: *BodyContext,
         nested_state: DraftExprId,
@@ -58158,123 +58852,6 @@ const BodyContext = struct {
             .value = nested_state,
             .rest = rest,
         } });
-    }
-
-    fn lowerBodyThenStateOnlyAtTypeCell(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        state_cell: DraftTypeCell,
-        merge_binders: []const MergeBinder,
-    ) Allocator.Error!DraftExprId {
-        if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtTypeCell(body, state_cell);
-        const checked_body = self.view.bodies.expr(body);
-        switch (checked_body.data) {
-            .block => |block| {
-                const previous_statement_success_frames = self.runtime_demand_guard_frames;
-                defer self.runtime_demand_guard_frames = previous_statement_success_frames;
-                var statements = try self.lowerBlockStatements(block.statements);
-                defer self.allocator.free(statements.items);
-                if (statementTerminationIsNone(statements.termination)) {
-                    const final_result = try self.lowerDiscardedExprStatementAtTypeCell(block.final_expr);
-                    if (final_result.stmt) |stmt| try statements.append(self.allocator, stmt);
-                    statements.termination = final_result.termination;
-                }
-                return try self.addExprWithTypeCell(state_cell, .{ .block = .{
-                    .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                    .final_expr = switch (statements.termination) {
-                        .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell),
-                        .checked_control_transfer => try self.addExprWithTypeCell(state_cell, .@"unreachable"),
-                        .none => try self.stateOnlyTupleExprAtTypeCell(state_cell, merge_binders),
-                    },
-                } });
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
-                const result = try self.lowerDiscardedExprStatementAtTypeCell(body);
-                const stmt_ids = if (result.stmt) |stmt| &[_]DraftStmtId{stmt} else &[_]DraftStmtId{};
-                return try self.addExprWithTypeCell(state_cell, .{ .block = .{
-                    .statements = try self.addStmtSpan(stmt_ids),
-                    .final_expr = switch (result.termination) {
-                        .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell),
-                        .checked_control_transfer => try self.addExprWithTypeCell(state_cell, .@"unreachable"),
-                        .none => try self.stateOnlyTupleExprAtTypeCell(state_cell, merge_binders),
-                    },
-                } });
-            },
-        }
-    }
-
-    const LoweredDiscardedExpr = struct {
-        stmt: ?DraftStmtId,
-        termination: StatementTermination,
-    };
-
-    fn lowerDiscardedExprStatementAtTypeCell(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-    ) Allocator.Error!LoweredDiscardedExpr {
-        const checked_expr = self.view.bodies.expr(expr_id);
-        if (checked_expr.data == .for_ and !self.checkedExprDivergesInLoweredRuntime(expr_id)) {
-            return .{
-                .stmt = try self.addStmt(try self.lowerForStatement(checked_expr.data.for_)),
-                .termination = .none,
-            };
-        }
-        switch (checked_expr.data) {
-            .if_, .match_ => {
-                const merge_binders = try self.stateMergeBinders(expr_id);
-                defer self.allocator.free(merge_binders);
-                if (merge_binders.len != 0) {
-                    const state_cell = try self.stateOnlyTypeCell(merge_binders);
-                    const state_value = switch (checked_expr.data) {
-                        .if_ => |if_| try self.addExprWithTypeCell(
-                            state_cell,
-                            try self.lowerIfStateOnlyAtTypeCell(
-                                if_,
-                                state_cell,
-                                merge_binders,
-                                try self.ifComptimeSite(expr_id, if_),
-                            ),
-                        ),
-                        .match_ => |match| try self.lowerMatchExprWithOutput(
-                            match,
-                            .{ .state_only = .{
-                                .state_cell = state_cell,
-                                .merge_binders = merge_binders,
-                            } },
-                            try self.matchComptimeSite(expr_id, match),
-                        ),
-                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
-                    };
-                    return .{
-                        .stmt = try self.addStmt(.{ .let_ = .{
-                            .pat = try self.stateOnlyPatternAtTypeCell(state_cell, merge_binders),
-                            .value = state_value,
-                        } }),
-                        .termination = .none,
-                    };
-                }
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
-
-        const cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
-        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
-            return .{
-                .stmt = try self.addStmt(.{ .expr = try self.lowerDivergentExprAtTypeCell(expr_id, cell) }),
-                .termination = .checked_control_transfer,
-            };
-        }
-        const node = try cell.toGraphNode(self.graph);
-        if (try self.nodeIsProvenUninhabited(node)) {
-            return .{
-                .stmt = null,
-                .termination = .{ .uninhabited = try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, cell) },
-            };
-        }
-        return .{
-            .stmt = try self.addStmt(.{ .expr = try self.lowerExprAtTypeCell(expr_id, cell) }),
-            .termination = .none,
-        };
     }
 
     fn stateResultTupleExprAtTypeCells(
@@ -58353,40 +58930,10 @@ const BodyContext = struct {
         return try self.addPatWithTypeCell(state_cell, .{ .tuple = try self.addPatSpan(pattern_items) });
     }
 
-    fn lowerBlock(self: *BodyContext, block: anytype, ty: Type.TypeId) Allocator.Error!BodyExprData {
-        const previous_statement_success_frames = self.runtime_demand_guard_frames;
-        defer self.runtime_demand_guard_frames = previous_statement_success_frames;
-        const stmts = try self.lowerBlockStatements(block.statements);
-        defer self.allocator.free(stmts.items);
-        return .{ .block = .{
-            .statements = try self.addStmtSpan(stmts.items[0..stmts.len]),
-            .final_expr = switch (stmts.termination) {
-                .checked_control_transfer => try self.unreachableAfterTerminatingStatementExpr(ty),
-                .uninhabited => |scrutinee| try self.zeroBranchMatch(scrutinee, ty),
-                .none => if (self.checkedExprDivergesInLoweredRuntime(block.final_expr))
-                    try self.lowerDivergentExprAtType(block.final_expr, ty)
-                else if (try self.typeIsProvenUninhabited(ty))
-                    try self.lowerExplicitUninhabitedInvocation(block.final_expr, ty)
-                else
-                    try self.lowerExprAtType(block.final_expr, ty),
-            },
-        } };
-    }
-
-    fn lowerBlockAtTypeCell(
-        self: *BodyContext,
-        block: @FieldType(checked.CheckedExprData, "block"),
-        result_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        return (try self.runLower(.{ .block = .{
-            .statements = block.statements,
-            .final_expr = block.final_expr,
-            .result_cell = result_cell,
-        } })).exprValue();
-    }
-
     fn releaseBlockTask(self: *BodyContext, task: *BlockTask) void {
         self.restoreSourceLocation(&task.statement_saved);
+        self.allocator.free(task.expanded_merge_binders);
+        task.expanded_merge_binders = &.{};
         if (task.stage != .start) {
             self.runtime_demand_guard_frames = task.saved_guard_frames;
             self.allocator.free(task.lowered.items);
@@ -58395,9 +58942,8 @@ const BodyContext = struct {
         }
     }
 
-    /// Lower a block's statements in order, then its final expression. A
-    /// statement's own value, and the final expression, lower as child tasks;
-    /// statement forms with bespoke lowering run their helpers directly.
+    /// Lower a block's statements in order, then its tail. Every statement
+    /// and the final expression lower as child tasks.
     fn stepBlock(self: *BodyContext, task: *BlockTask, input: ?LowerResult) Allocator.Error!LowerStep {
         switch (task.stage) {
             .start => {
@@ -58405,32 +58951,31 @@ const BodyContext = struct {
                 task.saved_guard_frames = self.runtime_demand_guard_frames;
                 task.stage = .statements;
             },
-            .statements => unreachable,
-            .pattern_value => {
-                const statement = self.view.bodies.statement(task.statement);
-                const pattern, const expr = switch (statement.data) {
-                    .decl => |decl| .{ decl.pattern, decl.expr },
-                    .var_ => |decl| .{ decl.pattern, decl.expr },
-                    .reassign => |decl| .{ decl.pattern, decl.expr },
-                    .pending, .promoted_proc, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => unreachable,
-                };
-                _ = expr;
-                const lowered = try self.finishPatternStatement(pattern, statement.source_region, task.requested_cell, input.?.exprValue());
-                const result: LoweredStatement = if (lowered.stmt) |stmt|
-                    try self.finishLoweredStatement(stmt, lowered.termination, task.statement_diverges)
-                else
-                    .{ .stmt = null, .termination = lowered.termination };
-                if (try self.finishBlockStatement(task, result)) task.stage = .statements;
+            .statements, .finished => unreachable,
+            .uninhabited_statement => {
+                task.lowered.termination = .{ .uninhabited = input.?.exprValue() };
+                return self.beginBlockTail(task);
             },
-            .expr_statement => {
-                const result = try self.finishLoweredStatement(.{ .expr = input.?.exprValue() }, .none, task.statement_diverges);
-                if (try self.finishBlockStatement(task, result)) task.stage = .statements;
+            .statement => {
+                if (!try self.finishBlockStatement(task, input.?.statementValue())) return self.beginBlockTail(task);
+                task.stage = .statements;
             },
-            .final_expr => return self.finishBlockValue(task, input.?.exprValue()),
-            .finished => unreachable,
+            .expanded => {
+                try self.finishExpandedPatternStatement(task, input.?.exprValue());
+                const termination: StatementTermination = if (task.statement_diverges) .checked_control_transfer else .none;
+                if (!try self.finishBlockStatement(task, .{ .stmt = null, .termination = termination })) return self.beginBlockTail(task);
+                task.stage = .statements;
+            },
+            .final_expr => return self.finishBlockFinal(task, input.?.exprValue()),
+            .discarded_final => {
+                const final_result = input.?.statementValue();
+                if (final_result.stmt) |stmt| try task.lowered.append(self.allocator, stmt);
+                task.lowered.termination = final_result.termination;
+                return self.finishDiscardingBlock(task);
+            },
         }
 
-        while (task.stage == .statements and task.index < task.statements.len) {
+        while (task.index < task.statements.len) {
             const statement = task.statements[task.index];
             task.index += 1;
             try self.registerLocalAssociatedProcedures(statement);
@@ -58444,36 +58989,66 @@ const BodyContext = struct {
             // the rest of the block unreachable.
             const statement_diverges = self.checkedStatementDivergesInLoweredRuntime(statement);
             if (!statement_diverges and !self.checkedStatementHasRuntimeEffect(statement)) continue;
-            if (!statement_diverges) {
-                if (try self.lowerUninhabitedStatementScrutinee(statement)) |scrutinee| {
-                    task.lowered.termination = .{ .uninhabited = scrutinee };
-                    break;
-                }
-            }
             task.statement = statement;
             task.statement_start = task.lowered.len;
             task.statement_diverges = statement_diverges;
-            if (try self.appendExpandedPatternStatement(statement, &task.lowered)) {
-                if (!try self.finishBlockStatement(task, .{ .stmt = null, .termination = if (statement_diverges) .checked_control_transfer else .none })) break;
-                continue;
+            if (!statement_diverges) {
+                if (try self.uninhabitedStatementScrutineeStep(statement)) |step| {
+                    task.stage = .uninhabited_statement;
+                    return step;
+                }
             }
-            if (try self.beginBlockStatementChild(task)) |step| return step;
-            const statement_result = try self.lowerStatement(statement, statement_diverges);
-            if (!try self.finishBlockStatement(task, statement_result)) break;
+            if (try self.beginExpandedPatternStatement(task)) |step| {
+                task.stage = .expanded;
+                return step;
+            }
+            task.stage = .statement;
+            return requestLowerTask(self, .{ .statement = .{ .statement = statement, .diverges = statement_diverges } });
         }
+        return self.beginBlockTail(task);
+    }
 
+    /// Lower the block's tail once its statements are lowered.
+    fn beginBlockTail(self: *BodyContext, task: *BlockTask) Allocator.Error!LowerStep {
+        task.stage = .final_expr;
+        switch (task.tail) {
+            .value => {},
+            .loop_continue, .state_only => {
+                if (!statementTerminationIsNone(task.lowered.termination)) return self.finishDiscardingBlock(task);
+                task.stage = .discarded_final;
+                return requestLowerTask(self, .{ .discarded = .{ .expr = task.final_expr } });
+            },
+            .state_result => |tail| {
+                const state_cell = tail.state.state_cell;
+                switch (task.lowered.termination) {
+                    .uninhabited => |scrutinee| return self.finishStatementsBlock(task, try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell)),
+                    .checked_control_transfer => return self.finishStatementsBlock(task, try self.addExprWithTypeCell(state_cell, .@"unreachable")),
+                    .none => {},
+                }
+                if (try self.nodeIsProvenUninhabited(tail.result_node)) {
+                    task.final_wrap = state_cell;
+                    return uninhabitedScrutineeStep(self, task.final_expr, tail.state.result_cell);
+                }
+                return requestLowerTask(self, .{ .value_then_state = .{
+                    .body = task.final_expr,
+                    .result_cell = tail.state.result_cell,
+                    .state_cell = state_cell,
+                    .merge_binders = tail.state.merge_binders,
+                } });
+            },
+        }
         if (task.typed) |ty| {
             switch (task.lowered.termination) {
                 .checked_control_transfer => return self.finishBlockValue(task, try self.unreachableAfterTerminatingStatementExpr(ty)),
                 .uninhabited => |scrutinee| return self.finishBlockValue(task, try self.zeroBranchMatch(scrutinee, ty)),
                 .none => {
                     if (self.checkedExprDivergesInLoweredRuntime(task.final_expr)) {
-                        return self.finishBlockValue(task, try self.lowerDivergentExprAtType(task.final_expr, ty));
+                        return divergentStep(self, task.final_expr, .{ .at_type = ty });
                     }
                     if (try self.typeIsProvenUninhabited(ty)) {
-                        return self.finishBlockValue(task, try self.lowerExplicitUninhabitedInvocation(task.final_expr, ty));
+                        task.final_wrap = .{ .sealed = ty };
+                        return uninhabitedScrutineeStep(self, task.final_expr, .{ .sealed = ty });
                     }
-                    task.stage = .final_expr;
                     return requestLowerChild(self, task.final_expr, .{ .sealed = ty });
                 },
             }
@@ -58489,58 +59064,54 @@ const BodyContext = struct {
             } })),
             .none => {
                 if (!self.checkedExprDivergesInLoweredRuntime(task.final_expr) and try self.nodeIsProvenUninhabited(result_node)) {
-                    return self.finishBlockValue(task, try self.lowerExplicitUninhabitedInvocationAtTypeCell(task.final_expr, task.result_cell));
+                    task.final_wrap = task.result_cell;
+                    return uninhabitedScrutineeStep(self, task.final_expr, task.result_cell);
                 }
-                task.stage = .final_expr;
                 return requestLowerChild(self, task.final_expr, task.result_cell);
             },
         }
     }
 
-    /// Start lowering a statement whose value lowers as a child task: a
-    /// non-divergent pattern binding, or an expression statement with no
-    /// state to merge. Returns null for every other statement.
-    fn beginBlockStatementChild(self: *BodyContext, task: *BlockTask) Allocator.Error!?LowerStep {
-        const statement = self.view.bodies.statement(task.statement);
-        switch (statement.data) {
-            .decl => |decl| {
-                if (task.statement_diverges or self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null;
-                return try self.beginPatternStatementChild(task, statement, decl.pattern, decl.expr);
-            },
-            .var_ => |decl| {
-                if (task.statement_diverges) return null;
-                return try self.beginPatternStatementChild(task, statement, decl.pattern, decl.expr);
-            },
-            .reassign => |decl| {
-                if (task.statement_diverges) return null;
-                return try self.beginPatternStatementChild(task, statement, decl.pattern, decl.expr);
-            },
-            .expr => |child| {
-                if (try self.exprHasStateMergeBinders(child)) return null;
-                task.statement_saved = try self.enterStatementSourceLocation(statement.source_region);
-                task.stage = .expr_statement;
-                return requestLowerTask(self, .{ .expr = .{ .expr = child } });
-            },
-            .pending, .promoted_proc, .var_uninitialized, .crash, .dbg, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
-        }
+    fn finishBlockFinal(self: *BodyContext, task: *BlockTask, lowered: DraftExprId) Allocator.Error!LowerStep {
+        const final_expr = if (task.final_wrap) |cell|
+            try self.zeroBranchMatchAtTypeCell(lowered, cell)
+        else
+            lowered;
+        return switch (task.tail) {
+            .value => self.finishBlockValue(task, final_expr),
+            .state_result => self.finishStatementsBlock(task, final_expr),
+            .loop_continue, .state_only => unreachable,
+        };
     }
 
-    fn beginPatternStatementChild(
-        self: *BodyContext,
-        task: *BlockTask,
-        statement: checked.CheckedStatement,
-        pattern: checked.CheckedPatternId,
-        expr: checked.CheckedExprId,
-    ) Allocator.Error!LowerStep {
-        task.statement_saved = try self.enterStatementSourceLocation(statement.source_region);
-        task.requested_cell = try self.beginPatternStatementValue(pattern, expr);
-        task.stage = .pattern_value;
-        return requestLowerTask(self, .{ .at_type_cell = .{
-            .expr = expr,
-            .cell = task.requested_cell,
-            .demand = .runtime_value,
-            .diverges = false,
-        } });
+    /// A block whose final expression was discarded ends in its tail's
+    /// continuation once its statements run normally.
+    fn finishDiscardingBlock(self: *BodyContext, task: *BlockTask) Allocator.Error!LowerStep {
+        const cell = task.result_cell;
+        const statements = try self.addStmtSpan(task.lowered.items[0..task.lowered.len]);
+        const final_expr = switch (task.lowered.termination) {
+            .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, cell),
+            .checked_control_transfer => try self.addExprWithTypeCell(cell, .@"unreachable"),
+            .none => switch (task.tail) {
+                .loop_continue => |loop| if (loop.rest_expr) |rest_expr|
+                    try self.continueWithState(cell, rest_expr, loop.carries)
+                else
+                    try self.continueWithCurrentState(cell, loop.carries),
+                .state_only => |state| try self.stateOnlyTupleExprAtTypeCell(cell, state.merge_binders),
+                .value, .state_result => unreachable,
+            },
+        };
+        return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .block = .{
+            .statements = statements,
+            .final_expr = final_expr,
+        } }));
+    }
+
+    fn finishStatementsBlock(self: *BodyContext, task: *BlockTask, final_expr: DraftExprId) Allocator.Error!LowerStep {
+        return loweredExprStep(try self.addExprWithTypeCell(task.result_cell, .{ .block = .{
+            .statements = try self.addStmtSpan(task.lowered.items[0..task.lowered.len]),
+            .final_expr = final_expr,
+        } }));
     }
 
     fn enterStatementSourceLocation(self: *BodyContext, source_region: base.Region) Allocator.Error!SavedSourceLocation {
@@ -58579,6 +59150,7 @@ const BodyContext = struct {
                 .statements = try self.addStmtSpan(task.lowered.items[0..task.lowered.len]),
                 .final_expr = final_expr,
             } };
+            if (task.as_data) return .{ .ret = .{ .data = data } };
             return loweredExprStep(try self.addExpr(.{ .ty = ty, .data = data }));
         }
         // A block is representation-transparent: preserve an exact
@@ -58626,63 +59198,13 @@ const BodyContext = struct {
         }
     };
 
-    fn lowerBlockStatements(self: *BodyContext, checked_statements: []const checked.CheckedStatementId) Allocator.Error!LoweredStatements {
-        const items = try self.allocator.alloc(DraftStmtId, checked_statements.len);
-        var lowered = LoweredStatements{
-            .items = items,
-            .len = 0,
-            .termination = .none,
-        };
-        for (checked_statements) |statement| {
-            try self.registerLocalAssociatedProcedures(statement);
-            // Checking records divergence per statement, and marks a block
-            // divergent when any statement in it diverges. That output
-            // decides whether callers demand the block's own type from its
-            // final expression or the effect type from a value that never
-            // materializes, so it outranks every statement-local judgement
-            // here: a divergent statement transfers control, which makes it
-            // observable however little else the statement does, and leaves
-            // the rest of the block unreachable.
-            const statement_diverges = self.checkedStatementDivergesInLoweredRuntime(statement);
-            if (!statement_diverges and !self.checkedStatementHasRuntimeEffect(statement)) continue;
-            if (!statement_diverges) {
-                if (try self.lowerUninhabitedStatementScrutinee(statement)) |scrutinee| {
-                    lowered.termination = .{ .uninhabited = scrutinee };
-                    break;
-                }
-            }
-            var termination: StatementTermination = if (statement_diverges)
-                .checked_control_transfer
-            else
-                .none;
-            const statement_start = lowered.len;
-            if (!try self.appendExpandedPatternStatement(statement, &lowered)) {
-                const statement_result = try self.lowerStatement(statement, statement_diverges);
-                if (statement_result.stmt) |stmt| try lowered.append(self.allocator, stmt);
-                termination = statement_result.termination;
-            }
-            {
-                var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
-                defer timing_scope.end();
-                if (try self.anyStmtSpanImpossibilityProof(lowered.items[statement_start..lowered.len])) |proof| {
-                    self.runtime_demand_guard_frames = try self.withStatementSuccessRuntimeDemandGuardFrame(statement, proof);
-                }
-            }
-            switch (termination) {
-                .none => {},
-                .checked_control_transfer, .uninhabited => {
-                    lowered.termination = termination;
-                    break;
-                },
-            }
-        }
-        return lowered;
-    }
-
-    fn lowerUninhabitedStatementScrutinee(
+    /// A statement whose value is proven uninhabited ends its block: lower
+    /// the value as a child scrutinee. Returns null for every other
+    /// statement.
+    fn uninhabitedStatementScrutineeStep(
         self: *BodyContext,
         statement_id: checked.CheckedStatementId,
-    ) Allocator.Error!?DraftExprId {
+    ) Allocator.Error!?LowerStep {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
         const statement = self.view.bodies.statement(statement_id);
@@ -58702,11 +59224,11 @@ const BodyContext = struct {
         if (self.view.bodies.expr(expr_id).data == .runtime_error) return null;
         if (try self.graphFreeResultTypeForExpr(expr_id)) |ty| {
             if (!try self.typeIsProvenUninhabited(ty)) return null;
-            return try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, .{ .sealed = ty });
+            return uninhabitedScrutineeStep(self, expr_id, .{ .sealed = ty });
         }
         const node = try self.lowerExprTypeNode(expr_id);
         if (!try self.nodeIsProvenUninhabited(node)) return null;
-        return try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, DraftTypeCell.fromGraphNode(node));
+        return uninhabitedScrutineeStep(self, expr_id, DraftTypeCell.fromGraphNode(node));
     }
 
     fn statementTerminationIsNone(termination: StatementTermination) bool {
@@ -58716,40 +59238,31 @@ const BodyContext = struct {
         };
     }
 
-    fn appendExpandedPatternStatement(
-        self: *BodyContext,
-        statement_id: checked.CheckedStatementId,
-        lowered: *LoweredStatements,
-    ) Allocator.Error!bool {
-        const statement = self.view.bodies.statement(statement_id);
-        const saved_loc = self.builder.current_loc;
-        defer self.builder.current_loc = saved_loc;
-        const saved_region = self.builder.current_region;
-        defer self.builder.current_region = saved_region;
-        self.builder.current_loc = try self.sourceLocFor(statement.source_region);
-        self.builder.current_region = statement.source_region;
+    /// Start a pattern statement that binds several block statements, its
+    /// value lowering as a child. Returns null for every other statement.
+    fn beginExpandedPatternStatement(self: *BodyContext, task: *BlockTask) Allocator.Error!?LowerStep {
+        const statement = self.view.bodies.statement(task.statement);
         const pattern, const expr = switch (statement.data) {
             .decl => |decl| blk: {
-                if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return false;
+                if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null;
                 break :blk .{ decl.pattern, decl.expr };
             },
-            .promoted_proc => return false,
+            .promoted_proc => return null,
             .var_ => |decl| .{ decl.pattern, decl.expr },
             .reassign => |decl| .{ decl.pattern, decl.expr },
-            .pending, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return false,
+            .pending, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
         };
+        task.statement_saved = try self.enterStatementSourceLocation(statement.source_region);
+        errdefer self.restoreSourceLocation(&task.statement_saved);
 
-        const pattern_data = self.view.bodies.pattern(pattern).data;
-        if (try self.appendStatefulControlPatternStatement(
-            pattern,
-            expr,
-            statement.source_region,
-            lowered,
-        )) return true;
+        if (try self.beginStatefulControlPatternStatement(task, pattern, expr)) |step| return step;
 
-        const destructs = switch (pattern_data) {
+        const destructs = switch (self.view.bodies.pattern(pattern).data) {
             .record_destructure => |destructs| destructs,
-            .pending, .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return false,
+            .pending, .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {
+                self.restoreSourceLocation(&task.statement_saved);
+                return null;
+            },
         };
         // Expand into per-field `let` STATEMENTS both for an explicit rest
         // binder and for any OPTIONAL destructured field: statement-level
@@ -58758,142 +59271,165 @@ const BodyContext = struct {
         // to that expression (the lift capture analysis is lexical), which
         // would leave later statements reading free locals.
         if (!self.recordDestructsNeedExplicitRest(destructs) and
-            !try self.recordDestructsHaveOptionalField(self.view.bodies.pattern(pattern).ty, destructs)) return false;
+            !try self.recordDestructsHaveOptionalField(self.view.bodies.pattern(pattern).ty, destructs))
+        {
+            self.restoreSourceLocation(&task.statement_saved);
+            return null;
+        }
 
         const value_node = try self.lowerExprTypeNode(expr);
         const value_cell = DraftTypeCell.fromGraphNode(value_node);
         try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
-        const value = try self.lowerExprAtTypeCell(expr, value_cell);
-        const source_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
-        try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
-            .pat = try self.addPatWithTypeCell(value_cell, .{ .bind = source_local }),
-            .value = value,
-        } }));
-
-        const source_expr = try self.addExprWithTypeCell(value_cell, .{ .local = source_local });
-        const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and try self.patternCanMiss(pattern))
-            try self.addComptimeSite(.destructure, statement.source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
-        else
-            null;
-        try self.appendRecordRestPatternStatements(
-            source_expr,
-            value_node,
-            self.view.bodies.pattern(pattern).ty,
-            destructs,
-            lowered,
-            comptime_site,
-        );
-        return true;
+        task.expanded = .{ .record = .{
+            .pattern = pattern,
+            .destructs = destructs,
+            .value_node = value_node,
+            .value_cell = value_cell,
+        } };
+        return requestLowerChild(self, expr, value_cell);
     }
 
-    /// A statement-position `if`/`match` can both produce the statement value
-    /// and reassign surrounding binders. Keep that nested state tuple intact
-    /// until the outer statement destructures it. The reassigned locals and
-    /// the result local are then bound by an ordinary block statement, so they
-    /// remain in scope for every later statement and loop back edge.
-    fn appendStatefulControlPatternStatement(
+    /// A statement-position `if`/`match`/`for` can both produce the
+    /// statement value and reassign surrounding binders. Keep that nested
+    /// state tuple intact until the statement destructures it. The
+    /// reassigned locals and the result local are then bound by an ordinary
+    /// block statement, so they remain in scope for every later statement
+    /// and loop back edge.
+    fn beginStatefulControlPatternStatement(
         self: *BodyContext,
+        task: *BlockTask,
         pattern: checked.CheckedPatternId,
         expr_id: checked.CheckedExprId,
-        source_region: base.Region,
-        lowered: *LoweredStatements,
-    ) Allocator.Error!bool {
-        const checked_expr = self.view.bodies.expr(expr_id);
-        switch (checked_expr.data) {
+    ) Allocator.Error!?LowerStep {
+        switch (self.view.bodies.expr(expr_id).data) {
             .if_, .match_, .for_ => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => return false,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => return null,
         }
 
-        const merge_binders = try self.stateMergeBinders(expr_id);
-        defer self.allocator.free(merge_binders);
-        if (merge_binders.len == 0) return false;
+        task.expanded_merge_binders = try self.stateMergeBinders(expr_id);
+        const merge_binders = task.expanded_merge_binders;
+        if (merge_binders.len == 0) {
+            self.allocator.free(task.expanded_merge_binders);
+            task.expanded_merge_binders = &.{};
+            return null;
+        }
 
         const value_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
         try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
         const state_cell = try self.stateResultTypeCell(merge_binders, value_cell);
-        const state_value = switch (checked_expr.data) {
-            .for_ => |for_| try self.lowerForThenStateResult(for_, value_cell, state_cell, merge_binders),
-            .if_ => |if_| try self.addExprWithTypeCell(
-                state_cell,
-                try self.lowerIfAtTypeCells(
-                    if_,
-                    value_cell,
-                    state_cell,
-                    merge_binders,
-                    try self.ifComptimeSite(expr_id, if_),
-                    null,
-                ),
-            ),
-            .match_ => |match| try self.lowerMatchExprWithOutput(
-                match,
-                .{ .state_result = .{
-                    .result_cell = value_cell,
-                    .state_cell = state_cell,
-                    .merge_binders = merge_binders,
-                } },
-                try self.matchComptimeSite(expr_id, match),
-            ),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => unreachable,
-        };
-
-        const state_pattern_items = try self.allocator.alloc(DraftPatId, merge_binders.len + 1);
-        defer self.allocator.free(state_pattern_items);
-        for (merge_binders, 0..) |merge, index| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
-            try self.bindLocalName(local, merge.binder);
-            try self.binders.put(merge.binder, local);
-            state_pattern_items[index] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+        task.expanded = .{ .stateful = .{
+            .pattern = pattern,
+            .value_cell = value_cell,
+            .state_cell = state_cell,
+        } };
+        if (self.view.bodies.expr(expr_id).data == .for_) {
+            return requestLowerTask(self, .{ .value_then_state = .{
+                .body = expr_id,
+                .result_cell = value_cell,
+                .state_cell = state_cell,
+                .merge_binders = merge_binders,
+            } });
         }
-        const result_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
-        state_pattern_items[merge_binders.len] = try self.addPatWithTypeCell(value_cell, .{ .bind = result_local });
-        try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
-            .pat = try self.addPatWithTypeCell(
-                state_cell,
-                .{ .tuple = try self.addPatSpan(state_pattern_items) },
-            ),
-            .value = state_value,
-        } }));
+        return self.controlFlowOutputStep(expr_id, value_cell, .{ .state_result = .{
+            .result_cell = value_cell,
+            .state_cell = state_cell,
+            .merge_binders = merge_binders,
+        } });
+    }
 
-        const result = try self.addExprWithTypeCell(value_cell, .{ .local = result_local });
-        const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and try self.patternCanMiss(pattern))
-            try self.addComptimeSite(
-                .destructure,
-                source_region,
-                self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern),
-                &.{},
-            )
-        else
-            null;
-        if (!try self.patternNeedsExplicitBinding(pattern)) {
-            const result_pattern = if (self.patternIsShapeFree(pattern))
-                try self.lowerShapeFreePatternAtCell(pattern, value_cell)
-            else
-                try self.lowerPatternAtNode(pattern, try value_cell.toGraphNode(self.graph));
-            try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
-                .pat = result_pattern,
-                .value = result,
-                .comptime_site = comptime_site,
-            } }));
-            return true;
+    /// Bind an expanded pattern statement's lowered value as block statements.
+    fn finishExpandedPatternStatement(self: *BodyContext, task: *BlockTask, value: DraftExprId) Allocator.Error!void {
+        const statement = self.view.bodies.statement(task.statement);
+        const lowered = &task.lowered;
+        switch (task.expanded) {
+            .record => |record| {
+                const pattern = record.pattern;
+                const value_cell = record.value_cell;
+                const source_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
+                try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                    .pat = try self.addPatWithTypeCell(value_cell, .{ .bind = source_local }),
+                    .value = value,
+                } }));
+
+                const source_expr = try self.addExprWithTypeCell(value_cell, .{ .local = source_local });
+                const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and try self.patternCanMiss(pattern))
+                    try self.addComptimeSite(.destructure, statement.source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
+                else
+                    null;
+                try self.appendRecordRestPatternStatements(
+                    source_expr,
+                    record.value_node,
+                    self.view.bodies.pattern(pattern).ty,
+                    record.destructs,
+                    lowered,
+                    comptime_site,
+                );
+            },
+            .stateful => |stateful| {
+                const pattern = stateful.pattern;
+                const value_cell = stateful.value_cell;
+                const state_cell = stateful.state_cell;
+                const merge_binders = task.expanded_merge_binders;
+                const state_pattern_items = try self.allocator.alloc(DraftPatId, merge_binders.len + 1);
+                defer self.allocator.free(state_pattern_items);
+                for (merge_binders, 0..) |merge, index| {
+                    const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+                    try self.bindLocalName(local, merge.binder);
+                    try self.binders.put(merge.binder, local);
+                    state_pattern_items[index] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+                }
+                const result_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
+                state_pattern_items[merge_binders.len] = try self.addPatWithTypeCell(value_cell, .{ .bind = result_local });
+                try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                    .pat = try self.addPatWithTypeCell(
+                        state_cell,
+                        .{ .tuple = try self.addPatSpan(state_pattern_items) },
+                    ),
+                    .value = value,
+                } }));
+
+                const result = try self.addExprWithTypeCell(value_cell, .{ .local = result_local });
+                const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and try self.patternCanMiss(pattern))
+                    try self.addComptimeSite(
+                        .destructure,
+                        statement.source_region,
+                        self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern),
+                        &.{},
+                    )
+                else
+                    null;
+                if (!try self.patternNeedsExplicitBinding(pattern)) {
+                    const result_pattern = if (self.patternIsShapeFree(pattern))
+                        try self.lowerShapeFreePatternAtCell(pattern, value_cell)
+                    else
+                        try self.lowerPatternAtNode(pattern, try value_cell.toGraphNode(self.graph));
+                    try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                        .pat = result_pattern,
+                        .value = result,
+                        .comptime_site = comptime_site,
+                    } }));
+                } else {
+                    const unit_ty = try self.unitType();
+                    var unit = try self.addExpr(.{ .ty = unit_ty, .data = .unit });
+                    unit = try self.wrapComptimeBranch(comptime_site, 0, unit);
+                    const miss = if (comptime_site) |site|
+                        try self.comptimeExhaustivenessFailedExpr(unit_ty, site)
+                    else
+                        try self.runtimeCrashExpr(unit_ty, "pattern match failed");
+                    try lowered.append(self.allocator, try self.addStmt(.{ .expr = try self.lowerMaterializedPatternValueThen(
+                        pattern,
+                        result,
+                        value_cell,
+                        .{ .sealed = unit_ty },
+                        .{ .expr = unit },
+                        miss,
+                        null,
+                    ) }));
+                }
+                self.allocator.free(task.expanded_merge_binders);
+                task.expanded_merge_binders = &.{};
+            },
         }
-
-        const unit_ty = try self.unitType();
-        var unit = try self.addExpr(.{ .ty = unit_ty, .data = .unit });
-        unit = try self.wrapComptimeBranch(comptime_site, 0, unit);
-        const miss = if (comptime_site) |site|
-            try self.comptimeExhaustivenessFailedExpr(unit_ty, site)
-        else
-            try self.runtimeCrashExpr(unit_ty, "pattern match failed");
-        try lowered.append(self.allocator, try self.addStmt(.{ .expr = try self.lowerMaterializedPatternValueThen(
-            pattern,
-            result,
-            value_cell,
-            .{ .sealed = unit_ty },
-            .{ .expr = unit },
-            miss,
-            null,
-        ) }));
-        return true;
     }
 
     fn appendRecordRestPatternStatements(
@@ -59001,271 +59537,11 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerDivergentExprAtType(
-        self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const checked_expr = self.view.bodies.expr(checked_expr_id);
-        switch (checked_expr.data) {
-            .match_ => |match| {
-                if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
-                    return try self.addExpr(.{
-                        .ty = ty,
-                        .data = try self.lowerDivergentExprForEffectDataAtType(match.cond, ty),
-                    });
-                }
-                return try self.lowerMatchExpr(checked_expr_id, match, ty);
-            },
-            .if_ => |if_| {
-                if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
-                    return try self.addExpr(.{
-                        .ty = ty,
-                        .data = try self.lowerDivergentExprForEffectDataAtType(if_.branches[0].cond, ty),
-                    });
-                }
-                return try self.lowerIfExpr(checked_expr_id, if_, ty);
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
-
-        return try self.addExpr(.{
-            .ty = ty,
-            .data = try self.lowerDivergentExprDataAtType(checked_expr_id, ty),
-        });
-    }
-
-    fn lowerDivergentExprAtTypeCell(
-        self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
-        result_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        const checked_expr = self.view.bodies.expr(checked_expr_id);
-        switch (checked_expr.data) {
-            .match_ => |match| return try self.lowerMatchExprAtTypeCell(checked_expr_id, match, result_cell),
-            .if_ => |if_| return try self.lowerIfExprAtTypeCell(checked_expr_id, if_, result_cell),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
-
-        const effect_ty = try self.unitType();
-        const effect = try self.lowerDivergentExprAtType(checked_expr_id, effect_ty);
-        const stmt = try self.addStmt(.{ .expr = effect });
-        return try self.addExprWithTypeCell(result_cell, .{ .block = .{
-            .statements = try self.addStmtSpan(&.{stmt}),
-            .final_expr = try self.addExprWithTypeCell(result_cell, .@"unreachable"),
-        } });
-    }
-
     fn exprIdAsDivergentData(self: *BodyContext, expr: DraftExprId) Allocator.Error!BodyExprData {
         return .{ .block = .{
             .statements = try self.addStmtSpan(&[_]DraftStmtId{}),
             .final_expr = expr,
         } };
-    }
-
-    fn lowerDivergentExprForEffectDataAtType(
-        self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!BodyExprData {
-        // A divergent expression never returns a value, so its checked result
-        // variable can legitimately remain unconstrained; the continuation's
-        // explicit type stands in for a result that cannot exist. An explicit
-        // checked runtime error lowers its crash path at unit because its
-        // deliberately erroneous source type has no monotype.
-        const effect_ty = if (self.view.bodies.expr(checked_expr_id).data == .runtime_error)
-            try self.unitType()
-        else
-            ty;
-        const effect = try self.lowerDivergentExprAtType(checked_expr_id, effect_ty);
-        const stmt = try self.addStmt(.{ .expr = effect });
-        return .{ .block = .{
-            .statements = try self.addStmtSpan(&[_]DraftStmtId{stmt}),
-            .final_expr = try self.unreachableAfterTerminatingStatementExpr(ty),
-        } };
-    }
-
-    fn lowerFirstDivergentExprForEffectDataAtType(
-        self: *BodyContext,
-        items: []const checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!BodyExprData {
-        for (items) |item| {
-            if (self.checkedExprDivergesInLoweredRuntime(item)) {
-                return try self.lowerDivergentExprForEffectDataAtType(item, ty);
-            }
-        }
-        Common.invariant("checked expression was marked divergent but no divergent child was found");
-    }
-
-    fn lowerDivergentRecordForEffectDataAtType(
-        self: *BodyContext,
-        record: anytype,
-        ty: Type.TypeId,
-    ) Allocator.Error!BodyExprData {
-        if (record.ext) |ext| {
-            if (self.checkedExprDivergesInLoweredRuntime(ext)) {
-                return try self.lowerDivergentExprForEffectDataAtType(ext, ty);
-            }
-        }
-        for (record.fields) |field| {
-            if (self.checkedExprDivergesInLoweredRuntime(field.value)) {
-                return try self.lowerDivergentExprForEffectDataAtType(field.value, ty);
-            }
-        }
-        Common.invariant("checked record expression was marked divergent but no divergent child was found");
-    }
-
-    fn lowerDivergentInterpolationForEffectDataAtType(
-        self: *BodyContext,
-        interpolation: checked.CheckedInterpolation,
-        ty: Type.TypeId,
-    ) Allocator.Error!BodyExprData {
-        if (self.checkedExprDivergesInLoweredRuntime(interpolation.first)) {
-            return try self.lowerDivergentExprForEffectDataAtType(interpolation.first, ty);
-        }
-        for (interpolation.parts) |part| {
-            if (self.checkedExprDivergesInLoweredRuntime(part.value)) {
-                return try self.lowerDivergentExprForEffectDataAtType(part.value, ty);
-            }
-            if (self.checkedExprDivergesInLoweredRuntime(part.following_segment)) {
-                return try self.lowerDivergentExprForEffectDataAtType(part.following_segment, ty);
-            }
-        }
-        Common.invariant("checked interpolation was marked divergent but no divergent child was found");
-    }
-
-    fn lowerDivergentDispatchForEffectDataAtType(
-        self: *BodyContext,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        ty: Type.TypeId,
-    ) Allocator.Error!BodyExprData {
-        const plan_id = maybe_plan orelse Common.invariant("divergent checked dispatch expression did not contain its checked plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        switch (self.dispatchRuntimePlan(plan)) {
-            .callable => {},
-            .crash => |reason| return .{ .crash = try self.addStringLiteral(dispatchCrashMessage(reason)) },
-        }
-        for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
-            .checked_expr => |expr| if (self.checkedExprDivergesInLoweredRuntime(expr)) {
-                return try self.lowerDivergentExprForEffectDataAtType(expr, ty);
-            },
-            .generated_interpolation_iter => |expr| {
-                const interpolation = switch (self.view.bodies.expr(expr).data) {
-                    .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("divergent interpolation iterator referenced a non-interpolation expression"),
-                };
-                return try self.lowerDivergentInterpolationForEffectDataAtType(interpolation, ty);
-            },
-            .generated_numeral, .generated_quote => {},
-        };
-        Common.invariant("checked dispatch expression was marked divergent but no divergent operand was found");
-    }
-
-    fn lowerDivergentExprDataAtType(
-        self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!BodyExprData {
-        const checked_expr = self.view.bodies.expr(checked_expr_id);
-        return switch (checked_expr.data) {
-            .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
-            .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
-            .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
-            .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
-            .expect_err => |expect_err| .{ .expect_err = .{
-                .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
-                .region = checked_expr.source_region,
-            } },
-            .str => |items| try self.lowerFirstDivergentExprForEffectDataAtType(items, ty),
-            .list => |items| try self.lowerFirstDivergentExprForEffectDataAtType(items, ty),
-            .tuple => |items| try self.lowerFirstDivergentExprForEffectDataAtType(items, ty),
-            .block => |block| try self.lowerBlock(block, ty),
-            .match_ => |match| try self.exprIdAsDivergentData(try self.lowerMatchExpr(checked_expr_id, match, ty)),
-            .if_ => |if_| try self.exprIdAsDivergentData(try self.lowerIfExpr(checked_expr_id, if_, ty)),
-            .call => |call| blk: {
-                if (self.checkedExprDivergesInLoweredRuntime(call.func)) {
-                    break :blk try self.lowerDivergentExprForEffectDataAtType(call.func, ty);
-                }
-                break :blk try self.lowerFirstDivergentExprForEffectDataAtType(call.args, ty);
-            },
-            .record => |record| try self.lowerDivergentRecordForEffectDataAtType(record, ty),
-            .tag => |tag| try self.lowerFirstDivergentExprForEffectDataAtType(tag.args, ty),
-            .nominal => |nominal| try self.lowerDivergentExprForEffectDataAtType(nominal.backing_expr, ty),
-            .binop => |binop| blk: {
-                if (self.checkedExprDivergesInLoweredRuntime(binop.lhs)) {
-                    break :blk try self.lowerDivergentExprForEffectDataAtType(binop.lhs, ty);
-                }
-                if (self.checkedExprDivergesInLoweredRuntime(binop.rhs)) {
-                    break :blk try self.lowerDivergentExprForEffectDataAtType(binop.rhs, ty);
-                }
-                Common.invariant("checked binary expression was marked divergent but no divergent child was found");
-            },
-            .unary_minus,
-            .unary_not,
-            .dbg,
-            => |child| try self.lowerDivergentExprForEffectDataAtType(child, ty),
-            .expect => |child| if (self.builder.inline_expects == .run)
-                try self.lowerDivergentExprForEffectDataAtType(child, ty)
-            else
-                Common.invariant("omitted checked expect reached divergent runtime lowering"),
-            .field_access => |field| try self.lowerDivergentExprForEffectDataAtType(field.receiver, ty),
-            .structural_eq => |eq| blk: {
-                if (self.checkedExprDivergesInLoweredRuntime(eq.lhs)) {
-                    break :blk try self.lowerDivergentExprForEffectDataAtType(eq.lhs, ty);
-                }
-                if (self.checkedExprDivergesInLoweredRuntime(eq.rhs)) {
-                    break :blk try self.lowerDivergentExprForEffectDataAtType(eq.rhs, ty);
-                }
-                Common.invariant("checked structural equality was marked divergent but no divergent child was found");
-            },
-            .structural_hash => |hash| blk: {
-                if (self.checkedExprDivergesInLoweredRuntime(hash.value)) {
-                    break :blk try self.lowerDivergentExprForEffectDataAtType(hash.value, ty);
-                }
-                if (self.checkedExprDivergesInLoweredRuntime(hash.hasher)) {
-                    break :blk try self.lowerDivergentExprForEffectDataAtType(hash.hasher, ty);
-                }
-                Common.invariant("checked structural hash was marked divergent but no divergent child was found");
-            },
-            .tuple_access => |access| try self.lowerDivergentExprForEffectDataAtType(access.tuple, ty),
-            .for_ => |for_| try self.lowerDivergentExprForEffectDataAtType(for_.expr, ty),
-            .run_low_level => |low_level| blk: {
-                for (low_level.args) |arg| {
-                    if (self.checkedExprDivergesInLoweredRuntime(arg)) {
-                        break :blk try self.lowerDivergentExprForEffectDataAtType(arg, ty);
-                    }
-                }
-                if (low_level.op != .crash) {
-                    Common.invariant("checked low-level expression was marked divergent but no divergent argument was found");
-                }
-                break :blk .{ .low_level = .{
-                    .op = low_level.op,
-                    .args = try self.lowerExprSpan(low_level.args),
-                } };
-            },
-            .dispatch_call => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),
-            .interpolation => |interpolation| try self.lowerDivergentInterpolationForEffectDataAtType(interpolation, ty),
-            .method_eq => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),
-            .type_dispatch_call => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),
-            .numeral => |numeral| try self.lowerDivergentDispatchForEffectDataAtType(numeral.plan, ty),
-            .str_from_quote => |quote| try self.lowerDivergentDispatchForEffectDataAtType(quote.plan, ty),
-            .pending,
-            .str_segment,
-            .bytes_literal,
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .empty_list,
-            .empty_record,
-            .zero_argument_tag,
-            .closure,
-            .lambda,
-            .anno_only,
-            .hosted_lambda,
-            => Common.invariant("non-divergent checked expression reached divergent lowering"),
-        };
     }
 
     fn unreachableAfterTerminatingStatementExpr(self: *BodyContext, ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -59316,39 +59592,6 @@ const BodyContext = struct {
         carries: []const LoopCarry,
     };
 
-    fn lowerForThenStateResult(
-        self: *BodyContext,
-        for_: anytype,
-        result_cell: DraftTypeCell,
-        state_cell: DraftTypeCell,
-        merge_binders: []const MergeBinder,
-    ) Allocator.Error!DraftExprId {
-        const stmt = try self.addStmt(try self.lowerForStatement(for_));
-        const unit = try self.addExprWithTypeCell(result_cell, .unit);
-        return try self.addExprWithTypeCell(state_cell, .{ .block = .{
-            .statements = try self.addStmtSpan(&.{stmt}),
-            .final_expr = try self.stateResultTupleExprAtTypeCells(state_cell, merge_binders, unit),
-        } });
-    }
-
-    /// Both source loop forms bind their exit state in the enclosing
-    /// continuation. Expression callers supply unit only after that binding.
-    fn lowerForStatement(self: *BodyContext, for_: anytype) Allocator.Error!DraftStmt {
-        const carries = try self.prepareLoopCarries(for_.mutations);
-        defer self.allocator.free(carries);
-        const loop_cell = try self.loopStateTypeCell(try self.unitType(), carries);
-        const expr = try self.addExprWithTypeCell(loop_cell, try self.lowerIteratorFor(for_, loop_cell, carries));
-        return try self.loopExitStatement(expr, carries, loop_cell);
-    }
-
-    fn lowerConditionLoopStatement(self: *BodyContext, loop: checked.CheckedConditionLoop, condition: WhileCondition) Allocator.Error!DraftStmt {
-        const carries = try self.prepareLoopCarries(loop.mutations);
-        defer self.allocator.free(carries);
-        const loop_cell = try self.loopStateTypeCell(try self.unitType(), carries);
-        const expr = try self.addExprWithTypeCell(loop_cell, try self.lowerWhile(loop, loop_cell, carries, condition));
-        return try self.loopExitStatement(expr, carries, loop_cell);
-    }
-
     fn loopExitStatement(self: *BodyContext, expr: DraftExprId, carries: []const LoopCarry, loop_cell: DraftTypeCell) Allocator.Error!DraftStmt {
         if (carries.len == 0) return .{ .expr = expr };
         return .{ .let_ = .{
@@ -59357,296 +59600,10 @@ const BodyContext = struct {
         } };
     }
 
-    fn lowerIteratorFor(
-        self: *BodyContext,
-        for_: anytype,
-        result_cell: DraftTypeCell,
-        carries: []const LoopCarry,
-    ) Allocator.Error!BodyExprData {
-        const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
-        const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
-
-        if (self.dispatchCrashReason(plan.iter.resolution) orelse self.dispatchCrashReason(plan.next.resolution)) |reason| {
-            const message = dispatchCrashMessage(reason);
-            return .{ .crash = try self.addStringLiteral(message) };
-        }
-
-        const initial_iterator = try self.lowerIteratorDispatch(plan.iter, null, null);
-        const iterator_cell = self.exprTypeCell(initial_iterator);
-        try self.constrainCheckedInterfaceToCell(plan.iterator_ty, iterator_cell);
-        const step = try self.iteratorStepShape(plan, iterator_cell);
-        try self.constrainCheckedInterfaceToCell(plan.iterator_ty, DraftTypeCell.fromGraphNode(step.one_rest.node));
-        try self.constrainCheckedInterfaceToCell(plan.iterator_ty, DraftTypeCell.fromGraphNode(step.skip_rest.node));
-        try self.constrainCheckedInterfaceToCell(plan.item_ty, DraftTypeCell.fromGraphNode(step.one_item.node));
-        const iterator_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), iterator_cell, null);
-        const iterator_param = DraftTypedLocal{ .local = iterator_local, .ty = iterator_cell };
-
-        var saved = std.ArrayList(BinderRestore).empty;
-        defer saved.deinit(self.allocator);
-        for (carries) |carry| {
-            try self.saveBinder(carry.binder, &saved);
-            try self.binders.put(carry.binder, carry.param_local);
-        }
-        defer self.restoreBinders(saved.items);
-
-        try self.pushLoopContext(result_cell, carries);
-        defer self.popLoopContext();
-
-        const step_expr = try self.lowerIteratorDispatch(plan.next, iterator_param, DraftTypeCell.fromGraphNode(step.step_node));
-        try self.constrainCheckedInterfaceToCell(plan.step_ty, self.exprTypeCell(step_expr));
-        const done_body = if (carries.len == 0)
-            try self.addExprWithTypeCell(result_cell, .{ .break_ = null })
-        else
-            try self.addExprWithTypeCell(result_cell, .{ .break_ = try self.loopStateExpr(result_cell, carries) });
-
-        var branches: [3]DraftBranch = undefined;
-        branches[0] = .{
-            .pat = try self.iteratorDonePattern(step),
-            .body = done_body,
-        };
-        branches[1] = if (try self.nodeIsProvenUninhabited(step.one_item.node))
-            try self.uninhabitedIteratorOneBranch(step, done_body)
-        else
-            try self.iteratorOneBranch(for_, result_cell, step, iterator_cell, carries);
-        branches[2] = try self.iteratorSkipBranch(result_cell, step, iterator_cell, carries);
-
-        const match_expr = try self.addExprWithTypeCell(result_cell, .{ .match_ = .{
-            .scrutinee = step_expr,
-            .branches = try self.addBranchSpan(&branches),
-        } });
-
-        const params = try self.allocator.alloc(DraftTypedLocal, 1 + carries.len);
-        defer self.allocator.free(params);
-        params[0] = iterator_param;
-        for (carries, 0..) |carry, i| params[i + 1] = .{ .local = carry.param_local, .ty = carry.ty };
-
-        const initial_values = try self.allocator.alloc(DraftExprId, 1 + carries.len);
-        defer self.allocator.free(initial_values);
-        initial_values[0] = initial_iterator;
-        for (carries, 0..) |carry, i| {
-            initial_values[i + 1] = try self.addExprWithTypeCell(carry.ty, .{ .local = carry.initial_local });
-        }
-
-        return .{ .loop_ = .{
-            .params = try self.draft.addTypedLocalSpan(params),
-            .initial_values = try self.addExprSpan(initial_values),
-            .body = match_expr,
-        } };
-    }
-
     const WhileCondition = enum {
         checked,
         always_true,
     };
-
-    fn lowerWhile(
-        self: *BodyContext,
-        while_: anytype,
-        result_cell: DraftTypeCell,
-        carries: []const LoopCarry,
-        condition: WhileCondition,
-    ) Allocator.Error!BodyExprData {
-        var saved = std.ArrayList(BinderRestore).empty;
-        defer saved.deinit(self.allocator);
-        for (carries) |carry| {
-            try self.saveBinder(carry.binder, &saved);
-            try self.binders.put(carry.binder, carry.param_local);
-        }
-        defer self.restoreBinders(saved.items);
-
-        try self.pushLoopContext(result_cell, carries);
-        defer self.popLoopContext();
-
-        // Checked entry edges observe the loop parameters at the start of an
-        // iteration. Lower both the condition and its false-edge result before
-        // the body, whose branch merges replace binder mappings with post-body
-        // locals used only by the continuation edge.
-        const checked_entry = switch (condition) {
-            .checked => .{
-                .cond = try self.lowerExpr(while_.cond),
-                .break_body = try self.breakCurrentLoopExpr(),
-            },
-            .always_true => null,
-        };
-        const continue_body = try self.lowerWhileBodyThenContinue(while_.body, result_cell, carries);
-        const body = switch (condition) {
-            .always_true => continue_body,
-            .checked => blk: {
-                const entry = checked_entry.?;
-                const branches = [_]DraftIfBranch{.{ .cond = entry.cond, .body = continue_body }};
-                break :blk try self.addExprWithTypeCell(result_cell, .{ .if_ = .{
-                    .branches = try self.addIfBranchSpan(&branches),
-                    .final_else = entry.break_body,
-                } });
-            },
-        };
-
-        const params = try self.allocator.alloc(DraftTypedLocal, carries.len);
-        defer self.allocator.free(params);
-        for (carries, 0..) |carry, i| params[i] = .{ .local = carry.param_local, .ty = carry.ty };
-
-        const initial_values = try self.allocator.alloc(DraftExprId, carries.len);
-        defer self.allocator.free(initial_values);
-        for (carries, 0..) |carry, i| {
-            initial_values[i] = try self.addExprWithTypeCell(carry.ty, .{ .local = carry.initial_local });
-        }
-
-        return .{ .loop_ = .{
-            .params = try self.draft.addTypedLocalSpan(params),
-            .initial_values = try self.addExprSpan(initial_values),
-            .body = body,
-        } };
-    }
-
-    fn lowerIteratorDispatch(
-        self: *BodyContext,
-        plan: static_dispatch.IteratorDispatchCall,
-        loop_iterator: ?DraftTypedLocal,
-        expected_ret_ty: ?DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
-        if (plan.dispatcher_arg_index >= plan_args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
-
-        const lookup = self.iteratorMethodLookup(plan);
-
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.in_deferred_body = self.in_deferred_body;
-
-        var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
-        const initial_plan_fn = try self.graph.functionNodes(callable_node);
-        // Instantiating the caller-authored request completes any procedure
-        // operands that return iterator evidence. Only then is the producer's
-        // representation available for the generated Iter.iter/Iter.next path.
-        if (try self.lowerGeneratedIteratorDispatch(
-            lookup,
-            plan,
-            plan_args,
-            initial_plan_fn.args[plan.dispatcher_arg_index],
-            loop_iterator,
-            expected_ret_ty,
-        )) |generated| {
-            return generated;
-        }
-        const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
-        try self.relateDispatchTargetRequestInterface(lookup, target_node, callable_node);
-        if (try self.generatedIteratorPlanRequestNode(
-            lookup,
-            target_node,
-            callable_node,
-            plan_args,
-        )) |private_node| {
-            callable_node = private_node;
-        }
-        // The generated request owns the operand slots used to lower this
-        // call. Completing the callee may replace the callable result, but it
-        // must not move these request-authored operands.
-        const plan_fn = try self.graph.functionNodes(callable_node);
-        const callee = try self.methodTargetCalleeAtNodeWithEvidence(
-            lookup,
-            callable_node,
-            self.iteratorTargetEvidenceSource(plan),
-        );
-        const completed_callable_node = try self.draftFnSlotTypeNode(callee, callable_node);
-        if (expected_ret_ty) |expected| {
-            if (!self.graph.sameClass(plan_fn.ret, try expected.toGraphNode(self.graph))) {
-                Common.invariant("checked iterator dispatch plan return type differed from iterator-for expected type");
-            }
-        }
-
-        const dispatcher_node = plan_fn.args[plan.dispatcher_arg_index];
-        try call_ctx.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
-        const actual_dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], loop_iterator);
-        try relateRequestComponent(self.graph, dispatcher_node, actual_dispatcher_node);
-        // A producer-authored request intentionally remains in a different
-        // class from its checked-public operand. The directed relation above
-        // validates their complete public interface; ordinary operands still
-        // require the single checked class.
-        if (!self.graph.sameClass(dispatcher_node, actual_dispatcher_node) and
-            !try self.graph.containsGeneratedPrivate(dispatcher_node) and
-            !try self.graph.containsGeneratedPrivate(actual_dispatcher_node))
-        {
-            Common.invariant("iterator dispatch plan dispatcher operand differed from the checked dispatcher type");
-        }
-        const fn_nodes = try self.graph.functionNodes(completed_callable_node);
-        if (fn_nodes.args.len != plan_args.len) {
-            Common.invariant("completed iterator dispatch target changed its argument arity");
-        }
-        if (expected_ret_ty) |expected| {
-            const expected_node = try expected.toGraphNode(self.graph);
-            // Completion may replace the public return with a producer-minted
-            // private representation that is directionally related to the
-            // request instead of sharing its class, so a generated-private
-            // side is exempt exactly like the dispatcher operand check above.
-            if (!self.graph.sameClass(fn_nodes.ret, expected_node) and
-                !try self.graph.containsGeneratedPrivate(fn_nodes.ret) and
-                !try self.graph.containsGeneratedPrivate(expected_node))
-            {
-                Common.invariant("checked iterator dispatch target return type differed from iterator-for expected type");
-            }
-        }
-        const args = try self.allocator.alloc(DraftExprId, plan_args.len);
-        defer self.allocator.free(args);
-        for (plan_args, 0..) |operand, i| {
-            args[i] = try self.lowerIteratorOperandAtNode(operand, loop_iterator, plan_fn.args[i]);
-        }
-
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(fn_nodes.ret),
-            .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(callee),
-                .args = try self.addExprSpan(args),
-                .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
-                .captures = try self.methodTargetCaptureSpan(lookup),
-            } },
-        );
-    }
-
-    fn lowerGeneratedIteratorDispatch(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        plan: static_dispatch.IteratorDispatchCall,
-        plan_args: []const static_dispatch.IteratorDispatchOperand,
-        dispatcher_node: NodeId,
-        loop_iterator: ?DraftTypedLocal,
-        expected_ret_ty: ?DraftTypeCell,
-    ) Allocator.Error!?DraftExprId {
-        const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
-        if (procedure != .iter_iter and procedure != .iter_next) return null;
-
-        if (!self.isGeneratedIteratorEvidenceNode(dispatcher_node)) return null;
-        try self.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
-
-        const iterator = try self.lowerIteratorOperandAtNode(
-            plan_args[plan.dispatcher_arg_index],
-            loop_iterator,
-            dispatcher_node,
-        );
-        switch (procedure) {
-            .iter_iter => {
-                if (expected_ret_ty) |expected| {
-                    try relateRequestComponent(self.graph, dispatcher_node, try expected.toGraphNode(self.graph));
-                }
-                return iterator;
-            },
-            .iter_next => {
-                const step_ret_node = try self.generatedIteratorStepReturnNode(dispatcher_node);
-                if (expected_ret_ty) |expected| {
-                    try relateRequestComponent(self.graph, step_ret_node, try expected.toGraphNode(self.graph));
-                }
-                return try self.addExprWithTypeCell(
-                    DraftTypeCell.fromGraphNode(step_ret_node),
-                    try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
-                );
-            },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_with_index, .iter_step_by, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
-        }
-    }
 
     fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.IteratorDispatchCall) MethodLookup {
         return switch (plan.resolution) {
@@ -59756,83 +59713,11 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerIteratorOperandAtNode(
-        self: *BodyContext,
-        operand: static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?DraftTypedLocal,
-        node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        return switch (operand) {
-            .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
-            .loop_iterator_state => blk: {
-                const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
-                const iterator_node = try iterator.ty.toGraphNode(self.graph);
-                try self.graph.unify(iterator_node, node);
-                if (!self.graph.sameClass(iterator_node, node)) Common.invariant("iterator .next operand type differed from instantiated callable argument type");
-                break :blk try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local });
-            },
-        };
-    }
-
     fn iteratorDonePattern(self: *BodyContext, step: IterStepShape) Allocator.Error!DraftPatId {
         return try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(step.step_node), .{ .tag = .{
             .name = try self.tagName(self.view, step.done_tag),
             .payloads = .empty(),
         } });
-    }
-
-    fn iteratorOneBranch(
-        self: *BodyContext,
-        for_: anytype,
-        result_cell: DraftTypeCell,
-        step: IterStepShape,
-        iterator_cell: DraftTypeCell,
-        carries: []const LoopCarry,
-    ) Allocator.Error!DraftBranch {
-        var saved = std.ArrayList(BinderRestore).empty;
-        defer saved.deinit(self.allocator);
-        try self.savePatternBinders(for_.pattern, &saved);
-        for (carries) |carry| try self.saveBinder(carry.binder, &saved);
-        defer self.restoreBinders(saved.items);
-
-        const item_cell = DraftTypeCell.fromGraphNode(step.one_item.node);
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell);
-
-        const previous_runtime_demand_guard_frames = self.runtime_demand_guard_frames;
-        self.runtime_demand_guard_frames = try self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step);
-        defer self.runtime_demand_guard_frames = previous_runtime_demand_guard_frames;
-
-        const rest_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), iterator_cell, null);
-        const item_local: ?DraftLocalId = if (try self.patternNeedsExplicitBinding(for_.pattern))
-            try self.addLocalWithBinderCell(self.builder.symbols.fresh(), item_cell, null)
-        else
-            null;
-        const record_pat = try self.iteratorOnePayloadPattern(for_.pattern, step, iterator_cell, rest_local, item_local);
-        const tag_pat = try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(step.step_node), .{ .tag = .{
-            .name = try self.tagName(self.view, step.one_tag),
-            .payloads = try self.addPatSpan(&[_]DraftPatId{record_pat}),
-        } });
-
-        const rest_expr = try self.addExprWithTypeCell(iterator_cell, .{ .local = rest_local });
-        const block = if (item_local) |local| blk: {
-            const item_expr = try self.addExprWithTypeCell(item_cell, .{ .local = local });
-            const miss = try self.addExprWithTypeCell(result_cell, .{ .crash = try self.addStringLiteral("pattern match failed") });
-            break :blk try self.lowerMaterializedPatternThen(
-                for_.pattern,
-                item_expr,
-                item_cell,
-                result_cell,
-                .{ .iterator_body = .{
-                    .body = for_.body,
-                    .result_cell = result_cell,
-                    .rest_expr = rest_expr,
-                    .carries = carries,
-                } },
-                miss,
-            );
-        } else try self.lowerIteratorBodyThenContinue(for_.body, result_cell, rest_expr, carries);
-
-        return .{ .pat = tag_pat, .body = block };
     }
 
     fn uninhabitedIteratorOneBranch(
@@ -59846,91 +59731,6 @@ const BodyContext = struct {
             .payloads = try self.addPatSpan(&[_]DraftPatId{payload_pat}),
         } });
         return .{ .pat = tag_pat, .body = body };
-    }
-
-    fn lowerIteratorBodyThenContinue(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        result_cell: DraftTypeCell,
-        rest_expr: DraftExprId,
-        carries: []const LoopCarry,
-    ) Allocator.Error!DraftExprId {
-        const checked_body = self.view.bodies.expr(body);
-        switch (checked_body.data) {
-            .block => |block| {
-                const previous_statement_success_frames = self.runtime_demand_guard_frames;
-                defer self.runtime_demand_guard_frames = previous_statement_success_frames;
-                var statements = try self.lowerBlockStatements(block.statements);
-                defer self.allocator.free(statements.items);
-                if (statementTerminationIsNone(statements.termination)) {
-                    const final_result = try self.lowerDiscardedExprStatementAtTypeCell(block.final_expr);
-                    if (final_result.stmt) |stmt| try statements.append(self.allocator, stmt);
-                    statements.termination = final_result.termination;
-                }
-                return try self.addExprWithTypeCell(result_cell, .{ .block = .{
-                    .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                    .final_expr = switch (statements.termination) {
-                        .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, result_cell),
-                        .checked_control_transfer => try self.addExprWithTypeCell(result_cell, .@"unreachable"),
-                        .none => try self.continueWithState(result_cell, rest_expr, carries),
-                    },
-                } });
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
-                const body_result = try self.lowerDiscardedExprStatementAtTypeCell(body);
-                const stmt_ids = if (body_result.stmt) |stmt| &[_]DraftStmtId{stmt} else &[_]DraftStmtId{};
-                return try self.addExprWithTypeCell(result_cell, .{ .block = .{
-                    .statements = try self.addStmtSpan(stmt_ids),
-                    .final_expr = switch (body_result.termination) {
-                        .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, result_cell),
-                        .checked_control_transfer => try self.addExprWithTypeCell(result_cell, .@"unreachable"),
-                        .none => try self.continueWithState(result_cell, rest_expr, carries),
-                    },
-                } });
-            },
-        }
-    }
-
-    fn lowerWhileBodyThenContinue(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        result_cell: DraftTypeCell,
-        carries: []const LoopCarry,
-    ) Allocator.Error!DraftExprId {
-        const checked_body = self.view.bodies.expr(body);
-        switch (checked_body.data) {
-            .block => |block| {
-                const previous_statement_success_frames = self.runtime_demand_guard_frames;
-                defer self.runtime_demand_guard_frames = previous_statement_success_frames;
-                var statements = try self.lowerBlockStatements(block.statements);
-                defer self.allocator.free(statements.items);
-                if (statementTerminationIsNone(statements.termination)) {
-                    const final_result = try self.lowerDiscardedExprStatementAtTypeCell(block.final_expr);
-                    if (final_result.stmt) |stmt| try statements.append(self.allocator, stmt);
-                    statements.termination = final_result.termination;
-                }
-                return try self.addExprWithTypeCell(result_cell, .{ .block = .{
-                    .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                    .final_expr = switch (statements.termination) {
-                        .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, result_cell),
-                        .checked_control_transfer => try self.addExprWithTypeCell(result_cell, .@"unreachable"),
-                        .none => try self.continueWithCurrentState(result_cell, carries),
-                    },
-                } });
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
-                const body_result = try self.lowerDiscardedExprStatementAtTypeCell(body);
-                const stmt_ids = if (body_result.stmt) |stmt| &[_]DraftStmtId{stmt} else &[_]DraftStmtId{};
-                return try self.addExprWithTypeCell(result_cell, .{ .block = .{
-                    .statements = try self.addStmtSpan(stmt_ids),
-                    .final_expr = switch (body_result.termination) {
-                        .uninhabited => |scrutinee| try self.zeroBranchMatchAtTypeCell(scrutinee, result_cell),
-                        .checked_control_transfer => try self.addExprWithTypeCell(result_cell, .@"unreachable"),
-                        .none => try self.continueWithCurrentState(result_cell, carries),
-                    },
-                } });
-            },
-        }
     }
 
     fn iteratorSkipBranch(
@@ -60434,127 +60234,6 @@ const BodyContext = struct {
         termination: StatementTermination,
     };
 
-    fn lowerStatefulExpectStatement(self: *BodyContext, child: checked.CheckedExprId) Allocator.Error!DraftStmt {
-        const merges = try self.stateMergeBinders(child);
-        defer self.allocator.free(merges);
-        if (merges.len == 0) return .{ .expect = try self.lowerExpr(child) };
-        const unit_cell: DraftTypeCell = .{ .sealed = try self.unitType() };
-        const condition_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child));
-        const state_cell = try self.stateResultTypeCell(merges, unit_cell);
-        const condition_state_cell = try self.stateResultTypeCell(merges, condition_cell);
-        const unit = try self.addExprWithTypeCell(unit_cell, .unit);
-        const omitted = if (self.builder.inline_expects == .shared)
-            try self.stateResultTupleExprAtTypeCells(state_cell, merges, unit)
-        else
-            null;
-        const condition_state = try self.lowerBodyThenStateResultAtTypeCells(child, condition_cell, condition_state_cell, merges);
-        const condition_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
-        defer self.allocator.free(condition_pattern);
-        for (merges, 0..) |merge, i| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
-            try self.bindLocalName(local, merge.binder);
-            try self.binders.put(merge.binder, local);
-            condition_pattern[i] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
-        }
-        const condition_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), condition_cell, null);
-        condition_pattern[merges.len] = try self.addPatWithTypeCell(condition_cell, .{ .bind = condition_local });
-        const run_statements = [_]DraftStmtId{
-            try self.addStmt(.{ .let_ = .{
-                .pat = try self.addPatWithTypeCell(condition_state_cell, .{ .tuple = try self.addPatSpan(condition_pattern) }),
-                .value = condition_state,
-            } }),
-            try self.addStmt(.{ .expect = try self.addExprWithTypeCell(condition_cell, .{ .local = condition_local }) }),
-        };
-        const executed = try self.addExprWithTypeCell(state_cell, .{ .block = .{
-            .statements = try self.addStmtSpan(&run_statements),
-            .final_expr = try self.stateResultTupleExprAtTypeCells(state_cell, merges, unit),
-        } });
-        const choice = if (omitted) |omitted_state| blk: {
-            const enabled = try self.addExpr(.{ .ty = try self.primitiveType(.bool), .data = .inline_expects_enabled });
-            break :blk try self.addExprWithTypeCell(state_cell, .{ .if_ = .{
-                .branches = try self.addIfBranchSpan(&.{.{ .cond = enabled, .body = executed }}),
-                .final_else = omitted_state,
-            } });
-        } else executed;
-        const output_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
-        defer self.allocator.free(output_pattern);
-        for (merges, 0..) |merge, i| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
-            try self.bindLocalName(local, merge.binder);
-            try self.binders.put(merge.binder, local);
-            output_pattern[i] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
-        }
-        output_pattern[merges.len] = try self.addPatWithTypeCell(unit_cell, .wildcard);
-        return .{ .let_ = .{
-            .pat = try self.addPatWithTypeCell(state_cell, .{ .tuple = try self.addPatSpan(output_pattern) }),
-            .value = choice,
-        } };
-    }
-
-    fn lowerStatement(
-        self: *BodyContext,
-        statement_id: checked.CheckedStatementId,
-        statement_diverges: bool,
-    ) Allocator.Error!LoweredStatement {
-        const statement = self.view.bodies.statement(statement_id);
-        const saved_loc = self.builder.current_loc;
-        defer self.builder.current_loc = saved_loc;
-        const saved_region = self.builder.current_region;
-        defer self.builder.current_region = saved_region;
-        self.builder.current_loc = try self.sourceLocFor(statement.source_region);
-        self.builder.current_region = statement.source_region;
-        var termination: StatementTermination = .none;
-        const stmt: DraftStmt = switch (statement.data) {
-            .pending,
-            .import_,
-            .alias_decl,
-            .where_alias_decl,
-            .nominal_decl,
-            .type_anno,
-            .type_var_alias,
-            .promoted_proc,
-            => Common.invariant("non-runtime checked statement reached Monotype lowering"),
-            .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
-            .decl => |decl| blk: {
-                if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
-                    const binder = self.localProcBinder(decl.pattern);
-                    if (self.view.bodies.patternBinder(binder).is_scheme_alias) return .{ .stmt = null, .termination = .none };
-                    try self.registerLocalProc(decl.pattern, decl.expr, statement_id);
-                    const unit_ty = try self.unitType();
-                    break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
-                }
-                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region, statement_diverges);
-                termination = lowered.termination;
-                break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
-            },
-            .var_ => |decl| blk: {
-                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region, statement_diverges);
-                termination = lowered.termination;
-                break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
-            },
-            .var_uninitialized => |decl| .{ .uninitialized = try self.lowerUninitializedPatternStatement(decl.pattern) },
-            .reassign => |decl| blk: {
-                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region, statement_diverges);
-                termination = lowered.termination;
-                break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
-            },
-            .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
-            .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
-            .expr => |child| try self.lowerExprStatement(child),
-            .expect => |child| if (self.builder.inline_expects == .omit) blk: {
-                const unit_ty = try self.unitType();
-                break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
-            } else try self.lowerStatefulExpectStatement(child),
-            .for_ => |for_| try self.lowerForStatement(for_),
-            .while_ => |while_| try self.lowerConditionLoopStatement(while_, .checked),
-            .infinite_loop => |loop| try self.lowerConditionLoopStatement(loop, .always_true),
-            .breakable_loop => |loop| try self.lowerConditionLoopStatement(loop, .always_true),
-            .break_ => .{ .expr = try self.breakCurrentLoopExpr() },
-            .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, .return_expr) },
-        };
-        return try self.finishLoweredStatement(stmt, termination, statement_diverges);
-    }
-
     fn finishLoweredStatement(
         self: *BodyContext,
         stmt: DraftStmt,
@@ -60580,33 +60259,6 @@ const BodyContext = struct {
         }
         const node = try self.lowerTypeNode(checked_pattern.ty);
         return try self.lowerShapeFreePatternAtCell(pattern, DraftTypeCell.fromGraphNode(node));
-    }
-
-    fn lowerPatternStatement(
-        self: *BodyContext,
-        pattern: checked.CheckedPatternId,
-        expr: checked.CheckedExprId,
-        source_region: base.Region,
-        statement_diverges: bool,
-    ) Allocator.Error!LoweredPatternStatement {
-        // A divergent initializer never produces a value to bind, so emitting a
-        // pattern or reading the initializer's dead checked type would invent a
-        // relation for a value that cannot exist.
-        if (statement_diverges) {
-            const unit_ty = try self.unitType();
-            return .{
-                .stmt = .{ .expr = try self.lowerDivergentExprAtType(expr, unit_ty) },
-                .termination = .none,
-            };
-        }
-        const requested_cell = try self.beginPatternStatementValue(pattern, expr);
-        const value = try self.lowerExprAtTypeCellWithKnownDivergence(
-            expr,
-            requested_cell,
-            .runtime_value,
-            false,
-        );
-        return try self.finishPatternStatement(pattern, source_region, requested_cell, value);
     }
 
     /// The cell a pattern statement's value lowers at, related to the
@@ -60784,31 +60436,12 @@ const BodyContext = struct {
         return try self.lowerExprAtTypeWithDemand(expr_id, ty, .uninhabited_result);
     }
 
-    fn lowerUninhabitedScrutineeAtTypeCell(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        return try self.lowerExprAtTypeCellWithDemand(expr_id, cell, .uninhabited_result);
-    }
-
     fn lowerExplicitUninhabitedInvocation(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         return try self.zeroBranchMatch(try self.lowerUninhabitedScrutinee(expr_id, ty), ty);
-    }
-
-    fn lowerExplicitUninhabitedInvocationAtTypeCell(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        return try self.zeroBranchMatchAtTypeCell(
-            try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, cell),
-            cell,
-        );
     }
 
     fn zeroBranchMatch(self: *BodyContext, scrutinee: DraftExprId, ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -60987,36 +60620,6 @@ const BodyContext = struct {
             .assign => |binder| binder,
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("local procedure declaration pattern was not a binder"),
         };
-    }
-
-    fn exprHasStateMergeBinders(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!bool {
-        const merge_binders = try self.stateMergeBinders(expr_id);
-        defer self.allocator.free(merge_binders);
-        return merge_binders.len != 0;
-    }
-
-    fn lowerExprStatement(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftStmt {
-        const merge_binders = try self.stateMergeBinders(expr_id);
-        defer self.allocator.free(merge_binders);
-        if (merge_binders.len == 0) return .{ .expr = try self.lowerExpr(expr_id) };
-
-        const state_cell = try self.stateOnlyTypeCell(merge_binders);
-        const checked_expr = self.view.bodies.expr(expr_id);
-        const state_expr = switch (checked_expr.data) {
-            .if_ => |if_| try self.addExprWithTypeCell(
-                state_cell,
-                try self.lowerIfStateOnlyAtTypeCell(if_, state_cell, merge_binders, try self.ifComptimeSite(expr_id, if_)),
-            ),
-            .match_ => |match| try self.lowerMatchExprWithOutput(match, .{ .state_only = .{
-                .state_cell = state_cell,
-                .merge_binders = merge_binders,
-            } }, try self.matchComptimeSite(expr_id, match)),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerBodyThenStateOnlyAtTypeCell(expr_id, state_cell, merge_binders),
-        };
-        return .{ .let_ = .{
-            .pat = try self.stateOnlyPatternAtTypeCell(state_cell, merge_binders),
-            .value = state_expr,
-        } };
     }
 
     fn statementDeclIsLocalProc(
@@ -61768,17 +61371,6 @@ const BodyContext = struct {
         return try self.runPatNode(.{ .at_node = .{ .pattern = pattern_id, .node = node, .in_match = true } }, match_lowering);
     }
 
-    /// Translate an optional destructure from checked Try space into flat
-    /// Present/Missing slot space, queueing binder preludes as needed.
-    fn lowerOptionalDestructChildAtSlotNode(
-        self: *BodyContext,
-        child: checked.CheckedPatternId,
-        slot_node: NodeId,
-        result_node: NodeId,
-    ) Allocator.Error!DraftPatId {
-        return try self.runPatNode(.{ .optional_slot = .{ .pattern = child, .slot_node = slot_node, .result_node = result_node } }, null);
-    }
-
     /// Lower a pattern tree at graph nodes. Each composite pattern is an
     /// explicit frame whose subpatterns lower in source order, so pattern
     /// depth never becomes native call depth.
@@ -61984,7 +61576,7 @@ const BodyContext = struct {
                     child = nominal.backing_pattern;
                     result_node = self.optionalTryBackingNode(result_node);
                 },
-                else => break pattern,
+                .pending, .assign, .as, .applied_tag, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => break pattern,
             }
         };
         const data: BodyPatData = switch (pattern.data) {
@@ -62162,33 +61754,6 @@ const BodyContext = struct {
             .guard_bindings = try self.addStmtSpan(guard_bindings.items),
             .body = body,
         };
-    }
-
-    fn lowerConstructorPatternAtNode(
-        self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        node: NodeId,
-    ) Allocator.Error!DraftPatId {
-        // Nominal layers can nest through a chain of declarations, so they
-        // are collected before wrapping from the innermost out.
-        var layers = std.ArrayList(NodeId).empty;
-        defer layers.deinit(self.allocator);
-        var current = node;
-        while (true) {
-            const representation_node = self.constructorRepresentationNode(current);
-            if (self.graph.content(representation_node) != .named) break;
-            const backing = self.graph.namedNodes(representation_node).backing orelse
-                Common.invariant("nested nominal constructor pattern had no runtime backing");
-            try layers.append(self.allocator, representation_node);
-            current = backing.node;
-        }
-        var pat = try self.lowerPatternAtNode(pattern_id, current);
-        var index = layers.items.len;
-        while (index > 0) {
-            index -= 1;
-            pat = try self.addPatWithTypeCell(DraftTypeCell.fromGraphNode(layers.items[index]), .{ .nominal = pat });
-        }
-        return pat;
     }
 
     fn lowerStrPattern(

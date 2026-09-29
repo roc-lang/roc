@@ -961,7 +961,7 @@ const Lifter = struct {
     /// newly discovered captures through affected reference edges.
     fn computeCaptureFixpoint(self: *Lifter) Allocator.Error!void {
         // `count` covers top-level defs and nested defs only; inline lambdas are
-        // reserved later, during `rewriteExpr`/`liftLambda`. Sizing here is what
+        // reserved later, during `rewriteExpr`. Sizing here is what
         // keeps inline lambdas out of the graph, which is sound because they are
         // never direct-call targets. Their captures are computed when lifting
         // reaches the lambda, from the already-solved def/nested-def states.
@@ -1372,10 +1372,10 @@ const CaptureSet = struct {
         /// Remove the innermost scope's locals, in reverse binding order.
         end_scope,
         add_if_free: Mono.LocalId,
-        /// Rebuild a function reference's capture operands once its operand
+        /// Assemble a function reference's capture operands once its operand
         /// values are collected.
         finalize_fn_ref: Mono.ExprId,
-        /// Rebuild a direct call's capture operands once its arguments and
+        /// Assemble a direct call's capture operands once its arguments and
         /// capture values are collected.
         finalize_call_proc: Mono.ExprId,
     };
@@ -1414,8 +1414,8 @@ const CaptureSet = struct {
         const fn_index = @intFromEnum(fn_ref.fn_id);
         // Inline lambdas are reserved while lifting expressions, after the
         // initial def/nested-def fixed-point table was sized. Their function
-        // records already contain the exact capture span computed by
-        // `liftLambda`; later recompute passes size the table to include
+        // records already contain the exact capture span computed when
+        // its lambda lifts; later recompute passes size the table to include
         // every function.
         const captures = if (fn_index < self.fn_captures.len)
             try rebuildCaptureOperandSpan(

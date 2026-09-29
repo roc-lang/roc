@@ -5711,7 +5711,7 @@ fn appendCheckedTypeBuildChildren(
     }
 }
 
-/// Rebuild a snapshot payload over its cloned children, read in the order
+/// Assemble a snapshot payload over its cloned children, read in the order
 /// `appendCheckedTypeBuildChildren` listed them.
 fn cloneCheckedTypeBuildPayload(
     allocator: Allocator,
@@ -6296,7 +6296,7 @@ const DeclarationAnnoWalk = struct {
             const anno = module_env.store.getTypeAnno(current);
             switch (anno) {
                 .parens => |parens| current = parens.anno,
-                else => break anno,
+                .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .malformed => break anno,
             }
         };
         const ops_start = self.ops.items.len;
@@ -8464,10 +8464,8 @@ const CheckedTypePublisher = struct {
         payload: CheckedTypePayloadBuild,
 
         fn get(self: Result, comptime tag: std.meta.Tag(Result)) @FieldType(Result, @tagName(tag)) {
-            return switch (self) {
-                tag => |payload| payload,
-                else => checkedArtifactInvariant("checked type publication frame received the wrong result kind", .{}),
-            };
+            if (std.meta.activeTag(self) != tag) checkedArtifactInvariant("checked type publication frame received the wrong result kind", .{});
+            return @field(self, @tagName(tag));
         }
     };
 
@@ -15777,7 +15775,7 @@ const CheckedBodyPayloadCopier = struct {
                     .binder = try self.patternBinder(current),
                 }),
                 .as => try pending.append(self.allocator, .{ .as_binder = current }),
-                else => {},
+                .applied_tag, .nominal, .nominal_external, .deferred_import_ref, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {},
             }
             try self.pushSourceSubpatterns(pattern, &pending);
         }
@@ -15884,7 +15882,7 @@ const CheckedBodyPayloadCopier = struct {
             switch (pattern) {
                 .assign, .var_assign, .as => try self.appendReassignedBinder(current, out),
                 .deferred_import_ref => checkedArtifactInvariant("deferred import reference pattern reached checked artifact publication", .{}),
-                else => {},
+                .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {},
             }
             try self.pushSourceSubpatterns(pattern, &pending);
         }

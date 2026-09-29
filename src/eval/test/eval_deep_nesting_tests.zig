@@ -16,11 +16,28 @@ const depth = 5000;
 const depth_str = std.fmt.comptimePrint("{d}", .{depth});
 const stack_bytes = 4 * 1024 * 1024;
 
+/// Shapes whose compilation does work superlinear in their depth nest less
+/// deeply, on a stack still far smaller than that depth times any per-level
+/// recursion cost.
+const shallow_depth = 1000;
+const shallow_depth_str = std.fmt.comptimePrint("{d}", .{shallow_depth});
+const shallow_stack_bytes = 2 * 1024 * 1024;
+
+/// A deep equality's case fusion, a curried lambda chain's instantiated
+/// types, and a method-dispatch chain's waiting dispatch constraints cost the
+/// square of their depth.
+const shallower_depth = 500;
+const shallower_depth_str = std.fmt.comptimePrint("{d}", .{shallower_depth});
+
+/// A loop nest's liveness facts grow with the product of its size and its
+/// depth.
+const loop_depth = 300;
+
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
 }
 
-/// Deep-nesting eval cases, each run on a `stack_bytes` stack under both
+/// Deep-nesting eval cases, each run on a small stack under both
 /// specialization strategies.
 pub const tests = cases ++ boxyVariants(&cases);
 
@@ -40,51 +57,46 @@ fn boxyVariants(comptime lss: []const TestCase) [lss.len]TestCase {
 
 const cases = [_]TestCase{
     .{
-        .name = "TEMPDEEP else-if chain",
+        .name = "issue 11698: else-if chain",
         .source_kind = .module,
         .source = "pick = |x| " ++ repeat("if x == 0 { 0.U64 } else ", depth) ++ "{ x }\nmain = pick(5.U64)\n",
         .expected = .{ .inspect_str = "5" },
         .stack_bytes = stack_bytes,
-        .opt_in = true,
     },
     .{
-        .name = "TEMPDEEP nested parens",
+        .name = "issue 11698: nested parens",
         .source_kind = .module,
         .source = "main = " ++ repeat("(", depth) ++ "1.U64" ++ repeat(" + 1)", depth) ++ "\n",
         .expected = .{ .inspect_str = std.fmt.comptimePrint("{d}", .{depth + 1}) },
         .stack_bytes = stack_bytes,
-        .opt_in = true,
     },
     .{
-        .name = "TEMPDEEP nested tuples",
+        .name = "issue 11698: nested tuples",
         .source_kind = .module,
-        .source = "main = " ++ repeat("(", depth) ++ "1.U64" ++ repeat(", 2)", depth) ++ repeat(".0", depth) ++ "\n",
+        .source = "main = " ++ repeat("(", shallow_depth) ++ "1.U64" ++ repeat(", 2)", shallow_depth) ++ repeat(".0", shallow_depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
-        .opt_in = true,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
-        .name = "TEMPDEEP nested tags",
+        .name = "issue 11698: nested tags",
         .source_kind = .module,
         // Rendering the value would recurse once per level at runtime, which
         // is the program's own depth; the untaken branch still compiles the
         // rendering of the deep type.
-        .source = "nested = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++
+        .source = "nested = " ++ repeat("Ok(", shallow_depth) ++ "1.U64" ++ repeat(")", shallow_depth) ++
             "\nrender = |n| if n == 0 { 1.U64 } else { Str.count_utf8_bytes(Str.inspect(nested)) }\nmain = render(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
-        .opt_in = true,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
-        .name = "TEMPDEEP nested blocks",
+        .name = "issue 11698: nested blocks",
         .source_kind = .module,
         .source = "main = " ++ repeat("{ ", depth) ++ "1.U64" ++ repeat(" }", depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
         .stack_bytes = stack_bytes,
-        .opt_in = true,
     },
     .{
-        .name = "TEMPDEEP wide match",
+        .name = "issue 11698: wide match",
         .source_kind = .module,
         .source = "pick = |x| match x {\n" ++ blk: {
             @setEvalBranchQuota(10_000_000);
@@ -94,46 +106,41 @@ const cases = [_]TestCase{
         } ++ "    _ => 0.U64\n}\nmain = pick(7.U64)\n",
         .expected = .{ .inspect_str = "7" },
         .stack_bytes = stack_bytes,
-        .opt_in = true,
     },
     .{
-        .name = "TEMPDEEP deep annotation",
+        .name = "issue 11698: deep annotation",
         .source_kind = .module,
         .source = "f : " ++ repeat("List(", depth) ++ "U64" ++ repeat(")", depth) ++ " -> U64\nf = |_| 1\nmain = f([])\n",
         .expected = .{ .inspect_str = "1" },
         .stack_bytes = stack_bytes,
-        .opt_in = true,
     },
     .{
-        .name = "TEMPDEEP deep list pattern",
+        .name = "issue 11698: deep list pattern",
         .source_kind = .module,
-        .source = "f = |l| match l { " ++ repeat("[", depth) ++ "x" ++ repeat("]", depth) ++ " => x, _ => 0.U64 }\nmain = f(" ++ repeat("[", depth) ++ "1.U64" ++ repeat("]", depth) ++ ")\n",
+        .source = "f = |l| match l { " ++ repeat("[", shallow_depth) ++ "x" ++ repeat("]", shallow_depth) ++ " => x, _ => 0.U64 }\nmain = f(" ++ repeat("[", shallow_depth) ++ "1.U64" ++ repeat("]", shallow_depth) ++ ")\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
-        .opt_in = true,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
-        .name = "TEMPDEEP curried lambdas",
+        .name = "issue 11698: curried lambdas",
         .source_kind = .module,
-        .source = "f = " ++ repeat("|_| ", depth) ++ "1.U64\nmain = f" ++ repeat("(0)", depth) ++ "\n",
+        .source = "f = " ++ repeat("|_| ", shallower_depth) ++ "1.U64\nmain = f" ++ repeat("(0)", shallower_depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
-        .opt_in = true,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
-        .name = "TEMPDEEP deep equality",
+        .name = "issue 11698: deep equality",
         .source_kind = .module,
         // Comparing the values would recurse once per level at runtime, which
         // is the program's own depth; the untaken branch still compiles the
         // equality of the deep type.
-        .source = "nested = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++
+        .source = "nested = " ++ repeat("Ok(", shallower_depth) ++ "1.U64" ++ repeat(")", shallower_depth) ++
             "\ncompare = |n| if n == 0 { 1.U64 } else if nested == nested { 2.U64 } else { 3.U64 }\nmain = compare(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
-        .opt_in = true,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
-        .name = "TEMPDEEP long call chain",
+        .name = "issue 11698: long call chain",
         .source_kind = .module,
         // Running the chain would recurse once per function at runtime, which
         // is the program's own depth; the untaken branch still compiles every
@@ -141,36 +148,81 @@ const cases = [_]TestCase{
         .source = blk: {
             @setEvalBranchQuota(10_000_000);
             var out: []const u8 = "";
-            for (0..depth) |i| out = out ++ std.fmt.comptimePrint("f{d} : U64 -> U64\nf{d} = |x| f{d}(x + 1)\n", .{ i, i, i + 1 });
+            for (0..shallow_depth) |i| out = out ++ std.fmt.comptimePrint("f{d} : U64 -> U64\nf{d} = |x| f{d}(x + 1)\n", .{ i, i, i + 1 });
             break :blk out;
-        } ++ "f" ++ depth_str ++ " : U64 -> U64\nf" ++ depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
+        } ++ "f" ++ shallow_depth_str ++ " : U64 -> U64\nf" ++ shallow_depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
-        .opt_in = true,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
-        .name = "TEMPDEEP nested for loops",
+        .name = "issue 11698: method dispatch chain",
         .source_kind = .module,
-        .source = "count = |n| {\n    var $total = n\n" ++ repeat("for _ in [1.U64] {\n", depth) ++ "$total = $total + 1\n" ++ repeat("}\n", depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        // Each method's body dispatches on the next type's value, whose
+        // method checking resolves on demand.
+        .source = blk: {
+            @setEvalBranchQuota(10_000_000);
+            var out: []const u8 = "";
+            for (0..shallower_depth) |i| out = out ++ std.fmt.comptimePrint("T{d} := [V{d}(U64)].{{\n    step = |T{d}.V{d}(x)| T{d}.V{d}(x).step()\n}}\n", .{ i, i, i, i, i + 1, i + 1 });
+            break :blk out;
+        } ++ "T" ++ shallower_depth_str ++ " := [V" ++ shallower_depth_str ++ "(U64)].{\n    step = |T" ++ shallower_depth_str ++ ".V" ++ shallower_depth_str ++ "(x)| x\n}\nrun = |n| if n == 0 { 1.U64 } else { T0.V0(n).step() }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
-        .opt_in = true,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
-        .name = "TEMPDEEP nested matches",
+        .name = "issue 11698: nested for loops",
+        .source_kind = .module,
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("for _ in [1.U64] {\n", loop_depth) ++ "$total = $total + 1\n" ++ repeat("}\n", loop_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: nested destructuring for loops",
+        .source_kind = .module,
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("for [a] in [[1.U64]] {\n", loop_depth) ++ "$total = $total + a\n" ++ repeat("}\n", loop_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: nested while loops",
+        .source_kind = .module,
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("while $total < 1 {\n", loop_depth) ++ "$total = $total + 1\n" ++ repeat("}\n", loop_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: nested stateful ifs",
+        .source_kind = .module,
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("if $total == 0 {\n", shallow_depth) ++ "$total = $total + 1\n" ++ repeat("} else {}\n", shallow_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: nested stateful matches",
+        .source_kind = .module,
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("match $total {\n0 => {\n", shallow_depth) ++ "$total = $total + 1\n" ++ repeat("}\n_ => {}\n}\n", shallow_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: nested divergent blocks",
+        .source_kind = .module,
+        .source = "pick = |x| if x == 0 { 1.U64 } else " ++ repeat("{\n", depth) ++ "crash \"deep\"" ++ repeat("\n}", depth) ++ "\nmain = pick(0.U64)\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "issue 11698: nested matches",
         .source_kind = .module,
         .source = "pick = |x| " ++ repeat("match x { 0 => 0.U64, _ => ", depth) ++ "x" ++ repeat(" }", depth) ++ "\nmain = pick(3.U64)\n",
         .expected = .{ .inspect_str = "3" },
         .stack_bytes = stack_bytes,
-        .opt_in = true,
     },
     .{
-        .name = "TEMPDEEP long flat list",
+        .name = "issue 11698: long flat list",
         .source_kind = .module,
         .source = "main = List.len([" ++ repeat("1.U64, ", depth) ++ "])\n",
         .expected = .{ .inspect_str = depth_str },
         .stack_bytes = stack_bytes,
-        .opt_in = true,
     },
     .{
         .name = "issue 11698: long left-associative + chain",

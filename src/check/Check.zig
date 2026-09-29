@@ -436,7 +436,7 @@ canonical_key_writer: canonical_type_keys.TypeWriter,
 /// name graph; when one resolves to an unchecked, unannotated local def, the
 /// obligation is recorded in `pending_dispatch_targets` and resolved at the
 /// current group's generalization boundary by checking the target's group in
-/// its own frame—never by re-entering `checkDef` mid-body.
+/// its own frame—never by re-entering `DefActivity` mid-body.
 ///
 /// Checking order for the current module's top-level defs. Owned; freed in
 /// `deinit`. Transient: computed when file checking starts, never part of
@@ -446,12 +446,12 @@ check_order: ?DependencyGraph.CheckOrder = null,
 def_group: std.ArrayListUnmanaged(u32) = .empty,
 /// Per-group progress; a `.checking` group has a frame on `group_stack`.
 group_states: std.ArrayListUnmanaged(GroupState) = .empty,
-/// Scratch for `ensureGroupCheckedWithDependencies`: the walk's worklist, and
+/// Scratch for `EnsureGroupActivity`: the walk's worklist, and
 /// the membership set of the groups it has collected. Both are empty between
 /// walks; a walk never nests inside another walk.
 group_dependency_walk: std.ArrayListUnmanaged(u32) = .empty,
 group_dependency_collected: std.DynamicBitSetUnmanaged = .{},
-/// The unchecked groups each active `ensureGroupCheckedWithDependencies` call
+/// The unchecked groups each active `EnsureGroupActivity`
 /// checks, in ascending group order. A nested call appends its own groups
 /// above its caller's and truncates back to them before returning.
 group_dependency_checks: std.ArrayListUnmanaged(u32) = .empty,
@@ -465,6 +465,9 @@ group_dependency_checks: std.ArrayListUnmanaged(u32) = .empty,
 /// structure at the suspended group's rank, where it generalizes when that
 /// group's boundary completes.
 group_stack: std.ArrayListUnmanaged(GroupFrame) = .empty,
+/// Each active group's position on `group_stack`; frames push and pop only
+/// through `pushGroupFrame` and `popGroupFrame`.
+group_frame_positions: std.AutoHashMapUnmanaged(u32, usize) = .empty,
 /// Dispatch obligations whose targets are unchecked, unannotated local defs,
 /// owned by the group that discovered them (stack-suffix discipline: entries
 /// at index >= the owning frame's `pending_targets_top` belong to that frame).
@@ -1760,7 +1763,7 @@ const GroupFrame = struct {
     group_index: u32,
     /// The env rank on entry to the group.
     base_rank: Rank,
-    /// The rank `checkDef` runs at for this group's members: `base_rank` for a
+    /// The rank `DefActivity` runs at for this group's members: `base_rank` for a
     /// singleton, or the shared frame (`base_rank.next()`) for a recursive
     /// group.
     def_check_rank: Rank,
@@ -3197,6 +3200,7 @@ pub fn deinit(self: *Self) void {
     self.group_dependency_collected.deinit(self.gpa);
     self.group_dependency_checks.deinit(self.gpa);
     self.group_stack.deinit(self.gpa);
+    self.group_frame_positions.deinit(self.gpa);
     self.pending_dispatch_targets.deinit(self.gpa);
     self.pending_predeclared_scheme_uses.deinit(self.gpa);
     self.predeclared_use_fresh_vars.deinit(self.gpa);
@@ -11350,57 +11354,6 @@ fn hoistedRootStatementStep(
     };
 }
 
-fn hoistedRootPatternSelectedDependenciesAreKept(
-    self: *Self,
-    root: CIR.Pattern.Idx,
-    keep_oracle: *const HoistedRootKeepOracle,
-) Allocator.Error!bool {
-    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
-    defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, root);
-    while (pending.pop()) |pattern| {
-        if (keep_oracle.selectedPatternIsKept(pattern)) |kept| {
-            if (!kept) return false;
-        }
-        try self.pushCirSubpatterns(&pending, pattern);
-    }
-    return true;
-}
-
-fn hoistedRootPatternBindersAreConcrete(
-    self: *Self,
-    root: CIR.Pattern.Idx,
-) Allocator.Error!bool {
-    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
-    defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, root);
-    while (pending.pop()) |pattern| {
-        switch (self.cir.store.getPattern(pattern)) {
-            .assign, .var_assign, .as => if (!try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern))) return false,
-            .tuple,
-            .record_destructure,
-            .applied_tag,
-            .nominal,
-            .nominal_external,
-            .list,
-            .str_interpolation,
-            .underscore,
-            .runtime_error,
-            .num_literal,
-            .num_from_numeral_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            => {},
-            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
-        }
-        try self.pushCirSubpatterns(&pending, pattern);
-    }
-    return true;
-}
-
 fn appendHoistedDependencyPatternBinders(
     self: *Self,
     root: CIR.Pattern.Idx,
@@ -14440,20 +14393,68 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 // defs //
 
 /// Check the types for a single definition
-fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Error!void {
+/// Checking one definition: its body checks as a child expression activity,
+/// and the state saved around it is restored once the definition is finished.
+const DefActivity = struct {
+    def_idx: CIR.Def.Idx,
+    stage: enum { start, body } = .start,
+    saved: ?SavedDefState = null,
+    def_name: ?Ident.Idx = null,
+    def_is_function: bool = false,
+
+    /// Checker state a definition's check replaces while it runs.
+    const SavedDefState = struct {
+        checking_executable_root: bool,
+        ambiguity_candidates_def_start: usize,
+        checked_lambda_params_def_start: usize,
+        open_literal_vars_def_start: usize,
+        enclosing_func_name: ?Ident.Idx,
+        exhaustiveness_scope: ?ExhaustivenessContext.Scope,
+        checking_immediate_callee: bool,
+        active_scheme_root: ?Var,
+    };
+
+    /// Restore the saved state, innermost replacement first.
+    fn restore(state: *DefActivity, checker: *Self) void {
+        const saved = state.saved orelse return;
+        checker.active_scheme_root = saved.active_scheme_root;
+        checker.checking_immediate_callee = saved.checking_immediate_callee;
+        if (saved.exhaustiveness_scope) |scope| scope.leave();
+        checker.enclosing_func_name = saved.enclosing_func_name;
+        checker.open_literal_vars_def_start = saved.open_literal_vars_def_start;
+        checker.checked_lambda_params_def_start = saved.checked_lambda_params_def_start;
+        checker.ambiguity_candidates_def_start = saved.ambiguity_candidates_def_start;
+        checker.checking_executable_root = saved.checking_executable_root;
+        state.saved = null;
+    }
+};
+
+fn stepDef(self: *Self, state: *DefActivity, input: ?CheckActivityResult, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
+    switch (state.stage) {
+        .start => return self.beginDef(state, env),
+        .body => {
+            try self.finishDef(state, input.?.doesFx(), env);
+            state.restore(self);
+            return checkActivityDone(.none);
+        },
+    }
+}
+
+fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const def_idx = state.def_idx;
     const def = self.cir.store.getDef(def_idx);
 
     const saved_checking_executable_root = self.checking_executable_root;
     self.checking_executable_root = self.isExecutableRootDef(def_idx);
-    defer self.checking_executable_root = saved_checking_executable_root;
 
     if (self.topLevelPattern(def.pattern)) |processing_def| {
         if (processing_def.status == .processed) {
             // If we've already processed this def, return immediately
-            return;
+            self.checking_executable_root = saved_checking_executable_root;
+            return checkActivityDone(.none);
         }
     }
 
@@ -14464,16 +14465,25 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // dispatch obligation can nest another group's defs at a boundary.
     const saved_ambiguity_candidates_def_start = self.ambiguity_candidates_def_start;
     self.ambiguity_candidates_def_start = self.ambiguity_candidates.items.len;
-    defer self.ambiguity_candidates_def_start = saved_ambiguity_candidates_def_start;
     const saved_checked_lambda_params_def_start = self.checked_lambda_params_def_start;
     self.checked_lambda_params_def_start = self.checked_lambda_params.items.len;
-    defer self.checked_lambda_params_def_start = saved_checked_lambda_params_def_start;
     const saved_open_literal_vars_def_start = self.open_literal_vars_def_start;
     self.open_literal_vars_def_start = self.open_literal_vars.items.len;
-    defer self.open_literal_vars_def_start = saved_open_literal_vars_def_start;
+    state.saved = .{
+        .checking_executable_root = saved_checking_executable_root,
+        .ambiguity_candidates_def_start = saved_ambiguity_candidates_def_start,
+        .checked_lambda_params_def_start = saved_checked_lambda_params_def_start,
+        .open_literal_vars_def_start = saved_open_literal_vars_def_start,
+        .enclosing_func_name = self.enclosing_func_name,
+        .exhaustiveness_scope = null,
+        .checking_immediate_callee = self.checking_immediate_callee,
+        .active_scheme_root = self.active_scheme_root,
+    };
+    errdefer state.restore(self);
 
     // Make as processing
     const def_name = self.getPatternIdent(def.pattern);
+    state.def_name = def_name;
     self.setTopLevelPattern(def.pattern, .{
         .def_idx = def_idx,
         .def_name = def_name,
@@ -14509,9 +14519,8 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     }
 
     // Extract function name from the pattern (for better error messages)
-    const saved_func_name = self.enclosing_func_name;
+    state.saved.?.enclosing_func_name = self.enclosing_func_name;
     self.enclosing_func_name = def_name;
-    defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
     const platform_required = self.platform_required_defs.get(def_idx);
@@ -14528,8 +14537,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         }
     };
 
-    const exhaustiveness_scope = self.exhaustiveness_context.enterCompileTimeRoot();
-    defer exhaustiveness_scope.leave();
+    state.saved.?.exhaustiveness_scope = self.exhaustiveness_context.enterCompileTimeRoot();
 
     // Infer types for the body, checking against the instantiated annotation.
     // Ordinary top-level constants are already compile-time roots, so nested
@@ -14538,16 +14546,15 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // contain top-level-equivalent local values.
     const def_expr = self.cir.store.getExpr(def.expr);
     const def_is_function = isFunctionDef(&self.cir.store, def_expr);
+    state.def_is_function = def_is_function;
     const def_expectation = if (def_is_function)
         expectation.withHoistPosition(.eligible)
     else
         expectation.forComptimeRoot();
-    const saved_checking_immediate_callee = self.checking_immediate_callee;
+    state.saved.?.checking_immediate_callee = self.checking_immediate_callee;
     if (self.checking_executable_root) self.checking_immediate_callee = true;
-    defer self.checking_immediate_callee = saved_checking_immediate_callee;
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
-    const saved_active_scheme_root = self.active_scheme_root;
     // A singleton value definition has no scheme boundary and therefore owns
     // no side-table candidates. Recursive groups still provisionally own every
     // member here because the shared group boundary decides which roots
@@ -14555,13 +14562,25 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // inner lambda, so candidates must use the lambda's owner from the start;
     // recursive SCC members continue to use the def expression root captured
     // by their shared group boundary.
+    state.saved.?.active_scheme_root = self.active_scheme_root;
     const scheme_owner = if (!group_prechecked and def_expr == .e_closure)
         ModuleEnv.varFrom(def_expr.e_closure.lambda_idx)
     else
         expr_var;
-    self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else saved_active_scheme_root;
-    defer self.active_scheme_root = saved_active_scheme_root;
-    const def_does_fx = try self.checkExpr(def.expr, env, def_expectation);
+    self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else state.saved.?.active_scheme_root;
+    state.stage = .body;
+    return .{ .push = .{ .expr = .{ .next = .{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr } } } };
+}
+
+fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std.mem.Allocator.Error!void {
+    const def_idx = state.def_idx;
+    const def = self.cir.store.getDef(def_idx);
+    const def_var = ModuleEnv.varFrom(def_idx);
+    const ptrn_var = ModuleEnv.varFrom(def.pattern);
+    const expr_var = ModuleEnv.varFrom(def.expr);
+    const def_expr = self.cir.store.getExpr(def.expr);
+    const def_is_function = state.def_is_function;
+    const platform_required = self.platform_required_defs.get(def_idx);
     // The annotation bounds the definition: a tag the body produced beyond an
     // implicitly opened union is an error (design.md "Polarity").
     if (def.annotation) |annotation_idx| {
@@ -14650,7 +14669,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Mark as processed
     self.setTopLevelPattern(def.pattern, .{
         .def_idx = def_idx,
-        .def_name = def_name,
+        .def_name = state.def_name,
         .status = .processed,
     });
 }
@@ -15267,7 +15286,7 @@ fn collectUnderscoreAnnoVars(
     }
 }
 
-/// The rank `checkDef` expects the env to sit at: the current group's
+/// The rank `DefActivity` expects the env to sit at: the current group's
 /// def-check rank (a recursive group's members check inside its shared
 /// frame), or the outermost rank outside any group (REPL, expect bodies).
 fn currentDefCheckRank(self: *const Self) Rank {
@@ -15312,6 +15331,117 @@ fn defInCurrentRecursiveGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
     return group_index == frame.group_index;
 }
 
+/// One suspended piece of group checking. Checking a group can require other
+/// groups checked first—a dispatch obligation or an early annotated use
+/// resolved at a generalization boundary—and those groups' own boundaries can
+/// require further groups. Every such step is an activity on one explicit
+/// stack (`runCheckActivities`), so a chain of dispatch-dependent groups
+/// never becomes native call depth. Each activity runs exactly the work its
+/// direct counterpart ran, in the same order.
+const CheckActivity = union(enum) {
+    /// A group checked, optionally after its unchecked name dependencies.
+    ensure_group: EnsureGroupActivity,
+    /// One binding group.
+    group: GroupActivity,
+    /// One definition.
+    def: DefActivity,
+    /// One expression tree.
+    expr: ExprKernelActivity,
+    /// A group's generalization boundary.
+    boundary: BoundaryActivity,
+    /// The current frame's pending dispatch targets.
+    pending_targets: PendingTargetsActivity,
+    /// The current frame's early annotated uses.
+    predeclared_uses: PredeclaredUsesActivity,
+};
+
+const CheckActivityResult = union(enum) {
+    none,
+    /// Whether a checked expression performs effects.
+    does_fx: bool,
+    /// Whether an early annotated use replayed against pending requirements.
+    replayed: bool,
+
+    fn doesFx(result: CheckActivityResult) bool {
+        return switch (result) {
+            .does_fx => |does_fx| does_fx,
+            .none, .replayed => unreachable,
+        };
+    }
+
+    fn replayedAny(result: CheckActivityResult) bool {
+        return switch (result) {
+            .replayed => |replayed| replayed,
+            .none, .does_fx => unreachable,
+        };
+    }
+};
+
+const CheckActivityStep = union(enum) {
+    push: CheckActivity,
+    done: CheckActivityResult,
+};
+
+fn checkActivityDone(result: CheckActivityResult) CheckActivityStep {
+    return .{ .done = result };
+}
+
+/// Run a checking activity, and every activity it suspends on, to completion.
+fn runCheckActivities(self: *Self, root: CheckActivity, env: *Env) Allocator.Error!CheckActivityResult {
+    var activities: std.ArrayList(CheckActivity) = .empty;
+    defer activities.deinit(self.gpa);
+    errdefer while (activities.pop()) |activity| {
+        var owned = activity;
+        self.abortCheckActivity(&owned, env);
+    };
+    try activities.append(self.gpa, root);
+    var input: ?CheckActivityResult = null;
+    while (true) {
+        const activity = &activities.items[activities.items.len - 1];
+        switch (try self.stepCheckActivity(activity, input, env)) {
+            .push => |child| {
+                try activities.append(self.gpa, child);
+                input = null;
+            },
+            .done => |result| {
+                _ = activities.pop();
+                if (activities.items.len == 0) return result;
+                input = result;
+            },
+        }
+    }
+}
+
+fn stepCheckActivity(self: *Self, activity: *CheckActivity, input: ?CheckActivityResult, env: *Env) Allocator.Error!CheckActivityStep {
+    return switch (activity.*) {
+        .ensure_group => |*state| self.stepEnsureGroup(state),
+        .group => |*state| self.stepGroup(state, env),
+        .def => |*state| self.stepDef(state, input, env),
+        .expr => |*state| self.stepExprKernel(state, env),
+        .boundary => |*state| self.stepBoundary(state, input, env),
+        .pending_targets => |*state| self.stepPendingTargets(state, env),
+        .predeclared_uses => |*state| self.stepPredeclaredUses(state, env),
+    };
+}
+
+/// Release what an unfinished activity owns when checking fails.
+fn abortCheckActivity(self: *Self, activity: *CheckActivity, env: *Env) void {
+    switch (activity.*) {
+        .group => |*state| self.gpa.free(state.member_roots),
+        .def => |*state| state.restore(self),
+        .expr => |*state| {
+            if (state.finishing) |*finishing| finishing.frame.deinit();
+            while (state.tasks.pop()) |task| {
+                var owned_task = task;
+                self.abortExprTask(&owned_task, env);
+            }
+            state.tasks.deinit(self.gpa);
+        },
+        .boundary => |*state| if (state.owns_roots) self.gpa.free(state.roots),
+        .ensure_group, .pending_targets, .predeclared_uses => {},
+    }
+}
+
 /// Check `group_index` together with every unchecked group it transitively
 /// name-depends on, in ascending group order, so each group's name
 /// dependencies are in place before its bodies run. No other group is
@@ -15323,15 +15453,65 @@ fn defInCurrentRecursiveGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
 /// group enters `.checking` only after all of its name dependencies are
 /// checked. Each group is collected by at most one walk, so all walks
 /// together visit every group and dependency edge once.
-fn ensureGroupCheckedWithDependencies(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!void {
-    if (self.group_states.items[group_index] != .pending) {
-        try self.ensureGroupChecked(group_index, env);
-        return;
+const EnsureGroupActivity = struct {
+    group_index: u32,
+    with_dependencies: bool,
+    stage: enum { start, group, dependencies } = .start,
+    checks_base: usize = 0,
+    checks_end: usize = 0,
+    next: usize = 0,
+};
+
+fn ensureGroupChecked(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!void {
+    _ = try self.runCheckActivities(.{ .ensure_group = .{ .group_index = group_index, .with_dependencies = false } }, env);
+}
+
+fn ensureGroupStep(group_index: u32, with_dependencies: bool) CheckActivityStep {
+    return .{ .push = .{ .ensure_group = .{ .group_index = group_index, .with_dependencies = with_dependencies } } };
+}
+
+fn stepEnsureGroup(self: *Self, state: *EnsureGroupActivity) std.mem.Allocator.Error!CheckActivityStep {
+    switch (state.stage) {
+        .start => {},
+        .group => return checkActivityDone(.none),
+        .dependencies => {
+            std.debug.assert(self.group_dependency_checks.items.len == state.checks_end);
+            return self.nextEnsuredDependency(state);
+        },
+    }
+    const group_index = state.group_index;
+    if (!state.with_dependencies or self.group_states.items[group_index] != .pending) {
+        switch (self.group_states.items[group_index]) {
+            .checked => return checkActivityDone(.none),
+            .checking => {
+                // A suspended group—the current group, or an ancestor paused at
+                // its own boundary. Its members are already checked (`.processed`)
+                // with still-live, not-yet-generalized vars, so a dispatch
+                // back-edge resolves against them directly (the monomorphic merge)—
+                // the group is never re-entered. This also covers a pending
+                // target recorded mid-body for a later member of the SAME group:
+                // by boundary time the member loop has checked it.
+                if (builtin.mode == .Debug) {
+                    var on_stack = false;
+                    for (self.group_stack.items) |frame| {
+                        if (frame.group_index == group_index) {
+                            on_stack = true;
+                            break;
+                        }
+                    }
+                    std.debug.assert(on_stack);
+                }
+                return checkActivityDone(.none);
+            },
+            .pending => {
+                state.stage = .group;
+                return .{ .push = .{ .group = .{ .group_index = group_index } } };
+            },
+        }
     }
 
     const order = &self.check_order.?;
-    const checks_base = self.group_dependency_checks.items.len;
-    defer self.group_dependency_checks.shrinkRetainingCapacity(checks_base);
+    state.checks_base = self.group_dependency_checks.items.len;
 
     std.debug.assert(self.group_dependency_walk.items.len == 0);
     try self.group_dependency_walk.append(self.gpa, group_index);
@@ -15346,47 +15526,29 @@ fn ensureGroupCheckedWithDependencies(self: *Self, group_index: u32, env: *Env) 
         }
     }
 
-    const collected = self.group_dependency_checks.items[checks_base..];
+    const collected = self.group_dependency_checks.items[state.checks_base..];
     for (collected) |collected_group| {
         self.group_dependency_collected.unset(collected_group);
     }
     std.mem.sort(u32, collected, {}, std.sort.asc(u32));
 
-    // Nested checks append above `checks_base + collected.len` and truncate
-    // back, so this range stays intact; re-read it through `items` because
-    // those appends may reallocate the list.
-    const checks_end = self.group_dependency_checks.items.len;
-    var i = checks_base;
-    while (i < checks_end) : (i += 1) {
-        try self.ensureGroupChecked(self.group_dependency_checks.items[i], env);
-        std.debug.assert(self.group_dependency_checks.items.len == checks_end);
-    }
+    // Nested checks append above `checks_end` and truncate back, so this
+    // range stays intact; each is re-read through `items` because those
+    // appends may reallocate the list.
+    state.checks_end = self.group_dependency_checks.items.len;
+    state.next = state.checks_base;
+    state.stage = .dependencies;
+    return self.nextEnsuredDependency(state);
 }
 
-fn ensureGroupChecked(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!void {
-    switch (self.group_states.items[group_index]) {
-        .checked => return,
-        .checking => {
-            // A suspended group—the current group, or an ancestor paused at
-            // its own boundary. Its members are already checked (`.processed`)
-            // with still-live, not-yet-generalized vars, so a dispatch
-            // back-edge resolves against them directly (the monomorphic merge)—
-            // the group is never re-entered. This also covers a pending
-            // target recorded mid-body for a later member of the SAME group:
-            // by boundary time the member loop has checked it.
-            if (builtin.mode == .Debug) {
-                var on_stack = false;
-                for (self.group_stack.items) |frame| {
-                    if (frame.group_index == group_index) {
-                        on_stack = true;
-                        break;
-                    }
-                }
-                std.debug.assert(on_stack);
-            }
-        },
-        .pending => try self.checkGroup(group_index, env),
+fn nextEnsuredDependency(self: *Self, state: *EnsureGroupActivity) CheckActivityStep {
+    if (state.next < state.checks_end) {
+        const group_index = self.group_dependency_checks.items[state.next];
+        state.next += 1;
+        return ensureGroupStep(group_index, false);
     }
+    self.group_dependency_checks.shrinkRetainingCapacity(state.checks_base);
+    return checkActivityDone(.none);
 }
 
 /// Check one binding group. A non-recursive singleton runs the ordinary
@@ -15396,9 +15558,91 @@ fn ensureGroupChecked(self: *Self, group_index: u32, env: *Env) std.mem.Allocato
 /// unannotated function members' top-level lambdas are kept in the frame
 /// instead of generalizing on their own, and the whole group generalizes at
 /// the frame's boundary (the ML binding-group rule).
-fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!void {
+const GroupActivity = struct {
+    group_index: u32,
+    stage: enum { start, value_def_checked, value_def_fixpoint, value_def_replayed, members, boundary } = .start,
+    saved_active_scheme_root: ?Var = null,
+    base_rank: Rank = undefined,
+    frame_rank: Rank = undefined,
+    try_row_fixpoint: u32 = 0,
+    member_index: usize = 0,
+    /// The group's generalization-boundary roots. Owned.
+    member_roots: []BoundaryRoot = &.{},
+};
+
+fn stepGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
+    const scc = self.check_order.?.sccs[state.group_index];
+    switch (state.stage) {
+        .start => return self.beginGroup(state, env),
+        .value_def_checked => {
+            std.debug.assert(env.rank() == state.base_rank);
+            // A function def resolved its dispatch obligations at its RHS
+            // generalization boundary (inside checkExpr); a value def has no such
+            // boundary, so any obligations its RHS recorded resolve here, and
+            // with them the error-row contributions waiting on them.
+            state.stage = .value_def_fixpoint;
+            return .{ .push = .{ .pending_targets = .{} } };
+        },
+        .value_def_fixpoint => {
+            if (try self.relateTryRowFixpoint(env)) return .{ .push = .{ .pending_targets = .{} } };
+            state.stage = .value_def_replayed;
+            return .{ .push = .{ .predeclared_uses = .{ .current_boundary_captured = false } } };
+        },
+        .value_def_replayed => return self.finishGroup(state, env),
+        .members => {
+            if (state.member_index != 0) {
+                std.debug.assert(self.suppress_generalize_expr == null);
+                std.debug.assert(env.rank() == state.frame_rank);
+            }
+            if (state.member_index < scc.defs.len) {
+                const member_def_idx = scc.defs[state.member_index];
+                state.member_index += 1;
+                const member_def = self.cir.store.getDef(member_def_idx);
+                if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) {
+                    // Every recursive member's top-level RHS lives in the group
+                    // frame and generalizes at the shared boundary. Annotated
+                    // in-group references still instantiate their predeclared
+                    // schemes (polymorphic recursion), but deferring publication
+                    // lets forward members contribute their complete inferred
+                    // requirements before any member freezes.
+                    self.suppress_generalize_expr = member_def.expr;
+                }
+                return .{ .push = .{ .def = .{ .def_idx = member_def_idx } } };
+            }
+
+            // The group's generalization boundary. (Owned copy, not scratch: the
+            // boundary can nest other groups' checks, which use the scratch
+            // lists themselves.)
+            state.member_roots = try self.gpa.alloc(BoundaryRoot, scc.defs.len);
+            for (scc.defs, 0..) |member_def_idx, i| {
+                const member_def = self.cir.store.getDef(member_def_idx);
+                state.member_roots[i] = .{
+                    .owner = ModuleEnv.varFrom(member_def.expr),
+                    .interface = ModuleEnv.varFrom(member_def.expr),
+                };
+            }
+
+            // Destructure binders bind before the boundary's literal defaulting
+            // (inside the boundary) so defaulting sees them through the row
+            // (see `judgeRecordDestructBinds`).
+            try self.judgeRecordDestructBinds(env);
+            state.stage = .boundary;
+            return .{ .push = .{ .boundary = .{ .roots = state.member_roots } } };
+        },
+        .boundary => {
+            try self.finishRecursiveGroupBoundary(scc.defs, state.member_roots, env);
+            self.gpa.free(state.member_roots);
+            state.member_roots = &.{};
+            return self.finishGroup(state, env);
+        },
+    }
+}
+
+fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
+    const group_index = state.group_index;
     const scc = self.check_order.?.sccs[group_index];
-    const base_rank = env.rank();
+    state.base_rank = env.rank();
+    const base_rank = state.base_rank;
 
     // Invariant E (boundary cleanliness): group checks start—and nest—
     // only with no mid-body state pending.
@@ -15408,12 +15652,9 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
     // of whichever definition's boundary caused the group to be checked. A
     // group check nested inside another definition's generalization boundary
     // therefore runs with no active owner, exactly like a driver-initiated
-    // check; members that generalize install their own owners in `checkDef`.
-    const saved_active_scheme_root = self.active_scheme_root;
+    // check; members that generalize install their own owners in `DefActivity`.
+    state.saved_active_scheme_root = self.active_scheme_root;
     self.active_scheme_root = null;
-    defer {
-        self.active_scheme_root = saved_active_scheme_root;
-    }
 
     // A singleton value def never generalizes, so its obligations resolve at
     // the base rank (after checkDef); everything else's boundary is the RHS
@@ -15423,15 +15664,15 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
 
     self.group_states.items[group_index] = .checking;
     const boundary_rank = if (group_is_value_def) base_rank else base_rank.next();
-    const try_row_fixpoint = try self.pushTryRowFixpoint(boundary_rank);
-    try self.group_stack.append(self.gpa, .{
+    state.try_row_fixpoint = try self.pushTryRowFixpoint(boundary_rank);
+    try self.pushGroupFrame(.{
         .group_index = group_index,
         .base_rank = base_rank,
         .def_check_rank = if (scc.is_recursive) base_rank.next() else base_rank,
         .boundary_rank = boundary_rank,
         .pending_targets_top = self.pending_dispatch_targets.items.len,
         .pending_predeclared_uses_top = self.pending_predeclared_scheme_uses.items.len,
-        .try_row_fixpoint = try_row_fixpoint,
+        .try_row_fixpoint = state.try_row_fixpoint,
     });
     // An unannotated function member is reached monomorphically through its
     // pattern var and, while in flight, its RHS var.
@@ -15439,134 +15680,105 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         const member_def = self.cir.store.getDef(member_def_idx);
         if (member_def.annotation != null) continue;
         if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) continue;
-        try self.addTryRowFixpointLink(try_row_fixpoint, ModuleEnv.varFrom(member_def.pattern));
-        try self.addTryRowFixpointLink(try_row_fixpoint, ModuleEnv.varFrom(member_def.expr));
+        try self.addTryRowFixpointLink(state.try_row_fixpoint, ModuleEnv.varFrom(member_def.pattern));
+        try self.addTryRowFixpointLink(state.try_row_fixpoint, ModuleEnv.varFrom(member_def.expr));
     }
 
     if (!scc.is_recursive) {
         std.debug.assert(scc.defs.len == 1);
-        try self.checkDef(scc.defs[0], env);
-        std.debug.assert(env.rank() == base_rank);
-        // A function def resolved its dispatch obligations at its RHS
-        // generalization boundary (inside checkExpr); a value def has no such
-        // boundary, so any obligations its RHS recorded resolve here, and
-        // with them the error-row contributions waiting on them.
-        try self.resolveGroupPendingDispatchTargets(env);
-        while (try self.relateTryRowFixpoint(env)) try self.resolveGroupPendingDispatchTargets(env);
-        _ = try self.resolvePendingPredeclaredSchemeUses(env, false);
-    } else {
-        try env.var_pool.pushRank();
-        const frame_rank = env.rank();
-
-        // Rank every member's def/pattern vars in the shared frame first, so
-        // an earlier member's body can reference a later member.
-        for (scc.defs) |member_def_idx| {
-            const member_def = self.cir.store.getDef(member_def_idx);
-            try self.setVarRank(ModuleEnv.varFrom(member_def_idx), env);
-            try self.setVarRank(ModuleEnv.varFrom(member_def.pattern), env);
-            const member_pattern_ctx: PatternCtx = .{ .row_openness = if (try self.patternNeedsExhaustiveness(member_def.pattern)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(member_def_idx) };
-            if (!try self.checkPattern(member_def.pattern, member_pattern_ctx, env)) {
-                try self.erroneous_value_exprs.put(self.gpa, member_def.expr, {});
-            }
-        }
-
-        // Predeclare schemes for members whose annotations contain `_`
-        // inference holes. The module-wide pre-pass skips these (generalizing
-        // a hole into the standalone scheme would be unsound—see
-        // `predeclareAnnotationSchemeKeepingHolesShared`), but without a
-        // predeclared scheme an in-group reference links monomorphically to
-        // the member's in-flight type, unifying two members' distinct
-        // same-named rigid variables (issue 11605). Inside the shared frame
-        // the holes can stay monomorphic instead, so the annotation's rigids
-        // are quantified for in-group uses exactly like the hole-free rule.
-        try self.predeclareHoledAnnotationSchemes(scc.defs, env);
-
-        for (scc.defs) |member_def_idx| {
-            const member_def = self.cir.store.getDef(member_def_idx);
-            if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) {
-                // Every recursive member's top-level RHS lives in the group
-                // frame and generalizes at the shared boundary. Annotated
-                // in-group references still instantiate their predeclared
-                // schemes (polymorphic recursion), but deferring publication
-                // lets forward members contribute their complete inferred
-                // requirements before any member freezes.
-                self.suppress_generalize_expr = member_def.expr;
-            }
-            try self.checkDef(member_def_idx, env);
-            std.debug.assert(self.suppress_generalize_expr == null);
-            std.debug.assert(env.rank() == frame_rank);
-        }
-
-        // The group's generalization boundary. (Owned copy, not scratch: the
-        // boundary can nest other groups' checks, which use the scratch
-        // lists themselves.)
-        const member_roots = try self.gpa.alloc(BoundaryRoot, scc.defs.len);
-        defer self.gpa.free(member_roots);
-        for (scc.defs, 0..) |member_def_idx, i| {
-            const member_def = self.cir.store.getDef(member_def_idx);
-            member_roots[i] = .{
-                .owner = ModuleEnv.varFrom(member_def.expr),
-                .interface = ModuleEnv.varFrom(member_def.expr),
-            };
-        }
-
-        // Destructure binders bind before the boundary's literal defaulting
-        // (inside `runGroupBoundary`) so defaulting sees them through the
-        // row (see `judgeRecordDestructBinds`).
-        try self.judgeRecordDestructBinds(env);
-        try self.runGroupBoundary(member_roots, env);
-        // Recursive members create their schemes together at the shared group
-        // boundary, after `checkDef`'s ordinary binding publication already
-        // ran. Publish the stable pattern/def aliases now that the schemes
-        // exist, before any use can instantiate a member through those vars.
-        for (scc.defs) |member_def_idx| {
-            const member_def = self.cir.store.getDef(member_def_idx);
-            const expr_var = ModuleEnv.varFrom(member_def.expr);
-            try self.bindTypeSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
-            try self.bindTypeSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
-            if (self.predeclaredSchemeVar(member_def_idx)) |predeclared_scheme_var| {
-                try self.bindTypeSchemeVar(expr_var, predeclared_scheme_var);
-            }
-        }
-        for (scc.defs) |member_def_idx| {
-            const member_def = self.cir.store.getDef(member_def_idx);
-            if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) {
-                try self.checkEffectfulFunctionName(member_def.pattern, member_def.expr);
-            }
-        }
-        try self.judgeFieldKindsAtBoundary(env);
-        self.unify_scratch.clearPersistentOpenings();
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-        try self.captureEscapedSchemeDispatchRequirements(member_roots, env);
-        for (scc.defs) |member_def_idx| {
-            const member_def = self.cir.store.getDef(member_def_idx);
-            const expr_var = ModuleEnv.varFrom(member_def.expr);
-            try self.deduplicateGeneralizedDispatchRequirements(expr_var, env);
-            try self.publishBindingScheme(expr_var);
-            try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
-            try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
-            if (self.predeclaredSchemeVar(member_def_idx)) |predeclared_scheme_var| {
-                try self.bindBindingSchemeVar(expr_var, predeclared_scheme_var);
-            }
-        }
-        self.retireNonGeneralizedTypeSchemes(member_roots);
-        try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env);
-        try self.activateSchemeDeferredCodecConstraints(member_roots);
-        try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
-        env.var_pool.popRank();
+        state.stage = .value_def_checked;
+        return .{ .push = .{ .def = .{ .def_idx = scc.defs[0] } } };
     }
 
-    std.debug.assert(env.rank() == base_rank);
+    try env.var_pool.pushRank();
+    state.frame_rank = env.rank();
+
+    // Rank every member's def/pattern vars in the shared frame first, so
+    // an earlier member's body can reference a later member.
+    for (scc.defs) |member_def_idx| {
+        const member_def = self.cir.store.getDef(member_def_idx);
+        try self.setVarRank(ModuleEnv.varFrom(member_def_idx), env);
+        try self.setVarRank(ModuleEnv.varFrom(member_def.pattern), env);
+        const member_pattern_ctx: PatternCtx = .{ .row_openness = if (try self.patternNeedsExhaustiveness(member_def.pattern)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(member_def_idx) };
+        if (!try self.checkPattern(member_def.pattern, member_pattern_ctx, env)) {
+            try self.erroneous_value_exprs.put(self.gpa, member_def.expr, {});
+        }
+    }
+
+    // Predeclare schemes for members whose annotations contain `_`
+    // inference holes. The module-wide pre-pass skips these (generalizing
+    // a hole into the standalone scheme would be unsound—see
+    // `predeclareAnnotationSchemeKeepingHolesShared`), but without a
+    // predeclared scheme an in-group reference links monomorphically to
+    // the member's in-flight type, unifying two members' distinct
+    // same-named rigid variables (issue 11605). Inside the shared frame
+    // the holes can stay monomorphic instead, so the annotation's rigids
+    // are quantified for in-group uses exactly like the hole-free rule.
+    try self.predeclareHoledAnnotationSchemes(scc.defs, env);
+
+    state.member_index = 0;
+    state.stage = .members;
+    return self.stepGroup(state, env);
+}
+
+/// A recursive group's work after its shared boundary resolves: publish,
+/// generalize, and retire the members' schemes together.
+fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_roots: []const BoundaryRoot, env: *Env) std.mem.Allocator.Error!void {
+    // Recursive members create their schemes together at the shared group
+    // boundary, after `DefActivity`'s ordinary binding publication already
+    // ran. Publish the stable pattern/def aliases now that the schemes
+    // exist, before any use can instantiate a member through those vars.
+    for (defs) |member_def_idx| {
+        const member_def = self.cir.store.getDef(member_def_idx);
+        const expr_var = ModuleEnv.varFrom(member_def.expr);
+        try self.bindTypeSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
+        try self.bindTypeSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
+        if (self.predeclaredSchemeVar(member_def_idx)) |predeclared_scheme_var| {
+            try self.bindTypeSchemeVar(expr_var, predeclared_scheme_var);
+        }
+    }
+    for (defs) |member_def_idx| {
+        const member_def = self.cir.store.getDef(member_def_idx);
+        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) {
+            try self.checkEffectfulFunctionName(member_def.pattern, member_def.expr);
+        }
+    }
+    try self.judgeFieldKindsAtBoundary(env);
+    self.unify_scratch.clearPersistentOpenings();
+    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    try self.captureEscapedSchemeDispatchRequirements(member_roots, env);
+    for (defs) |member_def_idx| {
+        const member_def = self.cir.store.getDef(member_def_idx);
+        const expr_var = ModuleEnv.varFrom(member_def.expr);
+        try self.deduplicateGeneralizedDispatchRequirements(expr_var, env);
+        try self.publishBindingScheme(expr_var);
+        try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
+        try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
+        if (self.predeclaredSchemeVar(member_def_idx)) |predeclared_scheme_var| {
+            try self.bindBindingSchemeVar(expr_var, predeclared_scheme_var);
+        }
+    }
+    self.retireNonGeneralizedTypeSchemes(member_roots);
+    try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env);
+    try self.activateSchemeDeferredCodecConstraints(member_roots);
+    try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
+    env.var_pool.popRank();
+}
+
+fn finishGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
+    std.debug.assert(env.rank() == state.base_rank);
     // Invariant B: every dispatch obligation this group discovered was
     // resolved at its boundary.
     std.debug.assert(self.pending_dispatch_targets.items.len ==
         self.group_stack.items[self.group_stack.items.len - 1].pending_targets_top);
     std.debug.assert(self.pending_predeclared_scheme_uses.items.len ==
         self.group_stack.items[self.group_stack.items.len - 1].pending_predeclared_uses_top);
-    std.debug.assert(self.try_row_fixpoints.items.len == try_row_fixpoint + 1);
+    std.debug.assert(self.try_row_fixpoints.items.len == state.try_row_fixpoint + 1);
     try self.popTryRowFixpoint(env);
-    _ = self.group_stack.pop();
-    self.group_states.items[group_index] = .checked;
+    self.popGroupFrame();
+    self.group_states.items[state.group_index] = .checked;
+    self.active_scheme_root = state.saved_active_scheme_root;
+    return checkActivityDone(.none);
 }
 
 /// Run the group generalization boundary up to (not including) the generalize
@@ -15575,41 +15787,66 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
 /// into an unchecked group is outstanding), interleaved with boundary literal
 /// defaulting to a fixpoint, since a defaulting round can pin a receiver and
 /// surface a new obligation.
-fn runGroupBoundary(
-    self: *Self,
+const BoundaryActivity = struct {
     roots: []const BoundaryRoot,
-    env: *Env,
-) std.mem.Allocator.Error!void {
-    // Outside every group frame (module finalization, REPL, expect bodies)
-    // no fixpoint is open here.
-    const owns_fixpoint = self.group_stack.items.len > 0;
-    if (owns_fixpoint) {
-        std.debug.assert(self.group_stack.items[self.group_stack.items.len - 1].try_row_fixpoint + 1 == self.try_row_fixpoints.items.len);
+    /// Whether `roots` is owned by this activity.
+    owns_roots: bool = false,
+    stage: enum { start, targets_resolved, replayed_before_capture, replayed_after_capture } = .start,
+    owns_fixpoint: bool = false,
+    pending_before: usize = 0,
+    replayed_before_capture: bool = false,
+};
+
+fn stepBoundary(self: *Self, state: *BoundaryActivity, input: ?CheckActivityResult, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
+    switch (state.stage) {
+        .start => {
+            // Outside every group frame (module finalization, REPL, expect bodies)
+            // no fixpoint is open here.
+            state.owns_fixpoint = self.group_stack.items.len > 0;
+            if (state.owns_fixpoint) {
+                std.debug.assert(self.group_stack.items[self.group_stack.items.len - 1].try_row_fixpoint + 1 == self.try_row_fixpoints.items.len);
+            }
+        },
+        .targets_resolved => {
+            // Every member's pattern carries its RHS and every obligation this
+            // frame owns has resolved, so the results its deferred error-row
+            // contributions reached are known. Relating them can pin receivers.
+            if (!(state.owns_fixpoint and try self.relateTryRowFixpoint(env))) {
+                state.pending_before = self.pending_dispatch_targets.items.len;
+                state.stage = .replayed_before_capture;
+                return .{ .push = .{ .predeclared_uses = .{ .current_boundary_captured = false } } };
+            }
+        },
+        .replayed_before_capture => {
+            state.replayed_before_capture = input.?.replayedAny();
+            try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(state.roots, env);
+            state.stage = .replayed_after_capture;
+            return .{ .push = .{ .predeclared_uses = .{ .current_boundary_captured = true } } };
+        },
+        .replayed_after_capture => {
+            const replayed_after_capture = input.?.replayedAny();
+            if (!state.replayed_before_capture and !replayed_after_capture and
+                self.pending_dispatch_targets.items.len == state.pending_before)
+            {
+                try self.finalizeFunctionEffectsAtBoundary(state.roots);
+                // Invariant D: every remaining deferred dispatch constraint targets a
+                // checked def, an annotated scheme, or a still-flex receiver.
+                std.debug.assert(self.pending_dispatch_targets.items.len == self.currentFramePendingTargetsTop());
+                std.debug.assert(self.pending_predeclared_scheme_uses.items.len == self.currentFramePendingPredeclaredUsesTop());
+                if (state.owns_roots) self.gpa.free(state.roots);
+                state.roots = &.{};
+                return checkActivityDone(.none);
+            }
+        },
     }
-    while (true) {
-        // Deferred dispatch receivers may have been pinned since the last
-        // in-body pass—in a recursive group, the members' def-level
-        // pattern=body unifications run after their bodies' dispatch passes,
-        // and they can pin a recursive call's result (e.g. #9885's
-        // `reverse(rest).append(first)`). Resolve those before generalizing.
-        try self.checkStaticDispatchConstraints(env, false);
-        try self.resolveGroupPendingDispatchTargets(env);
-        // Every member's pattern carries its RHS and every obligation this
-        // frame owns has resolved, so the results its deferred error-row
-        // contributions reached are known. Relating them can pin receivers.
-        if (owns_fixpoint and try self.relateTryRowFixpoint(env)) continue;
-        const pending_before = self.pending_dispatch_targets.items.len;
-        const replayed_before_capture = try self.resolvePendingPredeclaredSchemeUses(env, false);
-        try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(roots, env);
-        const replayed_after_capture = try self.resolvePendingPredeclaredSchemeUses(env, true);
-        if (replayed_before_capture or replayed_after_capture) continue;
-        if (self.pending_dispatch_targets.items.len == pending_before) break;
-    }
-    try self.finalizeFunctionEffectsAtBoundary(roots);
-    // Invariant D: every remaining deferred dispatch constraint targets a
-    // checked def, an annotated scheme, or a still-flex receiver.
-    std.debug.assert(self.pending_dispatch_targets.items.len == self.currentFramePendingTargetsTop());
-    std.debug.assert(self.pending_predeclared_scheme_uses.items.len == self.currentFramePendingPredeclaredUsesTop());
+    // Deferred dispatch receivers may have been pinned since the last
+    // in-body pass—in a recursive group, the members' def-level
+    // pattern=body unifications run after their bodies' dispatch passes,
+    // and they can pin a recursive call's result (e.g. #9885's
+    // `reverse(rest).append(first)`). Resolve those before generalizing.
+    try self.checkStaticDispatchConstraints(env, false);
+    state.stage = .targets_resolved;
+    return .{ .push = .{ .pending_targets = .{} } };
 }
 
 /// Materialize positive directed-effect results before the enclosing type
@@ -15639,16 +15876,23 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot) A
 /// group (nested, in its own frame, together with the unchecked groups it
 /// transitively name-depends on), then re-run dispatch constraint processing, which may
 /// pin further receivers and record further targets—loop to quiescence.
-fn resolveGroupPendingDispatchTargets(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    const top = self.currentFramePendingTargetsTop();
-    while (self.pending_dispatch_targets.items.len > top) {
-        while (self.pending_dispatch_targets.items.len > top) {
-            const target_def = self.pending_dispatch_targets.pop().?;
-            const target_group = self.defGroupIndex(target_def).?;
-            try self.ensureGroupCheckedWithDependencies(target_group, env);
-        }
+const PendingTargetsActivity = struct {
+    top: ?usize = null,
+};
+
+fn stepPendingTargets(self: *Self, state: *PendingTargetsActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
+    const top = state.top orelse blk: {
+        const top = self.currentFramePendingTargetsTop();
+        state.top = top;
+        if (self.pending_dispatch_targets.items.len <= top) return checkActivityDone(.none);
+        break :blk top;
+    };
+    if (self.pending_dispatch_targets.items.len <= top) {
         try self.checkStaticDispatchConstraints(env, false);
+        if (self.pending_dispatch_targets.items.len <= top) return checkActivityDone(.none);
     }
+    const target_def = self.pending_dispatch_targets.pop().?;
+    return ensureGroupStep(self.defGroupIndex(target_def).?, true);
 }
 
 /// Record that a dispatch obligation resolved to `target_def_idx`—an
@@ -15676,12 +15920,23 @@ fn activeDeferredDispatchObligationOwnerFrame(
 /// The `group_stack` index of the active frame checking `group_index`, or
 /// null when that group is not on the stack.
 fn activeGroupFrameIndex(self: *const Self, group_index: u32) ?usize {
-    var frame_idx = self.group_stack.items.len;
-    while (frame_idx > 0) {
-        frame_idx -= 1;
-        if (self.group_stack.items[frame_idx].group_index == group_index) return frame_idx;
-    }
-    return null;
+    return self.group_frame_positions.get(group_index);
+}
+
+fn pushGroupFrame(self: *Self, frame: GroupFrame) std.mem.Allocator.Error!void {
+    try self.group_frame_positions.ensureUnusedCapacity(self.gpa, 1);
+    try self.group_stack.append(self.gpa, frame);
+    self.group_frame_positions.putAssumeCapacityNoClobber(frame.group_index, self.group_stack.items.len - 1);
+}
+
+fn popGroupFrame(self: *Self) void {
+    const frame = self.group_stack.pop().?;
+    _ = self.group_frame_positions.remove(frame.group_index);
+}
+
+fn clearGroupFrames(self: *Self) void {
+    self.group_stack.shrinkRetainingCapacity(0);
+    self.group_frame_positions.clearRetainingCapacity();
 }
 
 /// Whether a same-module dispatch target whose def var has not generalized
@@ -16110,22 +16365,27 @@ fn replayPredeclaredSchemeUse(
 /// recursive/SCC roots have just been captured; a current-group target with no
 /// side-table scheme then has no hidden requirements, and its replay only
 /// records the use against the target's own scheme.
-fn resolvePendingPredeclaredSchemeUses(
-    self: *Self,
-    env: *Env,
+const PredeclaredUsesActivity = struct {
     current_boundary_captured: bool,
-) Allocator.Error!bool {
-    const top = self.currentFramePendingPredeclaredUsesTop();
-    const end = self.pending_predeclared_scheme_uses.items.len;
-    var write = top;
-    var replayed_any = false;
-    var read = top;
-    while (read < end) : (read += 1) {
-        const pending = self.pending_predeclared_scheme_uses.items[read];
-        const target_group = self.defGroupIndex(pending.target_def).?;
-        try self.ensureGroupCheckedWithDependencies(target_group, env);
-        std.debug.assert(self.pending_predeclared_scheme_uses.items.len == end);
+    started: bool = false,
+    end: usize = 0,
+    write: usize = 0,
+    read: usize = 0,
+    replayed_any: bool = false,
+};
 
+fn stepPredeclaredUses(self: *Self, state: *PredeclaredUsesActivity, env: *Env) Allocator.Error!CheckActivityStep {
+    if (!state.started) {
+        state.started = true;
+        const top = self.currentFramePendingPredeclaredUsesTop();
+        state.end = self.pending_predeclared_scheme_uses.items.len;
+        state.write = top;
+        state.read = top;
+    } else {
+        std.debug.assert(self.pending_predeclared_scheme_uses.items.len == state.end);
+        const pending = self.pending_predeclared_scheme_uses.items[state.read];
+        state.read += 1;
+        const target_group = self.defGroupIndex(pending.target_def).?;
         const target_def = self.cir.store.getDef(pending.target_def);
         const target_scheme_root = ModuleEnv.varFrom(target_def.expr);
         const has_pending_requirements = self.typeSchemeIndexForRoot(target_scheme_root) != null;
@@ -16133,23 +16393,24 @@ fn resolvePendingPredeclaredSchemeUses(
         std.debug.assert(self.group_stack.items.len > 0);
         const current_group = self.group_stack.items[self.group_stack.items.len - 1].group_index;
         const target_boundary_finished = self.group_states.items[target_group] == .checked or
-            (current_boundary_captured and target_group == current_group);
+            (state.current_boundary_captured and target_group == current_group);
         if (has_pending_requirements) {
             try self.replayPredeclaredSchemeUse(pending, target_scheme_root, env);
-            replayed_any = true;
-            continue;
-        }
-        if (target_boundary_finished) {
+            state.replayed_any = true;
+        } else if (target_boundary_finished) {
             try self.replayPredeclaredSchemeUse(pending, target_scheme_root, env);
-            continue;
+        } else {
+            self.pending_predeclared_scheme_uses.items[state.write] = pending;
+            state.write += 1;
         }
-
-        self.pending_predeclared_scheme_uses.items[write] = pending;
-        write += 1;
     }
-    self.pending_predeclared_scheme_uses.shrinkRetainingCapacity(write);
+    if (state.read < state.end) {
+        const pending = self.pending_predeclared_scheme_uses.items[state.read];
+        return ensureGroupStep(self.defGroupIndex(pending.target_def).?, true);
+    }
+    self.pending_predeclared_scheme_uses.shrinkRetainingCapacity(state.write);
     self.reclaimPredeclaredUseFreshVars();
-    return replayed_any;
+    return checkActivityDone(.{ .replayed = state.replayed_any });
 }
 
 /// Pin `obligation_var`'s class at the current group's boundary rank so no
@@ -17297,14 +17558,6 @@ const FormalVariance = enum {
         return .invariant;
     }
 
-    /// One occurrence standing at `polarity` within the declaration body.
-    fn ofOccurrence(polarity: Polarity) FormalVariance {
-        return switch (polarity) {
-            .pos => .covariant,
-            .neg => .contravariant,
-        };
-    }
-
     /// The polarity an argument substituted for this formal is generated at,
     /// given the polarity of the reference itself.
     fn compose(self: FormalVariance, reference: Polarity) Polarity {
@@ -17421,13 +17674,6 @@ const VariancePosition = enum {
     covariant,
     contravariant,
     invariant,
-
-    fn ofPolarity(polarity: Polarity) VariancePosition {
-        return switch (polarity) {
-            .pos => .covariant,
-            .neg => .contravariant,
-        };
-    }
 
     fn flip(self: VariancePosition) VariancePosition {
         return switch (self) {
@@ -20289,8 +20535,8 @@ const Expected = struct {
     /// instantiated use to its slot. Passing `expected_type` to those children
     /// would constrain the generalized scheme rather than that use. This
     /// separate channel lets aggregate expressions project child slots early;
-    /// their owner still establishes the ordinary relation after
-    /// `checkStoredValueExpr` returns the instantiated value.
+    /// their owner still establishes the ordinary relation after the stored
+    /// value's check returns the instantiated value.
     contextual_type: ?ExpectedType = null,
     branch_result: ?Var = null,
     comptime_condition_warnings: enum { emit, suppress } = .emit,
@@ -21501,7 +21747,12 @@ const ExprCheckFrame = struct {
         self.active = false;
     }
 
-    fn finish(self: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!void {
+    const FinishProgress = enum { finished, boundary };
+
+    /// Finish the frame up to its group's generalization boundary, when it is
+    /// one; `.boundary` means the boundary must run before
+    /// `finishAfterBoundary` completes the frame.
+    fn finishBeforeBoundary(self: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!FinishProgress {
         const checker = self.checker;
         const env = self.env;
 
@@ -21568,38 +21819,51 @@ const ExprCheckFrame = struct {
                 // singleton group's def RHS). Resolve dispatch obligations into
                 // unchecked groups before anything here generalizes (Invariant D),
                 // interleaved with boundary defaulting.
-                try checker.runGroupBoundary(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
-            } else {
-                // Inner lambda: boundary defaulting runs first—it must see
-                // ranks BEFORE they are promoted to generalized. Pending dispatch
-                // obligations (pinned at the group's boundary rank) escape this
-                // frame and stay live for the group boundary.
-                try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
+                return .boundary;
             }
-            try checker.judgeFieldKindsAtBoundary(env);
-            checker.unify_scratch.clearPersistentOpenings();
-            try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
-            try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
-            try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw, env);
-            try checker.publishBindingScheme(self.expr_var_raw);
-            checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
-            try checker.retireStructurallyPublishedTypeSchemeRequirements(
-                &.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }},
-                env,
-            );
-            try checker.activateSchemeDeferredCodecConstraints(&.{.{
-                .owner = self.expr_var_raw,
-                .interface = self.expr_var,
-            }});
-            // The scheme's vars froze at generalized rank: judge this def's
-            // dispatch-constrained receivers now, while the judgment is a
-            // local question about one scheme (see
-            // `judgeAmbiguityCandidatesAtGeneralization`).
-            try checker.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = self.expr_var_raw, .interface = self.expr_var });
+            // Inner lambda: boundary defaulting runs first—it must see
+            // ranks BEFORE they are promoted to generalized. Pending dispatch
+            // obligations (pinned at the group's boundary rank) escape this
+            // frame and stay live for the group boundary.
+            try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
+            try self.generalize();
         }
 
         try self.hoist_frame.?.finish(does_fx);
         self.deinit();
+        return .finished;
+    }
+
+    /// Complete a frame whose group's generalization boundary has run.
+    fn finishAfterBoundary(self: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!void {
+        try self.generalize();
+        try self.hoist_frame.?.finish(does_fx);
+        self.deinit();
+    }
+
+    fn generalize(self: *ExprCheckFrame) std.mem.Allocator.Error!void {
+        const checker = self.checker;
+        const env = self.env;
+        try checker.judgeFieldKindsAtBoundary(env);
+        checker.unify_scratch.clearPersistentOpenings();
+        try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
+        try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
+        try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw, env);
+        try checker.publishBindingScheme(self.expr_var_raw);
+        checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
+        try checker.retireStructurallyPublishedTypeSchemeRequirements(
+            &.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }},
+            env,
+        );
+        try checker.activateSchemeDeferredCodecConstraints(&.{.{
+            .owner = self.expr_var_raw,
+            .interface = self.expr_var,
+        }});
+        // The scheme's vars froze at generalized rank: judge this def's
+        // dispatch-constrained receivers now, while the judgment is a
+        // local question about one scheme (see
+        // `judgeAmbiguityCandidatesAtGeneralization`).
+        try checker.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = self.expr_var_raw, .interface = self.expr_var });
     }
 };
 
@@ -21805,71 +22069,94 @@ const ExprTaskState = union(enum) {
 };
 
 /// Check an expression tree. Every expression that checks child expressions
-/// suspends as an `ExprTask` on one explicit stack, backed first by local
-/// storage and then by the general allocator, and resumes with each child's
-/// effect result; valid source depth never becomes compiler thread call depth.
-/// Each expression still owns an ordinary checker frame, so rank,
+/// suspends as an `ExprTask` on one explicit stack and resumes with each
+/// child's effect result; valid source depth never becomes compiler thread
+/// call depth. Each expression still owns an ordinary checker frame, so rank,
 /// generalization, dispatch, call-position, and hoist state enter and finish
-/// in exactly the same order as a direct traversal would.
+/// in exactly the same order as a direct traversal would. A frame that is its
+/// group's generalization boundary suspends the whole tree while the
+/// boundary runs as an activity of its own.
 ///
 /// A closure supplies its executable owner when delegating to its structural
 /// lambda child. Descendant expressions start their own ownership normally.
+const ExprKernelActivity = struct {
+    tasks: std.ArrayList(ExprTask) = .empty,
+    next: ?ExprChildRequest,
+    child_does_fx: ?bool = null,
+    /// A finished frame suspended at its group's generalization boundary.
+    finishing: ?struct { frame: ExprCheckFrame, does_fx: bool } = null,
+};
+
 fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected, function_owner: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    var fallback_state = std.heap.stackFallback(16 * 1024, self.gpa);
-    const task_allocator = fallback_state.get();
-    var tasks: std.ArrayList(ExprTask) = .empty;
-    defer tasks.deinit(task_allocator);
-    errdefer {
-        while (tasks.pop()) |task| {
-            var owned_task = task;
-            self.abortExprTask(&owned_task, env);
-        }
-    }
-
-    var next: ?ExprChildRequest = .{
+    return (try self.runCheckActivities(.{ .expr = .{ .next = .{
         .expr = expr_idx,
         .expected = expected,
         .function_owner = function_owner,
-    };
-    var child_does_fx: ?bool = null;
+    } } }, env)).doesFx();
+}
+
+fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
+    if (state.finishing) |*finishing| {
+        try finishing.frame.finishAfterBoundary(finishing.does_fx);
+        state.child_does_fx = finishing.does_fx;
+        state.finishing = null;
+    }
     while (true) {
-        if (next) |request| {
-            next = null;
+        if (state.next) |request| {
+            state.next = null;
             var frame = try self.beginExprCheckFrame(request.expr, env, request.expected);
             const owner = request.function_owner orelse request.expr;
-            if (exprTaskState(frame.expr)) |state| {
-                tasks.append(task_allocator, .{
+            if (exprTaskState(frame.expr)) |task_state| {
+                state.tasks.append(self.gpa, .{
                     .frame = frame,
                     .expected = request.expected,
                     .function_owner = owner,
-                    .state = state,
+                    .state = task_state,
                 }) catch |err| {
                     frame.deinit();
                     return err;
                 };
-                child_does_fx = null;
+                state.child_does_fx = null;
             } else {
-                defer frame.deinit();
+                errdefer frame.deinit();
                 const does_fx = try self.checkLeafExpr(&frame, request.expected, env);
-                try frame.finish(does_fx);
-                child_does_fx = does_fx;
+                if (try self.finishExprFrame(state, &frame, does_fx)) |step| return step;
             }
         }
 
-        if (tasks.items.len == 0) return child_does_fx.?;
-        const task = &tasks.items[tasks.items.len - 1];
-        switch (try self.resumeExprTask(task, env, child_does_fx)) {
-            .child => |request| next = request,
+        if (state.tasks.items.len == 0) {
+            state.tasks.deinit(self.gpa);
+            return checkActivityDone(.{ .does_fx = state.child_does_fx.? });
+        }
+        const task = &state.tasks.items[state.tasks.items.len - 1];
+        switch (try self.resumeExprTask(task, env, state.child_does_fx)) {
+            .child => |request| state.next = request,
             .done => {
-                var finished = tasks.pop().?;
-                defer finished.frame.deinit();
-                try finished.frame.finish(finished.does_fx);
-                child_does_fx = finished.does_fx;
+                var finished = state.tasks.pop().?;
+                errdefer finished.frame.deinit();
+                if (try self.finishExprFrame(state, &finished.frame, finished.does_fx)) |step| return step;
             },
         }
+    }
+}
+
+/// Finish a checked expression's frame; a frame at its group's generalization
+/// boundary suspends until the boundary activity completes.
+fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!?CheckActivityStep {
+    switch (try frame.finishBeforeBoundary(does_fx)) {
+        .finished => {
+            state.child_does_fx = does_fx;
+            return null;
+        },
+        .boundary => {
+            state.finishing = .{ .frame = frame.*, .does_fx = does_fx };
+            frame.active = false;
+            const roots = try self.gpa.alloc(BoundaryRoot, 1);
+            roots[0] = .{ .owner = state.finishing.?.frame.expr_var_raw, .interface = state.finishing.?.frame.expr_var };
+            return .{ .push = .{ .boundary = .{ .roots = roots, .owns_roots = true } } };
+        },
     }
 }
 
@@ -21994,14 +22281,14 @@ fn resumeExprTask(self: *Self, task: *ExprTask, env: *Env, child_does_fx: ?bool)
         .field_access => |*state| self.resumeFieldAccessCheck(task, state, env),
         .interpolation => |*state| self.resumeInterpolationCheck(task, state, env),
         .method_call => |*state| self.resumeMethodCallCheck(task, state, env, child_does_fx != null),
-        .dispatch_call => |*state| self.resumeDispatchCallCheck(task, state, env),
+        .dispatch_call => |*state| self.resumeDispatchCallCheck(task, state),
         .structural_eq => |*state| self.resumeStructuralEqCheck(task, state, env),
         .structural_hash => |*state| self.resumeStructuralHashCheck(task, state, env),
         .method_eq => |*state| self.resumeMethodEqCheck(task, state, env),
         .type_method_call => |*state| self.resumeTypeMethodCallCheck(task, state, env),
-        .type_dispatch_call => |*state| self.resumeTypeDispatchCallCheck(task, state, env),
+        .type_dispatch_call => |*state| self.resumeTypeDispatchCallCheck(task, state),
         .expect_err => |*state| self.resumeExpectErrCheck(task, state, env),
-        .dbg => |*state| self.resumeDbgCheck(task, state, env, child_does_fx),
+        .dbg => |*state| self.resumeDbgCheck(task, state, env),
         .expect => |*state| self.resumeExpectCheck(task, state, env, child_does_fx),
         .for_ => |*state| self.resumeForExprCheck(task, state, env, child_does_fx),
         .return_ => |*state| self.resumeReturnCheck(task, state, env),
@@ -23927,7 +24214,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
             const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
             std.debug.assert(self.suppress_generalize_expr == null);
-            // The annotation bounds the definition (see `checkDef`).
+            // The annotation bounds the definition (see `DefActivity`).
             if (decl_stmt.anno) |annotation_idx| {
                 try self.auditImplicitOpenExts(
                     annotation_idx,
@@ -25412,8 +25699,7 @@ fn abortMethodCallCheck(self: *Self, state: MethodCallCheck) void {
     self.gpa.free(state.arg_vars);
 }
 
-fn resumeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
-    _ = env;
+fn resumeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_idx = frame.expr_idx;
     const expr_var = frame.expr_var;
@@ -25559,8 +25845,7 @@ fn resumeTypeMethodCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck
     return .done;
 }
 
-fn resumeTypeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
-    _ = env;
+fn resumeTypeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const method_call = frame.expr.e_type_dispatch_call;
     const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
@@ -25596,8 +25881,7 @@ fn resumeExpectErrCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, 
     return .done;
 }
 
-fn resumeDbgCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
-    _ = child_does_fx;
+fn resumeDbgCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck, env: *Env) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     if (!state.started) {
         state.started = true;
@@ -27227,7 +27511,7 @@ fn checkPatternExhaustiveness(
 /// branch, so a refutable pattern there (e.g. `|[_, ..]|` or `|Ok(x)|`) that
 /// does not cover every value of its type is a runtime `pattern match failed`
 /// waiting to happen. Match expressions already get this analysis via
-/// `checkMatchExpr`; this closes the same gap for parameter patterns, which were
+/// `resumeMatchCheck`; this closes the same gap for parameter patterns, which were
 /// previously type-checked but never checked for exhaustiveness.
 fn reportNonExhaustiveLambdaParams(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.checked_lambda_params.items) |arg_span| {
@@ -33577,14 +33861,14 @@ fn encoderForConstraintEncodingVar(self: *Self, constraint: StaticDispatchConstr
     return args[0];
 }
 
-fn deferredEncodeHasPendingOpenLiteral(self: *Self, deferred: DeferredConstraintCheck, env: *Env) Allocator.Error!bool {
+fn deferredEncodeHasPendingOpenLiteral(self: *Self, deferred: DeferredConstraintCheck) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return try self.varHasPendingOpenLiteralForDerivedEncode(deferred.var_, env, &self.var_set);
+    return try self.varHasPendingOpenLiteralForDerivedEncode(deferred.var_, &self.var_set);
 }
 
-fn deferredParseHasPendingOpenLiteral(self: *Self, deferred: DeferredConstraintCheck, env: *Env) Allocator.Error!bool {
+fn deferredParseHasPendingOpenLiteral(self: *Self, deferred: DeferredConstraintCheck) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return try self.varHasPendingOpenLiteralForDerivedParse(deferred.var_, env, &self.var_set);
+    return try self.varHasPendingOpenLiteralForDerivedParse(deferred.var_, &self.var_set);
 }
 
 const DerivedCodecDirection = enum { parse, encode };
@@ -33598,10 +33882,8 @@ fn varHasPendingOpenLiteralForDerived(
     self: *Self,
     direction: DerivedCodecDirection,
     root: Var,
-    env: *Env,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    _ = env;
     const Item = union(enum) {
         var_: Var,
         /// A tag union's extension, followed without marking it visited.
@@ -33698,19 +33980,17 @@ fn varHasPendingOpenLiteralForDerived(
 fn varHasPendingOpenLiteralForDerivedParse(
     self: *Self,
     var_: Var,
-    env: *Env,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    return try self.varHasPendingOpenLiteralForDerived(.parse, var_, env, visited);
+    return try self.varHasPendingOpenLiteralForDerived(.parse, var_, visited);
 }
 
 fn varHasPendingOpenLiteralForDerivedEncode(
     self: *Self,
     var_: Var,
-    env: *Env,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    return try self.varHasPendingOpenLiteralForDerived(.encode, var_, env, visited);
+    return try self.varHasPendingOpenLiteralForDerived(.encode, var_, visited);
 }
 
 /// The source region of the numeral literal that put a `from_numeral` constraint
@@ -37079,7 +37359,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                         failure_expr,
                                     );
                                 },
-                                .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
+                                .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
                                 },
@@ -37123,7 +37403,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                         failure_expr,
                                     );
                                 },
-                                .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
+                                .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
                                 },
@@ -37426,7 +37706,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                     }
                                     continue;
                                 },
-                                .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
+                                .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
                                 },
@@ -37475,7 +37755,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                     }
                                     continue;
                                 },
-                                .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
+                                .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
                                 },
@@ -37707,7 +37987,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                 }
                             },
                             .unresolved => {
-                                if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
+                                if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
                                 }
@@ -37776,7 +38056,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                 }
                             },
                             .unresolved => {
-                                if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
+                                if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
                                 }
@@ -39088,9 +39368,9 @@ fn deferCodecWithInferredTagRows(
 ) Allocator.Error!bool {
     const settled = self.checking_final_codec_dispatch_constraints and
         !(if (constraint.fn_name.eql(self.cir.idents.parser_for))
-            try self.deferredParseHasPendingOpenLiteral(deferred, env)
+            try self.deferredParseHasPendingOpenLiteral(deferred)
         else
-            try self.deferredEncodeHasPendingOpenLiteral(deferred, env));
+            try self.deferredEncodeHasPendingOpenLiteral(deferred));
     const inferred_open = try self.closeTagRowsForDerivation(
         deferred.var_,
         env,
@@ -39871,32 +40151,6 @@ fn tagExtIsClosedEmpty(self: *Self, var_: Var) Allocator.Error!bool {
             },
             .structure => |structure| structure == .empty_tag_union,
             .err, .flex, .rigid, .field_presence => false,
-        };
-    }
-}
-
-fn varIsBuiltinStr(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
-    var current = var_;
-    while (true) {
-        return switch (self.types.resolveVar(current).desc.content) {
-            .structure => |structure| switch (structure) {
-                .nominal_type => |nominal| self.nominalIsBuiltinStrType(nominal),
-                .record,
-                .tuple,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                .tag_union,
-                .empty_tag_union,
-                => false,
-            },
-            .alias => |alias| {
-                current = self.types.getAliasBackingVar(alias);
-                continue;
-            },
-            .err => true,
-            .flex, .rigid => false,
         };
     }
 }
@@ -41307,8 +41561,8 @@ test "deferred dispatch obligation ownership is by group identity, not rank" {
 
     const checker = &test_env.checker;
     try std.testing.expectEqual(@as(usize, 0), checker.group_stack.items.len);
-    defer checker.group_stack.shrinkRetainingCapacity(0);
-    try checker.group_stack.append(checker.gpa, .{
+    defer checker.clearGroupFrames();
+    try checker.pushGroupFrame(.{
         .group_index = 7,
         .base_rank = .outermost,
         .def_check_rank = .outermost,
@@ -41317,7 +41571,7 @@ test "deferred dispatch obligation ownership is by group identity, not rank" {
         .pending_predeclared_uses_top = 0,
         .try_row_fixpoint = 0,
     });
-    try checker.group_stack.append(checker.gpa, .{
+    try checker.pushGroupFrame(.{
         .group_index = 9,
         .base_rank = Rank.outermost.next(),
         .def_check_rank = Rank.outermost.next(),
@@ -41351,7 +41605,7 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
 
     const checker = &test_env.checker;
     try std.testing.expectEqual(@as(usize, 0), checker.group_stack.items.len);
-    defer checker.group_stack.shrinkRetainingCapacity(0);
+    defer checker.clearGroupFrames();
 
     // No frames at all (module finalization, REPL, expect bodies): nothing is
     // in flight, so the frameless context adopts and pins at its own rank.
@@ -41361,7 +41615,7 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
         checker.deferredDispatchObligationBoundaryRank(null),
     );
 
-    try checker.group_stack.append(checker.gpa, .{
+    try checker.pushGroupFrame(.{
         .group_index = 7,
         .base_rank = .outermost,
         .def_check_rank = .outermost,
@@ -41376,7 +41630,7 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
     try std.testing.expect(checker.currentFrameAdoptsDeferredDispatchObligation(null));
     try std.testing.expect(checker.currentFrameAdoptsDeferredDispatchObligation(0));
 
-    try checker.group_stack.append(checker.gpa, .{
+    try checker.pushGroupFrame(.{
         .group_index = 9,
         .base_rank = Rank.outermost.next(),
         .def_check_rank = Rank.outermost.next(),
@@ -43916,22 +44170,6 @@ const DerivedCodecWalk = struct {
 
 const DerivedCodecVarPair = struct { a: Var, b: Var };
 
-/// Whether two types are the same shape, compared position by position rather
-/// than by var identity. A declaration's backing is instantiated fresh at every
-/// use, so an application that recurs carries structurally equal arguments on
-/// vars the walk has never seen. Pairs already under comparison are assumed
-/// equal, which is what lets a cyclic type answer at all. Anything this does
-/// not recognize answers "different", so a miss costs a second walk of one
-/// shape rather than a skipped obligation.
-fn derivedCodecTypesEql(
-    self: *Self,
-    a_var: Var,
-    b_var: Var,
-    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
-) Allocator.Error!bool {
-    return try self.derivedCodecVarsEql(&.{a_var}, &.{b_var}, assumed);
-}
-
 /// Every pair reachable from the roots must compare equal, and a pair already
 /// in `assumed` is equal by assumption, so the answer is the conjunction of
 /// each reachable pair's own check whatever order the pairs are visited in.
@@ -45916,8 +46154,8 @@ fn reportBranchMismatchAndPoison(
 /// Check one if/match branch body against the shared expected return type, and
 /// fold a compatible body into the per-expression accumulator `acc`.
 ///
-/// `acc` is a fresh var owned by the enclosing `checkIfElseExpr` /
-/// `checkMatchExpr`; it accumulates the meet of every compatible branch body and
+/// `acc` is a fresh var owned by the enclosing `resumeIfCheck` /
+/// `resumeMatchCheck`; it accumulates the meet of every compatible branch body and
 /// is unified with the shared `expected_ret` exactly once, at the end of the
 /// expression. Branches therefore never merge into `expected_ret` directly: the
 /// shared annotated return var is no longer the per-branch union-find hub, so

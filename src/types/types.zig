@@ -1077,7 +1077,7 @@ pub const StaticDispatchConstraint = struct {
     /// user's own expression without reconstructing var->expr maps after the
     /// fact. Copied verbatim by instantiation and cross-module import. This is
     /// METADATA: it is deliberately excluded from type identity—canonical type
-    /// keys (`writeConstraints`) and unification content-equality never read it,
+    /// keys (the checked artifact's type-key writer) and unification content-equality never read it,
     /// so two structurally identical constraints with different provenance stay
     /// equal.
     provenance: Provenance = .{},

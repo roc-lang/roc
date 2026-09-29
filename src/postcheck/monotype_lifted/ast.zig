@@ -585,6 +585,12 @@ pub const Program = struct {
         return BodyShard.append(self, worker, source_symbol_start, symbol_offset, source_join_start, join_offset);
     }
 
+    /// Whether an expression belongs to the frozen source a body shard
+    /// borrows, and therefore never changes while the shard is queried.
+    pub fn isFrozenExpr(self: *const Program, id: ExprId) bool {
+        return @intFromEnum(id) < self.prefixLen("exprs");
+    }
+
     fn prefixLen(self: *const Program, comptime field: []const u8) usize {
         return if (self.body_prefix) |prefix| prefix.len(field) else 0;
     }
@@ -2020,7 +2026,7 @@ pub const ExprWalk = enum {
 /// explicit stack. `visitor.enterExpr(expr_id)` returns an `ExprWalk`; the
 /// children it visits are those `appendChildren` lists, read when the
 /// expression is entered. Statements visit the expressions they evaluate.
-pub fn walkExprs(allocator: std.mem.Allocator, program: *const Program, root: ExprChild, visitor: anytype) !void {
+pub fn walkExprs(allocator: std.mem.Allocator, program: *const Program, root: ExprChild, visitor: anytype) std.mem.Allocator.Error!void {
     const Item = union(enum) { enter: ExprChild, exit: ExprId };
     var stack: std.ArrayList(Item) = .empty;
     defer stack.deinit(allocator);

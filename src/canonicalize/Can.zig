@@ -186,6 +186,15 @@ const AssociatedItemsResult = union(enum) {
     done,
     nested: AssociatedBlockState,
     decl_body: AssociatedDeclBodyWork,
+    expect_body: AssociatedExpectWork,
+};
+
+/// An associated `expect` whose body canonicalizes next.
+const AssociatedExpectWork = struct {
+    state: *AssociatedItemsState,
+    expect: std.meta.fieldInfo(AST.Statement, .expect).type,
+    owner_is_module_visible: bool,
+    block_context: ?BlockStatementContext,
 };
 
 const BlockTypeDeclStatementResult = struct {
@@ -3495,6 +3504,11 @@ fn processAssociatedBlock(
                     try next_stack.append(self.env.gpa, state);
                     try labels.append(self.env.gpa, .next);
                 },
+                .expect_body => |expect_work| {
+                    try self.canonicalizeAssociatedExpectNow(expect_work);
+                    try next_stack.append(self.env.gpa, state);
+                    try labels.append(self.env.gpa, .next);
+                },
             }
             continue :associated_kernel_loop .dispatch;
         },
@@ -4059,30 +4073,28 @@ fn reportInvalidAssociatedStatement(
 /// associated block nested inside a function body belongs to that function's
 /// block instead, so its expects become statements of the enclosing block and
 /// run inline wherever the block runs.
-fn canonicalizeAssociatedExpect(
-    self: *Self,
-    expect_stmt: std.meta.fieldInfo(AST.Statement, .expect).type,
-    owner_is_module_visible: bool,
-    block_context: ?BlockStatementContext,
-) std.mem.Allocator.Error!void {
-    const region = self.parse_ir.tokenizedRegionToRegion(expect_stmt.region);
-
+fn canonicalizeAssociatedExpectNow(self: *Self, work: AssociatedExpectWork) std.mem.Allocator.Error!void {
     // Track that we're inside an expect so the ? operator fails the expect on
     // Err instead of returning early.
     const was_in_expect = self.in_expect;
     self.in_expect = true;
     defer self.in_expect = was_in_expect;
 
-    const body = try self.canonicalizeExpr(expect_stmt.body);
+    const body = try self.canonicalizeExpr(work.expect.body);
+    try self.finishAssociatedExpect(work, body);
+}
+
+fn finishAssociatedExpect(self: *Self, work: AssociatedExpectWork, body: CanonicalizedExpr) std.mem.Allocator.Error!void {
+    const region = self.parse_ir.tokenizedRegionToRegion(work.expect.region);
     const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
         .body = body.idx,
     } }, region);
 
-    if (owner_is_module_visible) {
+    if (work.owner_is_module_visible) {
         try self.env.store.addScratchStatement(stmt_idx);
     } else {
         try self.addBlockStatement(
-            self.localAssociatedContext(block_context),
+            self.localAssociatedContext(work.block_context),
             CanonicalizedStatement{ .idx = stmt_idx, .free_vars = body.free_vars },
         );
     }
@@ -4432,11 +4444,15 @@ fn canonicalizeAssociatedItems(
             .@"while" => |while_stmt| try self.reportInvalidAssociatedStatement("while", while_stmt.region),
             .@"return" => |return_stmt| try self.reportInvalidAssociatedStatement("return", return_stmt.region),
             .@"break" => |break_stmt| try self.reportInvalidAssociatedStatement("break", break_stmt.region),
-            .expect => |expect_stmt| try self.canonicalizeAssociatedExpect(
-                expect_stmt,
-                owner_is_module_visible,
-                block_context,
-            ),
+            .expect => |expect_stmt| {
+                state.next = i + 1;
+                return .{ .expect_body = .{
+                    .state = state,
+                    .expect = expect_stmt,
+                    .owner_is_module_visible = owner_is_module_visible,
+                    .block_context = block_context,
+                } };
+            },
             .@"var", .expr, .file_import, .malformed => {
                 // var, expr, file_import and malformed are already reported by the parser.
             },
@@ -9473,7 +9489,7 @@ const DefiniteInitAnalyzer = struct {
                 if (match.branch_state) |box| self.destroyState(box);
                 self.deinitStates(&match.normal);
             },
-            else => {},
+            .expr, .stmt, .forward, .seq, .record, .block => {},
         }
         frame.job = .forward;
     }
@@ -12209,12 +12225,36 @@ fn runExprKernel(
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = decl_work.ast_body, .target = .scratch });
                 },
+                .expect_body => |expect_work| {
+                    // Track that we're inside an expect so the ? operator
+                    // fails the expect on Err instead of returning early.
+                    const was_in_expect = self.in_expect;
+                    self.in_expect = true;
+                    errdefer self.in_expect = was_in_expect;
+                    try stacks.pushFinishAssociatedExpect(frame_allocator, .{
+                        .work = expect_work,
+                        .was_in_expect = was_in_expect,
+                    });
+                    try stacks.pushParse(frame_allocator, .{ .idx = expect_work.expect.body, .target = .scratch });
+                },
             }
 
             continue :expr_kernel_loop .dispatch;
         },
         .associated_exit => {
             self.exitAssociatedBlockState(stacks.takeAssociatedExit());
+
+            continue :expr_kernel_loop .dispatch;
+        },
+        .finish_associated_expect => {
+            const state = stacks.takeFinishAssociatedExpect();
+            self.in_expect = state.was_in_expect;
+
+            const result_start = child_slots.items.len - 1;
+            const body = child_slots.items[result_start].expr;
+            child_slots.shrinkRetainingCapacity(result_start);
+            try self.finishAssociatedExpect(state.work, body);
+            try stacks.pushAssociatedNext(frame_allocator, state.work.state);
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -16399,6 +16439,7 @@ const ExprKernelLabel = enum {
     associated_next,
     associated_exit,
     finish_associated_decl_body,
+    finish_associated_expect,
     block_next,
     finish_block,
     finish_block_expr_stmt,
@@ -16477,6 +16518,11 @@ fn storeExprKernelOutput(
         .scratch => try child_slots.append(allocator, .{ .expr = result }),
     }
 }
+
+const ExprFinishAssociatedExpectWork = struct {
+    work: AssociatedExpectWork,
+    was_in_expect: bool,
+};
 
 const ExprFinishAssociatedDeclBodyWork = struct {
     work: AssociatedDeclBodyWork,
@@ -16862,6 +16908,7 @@ const ExprKernelWork = struct {
     associated_next: std.ArrayList(*AssociatedItemsState) = .empty,
     associated_exit: std.ArrayList(*AssociatedItemsState) = .empty,
     finish_associated_decl_body: std.ArrayList(ExprFinishAssociatedDeclBodyWork) = .empty,
+    finish_associated_expect: std.ArrayList(ExprFinishAssociatedExpectWork) = .empty,
     block_next: std.ArrayList(ExprBlockNextWork) = .empty,
     finish_block: std.ArrayList(ExprFinishBlockWork) = .empty,
     finish_block_expr_stmt: std.ArrayList(ExprFinishBlockExprStmtWork) = .empty,
@@ -16919,6 +16966,7 @@ const ExprKernelWork = struct {
             .associated_next => _ = self.takeAssociatedNext(),
             .associated_exit => _ = self.takeAssociatedExit(),
             .finish_associated_decl_body => _ = self.takeFinishAssociatedDeclBody(),
+            .finish_associated_expect => _ = self.takeFinishAssociatedExpect(),
             .block_next => _ = self.takeBlockNext(),
             .finish_block => _ = self.takeFinishBlock(),
             .finish_block_expr_stmt => _ = self.takeFinishBlockExprStmt(),
@@ -16992,6 +17040,10 @@ const ExprKernelWork = struct {
                     can.in_statement_position = finish.saved_stmt_pos;
                     continue;
                 },
+                .finish_associated_expect => {
+                    can.in_expect = self.takeFinishAssociatedExpect().was_in_expect;
+                    continue;
+                },
                 .parse,
                 .block_next,
                 .finish_block,
@@ -17054,6 +17106,7 @@ const ExprKernelWork = struct {
         self.associated_next.deinit(allocator);
         self.associated_exit.deinit(allocator);
         self.finish_associated_decl_body.deinit(allocator);
+        self.finish_associated_expect.deinit(allocator);
         self.block_next.deinit(allocator);
         self.finish_block.deinit(allocator);
         self.finish_block_expr_stmt.deinit(allocator);
@@ -17113,6 +17166,7 @@ const ExprKernelWork = struct {
         self.associated_next.clearRetainingCapacity();
         self.associated_exit.clearRetainingCapacity();
         self.finish_associated_decl_body.clearRetainingCapacity();
+        self.finish_associated_expect.clearRetainingCapacity();
         self.block_next.clearRetainingCapacity();
         self.finish_block.clearRetainingCapacity();
         self.finish_block_expr_stmt.clearRetainingCapacity();
@@ -17191,6 +17245,12 @@ const ExprKernelWork = struct {
         try self.associated_exit.append(allocator, item);
         errdefer _ = self.associated_exit.pop();
         try self.pushLabel(allocator, .associated_exit, self.current_target);
+    }
+
+    inline fn pushFinishAssociatedExpect(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishAssociatedExpectWork) std.mem.Allocator.Error!void {
+        try self.finish_associated_expect.append(allocator, item);
+        errdefer _ = self.finish_associated_expect.pop();
+        try self.pushLabel(allocator, .finish_associated_expect, self.current_target);
     }
 
     inline fn pushFinishAssociatedDeclBody(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishAssociatedDeclBodyWork) std.mem.Allocator.Error!void {
@@ -17507,6 +17567,10 @@ const ExprKernelWork = struct {
 
     inline fn takeAssociatedExit(self: *ExprKernelWork) *AssociatedItemsState {
         return self.associated_exit.pop() orelse unreachable;
+    }
+
+    inline fn takeFinishAssociatedExpect(self: *ExprKernelWork) ExprFinishAssociatedExpectWork {
+        return self.finish_associated_expect.pop() orelse unreachable;
     }
 
     inline fn takeFinishAssociatedDeclBody(self: *ExprKernelWork) ExprFinishAssociatedDeclBodyWork {

@@ -447,10 +447,7 @@ pub const UseOrder = struct {
     /// join parameter) and no other edge reaches the successor.
     fn blockContinuation(store: *const LirStore, tables: *const Scratch, preds: *const Rows, stmt: u32) ?u32 {
         if (tables.unresolved.isSet(tables.stmtIndex(stmt))) return null;
-        switch (store.getCFStmt(@enumFromInt(stmt))) {
-            .jump => return null,
-            else => {},
-        }
+        if (store.getCFStmt(@enumFromInt(stmt)) == .jump) return null;
         const Single = struct {
             count: u32 = 0,
             succ: u32 = no_local,
