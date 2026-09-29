@@ -640,6 +640,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: transitive imports preserve nominal method owner environments for equality",
     },
     .{
+        .roc_file = "test/fx/issue_11839_untransitive_derived_codec/main.roc",
+        .io_spec = "1>\"On\" Ok(W)",
+        .description = "Regression test: a method calling a derived codec of a nominal absent from its type keeps that nominal's owner reachable from importers",
+    },
+    .{
         .roc_file = "test/fx/test_no_dbg.roc",
         .io_spec = "1>Text",
         .description = "Recursive nominal type with List and pattern matching",

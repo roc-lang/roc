@@ -30598,6 +30598,35 @@ fn collectPublicApiDependencies(
         &type_owner_keys,
     );
 
+    // Generated-codec requirements serialized on binding schemes are copied
+    // into every importer that instantiates the binding (an exported def or a
+    // method reached by static dispatch), and each copy is revalidated there.
+    // A receiver can name a nominal the binding's type never mentions (issue
+    // 11839), so its owner must be reachable through this artifact's
+    // type-owner dependencies.
+    const module_env = module.moduleEnvConst();
+    for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
+        const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
+        for ([_]Var{ @enumFromInt(requirement.receiver_var), constraint.fn_var }) |requirement_var| {
+            const root = checked_type_publication.rootForSourceVar(module, requirement_var) orelse {
+                checkedArtifactInvariant("binding scheme codec requirement root was not published", .{});
+            };
+            try appendPublicApiTypeDependencies(
+                allocator,
+                names,
+                module_identity,
+                artifact_key,
+                checked_types,
+                root,
+                &active_types,
+                imports,
+                available_artifacts,
+                &keys,
+                &type_owner_keys,
+            );
+        }
+    }
+
     try appendPlatformRequiredDeclarationPublicApiDependencies(
         allocator,
         module,
