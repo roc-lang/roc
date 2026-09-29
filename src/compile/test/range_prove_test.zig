@@ -1489,3 +1489,69 @@ test "a loop parameter keeps its lower bound so a read back from a table's end p
     // the read back from the end proved.
     try std.testing.expectEqual(@as(usize, 2), marked_shape.is_lt);
 }
+
+// The hash-chain search's "longer match" loop: the head keeps the length in
+// hand below the nice length, the guard keeps the nice length within the
+// readable span past the position, and the length in hand is at least four
+// on entry, so the four-byte probe just past it inside the nested chain
+// walk is provably in bounds.
+test "a nested chain walk's probe past the length in hand proves from the outer loop's head" {
+    marked_op = "num_from_le_bytes_unchecked";
+    try harness.expectLirInspectionWithOptions(
+        \\search : List(U8), List(U16), U64, U64, U64, U64, U16 -> U64
+        \\search = |input, tab, in_next, best_len_in, max_len, nice_len, node_in| {
+        \\    if in_next + max_len > List.len(input) or nice_len > max_len or List.len(tab) < 32768 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    var $best_len = best_len_in
+        \\    var $done = 0.U64
+        \\    var $node = node_in
+        \\    if $best_len < 4 {
+        \\        $best_len = 4
+        \\    } else {
+        \\    }
+        \\    if $done == 0 {
+        \\        while $done == 0 and $best_len < nice_len {
+        \\            var $cand = 0.U64
+        \\            while True {
+        \\                probe = U32.from_le_bytes(input, in_next.plus_wrap($best_len).minus_wrap(3)) ?? 0
+        \\                if probe == 7 {
+        \\                    $cand = 1
+        \\                    break
+        \\                } else {
+        \\                }
+        \\                $node = List.get(tab, $node.to_u64().bitwise_and(32767)) ?? 0
+        \\                if $node == 0 {
+        \\                    $done = 1
+        \\                    break
+        \\                } else {
+        \\                }
+        \\            }
+        \\            if $done == 0 {
+        \\                $best_len = $best_len.plus_wrap($cand)
+        \\            } else {
+        \\            }
+        \\        }
+        \\    } else {
+        \\    }
+        \\    $best_len
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    tab = List.repeat(1.U16, 32768)
+        \\    echo!(Str.inspect(search(bytes, tab, 2, 4, args.len(), 8, 5)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.unchecked_reads);
+    // Only the guard's two `>` tests remain: the probe's length test and
+    // bound test both folded.
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.is_gt);
+}

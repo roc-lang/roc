@@ -442,6 +442,10 @@ const MeetBounds = struct {
 /// entry and back edges, say).
 const EnvMeet = struct {
     local: LocalId,
+    /// When set, the entry describes this field of the struct the local
+    /// holds rather than the local itself, keyed by the struct's root in
+    /// `field_values`.
+    field: ?u16 = null,
     root: NodeId,
     off_lo: i128,
     off_hi: i128,
@@ -465,6 +469,8 @@ const EnvMeet = struct {
 
 /// Bound on locals carried through one merge's environment meet.
 const merge_env_cap: usize = 64;
+/// Struct fields considered when a struct local's fields meet.
+const max_struct_meet_fields: u16 = 16;
 
 /// Accumulated meet state of one merge head: the facts present on every
 /// captured incoming edge, and the per-local value meet of the path
@@ -592,6 +598,15 @@ const Pass = struct {
     /// read site shares one node and facts proved through one site's read
     /// reach the others.
     field_values: std.AutoHashMap(u64, NodeId),
+    /// Roots of constructed structs, whose fields `field_values` records.
+    struct_roots: collections.DenseMap(NodeId, void),
+    /// The node each loop parameter was bound to when its body was seeded
+    /// this round. A back edge carrying that very value brings the
+    /// parameter back unchanged, so the entry edges' bounds hold on it too.
+    seeded_param_roots: collections.DenseMap(LocalId, NodeId),
+    /// Roots of those nodes, so merges keep a parameter's identity even
+    /// before any fact mentions it.
+    seeded_param_root_set: collections.DenseMap(NodeId, void),
     /// Sum roots by operand root pair, so every addition of the same two
     /// values shares one root for the round.
     sum_roots: std.AutoHashMap(u64, NodeId),
@@ -677,6 +692,9 @@ const Pass = struct {
             .merge_env = collections.DenseMap(CFStmtId, MergeEnvBounds).init(allocator),
             .global_facts = .empty,
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
+            .struct_roots = collections.DenseMap(NodeId, void).init(allocator),
+            .seeded_param_roots = collections.DenseMap(LocalId, NodeId).init(allocator),
+            .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
             .sums = .empty,
             .path_value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -731,6 +749,9 @@ const Pass = struct {
         self.merge_env.deinit();
         self.global_facts.deinit(self.allocator);
         self.field_values.deinit();
+        self.struct_roots.deinit();
+        self.seeded_param_roots.deinit();
+        self.seeded_param_root_set.deinit();
         self.sum_roots.deinit();
         self.sums.deinit(self.allocator);
         self.path_value_roots.deinit();
@@ -755,6 +776,9 @@ const Pass = struct {
         self.no_overflow_facts.clearRetainingCapacity();
         self.global_facts.clearRetainingCapacity();
         self.field_values.clearRetainingCapacity();
+        self.struct_roots.clearRetainingCapacity();
+        self.seeded_param_roots.clearRetainingCapacity();
+        self.seeded_param_root_set.clearRetainingCapacity();
         self.sum_roots.clearRetainingCapacity();
         self.sums.clearRetainingCapacity();
         self.path_value_roots.clearRetainingCapacity();
@@ -1187,6 +1211,24 @@ const Pass = struct {
         try self.bind(local, .{ .node = node });
     }
 
+    /// Bind a constructed struct to a fresh value whose fields are the
+    /// values it was built from, so a later field read finds the field's
+    /// node rather than a fresh unknown. Loop exits that carry several values
+    /// out through one record depend on this to keep their bounds.
+    fn modelStruct(self: *Pass, target: LocalId, fields: LIR.LocalSpan) ResourceError!void {
+        const node = (try self.unknownFor(self.localLayout(target))) orelse return self.bindFresh(target);
+        const field_locals = self.store.getLocalSpan(fields);
+        for (0..GuardedList.borrowLen(field_locals)) |i| {
+            const field_local = GuardedList.at(field_locals, i);
+            if (trackedIntMax(self.localLayout(field_local)) == null) continue;
+            const field_node = (try self.valueOf(field_local)) orelse continue;
+            const key = (@as(u64, node) << 16) | @as(u64, @intCast(i));
+            try self.field_values.put(key, field_node);
+            try self.struct_roots.put(node, {});
+        }
+        try self.bind(target, .{ .node = node });
+    }
+
     /// Bind a field-read target, unifying with earlier reads of the same
     /// field of the same struct value so facts reach every read site.
     fn bindFieldRead(self: *Pass, target: LocalId, source: LocalId, field_idx: u16) ResourceError!void {
@@ -1443,6 +1485,11 @@ const Pass = struct {
         if (node.lo != 0 or node.hi != std.math.maxInt(u64)) return true;
         // A list with a materialized length term carries length bounds.
         if (self.len_terms.contains(node.root)) return true;
+        // A constructed struct carries its fields' bounds.
+        if (self.struct_roots.contains(node.root)) return true;
+        // A loop parameter's value keeps its identity through merges so a
+        // back edge carrying it unchanged is recognized.
+        if (self.seeded_param_root_set.contains(node.root)) return true;
         for (self.facts.items) |fact| {
             if (fact.a == node.root or fact.b == node.root) return true;
         }
@@ -1927,6 +1974,29 @@ const Pass = struct {
                     .len_bounds = len_bounds,
                     .len_bounds_any = len_bounds,
                 });
+                // A struct's integer fields meet like locals of their own, so
+                // a loop exit that carries its state out through one record
+                // keeps each carried value's bounds.
+                var field_idx: u16 = 0;
+                while (field_idx < max_struct_meet_fields) : (field_idx += 1) {
+                    const field_node = self.field_values.get((@as(u64, node.root) << 16) | field_idx) orelse continue;
+                    if (state.env.items.len >= merge_env_cap) break;
+                    const fnode = self.nodes.items[field_node];
+                    const lower = try self.valueLowerBoundsNode(field_node);
+                    try state.env.append(self.allocator, .{
+                        .local = kv.key_ptr.*,
+                        .field = field_idx,
+                        .root = fnode.root,
+                        .off_lo = fnode.off_lo,
+                        .off_hi = fnode.off_hi,
+                        .valid = true,
+                        .bounds = try self.reachableBounds(field_node),
+                        .lower = lower,
+                        .lower_any = lower,
+                        .len_bounds = .{},
+                        .len_bounds_any = .{},
+                    });
+                }
             }
         } else {
             // Intersect facts: keep only entries this edge also carries.
@@ -1952,8 +2022,22 @@ const Pass = struct {
             for (state.env.items) |*meet| {
                 if (!meet.valid and meet.bounds.len == 0 and meet.lower.len == 0 and meet.lower_any.len == 0 and meet.len_bounds.len == 0 and meet.len_bounds_any.len == 0) continue;
                 const binding = self.path_env.get(meet.local);
-                if (binding) |b| {
-                    const node = self.nodes.items[b.node];
+                const node_id: ?NodeId = if (binding) |b|
+                    (if (meet.field) |field_idx| self.field_values.get((@as(u64, self.rootOf(b.node)) << 16) | field_idx) else b.node)
+                else
+                    null;
+                if (node_id) |nid| {
+                    // A loop parameter arriving as the very value its body
+                    // was seeded with is unchanged around the loop: the
+                    // entry edges' meet already describes it.
+                    if (meet.field == null) {
+                        if (self.seeded_param_roots.get(meet.local)) |seed_node| {
+                            const seeded = self.nodes.items[seed_node];
+                            const arriving = self.nodes.items[nid];
+                            if (seeded.root == arriving.root and seeded.off_lo == arriving.off_lo and seeded.off_hi == arriving.off_hi) continue;
+                        }
+                    }
+                    const node = self.nodes.items[nid];
                     if (meet.valid) {
                         if (node.root == meet.root) {
                             meet.off_lo = @min(meet.off_lo, node.off_lo);
@@ -1964,7 +2048,7 @@ const Pass = struct {
                     }
                     // Keep only the upper bounds this edge can also prove,
                     // widened to cover both edges.
-                    const mine = try self.reachableBounds(b.node);
+                    const mine = try self.reachableBounds(nid);
                     var kept: MeetBounds = .{};
                     for (meet.bounds.slice()) |bound| {
                         for (mine.slice()) |candidate| {
@@ -1975,7 +2059,7 @@ const Pass = struct {
                         }
                     }
                     meet.bounds = kept;
-                    const mine_lower = try self.valueLowerBounds(meet.local, b.node);
+                    const mine_lower = if (meet.field != null) try self.valueLowerBoundsNode(nid) else try self.valueLowerBounds(meet.local, nid);
                     var kept_lower: MeetBounds = .{};
                     for (meet.lower.slice()) |bound| {
                         for (mine_lower.slice()) |candidate| {
@@ -2000,7 +2084,7 @@ const Pass = struct {
                     }
                     // Same meet for length lower bounds: keep what this edge
                     // also proves, weakened (larger c) to cover both edges.
-                    const mine_len = try self.localLenBounds(b.node);
+                    const mine_len = try self.localLenBounds(nid);
                     var kept_len: MeetBounds = .{};
                     for (meet.len_bounds.slice()) |bound| {
                         for (mine_len.slice()) |candidate| {
@@ -2075,7 +2159,13 @@ const Pass = struct {
                     const join = self.store.getCFStmt(join_stmt).join;
                     const params = self.store.getLocalSpan(join.params);
                     for (0..GuardedList.borrowLen(params)) |i| {
-                        try self.seedLoopParam(join_id, GuardedList.at(params, i));
+                        const param = GuardedList.at(params, i);
+                        try self.seedLoopParam(join_id, param);
+                        if (self.lookup(param) == null) try self.bindFresh(param);
+                        if (self.lookup(param)) |b| {
+                            try self.seeded_param_roots.put(param, b.node);
+                            try self.seeded_param_root_set.put(self.rootOf(b.node), {});
+                        }
                     }
                 }
                 try self.seedMergeFacts(head);
@@ -2112,6 +2202,46 @@ const Pass = struct {
         try self.seedStableFacts(&state.stable);
     }
 
+    /// The node a met integer entry denotes in the region about to walk: the
+    /// shared root when every edge bound the same one, otherwise a fresh
+    /// value carrying the upper and lower bounds every edge proved; null
+    /// when the meet says nothing a fresh unknown would not.
+    fn metScalarNode(self: *Pass, meet: EnvMeet) ResourceError!?NodeId {
+        if (meet.valid) {
+            return try self.addNode(.{
+                .root = meet.root,
+                .off_lo = meet.off_lo,
+                .off_hi = meet.off_hi,
+                .lo = 0,
+                .hi = 0,
+            });
+        }
+        if (meet.bounds.len == 0 and meet.lower.len == 0) return null;
+        var hi: i128 = std.math.maxInt(u64);
+        for (meet.bounds.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            if (root.lo == root.hi) hi = @min(hi, root.lo + bound.c);
+        }
+        var lo: i128 = 0;
+        for (meet.lower.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            if (root.lo == root.hi) lo = @max(lo, root.lo - bound.c);
+        }
+        if (lo > hi) lo = hi;
+        const node = (try self.freshRoot(lo, hi)) orelse return null;
+        for (meet.bounds.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            if (root.lo == root.hi) continue;
+            try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
+        }
+        for (meet.lower.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            if (root.lo == root.hi) continue;
+            try self.addFact(.{ .a = bound.root, .b = node, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
+        }
+        return node;
+    }
+
     /// Bind the merged values of a completed meet in the region about to
     /// walk: a local every edge bound to one root keeps that root; a list
     /// whose edges agree on length lower bounds gets a fresh value whose
@@ -2123,6 +2253,15 @@ const Pass = struct {
         for (state.env.items) |meet| {
             if (loop_join) |join_id| {
                 if (self.join_assigned.contains(joinAssignedKey(join_id, meet.local))) continue;
+            }
+            if (meet.field) |field_idx| {
+                // The struct's own entry precedes its fields, so the parent
+                // is bound (or freshly made) by the time a field seeds.
+                const node = (try self.metScalarNode(meet)) orelse continue;
+                const parent = (try self.valueOf(meet.local)) orelse continue;
+                try self.field_values.put((@as(u64, self.rootOf(parent)) << 16) | field_idx, node);
+                try self.struct_roots.put(self.rootOf(parent), {});
+                continue;
             }
             if (meet.valid) {
                 const node = (try self.addNode(.{
@@ -2375,6 +2514,7 @@ const Pass = struct {
     fn persistMergeEnv(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
         var stable = MergeEnvBounds{};
         for (state.env.items) |meet| {
+            if (meet.field != null) continue;
             if (stable.len >= merge_env_persist_cap) break;
             var entry = StoredEnvBound{ .local = meet.local, .bounds = undefined, .len = 0, .lower = undefined, .lower_len = 0 };
             for (meet.bounds.slice()) |bound| {
@@ -2506,6 +2646,7 @@ const Pass = struct {
             if (!self.live_pending) try self.persistLoopFacts(join_id, state);
             if (state.captures != self.jumpCount(join_id) or state.captures < 2) continue;
             for (state.env.items) |meet| {
+                if (meet.field != null) continue;
                 const key = loopBoundKey(join_id, meet.local);
                 if (self.live_pending) {
                     // Assumption round: the walk ran under unverified seeds,
@@ -2547,7 +2688,7 @@ const Pass = struct {
                 }
                 // Carry the invariant list forward, admitting new length
                 // candidates as pending. A base that already failed
-                // verification stays dead and is never re-admitted.
+                // verification is listed as dead rather than re-admitted.
                 if (self.loop_bounds.get(key)) |previous| {
                     stable.len_items = previous.len_items;
                     stable.len_count = previous.len_count;
@@ -2589,13 +2730,28 @@ const Pass = struct {
         }
     }
 
-    /// Group resolution of the assumed length invariants at round end: the
-    /// assumptions may justify one another (simultaneous induction), so all
-    /// of them promote only when every one was re-derived on every edge;
-    /// otherwise the failures die and the survivors retry next round without
-    /// them.
+    /// Resolution of the assumed invariants at round end. In an assumption
+    /// round, the assumptions re-derived on every edge stand together
+    /// (simultaneous induction): failures die, one resting on a fallen
+    /// assumption retries next round without it, and the rest verify. In a
+    /// round that made progress, dead assumptions are seeded again, since a
+    /// failure only means unprovable under that round's facts.
     fn resolvePendingInvariants(self: *Pass) void {
-        if (!self.live_pending) return;
+        if (!self.live_pending) {
+            // A round that rewrote statements or persisted new bounds has a
+            // stronger fact base than the one an assumption failed under, so
+            // every failed assumption is worth one more try against it.
+            if (self.rewrites == 0 and !self.new_loop_bounds) return;
+            var revive_it = self.loop_bounds.valueIterator();
+            while (revive_it.next()) |stored| {
+                for (stored.len_items[0..stored.len_count]) |*item| {
+                    if (item.status != .dead) continue;
+                    item.status = .pending;
+                    self.new_loop_bounds = true;
+                }
+            }
+            return;
+        }
         var any_pending = false;
         var it = self.loop_bounds.valueIterator();
         while (it.next()) |stored| {
@@ -2607,29 +2763,55 @@ const Pass = struct {
         }
         if (!any_pending) return;
 
-        // An assumption verifies once every assumption its re-derivations
-        // rested on is itself or already verified; assumptions may justify
-        // one another, so this iterates to a fixpoint.
-        var verified_mask: u64 = 0;
-        var changed = true;
-        while (changed) {
-            changed = false;
+        // An assumption verifies when every assumption its re-derivations
+        // rested on is verified or is itself verifying now: the standing set
+        // starts as every re-derived assumption and sheds those resting on
+        // one that fell (a dead assumption, or one shed earlier), so mutually
+        // supporting assumptions promote together and an assumption resting
+        // on a fallen one retries next round without it.
+        var standing_changed = true;
+        while (standing_changed) {
+            standing_changed = false;
+            var standing: u64 = 0;
+            var unknown_fell = false;
+            it = self.loop_bounds.valueIterator();
+            while (it.next()) |stored| {
+                for (stored.len_items[0..stored.len_count]) |item| {
+                    switch (item.status) {
+                        .verified => standing |= item.assume_bit,
+                        .pending => if (item.hit) {
+                            standing |= item.assume_bit;
+                        } else if (item.assume_bit == unknown_assumption_bit) {
+                            unknown_fell = true;
+                        },
+                        .dead => if (item.assume_bit == unknown_assumption_bit) {
+                            unknown_fell = true;
+                        },
+                    }
+                }
+            }
+            if (unknown_fell) standing &= ~unknown_assumption_bit;
             it = self.loop_bounds.valueIterator();
             while (it.next()) |stored| {
                 for (stored.len_items[0..stored.len_count]) |*item| {
-                    if (item.status != .pending) continue;
-                    const deps = item.hit_deps & ~item.assume_bit & ~verified_mask;
-                    if (deps != 0) continue;
-                    item.status = .verified;
-                    verified_mask |= item.assume_bit & ~unknown_assumption_bit;
-                    changed = true;
+                    if (item.status != .pending or !item.hit) continue;
+                    if (item.hit_deps & ~standing == 0) continue;
+                    item.hit = false;
+                    standing_changed = true;
                 }
             }
         }
-        // A survivor whose re-derivation touched an assumption that did not
-        // verify retries next round: the dependency is recorded over every
-        // fact a query relaxed through, so it may name an assumption the
-        // bound never needed, and a dead one is not seeded again.
+        it = self.loop_bounds.valueIterator();
+        while (it.next()) |stored| {
+            for (stored.len_items[0..stored.len_count]) |*item| {
+                if (item.status == .pending and item.hit) item.status = .verified;
+            }
+        }
+        // A survivor that rested on a fallen assumption retries next round:
+        // the dependency is recorded over every fact a query relaxed
+        // through, so it may name an assumption the bound never needed. A
+        // dead one waits for a round that makes progress before it is
+        // seeded again.
         self.new_loop_bounds = true;
     }
 
@@ -2899,6 +3081,11 @@ const Pass = struct {
     /// fails (zero or below).
     fn valueLowerBounds(self: *Pass, local: LocalId, node: NodeId) ResourceError!MeetBounds {
         if (trackedIntMax(self.localLayout(local)) == null) return .{};
+        return self.valueLowerBoundsNode(node);
+    }
+
+    /// `valueLowerBounds` for a node already known to hold an integer.
+    fn valueLowerBoundsNode(self: *Pass, node: NodeId) ResourceError!MeetBounds {
         const all = try self.lenLowerBounds(node);
         var kept: MeetBounds = .{};
         for (all.slice()) |bound| {
@@ -3451,7 +3638,7 @@ const Pass = struct {
                     },
                     .assign_struct => |s| {
                         try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
+                        try self.modelStruct(s.target, s.fields);
                         current = s.next;
                     },
                     .store_struct => |s| {
