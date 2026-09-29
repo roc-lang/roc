@@ -1,5 +1,4 @@
 //! Regression test for https://github.com/roc-lang/roc/issues/11838.
-const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
 // A nominal type whose `parser_for` is derived calls into a nested nominal
