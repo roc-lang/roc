@@ -221,3 +221,35 @@ test "a consumed producer program is released whether its continuation succeeds 
         \\main! = |_args| Ok({})
     , .{ .prepared_inspect = inspectConsumedOwnership });
 }
+
+/// Solving consumes the producer program, so an allocation failure at any
+/// point in preparation must release every byte exactly once.
+fn inspectSolvedPreparationOwnership(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const counted_copy = try preparedCopy(counting.allocator(), prepared);
+    const copy_allocations = counting.alloc_index;
+    var complete = try lir.CheckedPipeline.prepareMonotypeToSolved(counted_copy);
+    complete.deinit();
+    const preparation_allocations = counting.alloc_index - copy_allocations;
+
+    var fail_offset: usize = 0;
+    while (fail_offset < preparation_allocations) : (fail_offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        const copy = try preparedCopy(failing.allocator(), prepared);
+        failing.fail_index = failing.alloc_index + fail_offset;
+        if (lir.CheckedPipeline.prepareMonotypeToSolved(copy)) |solved| {
+            var owned = solved;
+            owned.deinit();
+            return error.TestUnexpectedResult;
+        } else |err| switch (err) {
+            error.OutOfMemory => {},
+        }
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+    }
+}
+
+test "a consumed producer program is released once when solved preparation runs out of memory" {
+    try harness.expectLowersToLirWithOptions(
+        \\main! = |_args| Ok({})
+    , .{ .prepared_inspect = inspectSolvedPreparationOwnership });
+}
