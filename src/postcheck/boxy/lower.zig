@@ -10264,6 +10264,160 @@ const ProcedureBuilder = struct {
         );
     }
 
+    /// One nested parser shape: parse `shape_type` from `state` into `value`,
+    /// leaving the state after it in `rest`, then continue with `success`.
+    const ParseShapeRequest = struct {
+        context: GeneratedParserShapeContext,
+        shape_type: Plan.CheckedTypeIdentity,
+        shape_rep: Plan.TypeRepId,
+        state: LIR.LocalId,
+        value: LIR.LocalId,
+        rest: LIR.LocalId,
+        success: LIR.CFStmtId,
+    };
+
+    const ParseShapeStep = union(enum) {
+        /// The shape whose parser the top frame receives next.
+        request: ParseShapeRequest,
+        /// A frame was pushed and has not yet run.
+        pushed,
+        /// The statement the top frame receives next, or the whole parser
+        /// when no frame is left.
+        done: LIR.CFStmtId,
+    };
+
+    /// A parser waiting on its nested shapes' parsers.
+    const ParseShapeFrame = struct {
+        /// Whether the frame's last requested parser is still due.
+        awaiting: bool = false,
+        state: union(enum) {
+            try_shape: GeneratedTryParseState,
+            tuple: GeneratedTupleParseState,
+            list: GeneratedListParseState,
+            dict: GeneratedDictParseState,
+            dict_entry: GeneratedDictEntryParseState,
+            record: GeneratedRecordParseState,
+        },
+    };
+
+    /// A `Try` parsed as `Null` or its `Ok` shape.
+    const GeneratedTryParseState = struct {
+        context: GeneratedParserShapeContext,
+        call: Plan.GeneratedCodecCallPlan,
+        state: LIR.LocalId,
+        parsed: LIR.LocalId,
+        parsed_rep: Plan.TypeRepId,
+        null_ok: GeneratedParserTagVariant,
+        null_err: GeneratedParserTagVariant,
+        null_body: LIR.CFStmtId,
+        ok: ParseShapeRequest,
+    };
+
+    /// A tuple's elements parsed last first.
+    const GeneratedTupleParseState = struct {
+        request: ParseShapeRequest,
+        items: []GeneratedParserTupleItem,
+        parsed_rests: []LIR.LocalId,
+        separators: []GeneratedParserTryCall,
+        start: GeneratedParserTryCall,
+        len: LIR.LocalId,
+        /// The element being parsed; the elements after it are done.
+        remaining: usize,
+        current: LIR.CFStmtId,
+        item_state: LIR.LocalId = undefined,
+    };
+
+    /// A list parsed by a loop whose counted and uncounted steps each parse
+    /// one element.
+    const GeneratedListParseState = struct {
+        context: GeneratedParserShapeContext,
+        subject_type: Plan.CheckedTypeIdentity,
+        state: LIR.LocalId,
+        target_desc: ProcBodyBuilder.ResultDescriptorSource,
+        loop: GeneratedListLoop,
+        phase: enum { counted, uncounted },
+        counted_element: ParseShapeRequest,
+        counted_done: LIR.CFStmtId,
+        counted_step: LIR.CFStmtId = undefined,
+        uncounted: struct {
+            call: Plan.GeneratedCodecCallPlan,
+            step_rep: Plan.TypeRepId,
+            step: LIR.LocalId,
+            ok: GeneratedParserTagVariant,
+            err: GeneratedParserTagVariant,
+            err_body: LIR.CFStmtId,
+            ok_payload: ProcBodyBuilder.GeneratedParserTagPayload,
+            element: GeneratedParserTagVariant,
+            done: GeneratedParserTagVariant,
+            element_payload: ProcBodyBuilder.GeneratedParserTagPayload,
+        } = undefined,
+    };
+
+    /// A dictionary parsed by a loop whose counted and uncounted steps each
+    /// parse one entry.
+    const GeneratedDictParseState = struct {
+        context: GeneratedParserShapeContext,
+        state: LIR.LocalId,
+        shape_type: Plan.CheckedTypeIdentity,
+        loop: GeneratedDictLoop,
+        phase: enum { counted, uncounted },
+        counted_done: LIR.CFStmtId,
+        counted_step: LIR.CFStmtId = undefined,
+        uncounted: struct {
+            next: GeneratedParserTryCall,
+            entry_variant: GeneratedParserTagVariant,
+            done_variant: GeneratedParserTagVariant,
+            entry_payload: ProcBodyBuilder.GeneratedParserTagPayload,
+            done_payload: ProcBodyBuilder.GeneratedParserTagPayload,
+            entry_state: LIR.LocalId,
+        } = undefined,
+    };
+
+    /// One dictionary entry: its value parsed, then its key.
+    const GeneratedDictEntryParseState = struct {
+        context: GeneratedParserShapeContext,
+        loop: GeneratedDictLoop,
+        entry_state: LIR.LocalId,
+        key: LIR.LocalId,
+        after_key: LIR.LocalId,
+        phase: enum { value, key },
+        value: ParseShapeRequest,
+        key_start: GeneratedParserTryCall = undefined,
+        key_state: LIR.LocalId = undefined,
+    };
+
+    /// A record parsed by a loop whose field events each parse one matched
+    /// field: every `Field` match first, then every `TryField` and
+    /// `TryFieldCaseless` name comparison last field first.
+    const GeneratedRecordParseState = struct {
+        shape_context: GeneratedParserShapeContext,
+        state: LIR.LocalId,
+        field_names_source: GeneratedParserFieldNamesSource,
+        parse_call: Plan.GeneratedCodecCallPlan,
+        context: GeneratedParserRecordContext,
+        step_join: LIR.JoinPointId,
+        step: GeneratedParserTryCall,
+        variants: [5]GeneratedParserTagVariant,
+        bodies: [5]LIR.CFStmtId,
+        phase: enum { direct, try_field, caseless },
+        /// The field whose match is being built.
+        field_cursor: usize = 0,
+        direct: struct {
+            payload: ProcBodyBuilder.GeneratedParserTagPayload,
+            field_handle: LIR.LocalId,
+            rest: LIR.LocalId,
+            index: LIR.LocalId,
+            branches: []LIR.CFSwitchBranch,
+        },
+        named: struct {
+            payload: ProcBodyBuilder.GeneratedParserTagPayload,
+            name: LIR.LocalId,
+            rest: LIR.LocalId,
+            dispatch: LIR.CFStmtId,
+            matches: LIR.LocalId,
+        } = undefined,
+    };
+
     fn lowerGeneratedParseShapeFromState(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
@@ -10275,225 +10429,672 @@ const ProcedureBuilder = struct {
         rest: LIR.LocalId,
         success: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        try proc.ensureGeneratedParserOutputDescriptorForRep(value, shape_rep);
-        try proc.ensureGeneratedParserOutputDescriptorForRep(rest, context.state_rep);
-        const shape_module = procedureModuleById(self.modules, shape_type.module);
-        // An alias parses as its backing, which is the shape the planner
-        // walked and every planned call names.
-        switch (shape_module.checked_types.payload(shape_type.ty)) {
-            .alias => |alias| {
-                const backing_type = Plan.CheckedTypeIdentity{ .module = shape_type.module, .ty = alias.backing };
-                return try self.lowerGeneratedParseShapeFromState(
-                    proc,
-                    context,
-                    backing_type,
-                    proc.repForTypeRef(backing_type),
-                    state,
-                    value,
-                    rest,
-                    success,
-                );
-            },
-            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
-        }
-        if (checkedBuiltinNominalForType(shape_module, shape_type.ty) == .box) {
-            const payload = proc.repQuery().requiredSingleChild(shape_rep, .box_payload);
-            const payload_value = try proc.addGeneratedParserOutputLocalForRep(payload.rep);
-            const construct = try proc.assignBoxBoundary(
-                value,
-                payload_value,
-                shape_rep,
-                .box_box,
-                success,
-            );
-            return try self.lowerGeneratedParseShapeFromState(
-                proc,
-                context,
-                payload.source_type,
-                payload.rep,
-                state,
-                payload_value,
-                rest,
-                construct,
-            );
-        }
-
-        if (self.plan.generatedParserTryPlan(context.worker, shape_type)) |try_plan| {
-            return try self.lowerGeneratedTryFromState(
-                proc,
-                context,
-                try_plan,
-                shape_rep,
-                state,
-                value,
-                rest,
-                success,
-            );
-        }
-
-        const constructor_call = proc.generatedCodecCallPlanOrNull(
-            context.worker,
-            shape_type,
-            "parser_for",
-            shape_type,
-        );
-        const scalar_call = if (constructor_call == null) blk: {
-            const method = generatedParserScalarMethodForRep(self.plan, shape_rep) orelse break :blk null;
-            break :blk proc.generatedCodecCallPlan(context.worker, context.encoding_type, method, shape_type);
-        } else null;
-        if (constructor_call != null or scalar_call != null) {
-            const parsed_rep = if (constructor_call) |call| blk: {
-                const callable_rep = proc.repForTypeRef(call.ret_type);
-                const callable_fn = proc.functionChildrenForRep(callable_rep) orelse
-                    boxyLowerInvariant("generated custom parser constructor did not return a callable");
-                if (callable_fn.arg_count != 1) {
-                    boxyLowerInvariant("generated custom parser runtime had an unexpected arity");
-                }
-                break :blk callable_fn.ret;
-            } else proc.repForTypeRef(scalar_call.?.ret_type);
-            const parsed = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(parsed_rep);
-            const ok = proc.generatedParserTagVariant(parsed_rep, "Ok");
-            const err = proc.generatedParserTagVariant(parsed_rep, "Err");
-            const err_body = try proc.forwardGeneratedParserError(
-                context.result,
-                context.result_rep,
-                parsed,
-                err,
-                context.next,
-            );
-            const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-            var parsed_success = try proc.generatedParserReadRecordField(
-                rest,
-                context.state_rep,
-                ok_payload.local,
-                ok_payload.child,
-                "rest",
-                success,
-            );
-            parsed_success = try proc.generatedParserReadRecordField(
-                value,
-                shape_rep,
-                ok_payload.local,
-                ok_payload.child,
-                "value",
-                parsed_success,
-            );
-            parsed_success = try proc.generatedParserReadTagPayload(parsed, ok, ok_payload, parsed_success);
-            const variants = [_]GeneratedParserTagVariant{ ok, err };
-            const bodies = [_]LIR.CFStmtId{ parsed_success, err_body };
-            const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-            const dispatch = try proc.generatedParserTagDispatch(parsed, parsed_rep, &variants, &bodies, impossible);
-            if (constructor_call) |call| {
-                const callable_rep = proc.repForTypeRef(call.ret_type);
-                const callable = try proc.addFrameLocalForRep(callable_rep);
-                var continuation = try proc.lowerErasedCallLocalsInto(
-                    parsed,
-                    parsed_rep,
-                    callable_rep,
-                    callable,
-                    &.{state},
-                    &.{context.state_rep},
-                    dispatch,
-                );
-                continuation = try self.lowerGeneratedCodecCallLocalsInto(
-                    proc,
-                    call,
-                    callable,
-                    &.{context.encoding},
-                    continuation,
-                );
-                return continuation;
-            }
-            return try self.lowerGeneratedCodecCallLocalsInto(
-                proc,
-                scalar_call.?,
-                parsed,
-                &.{ context.encoding, state },
-                dispatch,
-            );
-        }
-
-        const shape_builtin = checkedBuiltinNominalForType(shape_module, shape_type.ty);
-        if (shape_builtin == .set) {
-            return try self.lowerGeneratedSetFromState(
-                proc,
-                context,
-                shape_type,
-                state,
-                value,
-                rest,
-                success,
-            );
-        }
-        if (shape_builtin == .dict) {
-            return try self.lowerGeneratedDictFromState(
-                proc,
-                context,
-                shape_type,
-                shape_rep,
-                state,
-                value,
-                rest,
-                success,
-            );
-        }
-
-        if (proc.recordRepForBoundary(shape_rep) != null or
-            self.plan.representations.items[@intFromEnum(shape_rep)].kind == .empty_record)
-        {
-            const field_names_source: GeneratedParserFieldNamesSource = if (context.tag_union_spec) |spec|
-                .{ .tag_union_spec = .{
-                    .spec = spec,
-                    .plan = context.tag_union_plan orelse
-                        boxyLowerInvariant("generated tag payload record had no explicit evidence plan"),
-                } }
-            else
-                .captures;
-            return try self.lowerGeneratedRecordFromState(
-                proc,
-                context,
-                shape_type,
-                shape_rep,
-                state,
-                value,
-                rest,
-                success,
-                field_names_source,
-            );
-        }
-
-        if (proc.tupleRepForBoundary(shape_rep) != null) {
-            return try self.lowerGeneratedTupleFromState(proc, context, shape_type, shape_rep, state, value, rest, success);
-        }
-        if (proc.listRepForBoundary(shape_rep) != null) {
-            return try self.lowerGeneratedListFromState(proc, context, shape_type, shape_rep, null, state, value, rest, success);
-        }
-        if (proc.tagVariantRepForBoundary(shape_rep) != null) {
-            return try self.lowerGeneratedTagUnionFromState(
-                proc,
-                context,
-                shape_type,
-                shape_rep,
-                state,
-                value,
-                rest,
-                success,
-            );
-        }
-        boxyLowerInvariant("generated parser nested shape body is not implemented");
+        var frames: std.ArrayList(ParseShapeFrame) = .empty;
+        defer self.releaseParseShapeFrames(&frames);
+        const first = try self.beginParseShape(proc, &frames, .{
+            .context = context,
+            .shape_type = shape_type,
+            .shape_rep = shape_rep,
+            .state = state,
+            .value = value,
+            .rest = rest,
+            .success = success,
+        });
+        return try self.runParseShapeFrames(proc, &frames, first);
     }
 
-    fn lowerGeneratedTryFromState(
+    fn lowerGeneratedRecordFromState(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        try_plan: Plan.GeneratedParserTryPlan,
+        shape_context: GeneratedParserShapeContext,
+        shape_type: Plan.CheckedTypeIdentity,
         shape_rep: Plan.TypeRepId,
         state: LIR.LocalId,
         value: LIR.LocalId,
         rest: LIR.LocalId,
         success: LIR.CFStmtId,
+        field_names_source: GeneratedParserFieldNamesSource,
     ) Allocator.Error!LIR.CFStmtId {
+        var frames: std.ArrayList(ParseShapeFrame) = .empty;
+        defer self.releaseParseShapeFrames(&frames);
+        const first = try self.beginGeneratedRecordParse(proc, &frames, shape_context, shape_type, shape_rep, state, value, rest, success, field_names_source);
+        return try self.runParseShapeFrames(proc, &frames, first);
+    }
+
+    fn runParseShapeFrames(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        first: ParseShapeStep,
+    ) Allocator.Error!LIR.CFStmtId {
+        var step = first;
+        while (true) {
+            switch (step) {
+                .request => |request| step = try self.beginParseShape(proc, frames, request),
+                .pushed => step = try self.stepParseShapeFrame(proc, frames, null),
+                .done => |stmt| {
+                    if (frames.items.len == 0) return stmt;
+                    step = try self.stepParseShapeFrame(proc, frames, stmt);
+                },
+            }
+        }
+    }
+
+    fn releaseParseShapeFrames(self: *ProcedureBuilder, frames: *std.ArrayList(ParseShapeFrame)) void {
+        var index = frames.items.len;
+        while (index > 0) {
+            index -= 1;
+            self.releaseParseShapeFrame(&frames.items[index]);
+        }
+        frames.deinit(self.allocator);
+    }
+
+    /// Free what an unfinished frame owns, as the direct build's defers
+    /// would.
+    fn releaseParseShapeFrame(self: *ProcedureBuilder, frame: *ParseShapeFrame) void {
+        switch (frame.state) {
+            .try_shape, .list, .dict, .dict_entry => {},
+            .tuple => |state| {
+                self.allocator.free(state.items);
+                self.allocator.free(state.parsed_rests);
+                self.allocator.free(state.separators);
+            },
+            .record => |state| {
+                self.allocator.free(state.context.fields);
+                self.allocator.free(state.context.presence);
+                self.allocator.free(state.direct.branches);
+            },
+        }
+    }
+
+    fn pushParseShapeFrame(self: *ProcedureBuilder, frames: *std.ArrayList(ParseShapeFrame), frame: ParseShapeFrame) Allocator.Error!ParseShapeStep {
+        var owned = frame;
+        frames.append(self.allocator, owned) catch |err| {
+            self.releaseParseShapeFrame(&owned);
+            return err;
+        };
+        return .pushed;
+    }
+
+    fn finishParseShapeFrame(self: *ProcedureBuilder, frames: *std.ArrayList(ParseShapeFrame), stmt: LIR.CFStmtId) ParseShapeStep {
+        var frame = frames.pop().?;
+        self.releaseParseShapeFrame(&frame);
+        return .{ .done = stmt };
+    }
+
+    fn beginParseShape(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        root: ParseShapeRequest,
+    ) Allocator.Error!ParseShapeStep {
+        var request = root;
+        while (true) {
+            const context = request.context;
+            const shape_type = request.shape_type;
+            const shape_rep = request.shape_rep;
+            const state = request.state;
+            const value = request.value;
+            const rest = request.rest;
+            const success = request.success;
+            try proc.ensureGeneratedParserOutputDescriptorForRep(value, shape_rep);
+            try proc.ensureGeneratedParserOutputDescriptorForRep(rest, context.state_rep);
+            const shape_module = procedureModuleById(self.modules, shape_type.module);
+            // An alias parses as its backing, which is the shape the planner
+            // walked and every planned call names.
+            switch (shape_module.checked_types.payload(shape_type.ty)) {
+                .alias => |alias| {
+                    const backing_type = Plan.CheckedTypeIdentity{ .module = shape_type.module, .ty = alias.backing };
+                    request.shape_type = backing_type;
+                    request.shape_rep = proc.repForTypeRef(backing_type);
+                    continue;
+                },
+                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
+            }
+            if (checkedBuiltinNominalForType(shape_module, shape_type.ty) == .box) {
+                const payload = proc.repQuery().requiredSingleChild(shape_rep, .box_payload);
+                const payload_value = try proc.addGeneratedParserOutputLocalForRep(payload.rep);
+                const construct = try proc.assignBoxBoundary(
+                    value,
+                    payload_value,
+                    shape_rep,
+                    .box_box,
+                    success,
+                );
+                request.shape_type = payload.source_type;
+                request.shape_rep = payload.rep;
+                request.value = payload_value;
+                request.success = construct;
+                continue;
+            }
+
+            if (self.plan.generatedParserTryPlan(context.worker, shape_type)) |try_plan| {
+                return try self.beginGeneratedTryParse(proc, frames, request, try_plan);
+            }
+
+            const constructor_call = proc.generatedCodecCallPlanOrNull(
+                context.worker,
+                shape_type,
+                "parser_for",
+                shape_type,
+            );
+            const scalar_call = if (constructor_call == null) blk: {
+                const method = generatedParserScalarMethodForRep(self.plan, shape_rep) orelse break :blk null;
+                break :blk proc.generatedCodecCallPlan(context.worker, context.encoding_type, method, shape_type);
+            } else null;
+            if (constructor_call != null or scalar_call != null) {
+                const parsed_rep = if (constructor_call) |call| blk: {
+                    const callable_rep = proc.repForTypeRef(call.ret_type);
+                    const callable_fn = proc.functionChildrenForRep(callable_rep) orelse
+                        boxyLowerInvariant("generated custom parser constructor did not return a callable");
+                    if (callable_fn.arg_count != 1) {
+                        boxyLowerInvariant("generated custom parser runtime had an unexpected arity");
+                    }
+                    break :blk callable_fn.ret;
+                } else proc.repForTypeRef(scalar_call.?.ret_type);
+                const parsed = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(parsed_rep);
+                const ok = proc.generatedParserTagVariant(parsed_rep, "Ok");
+                const err = proc.generatedParserTagVariant(parsed_rep, "Err");
+                const err_body = try proc.forwardGeneratedParserError(
+                    context.result,
+                    context.result_rep,
+                    parsed,
+                    err,
+                    context.next,
+                );
+                const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
+                var parsed_success = try proc.generatedParserReadRecordField(
+                    rest,
+                    context.state_rep,
+                    ok_payload.local,
+                    ok_payload.child,
+                    "rest",
+                    success,
+                );
+                parsed_success = try proc.generatedParserReadRecordField(
+                    value,
+                    shape_rep,
+                    ok_payload.local,
+                    ok_payload.child,
+                    "value",
+                    parsed_success,
+                );
+                parsed_success = try proc.generatedParserReadTagPayload(parsed, ok, ok_payload, parsed_success);
+                const variants = [_]GeneratedParserTagVariant{ ok, err };
+                const bodies = [_]LIR.CFStmtId{ parsed_success, err_body };
+                const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+                const dispatch = try proc.generatedParserTagDispatch(parsed, parsed_rep, &variants, &bodies, impossible);
+                if (constructor_call) |call| {
+                    const callable_rep = proc.repForTypeRef(call.ret_type);
+                    const callable = try proc.addFrameLocalForRep(callable_rep);
+                    var continuation = try proc.lowerErasedCallLocalsInto(
+                        parsed,
+                        parsed_rep,
+                        callable_rep,
+                        callable,
+                        &.{state},
+                        &.{context.state_rep},
+                        dispatch,
+                    );
+                    continuation = try self.lowerGeneratedCodecCallLocalsInto(
+                        proc,
+                        call,
+                        callable,
+                        &.{context.encoding},
+                        continuation,
+                    );
+                    return .{ .done = continuation };
+                }
+                return .{ .done = try self.lowerGeneratedCodecCallLocalsInto(
+                    proc,
+                    scalar_call.?,
+                    parsed,
+                    &.{ context.encoding, state },
+                    dispatch,
+                ) };
+            }
+
+            const shape_builtin = checkedBuiltinNominalForType(shape_module, shape_type.ty);
+            if (shape_builtin == .set) {
+                return try self.beginGeneratedSetParse(proc, frames, request);
+            }
+            if (shape_builtin == .dict) {
+                return try self.beginGeneratedDictParse(proc, frames, request);
+            }
+
+            if (proc.recordRepForBoundary(shape_rep) != null or
+                self.plan.representations.items[@intFromEnum(shape_rep)].kind == .empty_record)
+            {
+                const field_names_source: GeneratedParserFieldNamesSource = if (context.tag_union_spec) |spec|
+                    .{ .tag_union_spec = .{
+                        .spec = spec,
+                        .plan = context.tag_union_plan orelse
+                            boxyLowerInvariant("generated tag payload record had no explicit evidence plan"),
+                    } }
+                else
+                    .captures;
+                return try self.beginGeneratedRecordParse(
+                    proc,
+                    frames,
+                    context,
+                    shape_type,
+                    shape_rep,
+                    state,
+                    value,
+                    rest,
+                    success,
+                    field_names_source,
+                );
+            }
+
+            if (proc.tupleRepForBoundary(shape_rep) != null) {
+                return try self.beginGeneratedTupleParse(proc, frames, request);
+            }
+            if (proc.listRepForBoundary(shape_rep) != null) {
+                return try self.beginGeneratedListParse(proc, frames, context, shape_type, shape_rep, null, state, value, rest, success);
+            }
+            if (proc.tagVariantRepForBoundary(shape_rep) != null) {
+                return .{ .done = try self.lowerGeneratedTagUnionFromState(
+                    proc,
+                    context,
+                    shape_type,
+                    shape_rep,
+                    state,
+                    value,
+                    rest,
+                    success,
+                ) };
+            }
+            boxyLowerInvariant("generated parser nested shape body is not implemented");
+        }
+    }
+
+    fn stepParseShapeFrame(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        delivered: ?LIR.CFStmtId,
+    ) Allocator.Error!ParseShapeStep {
+        // A dictionary frame pushes at most one entry frame per step, so the
+        // top frame stays in place.
+        try frames.ensureUnusedCapacity(self.allocator, 1);
+        const frame = &frames.items[frames.items.len - 1];
+        const child: ?LIR.CFStmtId = if (frame.awaiting)
+            delivered orelse boxyLowerInvariant("generated parser frame resumed without its nested parser")
+        else if (delivered != null)
+            boxyLowerInvariant("generated parser frame received a parser it did not request")
+        else
+            null;
+        frame.awaiting = false;
+        switch (frame.state) {
+            .try_shape => |*state| {
+                const child_body = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = state.ok };
+                };
+                const variants = [_]GeneratedParserTagVariant{ state.null_ok, state.null_err };
+                const bodies = [_]LIR.CFStmtId{ state.null_body, child_body };
+                const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+                const dispatch = try proc.generatedParserTagDispatch(state.parsed, state.parsed_rep, &variants, &bodies, impossible);
+                const stmt = try self.lowerGeneratedCodecCallLocalsInto(
+                    proc,
+                    state.call,
+                    state.parsed,
+                    &.{ state.context.encoding, state.state },
+                    dispatch,
+                );
+                return self.finishParseShapeFrame(frames, stmt);
+            },
+            .tuple => |*state| {
+                const context = state.request.context;
+                if (child) |parsed| {
+                    const index = state.remaining;
+                    const boundary = if (index == 0) state.start else state.separators[index];
+                    var continuation = try proc.assignRepresentationBoundary(state.item_state, boundary.ok_payload.local, context.state_rep, boundary.ok_payload.child.rep, parsed);
+                    if (index != 0) {
+                        const item_index = try proc.addFrameLocal(.u64);
+                        continuation = try self.finishGeneratedParserTryCall(
+                            proc,
+                            state.separators[index],
+                            &.{ context.encoding, state.parsed_rests[index - 1], item_index, state.len },
+                            context.result,
+                            context.result_rep,
+                            context.next,
+                            continuation,
+                        );
+                        continuation = try proc.assignIntLiteral(item_index, @intCast(index), continuation);
+                    }
+                    state.current = continuation;
+                }
+                if (state.remaining > 0) {
+                    state.remaining -= 1;
+                    const index = state.remaining;
+                    state.item_state = try proc.addFrameLocalForRep(context.state_rep);
+                    frame.awaiting = true;
+                    return .{ .request = .{
+                        .context = context,
+                        .shape_type = state.items[index].source_type,
+                        .shape_rep = state.items[index].rep,
+                        .state = state.item_state,
+                        .value = state.items[index].value,
+                        .rest = state.parsed_rests[index],
+                        .success = state.current,
+                    } };
+                }
+                var continuation = try self.finishGeneratedParserTryCall(
+                    proc,
+                    state.start,
+                    &.{ context.encoding, state.request.state, state.len },
+                    context.result,
+                    context.result_rep,
+                    context.next,
+                    state.current,
+                );
+                continuation = try proc.assignIntLiteral(state.len, @intCast(state.items.len), continuation);
+                return self.finishParseShapeFrame(frames, continuation);
+            },
+            .list => |*state| switch (state.phase) {
+                .counted => {
+                    const element = child orelse {
+                        frame.awaiting = true;
+                        return .{ .request = state.counted_element };
+                    };
+                    const loop = state.loop;
+                    const context = state.context;
+                    const remaining_is_zero = try proc.addFrameLocal(.bool);
+                    const zero = try proc.addFrameLocal(.u64);
+                    var counted_step = try proc.boolSwitchNoContinuation(remaining_is_zero, state.counted_done, element);
+                    counted_step = try proc.assignBinaryLowLevel(remaining_is_zero, .num_is_eq, loop.remaining, zero, counted_step);
+                    state.counted_step = try proc.assignIntLiteral(zero, 0, counted_step);
+
+                    // One step of an uncounted list: `parse_list_next` reports
+                    // whether an item follows.
+                    const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_next", loop.subject_type);
+                    const step_rep = proc.repForTypeRef(call.ret_type);
+                    const step = try proc.addFrameLocalForRep(step_rep);
+                    const ok = proc.generatedParserTagVariant(step_rep, "Ok");
+                    const err = proc.generatedParserTagVariant(step_rep, "Err");
+                    const err_body = try proc.forwardGeneratedParserError(
+                        context.result,
+                        context.result_rep,
+                        step,
+                        err,
+                        context.next,
+                    );
+                    const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
+                    const event_element = proc.generatedParserTagVariant(ok_payload.child.rep, "Item");
+                    const event_done = proc.generatedParserTagVariant(ok_payload.child.rep, "Done");
+                    const element_payload = try proc.generatedParserSingleTagPayloadLocal(event_element);
+                    const elem_value = try proc.addGeneratedParserOutputLocalForRep(loop.elem.rep);
+                    const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+                    const after_element = try self.lowerGeneratedListAfterElement(
+                        proc,
+                        context,
+                        loop.subject_type,
+                        elem_value,
+                        loop.cursor,
+                        loop.acc,
+                        loop.value,
+                        loop.rest,
+                        loop.join_id,
+                        parsed_rest,
+                        loop.success,
+                    );
+                    state.uncounted = .{
+                        .call = call,
+                        .step_rep = step_rep,
+                        .step = step,
+                        .ok = ok,
+                        .err = err,
+                        .err_body = err_body,
+                        .ok_payload = ok_payload,
+                        .element = event_element,
+                        .done = event_done,
+                        .element_payload = element_payload,
+                    };
+                    state.phase = .uncounted;
+                    frame.awaiting = true;
+                    return .{ .request = .{
+                        .context = context,
+                        .shape_type = loop.elem.source_type,
+                        .shape_rep = loop.elem.rep,
+                        .state = element_payload.local,
+                        .value = elem_value,
+                        .rest = parsed_rest,
+                        .success = after_element,
+                    } };
+                },
+                .uncounted => {
+                    const parsed_element = child orelse boxyLowerInvariant("generated list parser uncounted step ran before its element");
+                    const loop = state.loop;
+                    const context = state.context;
+                    const uncounted = state.uncounted;
+                    const event = uncounted.ok_payload.local;
+                    const element_body = try proc.generatedParserReadTagPayload(event, uncounted.element, uncounted.element_payload, parsed_element);
+                    const done_body = try self.lowerGeneratedListDone(
+                        proc,
+                        context,
+                        loop.shape_rep,
+                        loop.acc,
+                        loop.value,
+                        loop.rest,
+                        event,
+                        uncounted.done,
+                        loop.success,
+                    );
+                    const event_variants = [_]GeneratedParserTagVariant{ uncounted.element, uncounted.done };
+                    const event_bodies = [_]LIR.CFStmtId{ element_body, done_body };
+                    const event_impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+                    var ok_body = try proc.generatedParserTagDispatch(event, uncounted.ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
+                    ok_body = try proc.generatedParserReadTagPayload(uncounted.step, uncounted.ok, uncounted.ok_payload, ok_body);
+                    const variants = [_]GeneratedParserTagVariant{ uncounted.ok, uncounted.err };
+                    const bodies = [_]LIR.CFStmtId{ ok_body, uncounted.err_body };
+                    const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+                    const dispatch = try proc.generatedParserTagDispatch(uncounted.step, uncounted.step_rep, &variants, &bodies, impossible);
+                    const uncounted_step = try self.lowerGeneratedCodecCallLocalsInto(proc, uncounted.call, uncounted.step, &.{ context.encoding, loop.cursor }, dispatch);
+                    return self.finishParseShapeFrame(frames, try self.finishGeneratedListParse(proc, state, uncounted_step));
+                },
+            },
+            .dict => |*state| switch (state.phase) {
+                .counted => {
+                    const entry = child orelse {
+                        frame.awaiting = true;
+                        return try self.beginGeneratedDictEntryParse(proc, frames, state.context, state.loop, state.loop.cursor, .counted);
+                    };
+                    const loop = state.loop;
+                    const context = state.context;
+                    const remaining_is_zero = try proc.addFrameLocal(.bool);
+                    const zero = try proc.addFrameLocal(.u64);
+                    var counted_step = try proc.boolSwitchNoContinuation(remaining_is_zero, state.counted_done, entry);
+                    counted_step = try proc.assignBinaryLowLevel(remaining_is_zero, .num_is_eq, loop.remaining, zero, counted_step);
+                    state.counted_step = try proc.assignIntLiteral(zero, 0, counted_step);
+
+                    // One step of an uncounted dictionary: `parse_dict_next`
+                    // reports whether an entry follows.
+                    const next = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_next", loop.subject_type));
+                    const event = next.ok_payload;
+                    const entry_variant = proc.generatedParserTagVariant(event.child.rep, "Entry");
+                    const done_variant = proc.generatedParserTagVariant(event.child.rep, "Done");
+                    const entry_payload = try proc.generatedParserSingleTagPayloadLocal(entry_variant);
+                    const done_payload = try proc.generatedParserSingleTagPayloadLocal(done_variant);
+                    const entry_state = try proc.addFrameLocalForRep(context.state_rep);
+                    state.uncounted = .{
+                        .next = next,
+                        .entry_variant = entry_variant,
+                        .done_variant = done_variant,
+                        .entry_payload = entry_payload,
+                        .done_payload = done_payload,
+                        .entry_state = entry_state,
+                    };
+                    state.phase = .uncounted;
+                    frame.awaiting = true;
+                    return try self.beginGeneratedDictEntryParse(proc, frames, context, loop, entry_state, .uncounted);
+                },
+                .uncounted => {
+                    const entry = child orelse boxyLowerInvariant("generated dictionary parser uncounted step ran before its entry");
+                    const loop = state.loop;
+                    const context = state.context;
+                    const uncounted = state.uncounted;
+                    const event = uncounted.next.ok_payload;
+                    const entry_at_rep = try proc.assignRepresentationBoundary(uncounted.entry_state, uncounted.entry_payload.local, context.state_rep, uncounted.entry_payload.child.rep, entry);
+                    const variants = [_]GeneratedParserTagVariant{ uncounted.entry_variant, uncounted.done_variant };
+                    const bodies = [_]LIR.CFStmtId{
+                        try proc.generatedParserReadTagPayload(
+                            event.local,
+                            uncounted.entry_variant,
+                            uncounted.entry_payload,
+                            entry_at_rep,
+                        ),
+                        try proc.generatedParserReadTagPayload(
+                            event.local,
+                            uncounted.done_variant,
+                            uncounted.done_payload,
+                            try self.lowerGeneratedDictDone(proc, context, loop, loop.acc, uncounted.done_payload.local, uncounted.done_payload.child.rep),
+                        ),
+                    };
+                    const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+                    const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
+                    const uncounted_step = try self.finishGeneratedParserTryCall(
+                        proc,
+                        uncounted.next,
+                        &.{ context.encoding, loop.cursor },
+                        context.result,
+                        context.result_rep,
+                        context.next,
+                        ok_body,
+                    );
+                    return self.finishParseShapeFrame(frames, try self.finishGeneratedDictParse(proc, state, uncounted_step));
+                },
+            },
+            .dict_entry => |*state| switch (state.phase) {
+                .value => {
+                    const parsed_value = child orelse {
+                        frame.awaiting = true;
+                        return .{ .request = state.value };
+                    };
+                    const loop = state.loop;
+                    const context = state.context;
+                    const separator = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_after_key", loop.subject_type));
+                    var continuation = try proc.assignRepresentationBoundary(state.value.state, separator.ok_payload.local, context.state_rep, separator.ok_payload.child.rep, parsed_value);
+                    continuation = try self.finishGeneratedParserTryCall(
+                        proc,
+                        separator,
+                        &.{ context.encoding, state.after_key },
+                        context.result,
+                        context.result_rep,
+                        context.next,
+                        continuation,
+                    );
+                    // Read one key at the entry state into `key`, leaving the
+                    // state after it in `after_key`, by the strategy the
+                    // planner recorded for this key type.
+                    const field_selection = self.plan.generatedParserDictionaryFieldSelection(context.worker, loop.key_type) orelse
+                        boxyLowerInvariant("generated dictionary key parser had no checked strategy");
+                    switch (field_selection.strategy) {
+                        .method => |method| {
+                            const call = proc.generatedCodecCallPlanByIdentity(context.worker, context.encoding_type, loop.key_type, method.module, method.name);
+                            return self.finishParseShapeFrame(frames, try self.lowerGeneratedDictKeyString(proc, context, call, state.entry_state, state.key, loop.key_rep, state.after_key, continuation));
+                        },
+                        .unit_tags => |key_str_subject| {
+                            const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_key_str", key_str_subject);
+                            const key_str = try proc.addFrameLocal(.str);
+                            const matched = try self.lowerGeneratedDictUnitTagKey(proc, context, loop.key_rep, key_str, state.key, state.after_key, continuation);
+                            return self.finishParseShapeFrame(frames, try self.lowerGeneratedDictKeyString(proc, context, call, state.entry_state, key_str, proc.repForTypeRef(key_str_subject), state.after_key, matched));
+                        },
+                        .key_start => {
+                            state.key_start = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_key_start", loop.key_type));
+                            state.key_state = try proc.addFrameLocalForRep(context.state_rep);
+                            state.phase = .key;
+                            frame.awaiting = true;
+                            return .{ .request = .{
+                                .context = context,
+                                .shape_type = loop.key_type,
+                                .shape_rep = loop.key_rep,
+                                .state = state.key_state,
+                                .value = state.key,
+                                .rest = state.after_key,
+                                .success = continuation,
+                            } };
+                        },
+                    }
+                },
+                .key => {
+                    const parsed_key = child orelse boxyLowerInvariant("generated dictionary key parser ran before its key");
+                    const context = state.context;
+                    const continuation = try proc.assignRepresentationBoundary(state.key_state, state.key_start.ok_payload.local, context.state_rep, state.key_start.ok_payload.child.rep, parsed_key);
+                    const stmt = try self.finishGeneratedParserTryCall(
+                        proc,
+                        state.key_start,
+                        &.{ context.encoding, state.entry_state },
+                        context.result,
+                        context.result_rep,
+                        context.next,
+                        continuation,
+                    );
+                    return self.finishParseShapeFrame(frames, stmt);
+                },
+            },
+            .record => |*state| {
+                const fields = state.context.fields;
+                switch (state.phase) {
+                    .direct => {
+                        if (child) |matched| {
+                            state.direct.branches[state.field_cursor].body = matched;
+                            state.field_cursor += 1;
+                        }
+                        if (state.field_cursor < fields.len) {
+                            state.direct.branches[state.field_cursor].value = fields[state.field_cursor].index;
+                            frame.awaiting = true;
+                            return .{ .request = try self.beginGeneratedMatchedRecordField(proc, &state.context, state.field_cursor, state.direct.rest) };
+                        }
+                        state.bodies[2] = try self.finishGeneratedRecordDirectFieldEvent(proc, state);
+                        try self.beginGeneratedRecordNamedFieldEvent(proc, state, .try_field);
+                    },
+                    .try_field, .caseless => if (child) |matched| {
+                        const compare_op: LIR.LowLevel = switch (state.phase) {
+                            .try_field => .str_is_eq,
+                            .caseless => .str_caseless_ascii_equals,
+                            .direct => boxyLowerInvariant("generated record named field phase was direct"),
+                        };
+                        const switch_stmt = try proc.boolSwitchNoContinuation(state.named.matches, matched, state.named.dispatch);
+                        state.named.dispatch = try proc.assignBinaryLowLevel(state.named.matches, compare_op, state.named.name, fields[state.field_cursor].renamed, switch_stmt);
+                    },
+                }
+                while (true) {
+                    if (state.field_cursor > 0) {
+                        state.field_cursor -= 1;
+                        state.named.matches = try proc.addFrameLocal(.bool);
+                        frame.awaiting = true;
+                        return .{ .request = try self.beginGeneratedMatchedRecordField(proc, &state.context, state.field_cursor, state.named.rest) };
+                    }
+                    switch (state.phase) {
+                        .direct => boxyLowerInvariant("generated record parser named fields began in the direct phase"),
+                        .try_field => {
+                            state.bodies[3] = try self.finishGeneratedRecordNamedFieldEvent(proc, state);
+                            try self.beginGeneratedRecordNamedFieldEvent(proc, state, .caseless);
+                        },
+                        .caseless => {
+                            state.bodies[4] = try self.finishGeneratedRecordNamedFieldEvent(proc, state);
+                            return self.finishParseShapeFrame(frames, try self.finishGeneratedRecordParse(proc, state));
+                        },
+                    }
+                }
+            },
+        }
+    }
+
+    fn beginGeneratedTryParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        request: ParseShapeRequest,
+        try_plan: Plan.GeneratedParserTryPlan,
+    ) Allocator.Error!ParseShapeStep {
+        const context = request.context;
+        const shape_rep = request.shape_rep;
+        const value = request.value;
+        const rest = request.rest;
+        const success = request.success;
         if (!try_plan.null) {
             boxyLowerInvariant("generated parser Try plan did not include Null handling");
         }
@@ -10541,26 +11142,800 @@ const ProcedureBuilder = struct {
             ok_rep,
             success,
         );
-        const child_body = try self.lowerGeneratedParseShapeFromState(
+        return try self.pushParseShapeFrame(frames, .{ .state = .{ .try_shape = .{
+            .context = context,
+            .call = call,
+            .state = request.state,
+            .parsed = parsed,
+            .parsed_rep = parsed_rep,
+            .null_ok = null_ok,
+            .null_err = null_err,
+            .null_body = null_body,
+            .ok = .{
+                .context = context,
+                .shape_type = try_plan.ok_type,
+                .shape_rep = ok_rep,
+                .state = request.state,
+                .value = ok_value,
+                .rest = rest,
+                .success = child_success,
+            },
+        } } });
+    }
+
+    /// A tuple's arity is static: `parse_tuple_start` opens it, every element
+    /// after the first is preceded by `parse_tuple_next`, and
+    /// `parse_tuple_end` closes it. Each call is told the element count.
+    fn beginGeneratedTupleParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        request: ParseShapeRequest,
+    ) Allocator.Error!ParseShapeStep {
+        const context = request.context;
+        const shape_type = request.shape_type;
+        const shape_rep = request.shape_rep;
+        var frame: ParseShapeFrame = .{ .state = .{ .tuple = .{
+            .request = request,
+            .items = &.{},
+            .parsed_rests = &.{},
+            .separators = &.{},
+            .start = undefined,
+            .len = undefined,
+            .remaining = 0,
+            .current = undefined,
+        } } };
+        errdefer self.releaseParseShapeFrame(&frame);
+        const state = &frame.state.tuple;
+        state.items = try self.generatedParserTupleItems(proc, shape_rep);
+        const items = state.items;
+        for (items) |*item| item.value = try proc.addGeneratedParserOutputLocalForRep(item.rep);
+        state.parsed_rests = try self.allocator.alloc(LIR.LocalId, items.len);
+        for (state.parsed_rests) |*local| local.* = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+
+        state.len = try proc.addFrameLocal(.u64);
+        state.start = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_start", shape_type));
+        const end = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_end", shape_type));
+        const next_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_next", shape_type);
+        // `separators[i]` precedes element `i`; element 0 has none.
+        state.separators = try self.allocator.alloc(GeneratedParserTryCall, items.len);
+        for (state.separators[@min(1, items.len)..]) |*separator| separator.* = try beginGeneratedParserTryCall(proc, next_call);
+
+        var continuation = try self.lowerGeneratedTupleFinish(proc, shape_rep, request.value, items, request.success);
+        continuation = try proc.assignRepresentationBoundary(request.rest, end.ok_payload.local, context.state_rep, end.ok_payload.child.rep, continuation);
+        state.current = try self.finishGeneratedParserTryCall(
             proc,
-            context,
-            try_plan.ok_type,
-            ok_rep,
-            state,
-            ok_value,
-            rest,
-            child_success,
+            end,
+            &.{ context.encoding, if (items.len == 0) state.start.ok_payload.local else state.parsed_rests[items.len - 1], state.len },
+            context.result,
+            context.result_rep,
+            context.next,
+            continuation,
         );
-        const variants = [_]GeneratedParserTagVariant{ null_ok, null_err };
-        const bodies = [_]LIR.CFStmtId{ null_body, child_body };
+        state.remaining = items.len;
+        try frames.append(self.allocator, frame);
+        return .pushed;
+    }
+
+    fn beginGeneratedListParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        context: GeneratedParserShapeContext,
+        subject_type: Plan.CheckedTypeIdentity,
+        shape_rep: Plan.TypeRepId,
+        explicit_elem: ?Plan.RepChild,
+        state: LIR.LocalId,
+        value: LIR.LocalId,
+        rest: LIR.LocalId,
+        success: LIR.CFStmtId,
+    ) Allocator.Error!ParseShapeStep {
+        const list_rep = proc.listRepForBoundary(shape_rep) orelse
+            boxyLowerInvariant("generated list parser shape had no list representation");
+        const elem = explicit_elem orelse proc.repQuery().requiredSingleChild(list_rep, .list_elem);
+        const elem_layout = proc.workerRuntimeLayoutForRep(elem.rep).layoutIdx();
+        if (elem_layout != proc.localListElemLayout(value)) {
+            boxyLowerInvariant("generated list parser element worker and storage layouts disagreed");
+        }
+
+        const list_layout = self.result.store.getLocal(value).layout_idx;
+        const acc = try proc.addFrameLocal(list_layout);
+        const target_desc = try proc.stableDescriptorForConstructedValue(value, shape_rep);
+        if (target_desc.desc) |desc| {
+            self.result.store.setLocalBoxyDesc(value, desc);
+            self.result.store.setLocalBoxyDesc(acc, desc);
+        }
+        const loop = GeneratedListLoop{
+            .subject_type = subject_type,
+            .shape_rep = shape_rep,
+            .state_rep = context.state_rep,
+            .elem = elem,
+            .cursor = try proc.addGeneratedParserOutputLocalForRep(context.state_rep),
+            .acc = acc,
+            .counted = try proc.addFrameLocal(.bool),
+            .remaining = try proc.addFrameLocal(.u64),
+            .value = value,
+            .rest = rest,
+            .join_id = proc.freshJoinPointId(),
+            .success = success,
+        };
+
+        // One step of a counted list: finish once no elements remain,
+        // otherwise parse the next element directly at the cursor.
+        var done = try proc.assignRepresentationBoundary(loop.rest, loop.cursor, context.state_rep, context.state_rep, loop.success);
+        done = try proc.assignRepresentationBoundary(loop.value, loop.acc, loop.shape_rep, loop.shape_rep, done);
+
+        const elem_value = try proc.addGeneratedParserOutputLocalForRep(loop.elem.rep);
+        const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        const next_acc = try proc.addFrameLocal(self.result.store.getLocal(loop.acc).layout_idx);
+        if (self.result.store.getLocal(loop.acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
+        const one = try proc.addFrameLocal(.u64);
+        const next_remaining = try proc.addFrameLocal(.u64);
+        var element = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
+        element = try proc.setLocalInitializeJoinParam(loop.remaining, next_remaining, element);
+        element = try proc.setLocalInitializeJoinParam(loop.acc, next_acc, element);
+        element = try proc.setLocalInitializeJoinParamFromRep(loop.cursor, parsed_rest, context.state_rep, element);
+        element = try proc.assignBinaryLowLevel(next_remaining, .num_int_sub_wrap, loop.remaining, one, element);
+        element = try proc.assignIntLiteral(one, 1, element);
+        element = try proc.assignListAppendGrowingMovingElement(next_acc, loop.acc, elem_value, element);
+        return try self.pushParseShapeFrame(frames, .{ .state = .{ .list = .{
+            .context = context,
+            .subject_type = subject_type,
+            .state = state,
+            .target_desc = target_desc,
+            .loop = loop,
+            .phase = .counted,
+            .counted_element = .{
+                .context = context,
+                .shape_type = loop.elem.source_type,
+                .shape_rep = loop.elem.rep,
+                .state = loop.cursor,
+                .value = elem_value,
+                .rest = parsed_rest,
+                .success = element,
+            },
+            .counted_done = done,
+        } } });
+    }
+
+    /// Finish the list parser once both loop steps are built.
+    fn finishGeneratedListParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: *const GeneratedListParseState,
+        uncounted_step: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const context = state.context;
+        const loop = state.loop;
+        const target_desc = state.target_desc;
+        const loop_body = try proc.boolSwitchNoContinuation(loop.counted, state.counted_step, uncounted_step);
+
+        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_start", state.subject_type);
+        const start = try beginGeneratedParserTryCall(proc, start_call);
+        const event = start.ok_payload;
+        const counted_variant = proc.generatedParserTagVariant(event.child.rep, "Counted");
+        const uncounted_variant = proc.generatedParserTagVariant(event.child.rep, "Uncounted");
+
+        const counted_payload = try proc.generatedParserSingleTagPayloadLocal(counted_variant);
+        const counted_len = try proc.addFrameLocal(.u64);
+        const counted_rest = try proc.addFrameLocalForRep(context.state_rep);
+        var counted_body = try self.lowerGeneratedListStartJump(proc, loop, target_desc.desc, counted_rest, context.state_rep, true, counted_len);
+        counted_body = try proc.generatedParserReadRecordField(counted_rest, context.state_rep, counted_payload.local, counted_payload.child, "rest", counted_body);
+        counted_body = try proc.generatedParserReadRecordField(counted_len, proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_payload.child.source_type, "len")), counted_payload.local, counted_payload.child, "len", counted_body);
+        counted_body = try proc.generatedParserReadTagPayload(event.local, counted_variant, counted_payload, counted_body);
+
+        const uncounted_payload = try proc.generatedParserSingleTagPayloadLocal(uncounted_variant);
+        const zero = try proc.addFrameLocal(.u64);
+        var uncounted_body = try self.lowerGeneratedListStartJump(proc, loop, target_desc.desc, uncounted_payload.local, uncounted_payload.child.rep, false, zero);
+        uncounted_body = try proc.assignIntLiteral(zero, 0, uncounted_body);
+        uncounted_body = try proc.generatedParserReadTagPayload(event.local, uncounted_variant, uncounted_payload, uncounted_body);
+
+        const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
+        const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
         const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const dispatch = try proc.generatedParserTagDispatch(parsed, parsed_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(
+        const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
+        var initial = try self.finishGeneratedParserTryCall(
             proc,
-            call,
-            parsed,
-            &.{ context.encoding, state },
+            start,
+            &.{ context.encoding, state.state },
+            context.result,
+            context.result_rep,
+            context.next,
+            ok_body,
+        );
+        initial = try proc.prependOptionalDescriptorMaterialization(target_desc.materialize, initial);
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = loop.join_id,
+            .params = try proc.joinParamSpan(&.{ loop.cursor, loop.acc, loop.counted, loop.remaining }),
+            .body = loop_body,
+            .remainder = initial,
+        } }, proc.derivedOrigin());
+    }
+
+    fn beginGeneratedSetParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        request: ParseShapeRequest,
+    ) Allocator.Error!ParseShapeStep {
+        const context = request.context;
+        const shape_type = request.shape_type;
+        const call = proc.generatedCodecCallPlan(context.worker, shape_type, "from_list", shape_type);
+        const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
+        if (arg_types.len != 1) boxyLowerInvariant("generated Set.from_list call had unexpected arity");
+        const list_rep = proc.repForTypeRef(arg_types[0]);
+        if (proc.listRepForBoundary(list_rep) == null) {
+            boxyLowerInvariant("generated Set.from_list call did not accept a List");
+        }
+        const list = try proc.addFrameLocalForRep(list_rep);
+        const convert = try self.lowerGeneratedCodecCallLocalsInto(proc, call, request.value, &.{list}, request.success);
+        const shape_module = procedureModuleById(self.modules, shape_type.module);
+        const nominal = resolvedNominalPayload(shape_module, shape_type.ty);
+        if (nominal.builtin != .set or nominal.args.len != 1) {
+            boxyLowerInvariant("generated Set parser shape did not have one public element type");
+        }
+        var public_elem = proc.repQuery().requiredSingleChild(proc.listRepForBoundary(list_rep).?, .list_elem);
+        public_elem.source_type = .{ .module = shape_type.module, .ty = nominal.args[0] };
+        public_elem.rep = proc.repForTypeRef(public_elem.source_type);
+        return try self.beginGeneratedListParse(
+            proc,
+            frames,
+            context,
+            shape_type,
+            list_rep,
+            public_elem,
+            request.state,
+            list,
+            request.rest,
+            convert,
+        );
+    }
+
+    fn beginGeneratedDictParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        request: ParseShapeRequest,
+    ) Allocator.Error!ParseShapeStep {
+        const context = request.context;
+        const shape_type = request.shape_type;
+        const shape_rep = request.shape_rep;
+        const insert_call = proc.generatedCodecCallPlan(context.worker, shape_type, "insert", shape_type);
+        const insert_arg_types = self.plan.generatedCodecCallTypeSlice(insert_call.arg_types);
+        if (insert_arg_types.len != 3 or !planTypeRefEql(insert_arg_types[0], shape_type)) {
+            boxyLowerInvariant("generated Dict.insert call had unexpected arguments");
+        }
+        const shape_module = procedureModuleById(self.modules, shape_type.module);
+        const nominal = resolvedNominalPayload(shape_module, shape_type.ty);
+        if (nominal.builtin != .dict or nominal.args.len != 2) {
+            boxyLowerInvariant("generated Dict parser shape did not have public key and value types");
+        }
+        const key_type = Plan.CheckedTypeIdentity{ .module = shape_type.module, .ty = nominal.args[0] };
+        const value_type = Plan.CheckedTypeIdentity{ .module = shape_type.module, .ty = nominal.args[1] };
+        const loop = GeneratedDictLoop{
+            .subject_type = shape_type,
+            .shape_rep = shape_rep,
+            .key_type = key_type,
+            .key_rep = proc.repForTypeRef(key_type),
+            .value_type = value_type,
+            .value_rep = proc.repForTypeRef(value_type),
+            .insert_call = insert_call,
+            .cursor = try proc.addGeneratedParserOutputLocalForRep(context.state_rep),
+            .acc = try proc.addFrameLocalForRep(shape_rep),
+            .counted = try proc.addFrameLocal(.bool),
+            .remaining = try proc.addFrameLocal(.u64),
+            .value = request.value,
+            .rest = request.rest,
+            .join_id = proc.freshJoinPointId(),
+            .success = request.success,
+        };
+
+        // One step of a counted dictionary: finish once no entries remain,
+        // otherwise parse the next entry directly at the cursor.
+        const done = try self.lowerGeneratedDictDone(proc, context, loop, loop.acc, loop.cursor, context.state_rep);
+        return try self.pushParseShapeFrame(frames, .{ .state = .{ .dict = .{
+            .context = context,
+            .state = request.state,
+            .shape_type = shape_type,
+            .loop = loop,
+            .phase = .counted,
+            .counted_done = done,
+        } } });
+    }
+
+    /// Finish the dictionary parser once both loop steps are built.
+    fn finishGeneratedDictParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: *const GeneratedDictParseState,
+        uncounted_step: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const context = state.context;
+        const loop = state.loop;
+        const loop_body = try proc.boolSwitchNoContinuation(loop.counted, state.counted_step, uncounted_step);
+
+        const start = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_start", state.shape_type));
+        const event = start.ok_payload;
+        const counted_variant = proc.generatedParserTagVariant(event.child.rep, "Counted");
+        const uncounted_variant = proc.generatedParserTagVariant(event.child.rep, "Uncounted");
+
+        const counted_payload = try proc.generatedParserSingleTagPayloadLocal(counted_variant);
+        const counted_len = try proc.addFrameLocal(.u64);
+        const counted_rest = try proc.addFrameLocalForRep(context.state_rep);
+        var counted_body = try self.lowerGeneratedDictStartJump(proc, context, loop, counted_rest, context.state_rep, true, counted_len);
+        counted_body = try proc.generatedParserReadRecordField(counted_rest, context.state_rep, counted_payload.local, counted_payload.child, "rest", counted_body);
+        counted_body = try proc.generatedParserReadRecordField(counted_len, proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_payload.child.source_type, "len")), counted_payload.local, counted_payload.child, "len", counted_body);
+        counted_body = try proc.generatedParserReadTagPayload(event.local, counted_variant, counted_payload, counted_body);
+
+        const uncounted_payload = try proc.generatedParserSingleTagPayloadLocal(uncounted_variant);
+        const zero = try proc.addFrameLocal(.u64);
+        var uncounted_body = try self.lowerGeneratedDictStartJump(proc, context, loop, uncounted_payload.local, uncounted_payload.child.rep, false, zero);
+        uncounted_body = try proc.assignIntLiteral(zero, 0, uncounted_body);
+        uncounted_body = try proc.generatedParserReadTagPayload(event.local, uncounted_variant, uncounted_payload, uncounted_body);
+
+        const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
+        const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+        const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
+        const initial = try self.finishGeneratedParserTryCall(
+            proc,
+            start,
+            &.{ context.encoding, state.state },
+            context.result,
+            context.result_rep,
+            context.next,
+            ok_body,
+        );
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = loop.join_id,
+            .params = try proc.joinParamSpan(&.{ loop.cursor, loop.acc, loop.counted, loop.remaining }),
+            .body = loop_body,
+            .remainder = initial,
+        } }, proc.derivedOrigin());
+    }
+
+    const GeneratedDictEntryEnd = enum { counted, uncounted };
+
+    /// One entry: key, `parse_dict_after_key`, value, insert, then the entry
+    /// end (counting down, or asking `parse_dict_after_entry`).
+    fn beginGeneratedDictEntryParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        context: GeneratedParserShapeContext,
+        loop: GeneratedDictLoop,
+        entry_state: LIR.LocalId,
+        end: GeneratedDictEntryEnd,
+    ) Allocator.Error!ParseShapeStep {
+        const key = try proc.addGeneratedParserOutputLocalForRep(loop.key_rep);
+        const after_key = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        const value_state = try proc.addFrameLocalForRep(context.state_rep);
+        const parsed_value = try proc.addGeneratedParserOutputLocalForRep(loop.value_rep);
+        const after_value = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        const next_acc = try proc.addFrameLocalForRep(loop.shape_rep);
+
+        var continuation = switch (end) {
+            .counted => blk: {
+                const one = try proc.addFrameLocal(.u64);
+                const next_remaining = try proc.addFrameLocal(.u64);
+                var counted = try self.lowerGeneratedDictLoopJump(proc, loop, next_acc, after_value, context.state_rep);
+                counted = try proc.setLocalInitializeJoinParam(loop.remaining, next_remaining, counted);
+                counted = try proc.assignBinaryLowLevel(next_remaining, .num_int_sub_wrap, loop.remaining, one, counted);
+                break :blk try proc.assignIntLiteral(one, 1, counted);
+            },
+            .uncounted => blk: {
+                const after = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_after_entry", loop.subject_type));
+                const event = after.ok_payload;
+                const continue_variant = proc.generatedParserTagVariant(event.child.rep, "Continue");
+                const done_variant = proc.generatedParserTagVariant(event.child.rep, "Done");
+                const continue_payload = try proc.generatedParserSingleTagPayloadLocal(continue_variant);
+                const done_payload = try proc.generatedParserSingleTagPayloadLocal(done_variant);
+                const variants = [_]GeneratedParserTagVariant{ continue_variant, done_variant };
+                const bodies = [_]LIR.CFStmtId{
+                    try proc.generatedParserReadTagPayload(
+                        event.local,
+                        continue_variant,
+                        continue_payload,
+                        try self.lowerGeneratedDictLoopJump(proc, loop, next_acc, continue_payload.local, continue_payload.child.rep),
+                    ),
+                    try proc.generatedParserReadTagPayload(
+                        event.local,
+                        done_variant,
+                        done_payload,
+                        try self.lowerGeneratedDictDone(proc, context, loop, next_acc, done_payload.local, done_payload.child.rep),
+                    ),
+                };
+                const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+                const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
+                break :blk try self.finishGeneratedParserTryCall(
+                    proc,
+                    after,
+                    &.{ context.encoding, after_value },
+                    context.result,
+                    context.result_rep,
+                    context.next,
+                    ok_body,
+                );
+            },
+        };
+        continuation = try self.lowerGeneratedCodecCallLocalsInto(proc, loop.insert_call, next_acc, &.{ loop.acc, key, parsed_value }, continuation);
+        return try self.pushParseShapeFrame(frames, .{ .state = .{ .dict_entry = .{
+            .context = context,
+            .loop = loop,
+            .entry_state = entry_state,
+            .key = key,
+            .after_key = after_key,
+            .phase = .value,
+            .value = .{
+                .context = context,
+                .shape_type = loop.value_type,
+                .shape_rep = loop.value_rep,
+                .state = value_state,
+                .value = parsed_value,
+                .rest = after_value,
+                .success = continuation,
+            },
+        } } });
+    }
+
+    fn beginGeneratedRecordParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        frames: *std.ArrayList(ParseShapeFrame),
+        shape_context: GeneratedParserShapeContext,
+        shape_type: Plan.CheckedTypeIdentity,
+        shape_rep: Plan.TypeRepId,
+        state: LIR.LocalId,
+        value: LIR.LocalId,
+        rest: LIR.LocalId,
+        success: LIR.CFStmtId,
+        field_names_source: GeneratedParserFieldNamesSource,
+    ) Allocator.Error!ParseShapeStep {
+        try proc.ensureGeneratedParserOutputDescriptorForRep(value, shape_rep);
+        try proc.ensureGeneratedParserOutputDescriptorForRep(rest, shape_context.state_rep);
+        const parse_call = proc.generatedCodecCallPlan(
+            shape_context.worker,
+            shape_context.encoding_type,
+            "parse_record_field",
+            shape_type,
+        );
+        const parse_arg_types = self.plan.generatedCodecCallTypeSlice(parse_call.arg_types);
+        if (parse_arg_types.len != 3 or !planTypeRefEql(parse_arg_types[2], shape_context.state_type)) {
+            boxyLowerInvariant("generated parse_record_field call disagreed with parser state metadata");
+        }
+
+        const cursor = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep);
+        const counted = try proc.addFrameLocal(.bool);
+        const remaining = try proc.addFrameLocal(.u64);
+        const entry_pending = try proc.addFrameLocal(.bool);
+        const evidence = try proc.addFrameLocalForRep(proc.repForTypeRef(parse_arg_types[1]));
+        var frame: ParseShapeFrame = .{ .state = .{ .record = .{
+            .shape_context = shape_context,
+            .state = state,
+            .field_names_source = field_names_source,
+            .parse_call = parse_call,
+            .context = .{
+                .worker = shape_context.worker,
+                .encoding_type = shape_context.encoding_type,
+                .encoding = shape_context.encoding,
+                .shape_type = shape_type,
+                .shape_rep = shape_rep,
+                .target = shape_context.result,
+                .target_rep = shape_context.result_rep,
+                .state_type = shape_context.state_type,
+                .state_rep = shape_context.state_rep,
+                .cursor = cursor,
+                .counted = counted,
+                .remaining = remaining,
+                .entry_pending = entry_pending,
+                .evidence = evidence,
+                .fields = &.{},
+                .presence = &.{},
+                .join_id = undefined,
+                .next = shape_context.next,
+                .value = value,
+                .rest = rest,
+                .success = success,
+            },
+            .step_join = undefined,
+            .step = undefined,
+            .variants = undefined,
+            .bodies = undefined,
+            .phase = .direct,
+            .direct = .{
+                .payload = undefined,
+                .field_handle = undefined,
+                .rest = undefined,
+                .index = undefined,
+                .branches = &.{},
+            },
+        } } };
+        errdefer self.releaseParseShapeFrame(&frame);
+        const record = &frame.state.record;
+        record.context.fields = try self.generatedParserRecordFields(
+            proc,
+            shape_context.worker,
+            shape_type,
+            shape_rep,
+            field_names_source,
+        );
+        const fields = record.context.fields;
+        const presence_count = (fields.len + 63) / 64;
+        record.context.presence = try self.allocator.alloc(LIR.LocalId, presence_count);
+        for (record.context.presence) |*local| local.* = try proc.addFrameLocal(.u64);
+        for (fields) |*field| field.payload = try proc.addGeneratedParserOutputLocalForRep(field.rep);
+        record.context.join_id = proc.freshJoinPointId();
+
+        // The loop head reads the next `parse_record_field` event.
+        record.step_join = proc.freshJoinPointId();
+        record.step = try beginGeneratedParserTryCall(proc, parse_call);
+        const event = record.step.ok_payload.local;
+        const event_child = record.step.ok_payload.child;
+        const continue_variant = proc.generatedParserTagVariant(event_child.rep, "Continue");
+        const done_variant = proc.generatedParserTagVariant(event_child.rep, "Done");
+        const field_variant = proc.generatedParserTagVariant(event_child.rep, "Field");
+        const try_field_variant = proc.generatedParserTagVariant(event_child.rep, "TryField");
+        const caseless_variant = proc.generatedParserTagVariant(event_child.rep, "TryFieldCaseless");
+        record.variants = .{
+            continue_variant,
+            done_variant,
+            field_variant,
+            try_field_variant,
+            caseless_variant,
+        };
+        record.bodies[0] = try self.lowerGeneratedRecordContinueEvent(proc, record.context, event, continue_variant);
+        record.bodies[1] = try self.lowerGeneratedRecordDoneEvent(proc, record.context, event, done_variant);
+
+        record.direct.payload = try proc.generatedParserSingleTagPayloadLocal(field_variant);
+        record.direct.field_handle = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
+        record.direct.rest = try proc.addFrameLocalForRep(record.context.state_rep);
+        record.direct.index = try proc.addFrameLocal(.u64);
+        record.direct.branches = try self.allocator.alloc(LIR.CFSwitchBranch, fields.len);
+        try frames.append(self.allocator, frame);
+        return .pushed;
+    }
+
+    fn finishGeneratedRecordDirectFieldEvent(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: *const GeneratedRecordParseState,
+    ) Allocator.Error!LIR.CFStmtId {
+        const direct = state.direct;
+        const context = state.context;
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+        const field_switch = try self.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = direct.index,
+            .branches = try self.result.store.addCFSwitchBranches(direct.branches),
+            .default_branch = impossible,
+            .continuation = null,
+        } }, proc.derivedOrigin());
+        var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = direct.index,
+            .op = .{ .field = .{ .source = direct.field_handle, .field_idx = 1 } },
+            .next = field_switch,
+        } }, proc.derivedOrigin());
+        continuation = try proc.generatedParserReadRecordField(
+            direct.rest,
+            context.state_rep,
+            direct.payload.local,
+            direct.payload.child,
+            "rest",
+            continuation,
+        );
+        continuation = try proc.generatedParserReadRecordField(
+            direct.field_handle,
+            proc.repForTypeRef(try proc.generatedParserRecordFieldType(direct.payload.child.source_type, "field")),
+            direct.payload.local,
+            direct.payload.child,
+            "field",
+            continuation,
+        );
+        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, state.variants[2], direct.payload, continuation);
+    }
+
+    /// Begin a `TryField` or `TryFieldCaseless` event: compare the name with
+    /// each field's name, last field first, skipping an unmatched entry.
+    fn beginGeneratedRecordNamedFieldEvent(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: *GeneratedRecordParseState,
+        phase: @FieldType(GeneratedRecordParseState, "phase"),
+    ) Allocator.Error!void {
+        const variant = switch (phase) {
+            .try_field => state.variants[3],
+            .caseless => state.variants[4],
+            .direct => boxyLowerInvariant("generated record named field event began in the direct phase"),
+        };
+        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
+        const name = try proc.addFrameLocal(.str);
+        const rest = try proc.addFrameLocalForRep(state.context.state_rep);
+        state.named = .{
+            .payload = payload,
+            .name = name,
+            .rest = rest,
+            .dispatch = try self.lowerGeneratedSkipRecordField(proc, state.context, rest),
+            .matches = undefined,
+        };
+        state.phase = phase;
+        state.field_cursor = state.context.fields.len;
+    }
+
+    fn finishGeneratedRecordNamedFieldEvent(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: *const GeneratedRecordParseState,
+    ) Allocator.Error!LIR.CFStmtId {
+        const named = state.named;
+        const variant = switch (state.phase) {
+            .try_field => state.variants[3],
+            .caseless => state.variants[4],
+            .direct => boxyLowerInvariant("generated record named field event finished in the direct phase"),
+        };
+        var dispatch = try proc.generatedParserReadRecordField(
+            named.rest,
+            state.context.state_rep,
+            named.payload.local,
+            named.payload.child,
+            "rest",
+            named.dispatch,
+        );
+        dispatch = try proc.generatedParserReadRecordField(
+            named.name,
+            proc.repForTypeRef(try proc.generatedParserRecordFieldType(named.payload.child.source_type, "name")),
+            named.payload.local,
+            named.payload.child,
+            "name",
             dispatch,
+        );
+        return try proc.generatedParserReadTagPayload(state.step.ok_payload.local, variant, named.payload, dispatch);
+    }
+
+    /// The parser for a matched record field's value, reserving the value
+    /// and building the loop update that follows it.
+    fn beginGeneratedMatchedRecordField(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: *const GeneratedParserRecordContext,
+        field_index: usize,
+        rest: LIR.LocalId,
+    ) Allocator.Error!ParseShapeRequest {
+        const field = context.fields[field_index];
+        const value = try proc.addGeneratedParserOutputLocalForRep(field.rep);
+        // A field stored in a wrapper (`Ok` of an optional `Try`, `#Present`
+        // of a presence slot) is parsed at the wrapped payload type.
+        const present_tag: ?[]const u8 = switch (field.kind) {
+            .missing_try => "Ok",
+            .optional_slot, .undetermined_slot => "#Present",
+            .required, .defaulted => null,
+        };
+        const parsed_value = if (present_tag != null)
+            try proc.addGeneratedParserOutputLocalForRep(field.parse_rep)
+        else
+            value;
+        const next_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        var success = try self.lowerGeneratedRecordLoopUpdate(proc, context.*, field_index, value, next_rest);
+        if (present_tag) |tag_text| {
+            success = try proc.assignGeneratedParserTag(
+                value,
+                field.rep,
+                proc.generatedParserTagVariant(field.rep, tag_text),
+                parsed_value,
+                field.parse_rep,
+                success,
+            );
+        }
+        return .{
+            .context = .{
+                .worker = context.worker,
+                .encoding_type = context.encoding_type,
+                .encoding = context.encoding,
+                .state_type = context.state_type,
+                .state_rep = context.state_rep,
+                .result = context.target,
+                .result_rep = context.target_rep,
+                .next = context.next,
+            },
+            .shape_type = field.parse_type,
+            .shape_rep = field.parse_rep,
+            .state = rest,
+            .value = parsed_value,
+            .rest = next_rest,
+            .success = success,
+        };
+    }
+
+    /// Finish the record parser once every field event is built.
+    fn finishGeneratedRecordParse(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        state: *const GeneratedRecordParseState,
+    ) Allocator.Error!LIR.CFStmtId {
+        const context = state.context;
+        const fields = context.fields;
+        const presence = context.presence;
+        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
+        const event_body = try proc.generatedParserTagDispatch(state.step.ok_payload.local, state.step.ok_payload.child.rep, &state.variants, &state.bodies, impossible);
+        const read_event = try self.finishGeneratedParserTryCall(
+            proc,
+            state.step,
+            &.{ context.encoding, context.evidence, context.cursor },
+            context.target,
+            context.target_rep,
+            context.next,
+            event_body,
+        );
+
+        // The loop head. A pending entry end runs first; otherwise a counted
+        // record with nothing remaining finishes, and anything else reads the
+        // next `parse_record_field` event.
+        const jump_step = try self.result.store.addCFStmt(.{ .jump = .{ .target = state.step_join } }, proc.derivedOrigin());
+        const finish = try self.lowerGeneratedRecordFinish(proc, context);
+        const remaining_is_zero = try proc.addFrameLocal(.bool);
+        const zero = try proc.addFrameLocal(.u64);
+        var counted_head = try proc.boolSwitchNoContinuation(remaining_is_zero, finish, jump_step);
+        counted_head = try proc.assignBinaryLowLevel(remaining_is_zero, .num_is_eq, context.remaining, zero, counted_head);
+        counted_head = try proc.assignIntLiteral(zero, 0, counted_head);
+        const jump_step_uncounted = try self.result.store.addCFStmt(.{ .jump = .{ .target = state.step_join } }, proc.derivedOrigin());
+        const head = try proc.boolSwitchNoContinuation(context.counted, counted_head, jump_step_uncounted);
+
+        const entry_end = try self.lowerGeneratedRecordEntryEnd(proc, context);
+        const head_dispatch = try proc.boolSwitchNoContinuation(context.entry_pending, entry_end, head);
+        const loop_body = try self.result.store.addCFStmt(.{ .join = .{
+            .id = state.step_join,
+            .params = LIR.LocalSpan.empty(),
+            .body = read_event,
+            .remainder = head_dispatch,
+        } }, proc.derivedOrigin());
+
+        var initial = try self.lowerGeneratedRecordStart(proc, context, state.state);
+        var field_index = fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            initial = try proc.initUninitializedLocal(fields[field_index].payload, initial);
+        }
+        var presence_index = presence.len;
+        while (presence_index > 0) {
+            presence_index -= 1;
+            initial = try proc.assignIntLiteral(presence[presence_index], 0, initial);
+        }
+
+        // Payloads precede presence words: ARC releases an overwritten payload
+        // immediately before its write, testing the old presence bit.
+        const control_params = [_]LIR.LocalId{ context.cursor, context.counted, context.remaining, context.entry_pending };
+        const join_params = try self.allocator.alloc(LIR.LocalId, control_params.len + fields.len + presence.len);
+        defer self.allocator.free(join_params);
+        @memcpy(join_params[0..control_params.len], &control_params);
+        for (fields, 0..) |field, index| join_params[control_params.len + index] = field.payload;
+        for (presence, 0..) |local, index| join_params[control_params.len + fields.len + index] = local;
+
+        const maybe_payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(maybe_payloads);
+        const maybe_conditions = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(maybe_conditions);
+        const maybe_masks = try self.allocator.alloc(u64, fields.len);
+        defer self.allocator.free(maybe_masks);
+        for (fields, 0..) |field, index| {
+            maybe_payloads[index] = field.payload;
+            maybe_conditions[index] = presence[index / 64];
+            maybe_masks[index] = @as(u64, 1) << @intCast(index % 64);
+        }
+
+        const join = try self.result.store.addCFStmt(.{ .join = .{
+            .id = context.join_id,
+            .params = try proc.joinParamSpan(join_params),
+            .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
+            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
+            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
+            .body = loop_body,
+            .remainder = initial,
+        } }, proc.derivedOrigin());
+        const with_evidence = try self.lowerGeneratedFieldNamesValue(proc, context.evidence, fields, join);
+        return try self.lowerGeneratedRecordFieldNamesSource(
+            proc,
+            state.field_names_source,
+            context.shape_rep,
+            fields,
+            with_evidence,
         );
     }
 
@@ -10687,88 +12062,6 @@ const ProcedureBuilder = struct {
         return continuation;
     }
 
-    /// A tuple's arity is static: `parse_tuple_start` opens it, every element
-    /// after the first is preceded by `parse_tuple_next`, and
-    /// `parse_tuple_end` closes it. Each call is told the element count.
-    fn lowerGeneratedTupleFromState(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_type: Plan.CheckedTypeIdentity,
-        shape_rep: Plan.TypeRepId,
-        state: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const items = try self.generatedParserTupleItems(proc, shape_rep);
-        defer self.allocator.free(items);
-        for (items) |*item| item.value = try proc.addGeneratedParserOutputLocalForRep(item.rep);
-        const parsed_rests = try self.allocator.alloc(LIR.LocalId, items.len);
-        defer self.allocator.free(parsed_rests);
-        for (parsed_rests) |*local| local.* = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-
-        const len = try proc.addFrameLocal(.u64);
-        const start = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_start", shape_type));
-        const end = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_end", shape_type));
-        const next_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_next", shape_type);
-        // `separators[i]` precedes element `i`; element 0 has none.
-        const separators = try self.allocator.alloc(GeneratedParserTryCall, items.len);
-        defer self.allocator.free(separators);
-        for (separators[@min(1, items.len)..]) |*separator| separator.* = try beginGeneratedParserTryCall(proc, next_call);
-
-        var continuation = try self.lowerGeneratedTupleFinish(proc, shape_rep, value, items, success);
-        continuation = try proc.assignRepresentationBoundary(rest, end.ok_payload.local, context.state_rep, end.ok_payload.child.rep, continuation);
-        continuation = try self.finishGeneratedParserTryCall(
-            proc,
-            end,
-            &.{ context.encoding, if (items.len == 0) start.ok_payload.local else parsed_rests[items.len - 1], len },
-            context.result,
-            context.result_rep,
-            context.next,
-            continuation,
-        );
-        var index = items.len;
-        while (index > 0) {
-            index -= 1;
-            const boundary = if (index == 0) start else separators[index];
-            const item_state = try proc.addFrameLocalForRep(context.state_rep);
-            continuation = try self.lowerGeneratedParseShapeFromState(
-                proc,
-                context,
-                items[index].source_type,
-                items[index].rep,
-                item_state,
-                items[index].value,
-                parsed_rests[index],
-                continuation,
-            );
-            continuation = try proc.assignRepresentationBoundary(item_state, boundary.ok_payload.local, context.state_rep, boundary.ok_payload.child.rep, continuation);
-            if (index == 0) continue;
-            const item_index = try proc.addFrameLocal(.u64);
-            continuation = try self.finishGeneratedParserTryCall(
-                proc,
-                separators[index],
-                &.{ context.encoding, parsed_rests[index - 1], item_index, len },
-                context.result,
-                context.result_rep,
-                context.next,
-                continuation,
-            );
-            continuation = try proc.assignIntLiteral(item_index, @intCast(index), continuation);
-        }
-        continuation = try self.finishGeneratedParserTryCall(
-            proc,
-            start,
-            &.{ context.encoding, state, len },
-            context.result,
-            context.result_rep,
-            context.next,
-            continuation,
-        );
-        return try proc.assignIntLiteral(len, @intCast(items.len), continuation);
-    }
-
     fn generatedParserTupleItems(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
@@ -10859,94 +12152,6 @@ const ProcedureBuilder = struct {
         success: LIR.CFStmtId,
     };
 
-    fn lowerGeneratedListFromState(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        subject_type: Plan.CheckedTypeIdentity,
-        shape_rep: Plan.TypeRepId,
-        explicit_elem: ?Plan.RepChild,
-        state: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const list_rep = proc.listRepForBoundary(shape_rep) orelse
-            boxyLowerInvariant("generated list parser shape had no list representation");
-        const elem = explicit_elem orelse proc.repQuery().requiredSingleChild(list_rep, .list_elem);
-        const elem_layout = proc.workerRuntimeLayoutForRep(elem.rep).layoutIdx();
-        if (elem_layout != proc.localListElemLayout(value)) {
-            boxyLowerInvariant("generated list parser element worker and storage layouts disagreed");
-        }
-
-        const list_layout = self.result.store.getLocal(value).layout_idx;
-        const acc = try proc.addFrameLocal(list_layout);
-        const target_desc = try proc.stableDescriptorForConstructedValue(value, shape_rep);
-        if (target_desc.desc) |desc| {
-            self.result.store.setLocalBoxyDesc(value, desc);
-            self.result.store.setLocalBoxyDesc(acc, desc);
-        }
-        const loop = GeneratedListLoop{
-            .subject_type = subject_type,
-            .shape_rep = shape_rep,
-            .state_rep = context.state_rep,
-            .elem = elem,
-            .cursor = try proc.addGeneratedParserOutputLocalForRep(context.state_rep),
-            .acc = acc,
-            .counted = try proc.addFrameLocal(.bool),
-            .remaining = try proc.addFrameLocal(.u64),
-            .value = value,
-            .rest = rest,
-            .join_id = proc.freshJoinPointId(),
-            .success = success,
-        };
-
-        const counted_step = try self.lowerGeneratedCountedListStep(proc, context, loop);
-        const uncounted_step = try self.lowerGeneratedListLoop(proc, context, loop);
-        const loop_body = try proc.boolSwitchNoContinuation(loop.counted, counted_step, uncounted_step);
-
-        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_start", subject_type);
-        const start = try beginGeneratedParserTryCall(proc, start_call);
-        const event = start.ok_payload;
-        const counted_variant = proc.generatedParserTagVariant(event.child.rep, "Counted");
-        const uncounted_variant = proc.generatedParserTagVariant(event.child.rep, "Uncounted");
-
-        const counted_payload = try proc.generatedParserSingleTagPayloadLocal(counted_variant);
-        const counted_len = try proc.addFrameLocal(.u64);
-        const counted_rest = try proc.addFrameLocalForRep(context.state_rep);
-        var counted_body = try self.lowerGeneratedListStartJump(proc, loop, target_desc.desc, counted_rest, context.state_rep, true, counted_len);
-        counted_body = try proc.generatedParserReadRecordField(counted_rest, context.state_rep, counted_payload.local, counted_payload.child, "rest", counted_body);
-        counted_body = try proc.generatedParserReadRecordField(counted_len, proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_payload.child.source_type, "len")), counted_payload.local, counted_payload.child, "len", counted_body);
-        counted_body = try proc.generatedParserReadTagPayload(event.local, counted_variant, counted_payload, counted_body);
-
-        const uncounted_payload = try proc.generatedParserSingleTagPayloadLocal(uncounted_variant);
-        const zero = try proc.addFrameLocal(.u64);
-        var uncounted_body = try self.lowerGeneratedListStartJump(proc, loop, target_desc.desc, uncounted_payload.local, uncounted_payload.child.rep, false, zero);
-        uncounted_body = try proc.assignIntLiteral(zero, 0, uncounted_body);
-        uncounted_body = try proc.generatedParserReadTagPayload(event.local, uncounted_variant, uncounted_payload, uncounted_body);
-
-        const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
-        const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
-        var initial = try self.finishGeneratedParserTryCall(
-            proc,
-            start,
-            &.{ context.encoding, state },
-            context.result,
-            context.result_rep,
-            context.next,
-            ok_body,
-        );
-        initial = try proc.prependOptionalDescriptorMaterialization(target_desc.materialize, initial);
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = loop.join_id,
-            .params = try proc.joinParamSpan(&.{ loop.cursor, loop.acc, loop.counted, loop.remaining }),
-            .body = loop_body,
-            .remainder = initial,
-        } }, proc.derivedOrigin());
-    }
-
     /// Enter the list loop with an empty list reserved to `capacity` elements
     /// (the reported count, or zero when uncounted).
     fn lowerGeneratedListStartJump(
@@ -10971,88 +12176,6 @@ const ProcedureBuilder = struct {
         return try proc.assignUnaryLowLevel(initial_list, .list_with_capacity, capacity, continuation);
     }
 
-    /// One step of a counted list: finish once no elements remain, otherwise
-    /// parse the next element directly at the cursor.
-    fn lowerGeneratedCountedListStep(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        loop: GeneratedListLoop,
-    ) Allocator.Error!LIR.CFStmtId {
-        var done = try proc.assignRepresentationBoundary(loop.rest, loop.cursor, context.state_rep, context.state_rep, loop.success);
-        done = try proc.assignRepresentationBoundary(loop.value, loop.acc, loop.shape_rep, loop.shape_rep, done);
-
-        const elem_value = try proc.addGeneratedParserOutputLocalForRep(loop.elem.rep);
-        const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        const next_acc = try proc.addFrameLocal(self.result.store.getLocal(loop.acc).layout_idx);
-        if (self.result.store.getLocal(loop.acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
-        const one = try proc.addFrameLocal(.u64);
-        const next_remaining = try proc.addFrameLocal(.u64);
-        var element = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
-        element = try proc.setLocalInitializeJoinParam(loop.remaining, next_remaining, element);
-        element = try proc.setLocalInitializeJoinParam(loop.acc, next_acc, element);
-        element = try proc.setLocalInitializeJoinParamFromRep(loop.cursor, parsed_rest, context.state_rep, element);
-        element = try proc.assignBinaryLowLevel(next_remaining, .num_int_sub_wrap, loop.remaining, one, element);
-        element = try proc.assignIntLiteral(one, 1, element);
-        element = try proc.assignListAppendGrowingMovingElement(next_acc, loop.acc, elem_value, element);
-        element = try self.lowerGeneratedParseShapeFromState(
-            proc,
-            context,
-            loop.elem.source_type,
-            loop.elem.rep,
-            loop.cursor,
-            elem_value,
-            parsed_rest,
-            element,
-        );
-
-        const remaining_is_zero = try proc.addFrameLocal(.bool);
-        const zero = try proc.addFrameLocal(.u64);
-        var step = try proc.boolSwitchNoContinuation(remaining_is_zero, done, element);
-        step = try proc.assignBinaryLowLevel(remaining_is_zero, .num_is_eq, loop.remaining, zero, step);
-        return try proc.assignIntLiteral(zero, 0, step);
-    }
-
-    fn lowerGeneratedSetFromState(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_type: Plan.CheckedTypeIdentity,
-        state: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const call = proc.generatedCodecCallPlan(context.worker, shape_type, "from_list", shape_type);
-        const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
-        if (arg_types.len != 1) boxyLowerInvariant("generated Set.from_list call had unexpected arity");
-        const list_rep = proc.repForTypeRef(arg_types[0]);
-        if (proc.listRepForBoundary(list_rep) == null) {
-            boxyLowerInvariant("generated Set.from_list call did not accept a List");
-        }
-        const list = try proc.addFrameLocalForRep(list_rep);
-        const convert = try self.lowerGeneratedCodecCallLocalsInto(proc, call, value, &.{list}, success);
-        const shape_module = procedureModuleById(self.modules, shape_type.module);
-        const nominal = resolvedNominalPayload(shape_module, shape_type.ty);
-        if (nominal.builtin != .set or nominal.args.len != 1) {
-            boxyLowerInvariant("generated Set parser shape did not have one public element type");
-        }
-        var public_elem = proc.repQuery().requiredSingleChild(proc.listRepForBoundary(list_rep).?, .list_elem);
-        public_elem.source_type = .{ .module = shape_type.module, .ty = nominal.args[0] };
-        public_elem.rep = proc.repForTypeRef(public_elem.source_type);
-        return try self.lowerGeneratedListFromState(
-            proc,
-            context,
-            shape_type,
-            list_rep,
-            public_elem,
-            state,
-            list,
-            rest,
-            convert,
-        );
-    }
-
     /// Locals that carry one generated dictionary parser loop between entries.
     const GeneratedDictLoop = struct {
         subject_type: Plan.CheckedTypeIdentity,
@@ -11073,91 +12196,6 @@ const ProcedureBuilder = struct {
         join_id: LIR.JoinPointId,
         success: LIR.CFStmtId,
     };
-
-    fn lowerGeneratedDictFromState(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_type: Plan.CheckedTypeIdentity,
-        shape_rep: Plan.TypeRepId,
-        state: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const insert_call = proc.generatedCodecCallPlan(context.worker, shape_type, "insert", shape_type);
-        const insert_arg_types = self.plan.generatedCodecCallTypeSlice(insert_call.arg_types);
-        if (insert_arg_types.len != 3 or !planTypeRefEql(insert_arg_types[0], shape_type)) {
-            boxyLowerInvariant("generated Dict.insert call had unexpected arguments");
-        }
-        const shape_module = procedureModuleById(self.modules, shape_type.module);
-        const nominal = resolvedNominalPayload(shape_module, shape_type.ty);
-        if (nominal.builtin != .dict or nominal.args.len != 2) {
-            boxyLowerInvariant("generated Dict parser shape did not have public key and value types");
-        }
-        const key_type = Plan.CheckedTypeIdentity{ .module = shape_type.module, .ty = nominal.args[0] };
-        const value_type = Plan.CheckedTypeIdentity{ .module = shape_type.module, .ty = nominal.args[1] };
-        const loop = GeneratedDictLoop{
-            .subject_type = shape_type,
-            .shape_rep = shape_rep,
-            .key_type = key_type,
-            .key_rep = proc.repForTypeRef(key_type),
-            .value_type = value_type,
-            .value_rep = proc.repForTypeRef(value_type),
-            .insert_call = insert_call,
-            .cursor = try proc.addGeneratedParserOutputLocalForRep(context.state_rep),
-            .acc = try proc.addFrameLocalForRep(shape_rep),
-            .counted = try proc.addFrameLocal(.bool),
-            .remaining = try proc.addFrameLocal(.u64),
-            .value = value,
-            .rest = rest,
-            .join_id = proc.freshJoinPointId(),
-            .success = success,
-        };
-
-        const counted_step = try self.lowerGeneratedCountedDictStep(proc, context, loop);
-        const uncounted_step = try self.lowerGeneratedDictLoop(proc, context, loop);
-        const loop_body = try proc.boolSwitchNoContinuation(loop.counted, counted_step, uncounted_step);
-
-        const start = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_start", shape_type));
-        const event = start.ok_payload;
-        const counted_variant = proc.generatedParserTagVariant(event.child.rep, "Counted");
-        const uncounted_variant = proc.generatedParserTagVariant(event.child.rep, "Uncounted");
-
-        const counted_payload = try proc.generatedParserSingleTagPayloadLocal(counted_variant);
-        const counted_len = try proc.addFrameLocal(.u64);
-        const counted_rest = try proc.addFrameLocalForRep(context.state_rep);
-        var counted_body = try self.lowerGeneratedDictStartJump(proc, context, loop, counted_rest, context.state_rep, true, counted_len);
-        counted_body = try proc.generatedParserReadRecordField(counted_rest, context.state_rep, counted_payload.local, counted_payload.child, "rest", counted_body);
-        counted_body = try proc.generatedParserReadRecordField(counted_len, proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_payload.child.source_type, "len")), counted_payload.local, counted_payload.child, "len", counted_body);
-        counted_body = try proc.generatedParserReadTagPayload(event.local, counted_variant, counted_payload, counted_body);
-
-        const uncounted_payload = try proc.generatedParserSingleTagPayloadLocal(uncounted_variant);
-        const zero = try proc.addFrameLocal(.u64);
-        var uncounted_body = try self.lowerGeneratedDictStartJump(proc, context, loop, uncounted_payload.local, uncounted_payload.child.rep, false, zero);
-        uncounted_body = try proc.assignIntLiteral(zero, 0, uncounted_body);
-        uncounted_body = try proc.generatedParserReadTagPayload(event.local, uncounted_variant, uncounted_payload, uncounted_body);
-
-        const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
-        const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
-        const initial = try self.finishGeneratedParserTryCall(
-            proc,
-            start,
-            &.{ context.encoding, state },
-            context.result,
-            context.result_rep,
-            context.next,
-            ok_body,
-        );
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = loop.join_id,
-            .params = try proc.joinParamSpan(&.{ loop.cursor, loop.acc, loop.counted, loop.remaining }),
-            .body = loop_body,
-            .remainder = initial,
-        } }, proc.derivedOrigin());
-    }
 
     /// Enter the dictionary loop with an empty dictionary reserved to
     /// `capacity` entries (the reported count, or zero when uncounted).
@@ -11199,167 +12237,6 @@ const ProcedureBuilder = struct {
         return try proc.assignRepresentationBoundary(loop.value, dict, loop.shape_rep, loop.shape_rep, continuation);
     }
 
-    /// One step of a counted dictionary: finish once no entries remain,
-    /// otherwise parse the next entry directly at the cursor.
-    fn lowerGeneratedCountedDictStep(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        loop: GeneratedDictLoop,
-    ) Allocator.Error!LIR.CFStmtId {
-        const done = try self.lowerGeneratedDictDone(proc, context, loop, loop.acc, loop.cursor, context.state_rep);
-        const entry = try self.lowerGeneratedDictEntry(proc, context, loop, loop.cursor, .counted);
-        const remaining_is_zero = try proc.addFrameLocal(.bool);
-        const zero = try proc.addFrameLocal(.u64);
-        var step = try proc.boolSwitchNoContinuation(remaining_is_zero, done, entry);
-        step = try proc.assignBinaryLowLevel(remaining_is_zero, .num_is_eq, loop.remaining, zero, step);
-        return try proc.assignIntLiteral(zero, 0, step);
-    }
-
-    /// One step of an uncounted dictionary: `parse_dict_next` reports whether
-    /// an entry follows.
-    fn lowerGeneratedDictLoop(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        loop: GeneratedDictLoop,
-    ) Allocator.Error!LIR.CFStmtId {
-        const next = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_next", loop.subject_type));
-        const event = next.ok_payload;
-        const entry_variant = proc.generatedParserTagVariant(event.child.rep, "Entry");
-        const done_variant = proc.generatedParserTagVariant(event.child.rep, "Done");
-        const entry_payload = try proc.generatedParserSingleTagPayloadLocal(entry_variant);
-        const done_payload = try proc.generatedParserSingleTagPayloadLocal(done_variant);
-        const variants = [_]GeneratedParserTagVariant{ entry_variant, done_variant };
-        const bodies = [_]LIR.CFStmtId{
-            try proc.generatedParserReadTagPayload(
-                event.local,
-                entry_variant,
-                entry_payload,
-                try self.lowerGeneratedDictEntryAtRep(proc, context, loop, entry_payload.local, entry_payload.child.rep, .uncounted),
-            ),
-            try proc.generatedParserReadTagPayload(
-                event.local,
-                done_variant,
-                done_payload,
-                try self.lowerGeneratedDictDone(proc, context, loop, loop.acc, done_payload.local, done_payload.child.rep),
-            ),
-        };
-        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
-        return try self.finishGeneratedParserTryCall(
-            proc,
-            next,
-            &.{ context.encoding, loop.cursor },
-            context.result,
-            context.result_rep,
-            context.next,
-            ok_body,
-        );
-    }
-
-    const GeneratedDictEntryEnd = enum { counted, uncounted };
-
-    fn lowerGeneratedDictEntryAtRep(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        loop: GeneratedDictLoop,
-        entry_state: LIR.LocalId,
-        entry_state_rep: Plan.TypeRepId,
-        end: GeneratedDictEntryEnd,
-    ) Allocator.Error!LIR.CFStmtId {
-        const state = try proc.addFrameLocalForRep(context.state_rep);
-        const entry = try self.lowerGeneratedDictEntry(proc, context, loop, state, end);
-        return try proc.assignRepresentationBoundary(state, entry_state, context.state_rep, entry_state_rep, entry);
-    }
-
-    /// One entry: key, `parse_dict_after_key`, value, insert, then the entry
-    /// end (counting down, or asking `parse_dict_after_entry`).
-    fn lowerGeneratedDictEntry(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        loop: GeneratedDictLoop,
-        entry_state: LIR.LocalId,
-        end: GeneratedDictEntryEnd,
-    ) Allocator.Error!LIR.CFStmtId {
-        const key = try proc.addGeneratedParserOutputLocalForRep(loop.key_rep);
-        const after_key = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        const value_state = try proc.addFrameLocalForRep(context.state_rep);
-        const parsed_value = try proc.addGeneratedParserOutputLocalForRep(loop.value_rep);
-        const after_value = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        const next_acc = try proc.addFrameLocalForRep(loop.shape_rep);
-
-        var continuation = switch (end) {
-            .counted => blk: {
-                const one = try proc.addFrameLocal(.u64);
-                const next_remaining = try proc.addFrameLocal(.u64);
-                var counted = try self.lowerGeneratedDictLoopJump(proc, loop, next_acc, after_value, context.state_rep);
-                counted = try proc.setLocalInitializeJoinParam(loop.remaining, next_remaining, counted);
-                counted = try proc.assignBinaryLowLevel(next_remaining, .num_int_sub_wrap, loop.remaining, one, counted);
-                break :blk try proc.assignIntLiteral(one, 1, counted);
-            },
-            .uncounted => blk: {
-                const after = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_after_entry", loop.subject_type));
-                const event = after.ok_payload;
-                const continue_variant = proc.generatedParserTagVariant(event.child.rep, "Continue");
-                const done_variant = proc.generatedParserTagVariant(event.child.rep, "Done");
-                const continue_payload = try proc.generatedParserSingleTagPayloadLocal(continue_variant);
-                const done_payload = try proc.generatedParserSingleTagPayloadLocal(done_variant);
-                const variants = [_]GeneratedParserTagVariant{ continue_variant, done_variant };
-                const bodies = [_]LIR.CFStmtId{
-                    try proc.generatedParserReadTagPayload(
-                        event.local,
-                        continue_variant,
-                        continue_payload,
-                        try self.lowerGeneratedDictLoopJump(proc, loop, next_acc, continue_payload.local, continue_payload.child.rep),
-                    ),
-                    try proc.generatedParserReadTagPayload(
-                        event.local,
-                        done_variant,
-                        done_payload,
-                        try self.lowerGeneratedDictDone(proc, context, loop, next_acc, done_payload.local, done_payload.child.rep),
-                    ),
-                };
-                const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-                const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
-                break :blk try self.finishGeneratedParserTryCall(
-                    proc,
-                    after,
-                    &.{ context.encoding, after_value },
-                    context.result,
-                    context.result_rep,
-                    context.next,
-                    ok_body,
-                );
-            },
-        };
-        continuation = try self.lowerGeneratedCodecCallLocalsInto(proc, loop.insert_call, next_acc, &.{ loop.acc, key, parsed_value }, continuation);
-        continuation = try self.lowerGeneratedParseShapeFromState(
-            proc,
-            context,
-            loop.value_type,
-            loop.value_rep,
-            value_state,
-            parsed_value,
-            after_value,
-            continuation,
-        );
-        const separator = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_after_key", loop.subject_type));
-        continuation = try proc.assignRepresentationBoundary(value_state, separator.ok_payload.local, context.state_rep, separator.ok_payload.child.rep, continuation);
-        continuation = try self.finishGeneratedParserTryCall(
-            proc,
-            separator,
-            &.{ context.encoding, after_key },
-            context.result,
-            context.result_rep,
-            context.next,
-            continuation,
-        );
-        return try self.lowerGeneratedDictKey(proc, context, loop, entry_state, key, after_key, continuation);
-    }
-
     /// Re-enter the dictionary loop with the grown dictionary. The counted
     /// state is unchanged; a counted entry end also updates `remaining`.
     fn lowerGeneratedDictLoopJump(
@@ -11373,49 +12250,6 @@ const ProcedureBuilder = struct {
         var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(loop.acc, dict, continuation);
         return try proc.setLocalInitializeJoinParamFromRep(loop.cursor, cursor, cursor_rep, continuation);
-    }
-
-    /// Read one key at `state` into `key`, leaving the state after it in
-    /// `after_key`, by the strategy the planner recorded for this key type.
-    fn lowerGeneratedDictKey(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        loop: GeneratedDictLoop,
-        state: LIR.LocalId,
-        key: LIR.LocalId,
-        after_key: LIR.LocalId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const field_selection = self.plan.generatedParserDictionaryFieldSelection(context.worker, loop.key_type) orelse
-            boxyLowerInvariant("generated dictionary key parser had no checked strategy");
-        switch (field_selection.strategy) {
-            .method => |method| {
-                const call = proc.generatedCodecCallPlanByIdentity(context.worker, context.encoding_type, loop.key_type, method.module, method.name);
-                return try self.lowerGeneratedDictKeyString(proc, context, call, state, key, loop.key_rep, after_key, success);
-            },
-            .unit_tags => |key_str_subject| {
-                const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_key_str", key_str_subject);
-                const key_str = try proc.addFrameLocal(.str);
-                const matched = try self.lowerGeneratedDictUnitTagKey(proc, context, loop.key_rep, key_str, key, after_key, success);
-                return try self.lowerGeneratedDictKeyString(proc, context, call, state, key_str, proc.repForTypeRef(key_str_subject), after_key, matched);
-            },
-            .key_start => {
-                const start = try beginGeneratedParserTryCall(proc, proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_key_start", loop.key_type));
-                const key_state = try proc.addFrameLocalForRep(context.state_rep);
-                var continuation = try self.lowerGeneratedParseShapeFromState(proc, context, loop.key_type, loop.key_rep, key_state, key, after_key, success);
-                continuation = try proc.assignRepresentationBoundary(key_state, start.ok_payload.local, context.state_rep, start.ok_payload.child.rep, continuation);
-                return try self.finishGeneratedParserTryCall(
-                    proc,
-                    start,
-                    &.{ context.encoding, state },
-                    context.result,
-                    context.result_rep,
-                    context.next,
-                    continuation,
-                );
-            },
-        }
     }
 
     /// Call a format key method `(encoding, state) -> Try({ value, rest }, err)`.
@@ -11494,119 +12328,6 @@ const ProcedureBuilder = struct {
             dispatch = try proc.assignStringBytesLiteral(name, proc.tagVariantNameText(variant.variant), dispatch);
         }
         return dispatch;
-    }
-
-    /// One step of an uncounted list: `parse_list_next` reports whether an
-    /// item follows.
-    fn lowerGeneratedListLoop(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        loop: GeneratedListLoop,
-    ) Allocator.Error!LIR.CFStmtId {
-        const shape_rep = loop.shape_rep;
-        const elem = loop.elem;
-        const cursor = loop.cursor;
-        const acc = loop.acc;
-        const value = loop.value;
-        const rest = loop.rest;
-        const join_id = loop.join_id;
-        const success = loop.success;
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_next", loop.subject_type);
-        const step_rep = proc.repForTypeRef(call.ret_type);
-        const step = try proc.addFrameLocalForRep(step_rep);
-        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
-        const err = proc.generatedParserTagVariant(step_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            step,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        const event = ok_payload.local;
-        const element = proc.generatedParserTagVariant(ok_payload.child.rep, "Item");
-        const done = proc.generatedParserTagVariant(ok_payload.child.rep, "Done");
-        const element_body = try self.lowerGeneratedListElement(
-            proc,
-            context,
-            loop.subject_type,
-            elem,
-            cursor,
-            acc,
-            value,
-            rest,
-            join_id,
-            event,
-            element,
-            success,
-        );
-        const done_body = try self.lowerGeneratedListDone(
-            proc,
-            context,
-            shape_rep,
-            acc,
-            value,
-            rest,
-            event,
-            done,
-            success,
-        );
-        const event_variants = [_]GeneratedParserTagVariant{ element, done };
-        const event_bodies = [_]LIR.CFStmtId{ element_body, done_body };
-        const event_impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        var ok_body = try proc.generatedParserTagDispatch(event, ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
-        ok_body = try proc.generatedParserReadTagPayload(step, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step, &.{ context.encoding, cursor }, dispatch);
-    }
-
-    fn lowerGeneratedListElement(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        subject_type: Plan.CheckedTypeIdentity,
-        elem: Plan.RepChild,
-        cursor: LIR.LocalId,
-        acc: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        join_id: LIR.JoinPointId,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const elem_value = try proc.addGeneratedParserOutputLocalForRep(elem.rep);
-        const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        var continuation = try self.lowerGeneratedListAfterElement(
-            proc,
-            context,
-            subject_type,
-            elem_value,
-            cursor,
-            acc,
-            value,
-            rest,
-            join_id,
-            parsed_rest,
-            success,
-        );
-        continuation = try self.lowerGeneratedParseShapeFromState(
-            proc,
-            context,
-            elem.source_type,
-            elem.rep,
-            payload.local,
-            elem_value,
-            parsed_rest,
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
     }
 
     fn lowerGeneratedListAfterElement(
@@ -11846,127 +12567,6 @@ const ProcedureBuilder = struct {
             rest,
             success,
             .captures,
-        );
-    }
-
-    fn lowerGeneratedRecordFromState(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        shape_context: GeneratedParserShapeContext,
-        shape_type: Plan.CheckedTypeIdentity,
-        shape_rep: Plan.TypeRepId,
-        state: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        success: LIR.CFStmtId,
-        field_names_source: GeneratedParserFieldNamesSource,
-    ) Allocator.Error!LIR.CFStmtId {
-        try proc.ensureGeneratedParserOutputDescriptorForRep(value, shape_rep);
-        try proc.ensureGeneratedParserOutputDescriptorForRep(rest, shape_context.state_rep);
-        const parse_call = proc.generatedCodecCallPlan(
-            shape_context.worker,
-            shape_context.encoding_type,
-            "parse_record_field",
-            shape_type,
-        );
-        const parse_arg_types = self.plan.generatedCodecCallTypeSlice(parse_call.arg_types);
-        if (parse_arg_types.len != 3 or !planTypeRefEql(parse_arg_types[2], shape_context.state_type)) {
-            boxyLowerInvariant("generated parse_record_field call disagreed with parser state metadata");
-        }
-
-        const cursor = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep);
-        const counted = try proc.addFrameLocal(.bool);
-        const remaining = try proc.addFrameLocal(.u64);
-        const entry_pending = try proc.addFrameLocal(.bool);
-        const evidence = try proc.addFrameLocalForRep(proc.repForTypeRef(parse_arg_types[1]));
-        const fields = try self.generatedParserRecordFields(
-            proc,
-            shape_context.worker,
-            shape_type,
-            shape_rep,
-            field_names_source,
-        );
-        defer self.allocator.free(fields);
-        const presence_count = (fields.len + 63) / 64;
-        const presence = try self.allocator.alloc(LIR.LocalId, presence_count);
-        defer self.allocator.free(presence);
-        for (presence) |*local| local.* = try proc.addFrameLocal(.u64);
-        for (fields) |*field| field.payload = try proc.addGeneratedParserOutputLocalForRep(field.rep);
-
-        const context = GeneratedParserRecordContext{
-            .worker = shape_context.worker,
-            .encoding_type = shape_context.encoding_type,
-            .encoding = shape_context.encoding,
-            .shape_type = shape_type,
-            .shape_rep = shape_rep,
-            .target = shape_context.result,
-            .target_rep = shape_context.result_rep,
-            .state_type = shape_context.state_type,
-            .state_rep = shape_context.state_rep,
-            .cursor = cursor,
-            .counted = counted,
-            .remaining = remaining,
-            .entry_pending = entry_pending,
-            .evidence = evidence,
-            .fields = fields,
-            .presence = presence,
-            .join_id = proc.freshJoinPointId(),
-            .next = shape_context.next,
-            .value = value,
-            .rest = rest,
-            .success = success,
-        };
-
-        const loop_body = try self.lowerGeneratedRecordParserLoopBody(proc, context, parse_call);
-        var initial = try self.lowerGeneratedRecordStart(proc, context, state);
-        var field_index = fields.len;
-        while (field_index > 0) {
-            field_index -= 1;
-            initial = try proc.initUninitializedLocal(fields[field_index].payload, initial);
-        }
-        var presence_index = presence.len;
-        while (presence_index > 0) {
-            presence_index -= 1;
-            initial = try proc.assignIntLiteral(presence[presence_index], 0, initial);
-        }
-
-        // Payloads precede presence words: ARC releases an overwritten payload
-        // immediately before its write, testing the old presence bit.
-        const control_params = [_]LIR.LocalId{ cursor, counted, remaining, entry_pending };
-        const join_params = try self.allocator.alloc(LIR.LocalId, control_params.len + fields.len + presence.len);
-        defer self.allocator.free(join_params);
-        @memcpy(join_params[0..control_params.len], &control_params);
-        for (fields, 0..) |field, index| join_params[control_params.len + index] = field.payload;
-        for (presence, 0..) |local, index| join_params[control_params.len + fields.len + index] = local;
-
-        const maybe_payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
-        defer self.allocator.free(maybe_payloads);
-        const maybe_conditions = try self.allocator.alloc(LIR.LocalId, fields.len);
-        defer self.allocator.free(maybe_conditions);
-        const maybe_masks = try self.allocator.alloc(u64, fields.len);
-        defer self.allocator.free(maybe_masks);
-        for (fields, 0..) |field, index| {
-            maybe_payloads[index] = field.payload;
-            maybe_conditions[index] = presence[index / 64];
-            maybe_masks[index] = @as(u64, 1) << @intCast(index % 64);
-        }
-
-        const join = try self.result.store.addCFStmt(.{ .join = .{
-            .id = context.join_id,
-            .params = try proc.joinParamSpan(join_params),
-            .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
-            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
-            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
-            .body = loop_body,
-            .remainder = initial,
-        } }, proc.derivedOrigin());
-        const with_evidence = try self.lowerGeneratedFieldNamesValue(proc, evidence, fields, join);
-        return try self.lowerGeneratedRecordFieldNamesSource(
-            proc,
-            field_names_source,
-            shape_rep,
-            fields,
-            with_evidence,
         );
     }
 
@@ -12288,38 +12888,6 @@ const ProcedureBuilder = struct {
         return try proc.assignIntLiteral(zero, 0, continuation);
     }
 
-    /// The loop head. A pending entry end runs first; otherwise a counted
-    /// record with nothing remaining finishes, and anything else reads the
-    /// next `parse_record_field` event.
-    fn lowerGeneratedRecordParserLoopBody(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        parse_call: Plan.GeneratedCodecCallPlan,
-    ) Allocator.Error!LIR.CFStmtId {
-        const step_join = proc.freshJoinPointId();
-        const read_event = try self.lowerGeneratedRecordReadEvent(proc, context, parse_call);
-        const jump_step = try self.result.store.addCFStmt(.{ .jump = .{ .target = step_join } }, proc.derivedOrigin());
-
-        const finish = try self.lowerGeneratedRecordFinish(proc, context);
-        const remaining_is_zero = try proc.addFrameLocal(.bool);
-        const zero = try proc.addFrameLocal(.u64);
-        var counted_head = try proc.boolSwitchNoContinuation(remaining_is_zero, finish, jump_step);
-        counted_head = try proc.assignBinaryLowLevel(remaining_is_zero, .num_is_eq, context.remaining, zero, counted_head);
-        counted_head = try proc.assignIntLiteral(zero, 0, counted_head);
-        const jump_step_uncounted = try self.result.store.addCFStmt(.{ .jump = .{ .target = step_join } }, proc.derivedOrigin());
-        const head = try proc.boolSwitchNoContinuation(context.counted, counted_head, jump_step_uncounted);
-
-        const entry_end = try self.lowerGeneratedRecordEntryEnd(proc, context);
-        const dispatch = try proc.boolSwitchNoContinuation(context.entry_pending, entry_end, head);
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = step_join,
-            .params = LIR.LocalSpan.empty(),
-            .body = read_event,
-            .remainder = dispatch,
-        } }, proc.derivedOrigin());
-    }
-
     /// End the entry whose value (or skip) just completed: a counted record
     /// counts it down, and an uncounted one asks `parse_record_after_field`
     /// whether another entry follows.
@@ -12366,56 +12934,6 @@ const ProcedureBuilder = struct {
         return try proc.boolSwitchNoContinuation(context.counted, counted_body, uncounted_body);
     }
 
-    fn lowerGeneratedRecordReadEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        parse_call: Plan.GeneratedCodecCallPlan,
-    ) Allocator.Error!LIR.CFStmtId {
-        const step = try beginGeneratedParserTryCall(proc, parse_call);
-        const event_body = try self.lowerGeneratedRecordParserEvent(proc, context, step.ok_payload.local, step.ok_payload.child);
-        return try self.finishGeneratedParserTryCall(
-            proc,
-            step,
-            &.{ context.encoding, context.evidence, context.cursor },
-            context.target,
-            context.target_rep,
-            context.next,
-            event_body,
-        );
-    }
-
-    fn lowerGeneratedRecordParserEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        event: LIR.LocalId,
-        event_child: Plan.RepChild,
-    ) Allocator.Error!LIR.CFStmtId {
-        const continue_variant = proc.generatedParserTagVariant(event_child.rep, "Continue");
-        const done_variant = proc.generatedParserTagVariant(event_child.rep, "Done");
-        const field_variant = proc.generatedParserTagVariant(event_child.rep, "Field");
-        const try_field_variant = proc.generatedParserTagVariant(event_child.rep, "TryField");
-        const caseless_variant = proc.generatedParserTagVariant(event_child.rep, "TryFieldCaseless");
-
-        const variants = [_]GeneratedParserTagVariant{
-            continue_variant,
-            done_variant,
-            field_variant,
-            try_field_variant,
-            caseless_variant,
-        };
-        const bodies = [_]LIR.CFStmtId{
-            try self.lowerGeneratedRecordContinueEvent(proc, context, event, continue_variant),
-            try self.lowerGeneratedRecordDoneEvent(proc, context, event, done_variant),
-            try self.lowerGeneratedRecordDirectFieldEvent(proc, context, event, field_variant),
-            try self.lowerGeneratedRecordNamedFieldEvent(proc, context, event, try_field_variant, .str_is_eq),
-            try self.lowerGeneratedRecordNamedFieldEvent(proc, context, event, caseless_variant, .str_caseless_ascii_equals),
-        };
-        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        return try proc.generatedParserTagDispatch(event, event_child.rep, &variants, &bodies, impossible);
-    }
-
     /// `Continue` means the format consumed a whole entry itself and the
     /// cursor already sits at the next entry boundary, so no entry end runs.
     fn lowerGeneratedRecordContinueEvent(
@@ -12430,148 +12948,6 @@ const ProcedureBuilder = struct {
         const uncounted_body = try self.lowerGeneratedRecordLoopJump(proc, context, payload.local, payload.child.rep, false, context.remaining, false);
         const choose = try proc.boolSwitchNoContinuation(context.counted, counted_body, uncounted_body);
         return try proc.generatedParserReadTagPayload(event, variant, payload, choose);
-    }
-
-    fn lowerGeneratedRecordDirectFieldEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const field_handle = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
-        const rest = try proc.addFrameLocalForRep(context.state_rep);
-        const index = try proc.addFrameLocal(.u64);
-        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, context.fields.len);
-        defer self.allocator.free(branches);
-        for (context.fields, 0..) |field, field_index| {
-            branches[field_index] = .{
-                .value = field.index,
-                .body = try self.lowerGeneratedMatchedRecordField(proc, context, field_index, rest),
-            };
-        }
-        const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
-        const field_switch = try self.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = index,
-            .branches = try self.result.store.addCFSwitchBranches(branches),
-            .default_branch = impossible,
-            .continuation = null,
-        } }, proc.derivedOrigin());
-        var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = index,
-            .op = .{ .field = .{ .source = field_handle, .field_idx = 1 } },
-            .next = field_switch,
-        } }, proc.derivedOrigin());
-        continuation = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            continuation,
-        );
-        continuation = try proc.generatedParserReadRecordField(
-            field_handle,
-            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "field")),
-            payload.local,
-            payload.child,
-            "field",
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedRecordNamedFieldEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        compare_op: LIR.LowLevel,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const name = try proc.addFrameLocal(.str);
-        const rest = try proc.addFrameLocalForRep(context.state_rep);
-        var dispatch = try self.lowerGeneratedSkipRecordField(proc, context, rest);
-        var index = context.fields.len;
-        while (index > 0) {
-            index -= 1;
-            const matches = try proc.addFrameLocal(.bool);
-            const matched = try self.lowerGeneratedMatchedRecordField(proc, context, index, rest);
-            const switch_stmt = try proc.boolSwitchNoContinuation(matches, matched, dispatch);
-            dispatch = try proc.assignBinaryLowLevel(matches, compare_op, name, context.fields[index].renamed, switch_stmt);
-        }
-        dispatch = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            dispatch,
-        );
-        dispatch = try proc.generatedParserReadRecordField(
-            name,
-            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "name")),
-            payload.local,
-            payload.child,
-            "name",
-            dispatch,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, dispatch);
-    }
-
-    fn lowerGeneratedMatchedRecordField(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        field_index: usize,
-        rest: LIR.LocalId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const field = context.fields[field_index];
-        const value = try proc.addGeneratedParserOutputLocalForRep(field.rep);
-        // A field stored in a wrapper (`Ok` of an optional `Try`, `#Present`
-        // of a presence slot) is parsed at the wrapped payload type.
-        const present_tag: ?[]const u8 = switch (field.kind) {
-            .missing_try => "Ok",
-            .optional_slot, .undetermined_slot => "#Present",
-            .required, .defaulted => null,
-        };
-        const parsed_value = if (present_tag != null)
-            try proc.addGeneratedParserOutputLocalForRep(field.parse_rep)
-        else
-            value;
-        const next_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        var success = try self.lowerGeneratedRecordLoopUpdate(proc, context, field_index, value, next_rest);
-        if (present_tag) |tag_text| {
-            success = try proc.assignGeneratedParserTag(
-                value,
-                field.rep,
-                proc.generatedParserTagVariant(field.rep, tag_text),
-                parsed_value,
-                field.parse_rep,
-                success,
-            );
-        }
-        return try self.lowerGeneratedParseShapeFromState(
-            proc,
-            .{
-                .worker = context.worker,
-                .encoding_type = context.encoding_type,
-                .encoding = context.encoding,
-                .state_type = context.state_type,
-                .state_rep = context.state_rep,
-                .result = context.target,
-                .result_rep = context.target_rep,
-                .next = context.next,
-            },
-            field.parse_type,
-            field.parse_rep,
-            rest,
-            parsed_value,
-            next_rest,
-            success,
-        );
     }
 
     fn lowerGeneratedRecordLoopUpdate(
@@ -19374,6 +19750,17 @@ const ProcBodyBuilder = struct {
             next
         else
             try self.assignRepresentationBoundary(payload.local, payload.stored, payload.child.rep, payload.stored_rep, next);
+        return try self.readGeneratedParserStoredTagPayload(source, variant, payload, converted);
+    }
+
+    /// Read the payload as the tag stores it, then continue with `next`.
+    fn readGeneratedParserStoredTagPayload(
+        self: *ProcBodyBuilder,
+        source: LIR.LocalId,
+        variant: ProcedureBuilder.GeneratedParserTagVariant,
+        payload: GeneratedParserTagPayload,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         return try self.assignConcreteTagPayloadRead(
             payload.stored,
             payload.stored_rep,
@@ -19384,7 +19771,7 @@ const ProcBodyBuilder = struct {
             variant.index,
             0,
             1,
-            converted,
+            next,
         );
     }
 
@@ -23740,23 +24127,34 @@ const ProcBodyBuilder = struct {
         source_mode: LIR.BoxyTransferMode,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (try self.plannedCallBoundaryLowersStructure(target, source, target_rep, source_rep)) {
+            return try self.assignRepresentationBoundaryConsumingSource(target, source, target_rep, source_rep, next);
+        }
+        return try self.assignRuntimeAdapterBoundary(target, source, target_rep, source_rep, source_mode, next);
+    }
+
+    /// Whether a planned call boundary converts through lowering rather than
+    /// one runtime adapter. A runtime adapter converts bytes through
+    /// descriptors, which do not describe a callable's erased-call
+    /// convention. A callable directly in the value, or inside its record,
+    /// tuple, tag, or named structure, crosses through lowering, which wraps
+    /// each callable in an adapter.
+    fn plannedCallBoundaryLowersStructure(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+    ) Allocator.Error!bool {
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_layout = self.parent.result.store.getLocal(source).layout_idx;
         const target_is_callable = self.functionChildrenForRep(target_rep) != null and
             self.parent.result.layouts.getLayout(target_layout).tag == .erased_callable;
         const source_is_callable = self.functionChildrenForRep(source_rep) != null and
             self.parent.result.layouts.getLayout(source_layout).tag == .erased_callable;
-        // A runtime adapter converts bytes through descriptors, which do not
-        // describe a callable's erased-call convention. A callable directly in
-        // the value, or inside its record, tuple, tag, or named structure,
-        // crosses through lowering, which wraps each callable in an adapter.
-        if (target_is_callable or source_is_callable or
+        return target_is_callable or source_is_callable or
             try self.repHoldsCallableInStructure(target_rep) or
-            try self.repHoldsCallableInStructure(source_rep))
-        {
-            return try self.assignRepresentationBoundaryConsumingSource(target, source, target_rep, source_rep, next);
-        }
-        return try self.assignRuntimeAdapterBoundary(target, source, target_rep, source_rep, source_mode, next);
+            try self.repHoldsCallableInStructure(source_rep);
     }
 
     /// Convert a value through one runtime adapter, which rewrites its bytes by
@@ -36761,6 +37159,143 @@ const ProcBodyBuilder = struct {
         );
     }
 
+    /// One representation boundary: convert `source` at `source_rep` into
+    /// `target` at `target_rep`, then continue with `next`.
+    const BoundaryRequest = struct {
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        mode: LIR.BoxyTransferMode,
+        next: LIR.CFStmtId,
+    };
+
+    const BoundaryStep = union(enum) {
+        /// The boundary whose statement the top frame receives next.
+        request: BoundaryRequest,
+        /// A frame was pushed and has not yet run.
+        pushed,
+        /// The statement the top frame receives next, or the whole result
+        /// when no frame is left.
+        done: LIR.CFStmtId,
+    };
+
+    /// A boundary waiting on its components' boundaries.
+    const BoundaryFrame = struct {
+        /// Whether the frame's last requested boundary is still due.
+        awaiting: bool = false,
+        state: union(enum) {
+            /// Structure adapted inside the target's nominal formal scopes.
+            scope: NominalBackingFormalScope,
+            /// Convert into the actual an enclosing nominal scope binds the
+            /// target's formal to, then box that.
+            bound_dynamic: struct { request: BoundaryRequest, converted: LIR.LocalId, actual: Plan.TypeRepId },
+            /// A presence slot's Present payload converted into the value.
+            presence: struct {
+                request: BoundaryRequest,
+                slot: PresenceSlotVariants,
+                payload: GeneratedParserTagPayload,
+                stored_converted: bool = false,
+            },
+            record: RecordBoundaryState,
+            list: ListBoundaryState,
+            tag_union: TagUnionBoundaryState,
+            payloads: TagPayloadBoundaryState,
+        },
+    };
+
+    /// A record converted field by field, last field first.
+    const RecordBoundaryState = struct {
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        /// The record the fields are read from: the source itself, or the
+        /// payload unboxed from it.
+        fields_source: LIR.LocalId,
+        source_record_rep: Plan.TypeRepId,
+        target_fields: []LIR.LocalId = &.{},
+        source_fields: []LIR.LocalId = &.{},
+        target_field_reps: []Plan.TypeRepId = &.{},
+        source_field_reps: []Plan.TypeRepId = &.{},
+        source_field_indices: []u16 = &.{},
+        aggregate_desc: ConstructedAggregateDescriptor = .{},
+        /// The field being converted; the fields after it are done.
+        remaining: usize = 0,
+        current: LIR.CFStmtId = undefined,
+        /// The dynamic source box the fields' record is unboxed from.
+        unbox: ?struct {
+            source: LIR.LocalId,
+            source_rep: Plan.TypeRepId,
+            payload_desc: ?LIR.BoxyDescRef,
+            payload_layout: layout.Idx,
+        },
+    };
+
+    /// A list converted element by element in a loop whose step converts
+    /// one element.
+    const ListBoundaryState = struct {
+        request: BoundaryRequest,
+        target_elem_rep: Plan.TypeRepId,
+        source_elem_rep: Plan.TypeRepId,
+        target_elem_desc_local: ?LIR.LocalId,
+        len: LIR.LocalId,
+        capacity: LIR.LocalId,
+        index: LIR.LocalId,
+        zero: LIR.LocalId,
+        initial_list: LIR.LocalId,
+        acc: LIR.LocalId,
+        elem_desc_initializers: std.ArrayList(DescriptorArgLocal),
+        target_elem_desc_info: ResultDescriptorSource,
+        target_desc_info: ResultDescriptorSource,
+        join_id: LIR.JoinPointId,
+        done: LIR.LocalId,
+        /// The loop body's exit once every element is converted.
+        finish: LIR.CFStmtId,
+        /// The step's statements after the element's boundary.
+        step_next: LIR.CFStmtId,
+        source_elem: LIR.LocalId,
+        target_elem: LIR.LocalId,
+        source_elem_desc_info: ResultDescriptorSource,
+        next_index: LIR.LocalId,
+        one: LIR.LocalId,
+    };
+
+    /// A concrete tag union converted by a switch with one branch per source
+    /// variant, first variant first.
+    const TagUnionBoundaryState = struct {
+        request: BoundaryRequest,
+        kind: enum { concrete, dynamic },
+        source_tag_rep: Plan.TypeRepId,
+        source_variants: []const Plan.TagVariant,
+        /// The concrete target's variants.
+        target_variants: []const Plan.TagVariant = &.{},
+        branches: []LIR.CFSwitchBranch,
+        /// The source variant whose branch is being built.
+        variant: usize = 0,
+        /// The concrete target's branch for a variant it excludes.
+        unreachable_source_variant: LIR.CFStmtId = undefined,
+        /// The concrete target's nominal wrapper formal scopes.
+        scope: ?NominalBackingFormalScope = null,
+    };
+
+    /// One tag variant's payloads converted last first, each read from the
+    /// source tag before its conversion.
+    const TagPayloadBoundaryState = struct {
+        target_locals: []LIR.LocalId,
+        source_locals: []ExtractedTagPayloadLocal,
+        target_children: []const Plan.RepChild,
+        source_children: []const Plan.RepChild,
+        source: LIR.LocalId,
+        source_tag_rep: Plan.TypeRepId,
+        tag_name: names.TagNameId,
+        variant_index: u16,
+        /// The payload being converted; the payloads after it are done.
+        remaining: usize,
+        current: LIR.CFStmtId,
+        /// The constructed concrete tag's descriptor, whose field
+        /// initializers run before the payload reads.
+        tag_desc: ?ConstructedAggregateDescriptor = null,
+    };
+
     fn assignRepresentationBoundaryWithSourceMode(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -36770,6 +37305,85 @@ const ProcBodyBuilder = struct {
         dynamic_box_source_mode: LIR.BoxyTransferMode,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const allocator = self.parent.allocator;
+        var frames: std.ArrayList(BoundaryFrame) = .empty;
+        defer {
+            var index = frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                self.releaseBoundaryFrame(&frames.items[index]);
+            }
+            frames.deinit(allocator);
+        }
+        var step = try self.beginBoundary(&frames, .{
+            .target = target,
+            .source = source,
+            .target_rep = target_rep,
+            .source_rep = source_rep,
+            .mode = dynamic_box_source_mode,
+            .next = next,
+        });
+        while (true) {
+            switch (step) {
+                .request => |request| step = try self.beginBoundary(&frames, request),
+                .pushed => step = try self.stepBoundaryFrame(&frames, null),
+                .done => |stmt| {
+                    if (frames.items.len == 0) return stmt;
+                    step = try self.stepBoundaryFrame(&frames, stmt);
+                },
+            }
+        }
+    }
+
+    /// Free what an unfinished frame owns and leave the scope it holds, as
+    /// the direct build's defers would.
+    fn releaseBoundaryFrame(self: *ProcBodyBuilder, frame: *BoundaryFrame) void {
+        const allocator = self.parent.allocator;
+        switch (frame.state) {
+            .scope => |scope| self.dropNominalBackingFormalScope(scope),
+            .bound_dynamic, .presence => {},
+            .record => |state| {
+                allocator.free(state.target_fields);
+                allocator.free(state.source_fields);
+                allocator.free(state.target_field_reps);
+                allocator.free(state.source_field_reps);
+                allocator.free(state.source_field_indices);
+                state.aggregate_desc.deinit(allocator);
+            },
+            .list => |*state| state.elem_desc_initializers.deinit(allocator),
+            .tag_union => |state| {
+                allocator.free(state.branches);
+                if (state.scope) |scope| self.dropNominalBackingFormalScope(scope);
+            },
+            .payloads => |state| {
+                allocator.free(state.target_locals);
+                allocator.free(state.source_locals);
+                if (state.tag_desc) |tag_desc| tag_desc.deinit(allocator);
+            },
+        }
+    }
+
+    fn pushBoundaryFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), frame: BoundaryFrame) Allocator.Error!void {
+        var owned = frame;
+        frames.append(self.parent.allocator, owned) catch |err| {
+            self.releaseBoundaryFrame(&owned);
+            return err;
+        };
+    }
+
+    fn finishBoundaryFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), stmt: LIR.CFStmtId) BoundaryStep {
+        var frame = frames.pop().?;
+        self.releaseBoundaryFrame(&frame);
+        return .{ .done = stmt };
+    }
+
+    fn beginBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!BoundaryStep {
+        const target = request.target;
+        const source = request.source;
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        const dynamic_box_source_mode = request.mode;
+        const next = request.next;
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_layout = self.parent.result.store.getLocal(source).layout_idx;
         const identity_target_rep = self.descriptorStorageRep(target_rep);
@@ -36779,7 +37393,7 @@ const ProcBodyBuilder = struct {
             (target_rep == source_rep or
                 (self.repIsFullyConcrete(target_rep) and self.repIsFullyConcrete(source_rep))))
         {
-            return if (target == source) next else try self.assignLocalFromRep(target, source, source_rep, next);
+            return .{ .done = if (target == source) next else try self.assignLocalFromRep(target, source, source_rep, next) };
         }
 
         // Alternative-pattern remapping can bind a generic payload local to a
@@ -36790,14 +37404,14 @@ const ProcBodyBuilder = struct {
             !self.parent.layoutIsBoxStorage(target_layout) and
             self.parent.result.store.getLocal(source).boxy_desc != null)
         {
-            return try self.assignDynamicBoxStorageToConcrete(
+            return .{ .done = try self.assignDynamicBoxStorageToConcrete(
                 target,
                 source,
                 identity_target_rep,
                 identity_source_rep,
                 dynamic_box_source_mode,
                 next,
-            );
+            ) };
         }
 
         // Two representations of the same source-level recursive type can be
@@ -36816,7 +37430,7 @@ const ProcBodyBuilder = struct {
         if (layouts_interchangeable and relabel_is_safe) {
             const source_desc = self.parent.result.store.getLocal(source).boxy_desc;
             const target_desc = self.parent.result.store.getLocal(target).boxy_desc;
-            return try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
+            return .{ .done = try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
                 .target = target,
                 .source = source,
                 .adapter = try self.internAdapter(
@@ -36829,13 +37443,13 @@ const ProcBodyBuilder = struct {
                 .target_desc = target_desc,
                 .source_mode = dynamic_box_source_mode,
                 .next = next,
-            } }, self.glueOrigin());
+            } }, self.glueOrigin()) };
         }
 
         if (target_layout == source_layout) {
             if (self.functionChildrenForRep(identity_target_rep)) |target_function| {
                 if (self.functionChildrenForRep(identity_source_rep)) |source_function| {
-                    return try self.assignErasedCallableBoundary(target, source, target_function, source_function, next);
+                    return .{ .done = try self.assignErasedCallableBoundary(target, source, target_function, source_function, next) };
                 }
             }
         }
@@ -36844,48 +37458,38 @@ const ProcBodyBuilder = struct {
         // the target's formals describe that storage by the actuals this use
         // supplies, so the adapter runs inside the target's formal scopes.
         const scope = try self.enterNominalWrapperFormalScopes(target_rep);
-        errdefer self.dropNominalBackingFormalScope(scope);
-        const body = try self.assignStructuralRepresentationBoundary(
-            target,
-            source,
-            target_rep,
-            source_rep,
-            identity_target_rep,
-            identity_source_rep,
-            target_layout,
-            source_layout,
-            dynamic_box_source_mode,
-            next,
-        );
-        return try self.leaveNominalBackingFormalScope(scope, body);
+        try self.pushBoundaryFrame(frames, .{ .awaiting = true, .state = .{ .scope = scope } });
+        return try self.beginStructuralBoundary(frames, request, identity_target_rep, identity_source_rep, source_layout);
     }
 
-    fn assignStructuralRepresentationBoundary(
+    fn beginStructuralBoundary(
         self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
+        frames: *std.ArrayList(BoundaryFrame),
+        request: BoundaryRequest,
         identity_target_rep: Plan.TypeRepId,
         identity_source_rep: Plan.TypeRepId,
-        target_layout: layout.Idx,
         source_layout: layout.Idx,
-        dynamic_box_source_mode: LIR.BoxyTransferMode,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return switch (self.workerRuntimeLayoutForRep(identity_target_rep)) {
+    ) Allocator.Error!BoundaryStep {
+        const target = request.target;
+        const source = request.source;
+        const next = request.next;
+        const identity_request: BoundaryRequest = .{
+            .target = target,
+            .source = source,
+            .target_rep = identity_target_rep,
+            .source_rep = identity_source_rep,
+            .mode = request.mode,
+            .next = next,
+        };
+        switch (self.workerRuntimeLayoutForRep(identity_target_rep)) {
             .dynamic_box => switch (self.workerRuntimeLayoutForRep(identity_source_rep)) {
-                .dynamic_box => if (try self.assignDynamicTagUnionToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else if (target_layout == source_layout)
-                    try self.assignDynamicBoxToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)
-                else
-                    try self.assignDynamicBoxToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next),
-                .concrete => if (try self.assignConcreteToBoundDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else if (try self.assignConcreteTagUnionToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else blk: {
+                .dynamic_box => {
+                    if (try self.beginDynamicTagUnionToDynamicBoundary(identity_request)) |step| return step;
+                    return .{ .done = try self.assignDynamicBoxToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next) };
+                },
+                .concrete => {
+                    if (try self.beginConcreteToBoundDynamicBoundary(frames, identity_request)) |step| return step;
+                    if (try self.beginConcreteTagUnionToDynamicBoundary(frames, identity_request)) |step| return step;
                     const source_info = if (self.parent.result.store.getLocal(source).boxy_desc) |desc|
                         ResultDescriptorSource{ .desc = desc }
                     else blk_source: {
@@ -36955,13 +37559,12 @@ const ProcBodyBuilder = struct {
                             .next = continuation,
                         } }, self.glueOrigin());
                     }
-                    break :blk continuation;
+                    return .{ .done = continuation };
                 },
             },
             .concrete => switch (self.workerRuntimeLayoutForRep(identity_source_rep)) {
-                .dynamic_box => if (try self.assignDynamicRecordToConcreteBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else blk: {
+                .dynamic_box => {
+                    if (try self.beginDynamicRecordToConcreteBoundary(frames, identity_request)) |step| return step;
                     const source_desc = try self.descriptorRefForSourceLocalRep(source, identity_source_rep);
                     const target_desc_info = try self.storageDescriptorForRepIfNeeded(identity_target_rep);
                     // A `.dynamic`-rep target reports no static storage descriptor,
@@ -36985,34 +37588,219 @@ const ProcBodyBuilder = struct {
                         source,
                         source_desc,
                         resolved_target_desc.desc,
-                        dynamic_box_source_mode,
+                        request.mode,
                         next,
                     );
-                    break :blk try self.prependOptionalDescriptorMaterialization(resolved_target_desc.materialize, adapt);
+                    return .{ .done = try self.prependOptionalDescriptorMaterialization(resolved_target_desc.materialize, adapt) };
                 },
-                .concrete => if (try self.assignPresenceSlotToValueBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else if (try self.assignListRepresentationBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else if (try self.assignSingletonZstTagToConcreteBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else if (try self.assignConcreteTagUnionToConcreteBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else if (try self.assignConcreteTagUnionToScalarBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else if (try self.assignConcreteRecordToConcreteBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
-                    adapted
-                else
-                    try self.assignDescriptorAwareNominalBoundary(
+                .concrete => {
+                    if (try self.beginPresenceSlotToValueBoundary(frames, identity_request)) |step| return step;
+                    if (try self.beginListRepresentationBoundary(frames, identity_request)) |step| return step;
+                    if (try self.assignSingletonZstTagToConcreteBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted| {
+                        return .{ .done = adapted };
+                    }
+                    if (try self.beginConcreteTagUnionToConcreteBoundary(frames, identity_request)) |step| return step;
+                    if (try self.assignConcreteTagUnionToScalarBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted| {
+                        return .{ .done = adapted };
+                    }
+                    if (try self.beginConcreteRecordToConcreteBoundary(frames, identity_request)) |step| return step;
+                    return .{ .done = try self.assignDescriptorAwareNominalBoundary(
                         target,
                         source,
-                        target_rep,
-                        source_rep,
-                        dynamic_box_source_mode,
+                        request.target_rep,
+                        request.source_rep,
+                        request.mode,
                         next,
-                    ),
+                    ) };
+                },
             },
-        };
+        }
+    }
+
+    fn stepBoundaryFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), delivered: ?LIR.CFStmtId) Allocator.Error!BoundaryStep {
+        // A tag union frame pushes at most one variant frame per step, so the
+        // top frame stays in place.
+        try frames.ensureUnusedCapacity(self.parent.allocator, 1);
+        const frame = &frames.items[frames.items.len - 1];
+        const child: ?LIR.CFStmtId = if (frame.awaiting)
+            delivered orelse boxyLowerInvariant("boxy boundary frame resumed without its component boundary")
+        else if (delivered != null)
+            boxyLowerInvariant("boxy boundary frame received a boundary it did not request")
+        else
+            null;
+        frame.awaiting = false;
+        switch (frame.state) {
+            .scope => |scope| {
+                const body = child orelse boxyLowerInvariant("boxy boundary scope frame ran before its structure");
+                const stmt = try self.leaveNominalBackingFormalScope(scope, body);
+                frames.items.len -= 1;
+                return .{ .done = stmt };
+            },
+            .bound_dynamic => |bound| {
+                const request = bound.request;
+                const boxed = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{
+                        .target = request.target,
+                        .source = bound.converted,
+                        .target_rep = request.target_rep,
+                        .source_rep = bound.actual,
+                        .mode = .borrow,
+                        .next = request.next,
+                    } };
+                };
+                frames.items.len -= 1;
+                return .{ .request = .{
+                    .target = bound.converted,
+                    .source = request.source,
+                    .target_rep = bound.actual,
+                    .source_rep = request.source_rep,
+                    .mode = .borrow,
+                    .next = boxed,
+                } };
+            },
+            .presence => |*presence| {
+                const request = presence.request;
+                const payload = presence.payload;
+                const converted = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{
+                        .target = request.target,
+                        .source = payload.local,
+                        .target_rep = request.target_rep,
+                        .source_rep = payload.child.rep,
+                        .mode = .borrow,
+                        .next = request.next,
+                    } };
+                };
+                if (!presence.stored_converted and payload.local != payload.stored) {
+                    presence.stored_converted = true;
+                    frame.awaiting = true;
+                    return .{ .request = .{
+                        .target = payload.local,
+                        .source = payload.stored,
+                        .target_rep = payload.child.rep,
+                        .source_rep = payload.stored_rep,
+                        .mode = .borrow,
+                        .next = converted,
+                    } };
+                }
+                const present_body = try self.readGeneratedParserStoredTagPayload(request.source, presence.slot.present, payload, converted);
+                const missing_body = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
+                const variants = [_]ProcedureBuilder.GeneratedParserTagVariant{presence.slot.present};
+                const bodies = [_]LIR.CFStmtId{present_body};
+                const stmt = try self.generatedParserTagDispatch(request.source, request.source_rep, &variants, &bodies, missing_body);
+                return self.finishBoundaryFrame(frames, stmt);
+            },
+            .record => |*state| {
+                if (child) |converted| {
+                    const index = state.remaining;
+                    const read_field = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                        .target = state.source_fields[index],
+                        .op = .{ .field = .{
+                            .source = state.fields_source,
+                            .field_idx = state.source_field_indices[index],
+                        } },
+                        .next = converted,
+                    } }, self.glueOrigin());
+                    state.current = try self.prependRecordFieldDescriptorBind(
+                        state.source_fields[index],
+                        state.fields_source,
+                        state.source_record_rep,
+                        state.source_field_indices[index],
+                        read_field,
+                    );
+                }
+                if (state.remaining > 0) {
+                    state.remaining -= 1;
+                    const index = state.remaining;
+                    try self.propagateLocalDescriptorEnvironmentToField(state.source_fields[index], state.source_field_reps[index], state.fields_source);
+                    frame.awaiting = true;
+                    return .{ .request = .{
+                        .target = state.target_fields[index],
+                        .source = state.source_fields[index],
+                        .target_rep = state.target_field_reps[index],
+                        .source_rep = state.source_field_reps[index],
+                        .mode = .borrow,
+                        .next = state.current,
+                    } };
+                }
+                return self.finishBoundaryFrame(frames, try self.finishRecordBoundary(state));
+            },
+            .list => |*state| {
+                const converted = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{
+                        .target = state.target_elem,
+                        .source = state.source_elem,
+                        .target_rep = state.target_elem_rep,
+                        .source_rep = state.source_elem_rep,
+                        .mode = .borrow,
+                        .next = state.step_next,
+                    } };
+                };
+                return self.finishBoundaryFrame(frames, try self.finishListBoundary(state, converted));
+            },
+            .tag_union => |*state| {
+                if (child) |body| {
+                    state.branches[state.variant].body = body;
+                    state.variant += 1;
+                }
+                while (state.variant < state.source_variants.len) {
+                    const step = switch (state.kind) {
+                        .concrete => try self.beginConcreteTagVariantToConcrete(frames, state),
+                        .dynamic => try self.beginConcreteTagVariantToDynamic(frames, state),
+                    };
+                    switch (step) {
+                        .done => |body| {
+                            state.branches[state.variant].body = body;
+                            state.variant += 1;
+                        },
+                        .pushed => {
+                            frame.awaiting = true;
+                            return .pushed;
+                        },
+                        .request => boxyLowerInvariant("boxy tag variant boundary requested a boundary before pushing its frame"),
+                    }
+                }
+                return self.finishBoundaryFrame(frames, try self.finishTagUnionBoundary(state));
+            },
+            .payloads => |*state| {
+                if (child) |converted| {
+                    const index = state.remaining;
+                    state.current = try self.assignConcreteTagPayloadRead(
+                        state.source_locals[index].local,
+                        state.source_children[index].rep,
+                        state.source_locals[index].desc_local,
+                        state.source,
+                        state.source_tag_rep,
+                        state.tag_name,
+                        state.variant_index,
+                        @intCast(index),
+                        state.source_children.len,
+                        converted,
+                    );
+                }
+                if (state.remaining > 0) {
+                    state.remaining -= 1;
+                    const index = state.remaining;
+                    frame.awaiting = true;
+                    return .{ .request = .{
+                        .target = state.target_locals[index],
+                        .source = state.source_locals[index].local,
+                        .target_rep = state.target_children[index].rep,
+                        .source_rep = state.source_children[index].rep,
+                        .mode = .borrow,
+                        .next = state.current,
+                    } };
+                }
+                const body = if (state.tag_desc) |tag_desc|
+                    try self.prependDescriptorArgMaterializations(tag_desc.field_initializers, state.current)
+                else
+                    state.current;
+                return self.finishBoundaryFrame(frames, body);
+            },
+        }
     }
 
     /// A still-undetermined record field is stored as its presence slot; where
@@ -37020,44 +37808,857 @@ const ProcBodyBuilder = struct {
     /// payload, converted to the target's representation like any other
     /// value. The field is required at this type, so the slot is never
     /// Missing.
-    fn assignPresenceSlotToValueBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        const slot = self.presenceSlotVariants(source_rep) orelse return null;
-        if (self.presenceSlotVariants(target_rep) != null) return null;
+    fn beginPresenceSlotToValueBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        const slot = self.presenceSlotVariants(request.source_rep) orelse return null;
+        if (self.presenceSlotVariants(request.target_rep) != null) return null;
         const payload = try self.generatedParserSingleTagPayloadLocal(slot.present);
-        const converted = try self.assignRepresentationBoundary(target, payload.local, target_rep, payload.child.rep, next);
-        const present_body = try self.generatedParserReadTagPayload(source, slot.present, payload, converted);
-        const missing_body = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
-        const variants = [_]ProcedureBuilder.GeneratedParserTagVariant{slot.present};
-        const bodies = [_]LIR.CFStmtId{present_body};
-        return try self.generatedParserTagDispatch(source, source_rep, &variants, &bodies, missing_body);
+        try self.pushBoundaryFrame(frames, .{ .state = .{ .presence = .{ .request = request, .slot = slot, .payload = payload } } });
+        return .pushed;
     }
 
     /// A dynamic target whose formal an enclosing nominal scope binds to a
     /// known actual stores that actual's own representation. When the source
     /// stores the actual differently, convert it into the actual's
     /// representation first, then box that.
-    fn assignConcreteToBoundDynamicBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        const actual = self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, target_rep) orelse return null;
+    fn beginConcreteToBoundDynamicBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        const actual = self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, request.target_rep) orelse return null;
         if (self.repIsBareDynamic(actual)) return null;
-        if (self.descriptorStorageRep(actual) == source_rep or
-            self.representationBoundaryIsDirect(actual, source_rep)) return null;
+        if (self.descriptorStorageRep(actual) == request.source_rep or
+            self.representationBoundaryIsDirect(actual, request.source_rep)) return null;
         const converted = try self.addFrameBoundaryTargetLocalForRep(actual);
-        const boxed = try self.assignRepresentationBoundary(target, converted, target_rep, actual, next);
-        return try self.assignRepresentationBoundary(converted, source, actual, source_rep, boxed);
+        try self.pushBoundaryFrame(frames, .{ .state = .{ .bound_dynamic = .{ .request = request, .converted = converted, .actual = actual } } });
+        return .pushed;
+    }
+
+    fn beginDynamicRecordToConcreteBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        const source = request.source;
+        const source_rep = request.source_rep;
+        const source_record_rep = self.recordRepForBoundary(source_rep) orelse return null;
+        const target_record_rep = self.recordRepForBoundary(request.target_rep) orelse return null;
+        if (source_record_rep == target_record_rep) return null;
+
+        const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
+        const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
+        if (source_record.kind != .dynamic) return null;
+        switch (target_record.kind) {
+            .record => {},
+            .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
+            .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
+        }
+
+        const source_payload_layout = self.parent.layout_plan.rep_layouts[@intFromEnum(source_record_rep)].descriptor_payload_layout orelse
+            boxyLowerInvariant("dynamic record boundary source had no descriptor payload layout");
+        const target_field_count = self.recordFieldCount(self.parent.plan.childSlice(target_record.children));
+        if (target_field_count == 0) return null;
+
+        const source_payload = try self.addFrameLocal(source_payload_layout);
+        // The unboxed source payload lives past the field conversions and is then
+        // dropped. When it carries an `erased_box` it must be
+        // reference-counted through a descriptor, so tag it with the source box's
+        // descriptor (which describes exactly this payload shape).
+        const source_payload_desc: ?LIR.BoxyDescRef = if (self.repContainsDynamicStorage(source_record_rep))
+            try self.descriptorRefForSourceLocalRep(source, source_rep)
+        else
+            null;
+        if (source_payload_desc) |desc| {
+            self.parent.result.store.setLocalBoxyDesc(source_payload, desc);
+        }
+        return try self.beginRecordFieldsBoundary(frames, request, target_record, target_field_count, .{
+            .target = request.target,
+            .target_rep = request.target_rep,
+            .fields_source = source_payload,
+            .source_record_rep = source_record_rep,
+            .unbox = .{
+                .source = source,
+                .source_rep = source_rep,
+                .payload_desc = source_payload_desc,
+                .payload_layout = source_payload_layout,
+            },
+        }, "dynamic");
+    }
+
+    fn beginConcreteRecordToConcreteBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        const target = request.target;
+        const source = request.source;
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        const next = request.next;
+        if (target_rep == source_rep) return null;
+
+        const source_record_rep = self.recordRepForBoundary(source_rep) orelse return null;
+        const target_record_rep = self.recordRepForBoundary(target_rep) orelse return null;
+        if (source_record_rep == target_record_rep) {
+            // The same backing record rep can be laid out at two different byte
+            // layouts: a transparent nominal that opts into declared field order
+            // reserves unnamed padding its structural backing omits (z@0, pad@4,
+            // a@8 vs the structural a@0, z@4). A flat nominal reinterpret would
+            // land each field at the wrong host-visible offset, so when the byte
+            // layouts differ the fields must be repositioned by their identity
+            // index; when the layouts already match a plain reinterpret suffices.
+            const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+            if (target_layout == source_layout) return null;
+        }
+
+        const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
+        const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
+        switch (source_record.kind) {
+            .record => {},
+            .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(source_record)) return null,
+            .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
+        }
+        switch (target_record.kind) {
+            .record => {},
+            .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
+            .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
+        }
+        const boxed_source_layout = self.workerRuntimeLayoutForRep(source_record_rep).layoutIdx();
+        const boxed_source_layout_value = self.parent.result.layouts.getLayout(boxed_source_layout);
+        const source_backing_is_box = switch (boxed_source_layout_value.tag) {
+            .box, .box_of_zst, .erased_box => true,
+            .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
+        };
+        // A plan-dynamic record whose backing is concrete at this site (fully
+        // known instantiation) converts field-by-field like a concrete record;
+        // only genuinely boxed backings take the box round-trip.
+        if ((source_record.kind == .dynamic or target_record.kind == .dynamic) and source_backing_is_box) {
+            const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
+            try self.bindConstructedTargetDescriptor(target, target_rep);
+            const target_desc = try self.constructedTargetDescForRep(target_rep);
+            const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+            const boxed_source = try self.addFrameLocal(boxed_source_layout);
+            self.parent.result.store.setLocalBoxyDesc(boxed_source, source_desc);
+            var continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
+                .target = target,
+                .source = boxed_source,
+                .source_desc = source_desc,
+                .target_desc = target_desc,
+                .target_layout = target_layout,
+                .source_mode = .move,
+                .next = next,
+            } }, self.glueOrigin());
+            continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, continuation);
+            return .{ .done = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
+                .target = boxed_source,
+                .payload = source,
+                .payload_layout = source_layout,
+                .payload_desc = source_desc,
+                .payload_mode = .borrow,
+                .next = continuation,
+            } }, self.glueOrigin()) };
+        }
+
+        const target_field_count = self.recordFieldCount(self.parent.plan.childSlice(target_record.children));
+        if (target_field_count == 0) return null;
+        return try self.beginRecordFieldsBoundary(frames, request, target_record, target_field_count, .{
+            .target = target,
+            .target_rep = target_rep,
+            .fields_source = source,
+            .source_record_rep = source_record_rep,
+            .unbox = null,
+        }, "concrete");
+    }
+
+    /// Reserve each target field's conversion and build the record's
+    /// construction, then push the frame that converts the fields.
+    fn beginRecordFieldsBoundary(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(BoundaryFrame),
+        request: BoundaryRequest,
+        target_record: Plan.TypeRepresentation,
+        target_field_count: usize,
+        initial: RecordBoundaryState,
+        comptime kind: []const u8,
+    ) Allocator.Error!BoundaryStep {
+        const allocator = self.parent.allocator;
+        var frame: BoundaryFrame = .{ .state = .{ .record = initial } };
+        errdefer self.releaseBoundaryFrame(&frame);
+        const state = &frame.state.record;
+        state.target_fields = try allocator.alloc(LIR.LocalId, target_field_count);
+        state.source_fields = try allocator.alloc(LIR.LocalId, target_field_count);
+        state.target_field_reps = try allocator.alloc(Plan.TypeRepId, target_field_count);
+        state.source_field_reps = try allocator.alloc(Plan.TypeRepId, target_field_count);
+        state.source_field_indices = try allocator.alloc(u16, target_field_count);
+
+        var field_index: usize = 0;
+        for (self.parent.plan.childSlice(target_record.children)) |target_child| {
+            switch (target_child.role) {
+                .record_field => |target_label| {
+                    const source_field = self.findRecordFieldByLabel(state.source_record_rep, procedureModuleById(self.parent.modules, target_child.source_type.module), target_label) orelse
+                        boxyLowerInvariant(kind ++ " record boundary source was missing target field");
+                    state.target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
+                        try self.addFrameLocalForRep(target_child.rep)
+                    else
+                        try self.addFrameBoundaryTargetLocalForRep(target_child.rep);
+                    state.source_fields[field_index] = try self.addFrameLocalForRep(source_field.rep);
+                    state.target_field_reps[field_index] = target_child.rep;
+                    state.source_field_reps[field_index] = source_field.rep;
+                    state.source_field_indices[field_index] = source_field.index;
+                    field_index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(target_child.rep),
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant(kind ++ " record boundary target had non-record child role"),
+            }
+        }
+        if (field_index != target_field_count) {
+            boxyLowerInvariant(kind ++ " record boundary field count disagreed with target record children");
+        }
+
+        const descriptor_fields = try allocator.alloc(AggregateDescriptorField, target_field_count);
+        defer allocator.free(descriptor_fields);
+        for (state.target_fields, state.target_field_reps, state.source_field_reps, descriptor_fields) |field_local, target_field_rep, source_field_rep, *field| {
+            field.* = .{
+                .local = field_local,
+                .target_rep = target_field_rep,
+                // This local is the boundary output, not the original field.
+                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
+                    source_field_rep
+                else
+                    target_field_rep,
+            };
+        }
+        state.aggregate_desc = try self.constructedAggregateDescriptorForFields(state.target, state.target_rep, descriptor_fields);
+
+        const assign_struct = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = state.target,
+            .fields = try self.parent.result.store.addLocalSpan(state.target_fields),
+            .contents_desc = state.aggregate_desc.contents_desc,
+            .next = request.next,
+        } }, self.glueOrigin());
+        state.current = try self.prependOptionalDescriptorMaterialization(state.aggregate_desc.materialize, assign_struct);
+        state.remaining = target_field_count;
+        try frames.append(allocator, frame);
+        return .pushed;
+    }
+
+    fn finishRecordBoundary(self: *ProcBodyBuilder, state: *const RecordBoundaryState) Allocator.Error!LIR.CFStmtId {
+        try self.recordAggregateLocalDescriptorEnvironment(state.target, state.target_rep, state.target_fields);
+        const fields_ready = if (state.unbox) |unbox|
+            try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
+                .target = state.fields_source,
+                .source = unbox.source,
+                .source_desc = try self.descriptorRefForSourceLocalRep(unbox.source, unbox.source_rep),
+                .target_desc = unbox.payload_desc,
+                .target_layout = unbox.payload_layout,
+                .source_mode = .borrow,
+                .next = state.current,
+            } }, self.glueOrigin())
+        else
+            state.current;
+        return try self.prependDescriptorArgMaterializations(state.aggregate_desc.field_initializers, fields_ready);
+    }
+
+    fn beginListRepresentationBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        const allocator = self.parent.allocator;
+        const target = request.target;
+        const source = request.source;
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        const target_list_rep = self.listRepForBoundary(target_rep) orelse return null;
+        const source_list_rep = self.listRepForBoundary(source_rep) orelse return null;
+
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+        const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
+        const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
+        if (!layoutIsList(target_layout_value) or !layoutIsList(source_layout_value)) return null;
+
+        const target_elem = self.repQuery().requiredSingleChild(target_list_rep, .list_elem);
+        const source_elem = self.repQuery().requiredSingleChild(source_list_rep, .list_elem);
+        // This list owns its element descriptor identity. A representation's
+        // existing descriptor local can still describe live source values.
+        const target_elem_desc_local = if (self.parent.plan.representations.items[@intFromEnum(target_elem.rep)].descriptor != null or
+            self.parent.layoutNeedsNestedBoxyDesc(self.parent.listElementLayout(target_layout)))
+            try self.addFrameLocal(.opaque_ptr)
+        else
+            null;
+
+        const len = try self.addFrameLocal(.u64);
+        const capacity = try self.addFrameLocal(.u64);
+        const index = try self.addFrameLocal(.u64);
+        const zero = try self.addFrameLocal(.u64);
+        const initial_list = try self.addFrameLocal(target_layout);
+        const acc = try self.addFrameLocal(target_layout);
+        const source_elem_desc_info = try self.descriptorForSourceListElement(source, source_list_rep, source_elem.rep);
+        var frame: BoundaryFrame = .{ .state = .{ .list = .{
+            .request = request,
+            .target_elem_rep = target_elem.rep,
+            .source_elem_rep = source_elem.rep,
+            .target_elem_desc_local = target_elem_desc_local,
+            .len = len,
+            .capacity = capacity,
+            .index = index,
+            .zero = zero,
+            .initial_list = initial_list,
+            .acc = acc,
+            .elem_desc_initializers = .empty,
+            .target_elem_desc_info = undefined,
+            .target_desc_info = undefined,
+            .join_id = undefined,
+            .done = undefined,
+            .finish = undefined,
+            .step_next = undefined,
+            .source_elem = undefined,
+            .target_elem = undefined,
+            .source_elem_desc_info = undefined,
+            .next_index = undefined,
+            .one = undefined,
+        } } };
+        var pushed = false;
+        defer if (!pushed) self.releaseBoundaryFrame(&frame);
+        const state = &frame.state.list;
+        try self.appendResultDescriptorInitializers(&state.elem_desc_initializers, source_elem_desc_info);
+        // Storage conversion needs a target-shaped item descriptor, which
+        // differs from the source's when the item storage layouts differ.
+        // Materialize once outside the loop, including for an empty list.
+        state.target_elem_desc_info = if (target_elem_desc_local != null and self.parent.listElementLayout(source_layout) != self.parent.listElementLayout(target_layout))
+            try self.adapterDescriptorForCallBoundary(target_elem.rep, source_elem.rep, source_elem_desc_info, &state.elem_desc_initializers)
+        else
+            source_elem_desc_info;
+        try self.appendResultDescriptorInitializers(&state.elem_desc_initializers, state.target_elem_desc_info);
+        state.target_desc_info = if (target_elem_desc_local) |elem_desc_local|
+            try self.constructedListDescriptorForElementLocal(target, target_rep, elem_desc_local)
+        else
+            try self.stableDescriptorForConstructedValue(target, target_rep);
+        if (state.target_desc_info.desc) |desc| {
+            self.parent.result.store.setLocalBoxyDesc(target, desc);
+            self.parent.result.store.setLocalBoxyDesc(initial_list, desc);
+            self.parent.result.store.setLocalBoxyDesc(acc, desc);
+        }
+        state.join_id = self.freshJoinPointId();
+
+        // The loop body: finish when the index reaches the length, otherwise
+        // step.
+        state.done = try self.addFrameLocal(.bool);
+        state.finish = try self.assignLocal(target, acc, request.next);
+
+        // The loop step: convert one element and append it.
+        const source_list_layout = self.parent.result.store.getLocal(source).layout_idx;
+        const target_list_layout = self.parent.result.store.getLocal(acc).layout_idx;
+        const source_storage_layout = self.parent.listElementLayout(source_list_layout);
+        const target_storage_layout = self.parent.listElementLayout(target_list_layout);
+        const source_worker_layout = self.workerRuntimeLayoutForRep(source_elem.rep).layoutIdx();
+        const requires_storage_adapter = source_storage_layout != source_worker_layout or
+            source_storage_layout != target_storage_layout;
+        state.source_elem = try self.addFrameLocal(if (requires_storage_adapter)
+            source_storage_layout
+        else
+            source_worker_layout);
+        state.target_elem = if (requires_storage_adapter)
+            try self.addFrameLocal(target_storage_layout)
+        else if (self.representationBoundaryIsDirect(target_elem.rep, source_elem.rep) or
+            self.repsUseSameDynamicBoxStorage(target_elem.rep, source_elem.rep))
+            state.source_elem
+        else if (target_elem_desc_local != null)
+            // The enclosing list owns this element descriptor. Reserve the
+            // value with that descriptor instead of creating a second identity.
+            try self.addFrameLocal(target_storage_layout)
+        else
+            try self.addFrameBoundaryTargetLocalForRep(target_elem.rep);
+        if (state.target_elem != state.source_elem) {
+            if (target_elem_desc_local) |desc_local| {
+                self.parent.result.store.setLocalBoxyDesc(state.target_elem, .{ .local = desc_local });
+            }
+        }
+        state.source_elem_desc_info = try self.descriptorForSourceListElement(source, source_rep, source_elem.rep);
+        const source_elem_desc = state.source_elem_desc_info.desc orelse
+            boxyLowerInvariant("boxy list boundary source element descriptor had no descriptor");
+        self.parent.result.store.setLocalBoxyDesc(state.source_elem, source_elem_desc);
+        const next_acc = try self.addFrameLocal(self.parent.result.store.getLocal(acc).layout_idx);
+        if (self.parent.result.store.getLocal(acc).boxy_desc) |desc| {
+            self.parent.result.store.setLocalBoxyDesc(next_acc, desc);
+        }
+        state.one = try self.addFrameLocal(.u64);
+        state.next_index = try self.addFrameLocal(.u64);
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = state.join_id } }, self.glueOrigin());
+        continuation = try self.setLocalInitializeJoinParam(acc, next_acc, continuation);
+        continuation = try self.setLocalInitializeJoinParam(index, state.next_index, continuation);
+        continuation = try self.assignListAppendMovingElement(next_acc, acc, state.target_elem, continuation);
+        if (requires_storage_adapter) {
+            const source_desc = state.source_elem_desc_info.desc orelse
+                boxyLowerInvariant("contextual list element storage had no exact source descriptor");
+            continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
+                .target = state.target_elem,
+                .source = state.source_elem,
+                .adapter = try self.internMoveAdapter(
+                    if (source_storage_layout == target_storage_layout) .relabel else .materialize,
+                    source_storage_layout,
+                    target_storage_layout,
+                ),
+                .source_desc = source_desc,
+                .target_desc = if (target_elem_desc_local) |local| .{ .local = local } else try self.parent.staticDescRefForRep(target_elem.rep),
+                .source_mode = .move,
+                .next = continuation,
+            } }, self.glueOrigin());
+        } else if (state.target_elem != state.source_elem) {
+            state.step_next = continuation;
+            try frames.append(allocator, frame);
+            pushed = true;
+            return .pushed;
+        }
+        return .{ .done = try self.finishListBoundary(state, continuation) };
+    }
+
+    /// Finish the list loop from its step's statements from the element's
+    /// read onward.
+    fn finishListBoundary(self: *ProcBodyBuilder, state: *const ListBoundaryState, step_continuation: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        const source = state.request.source;
+        var continuation = try self.assignBinaryLowLevel(state.source_elem, .list_get_unsafe, source, state.index, step_continuation);
+        continuation = try self.prependOptionalDescriptorMaterialization(state.source_elem_desc_info.materialize, continuation);
+        continuation = try self.assignBinaryLowLevel(state.next_index, .num_int_add_crash_on_overflow, state.index, state.one, continuation);
+        const step = try self.assignU64Literal(state.one, 1, continuation);
+        const switch_stmt = try self.boolSwitchNoContinuation(state.done, state.finish, step);
+        const body = try self.assignBinaryLowLevel(state.done, .num_is_eq, state.index, state.len, switch_stmt);
+
+        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = state.join_id } }, self.glueOrigin());
+        initial_jump = try self.setLocalInitializeJoinParam(state.acc, state.initial_list, initial_jump);
+        initial_jump = try self.setLocalInitializeJoinParam(state.index, state.zero, initial_jump);
+        initial_jump = try self.assignU64Literal(state.zero, 0, initial_jump);
+        initial_jump = try self.assignUnaryLowLevel(state.initial_list, .list_with_capacity, state.capacity, initial_jump);
+        initial_jump = try self.assignUnaryLowLevel(state.capacity, .list_capacity, source, initial_jump);
+        initial_jump = try self.assignUnaryLowLevel(state.len, .list_len, source, initial_jump);
+        initial_jump = try self.prependOptionalDescriptorMaterialization(state.target_desc_info.materialize, initial_jump);
+        if (state.target_elem_desc_local) |elem_desc_local| {
+            const target_elem_desc = state.target_elem_desc_info.desc orelse
+                boxyLowerInvariant("boxy list boundary initial element descriptor had no target descriptor");
+            initial_jump = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                .target = elem_desc_local,
+                .desc = target_elem_desc,
+                .next = initial_jump,
+            } }, self.glueOrigin());
+            initial_jump = try self.prependDescriptorArgMaterializations(state.elem_desc_initializers.items, initial_jump);
+        }
+        initial_jump = try self.prependConstructedDescriptorRebindForRep(state.request.source_rep, initial_jump);
+
+        return try self.parent.result.store.addCFStmt(.{ .join = .{
+            .id = state.join_id,
+            .params = try self.joinParamSpan(&[_]LIR.LocalId{ state.index, state.acc }),
+            .body = body,
+            .remainder = initial_jump,
+        } }, self.glueOrigin());
+    }
+
+    fn beginConcreteTagUnionToConcreteBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        const target = request.target;
+        const source = request.source;
+        const target_tag_rep = self.tagVariantRepForBoundary(request.target_rep) orelse return null;
+        const source_tag_rep = self.tagVariantRepForBoundary(request.source_rep) orelse return null;
+
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+        const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
+        const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
+        if (target_layout_value.tag != .tag_union or source_layout_value.tag != .tag_union) return null;
+
+        // Equal-layout tag unions can preserve the source value and its exact
+        // descriptor when the planned representations prove that every source
+        // payload uses storage accepted by the target. This is an explicit
+        // descriptor transfer, not a representation-identity shortcut: the
+        // target's reserved descriptor local is initialized by assignLocal.
+        if (target_layout == source_layout and
+            self.parent.result.store.getLocal(source).boxy_desc != null and
+            try self.repsCanReuseSourceDescriptor(source_tag_rep, target_tag_rep))
+        {
+            return .{ .done = try self.assignLocal(target, source, request.next) };
+        }
+
+        const target_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(target_tag_rep)].tag_variants);
+        const source_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
+        if (target_variants.len == 0 or source_variants.len == 0) return null;
+
+        // Checked row coercions can widen or narrow a concrete tag union. Prove
+        // that one row is a subset of the other before emitting either form;
+        // partially overlapping rows would indicate invalid producer data.
+        var source_has_excluded_variant = false;
+        for (source_variants) |source_variant| {
+            const source_name = self.tagVariantNameText(source_variant);
+            for (target_variants) |target_variant| {
+                if (std.mem.eql(u8, source_name, self.tagVariantNameText(target_variant))) break;
+            } else {
+                source_has_excluded_variant = true;
+            }
+        }
+        var target_has_added_variant = false;
+        for (target_variants) |target_variant| {
+            const target_name = self.tagVariantNameText(target_variant);
+            for (source_variants) |source_variant| {
+                if (std.mem.eql(u8, target_name, self.tagVariantNameText(source_variant))) break;
+            } else {
+                target_has_added_variant = true;
+            }
+        }
+        if (source_has_excluded_variant and target_has_added_variant) {
+            boxyLowerInvariant("boxy concrete tag boundary rows overlapped without a subset relationship");
+        }
+        // The target's payloads are written against the formals of the nominal
+        // wrappers `tagVariantRepForBoundary` passed through.
+        const scope = try self.enterNominalWrapperFormalScopes(request.target_rep);
+        var frame: BoundaryFrame = .{ .state = .{ .tag_union = .{
+            .request = request,
+            .kind = .concrete,
+            .source_tag_rep = source_tag_rep,
+            .source_variants = source_variants,
+            .target_variants = target_variants,
+            .branches = &.{},
+            .scope = scope,
+        } } };
+        errdefer self.releaseBoundaryFrame(&frame);
+        frame.state.tag_union.unreachable_source_variant = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
+        frame.state.tag_union.branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, source_variants.len);
+        try frames.append(self.parent.allocator, frame);
+        return .pushed;
+    }
+
+    /// Begin the current source variant's branch of a concrete target.
+    fn beginConcreteTagVariantToConcrete(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), state: *TagUnionBoundaryState) Allocator.Error!BoundaryStep {
+        const source_index = state.variant;
+        const source_variant = state.source_variants[source_index];
+        if (source_index > std.math.maxInt(u16)) {
+            boxyLowerInvariant("boxy concrete-to-concrete tag adapter variant index exceeded LIR variant range");
+        }
+        state.branches[source_index].value = @intCast(source_index);
+        const target_match: ?struct { variant: Plan.TagVariant, index: u16 } = blk: {
+            const source_name = self.tagVariantNameText(source_variant);
+            for (state.target_variants, 0..) |target_candidate, candidate_index| {
+                if (!std.mem.eql(u8, source_name, self.tagVariantNameText(target_candidate))) continue;
+                if (candidate_index > std.math.maxInt(u16)) {
+                    boxyLowerInvariant("boxy concrete-to-concrete tag adapter target variant index exceeded LIR variant range");
+                }
+                break :blk .{ .variant = target_candidate, .index = @intCast(candidate_index) };
+            }
+            break :blk null;
+        };
+        const target_variant_match = target_match orelse return .{ .done = state.unreachable_source_variant };
+        const target_variant = target_variant_match.variant;
+        const target_variant_index = target_variant_match.index;
+        const target = state.request.target;
+        const target_rep = state.request.target_rep;
+        const source = state.request.source;
+        const source_tag_rep = state.source_tag_rep;
+        const next = state.request.next;
+        const allocator = self.parent.allocator;
+
+        const target_payloads = self.parent.plan.childSlice(target_variant.payloads);
+        const source_payloads = self.parent.plan.childSlice(source_variant.payloads);
+        if (target_payloads.len != source_payloads.len) {
+            boxyLowerInvariant("boxy concrete tag adapter saw payload count mismatch between source and target variants");
+        }
+
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        if (target_payloads.len == 0 or
+            self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(self.tagUnionPayloadLayout(target_layout, target_variant_index))))
+        {
+            const target_desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
+            const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .target_desc = target_desc_info.desc,
+                .variant_index = target_variant_index,
+                .discriminant = target_variant_index,
+                .payload = null,
+                .next = next,
+            } }, self.glueOrigin());
+            return .{ .done = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag) };
+        }
+
+        const target_payload = try self.addFrameLocal(self.tagUnionPayloadLayout(target_layout, target_variant_index));
+        const source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].descriptor != null or
+            self.parent.result.store.getLocal(source).boxy_desc != null;
+
+        var frame: BoundaryFrame = .{ .state = .{ .payloads = .{
+            .target_locals = &.{},
+            .source_locals = &.{},
+            .target_children = target_payloads,
+            .source_children = source_payloads,
+            .source = source,
+            .source_tag_rep = source_tag_rep,
+            .tag_name = source_variant.name,
+            .variant_index = @intCast(source_index),
+            .remaining = target_payloads.len,
+            .current = undefined,
+        } } };
+        errdefer self.releaseBoundaryFrame(&frame);
+        const payloads = &frame.state.payloads;
+        payloads.target_locals = try allocator.alloc(LIR.LocalId, target_payloads.len);
+        payloads.source_locals = try allocator.alloc(ExtractedTagPayloadLocal, source_payloads.len);
+
+        if (target_payloads.len == 1) {
+            payloads.target_locals[0] = target_payload;
+            payloads.source_locals[0] = try self.addExtractedTagPayloadLocal(source_payloads[0].rep, source_has_payload_desc);
+            const descriptor_fields = [_]AggregateDescriptorField{.{
+                .local = target_payload,
+                .target_rep = target_payloads[0].rep,
+                .source_rep = source_payloads[0].rep,
+            }};
+            payloads.tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, &descriptor_fields);
+            const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .target_desc = payloads.tag_desc.?.desc,
+                .variant_index = target_variant_index,
+                .discriminant = target_variant_index,
+                .payload = target_payload,
+                .next = next,
+            } }, self.glueOrigin());
+            payloads.current = try self.prependOptionalDescriptorMaterialization(payloads.tag_desc.?.materialize, assign_tag);
+            try frames.append(allocator, frame);
+            return .pushed;
+        }
+
+        const target_payload_layout = self.parent.result.store.getLocal(target_payload).layout_idx;
+        for (payloads.target_locals, 0..) |*local, index| {
+            local.* = try self.addFrameLocal(try self.aggregateFieldLayout(target_payload_layout, index));
+        }
+        for (source_payloads, payloads.source_locals) |child, *local| {
+            local.* = try self.addExtractedTagPayloadLocal(child.rep, source_has_payload_desc);
+        }
+
+        const descriptor_fields = try allocator.alloc(AggregateDescriptorField, target_payloads.len);
+        defer allocator.free(descriptor_fields);
+        for (payloads.target_locals, target_payloads, source_payloads, descriptor_fields) |field_local, target_child, source_child, *field| {
+            field.* = .{
+                .local = field_local,
+                .target_rep = target_child.rep,
+                .source_rep = source_child.rep,
+            };
+        }
+        payloads.tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, descriptor_fields);
+        const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
+            .target = target,
+            .target_desc = payloads.tag_desc.?.desc,
+            .variant_index = target_variant_index,
+            .discriminant = target_variant_index,
+            .payload = target_payload,
+            .next = next,
+        } }, self.glueOrigin());
+        const continuation = try self.prependOptionalDescriptorMaterialization(payloads.tag_desc.?.materialize, assign_tag);
+        payloads.current = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = target_payload,
+            .fields = try self.parent.result.store.addLocalSpan(payloads.target_locals),
+            .next = continuation,
+        } }, self.glueOrigin());
+        try frames.append(allocator, frame);
+        return .pushed;
+    }
+
+    fn beginConcreteTagUnionToDynamicBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        const target = request.target;
+        const source = request.source;
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        const next = request.next;
+        if (!self.repHasTagDomain(target_rep)) return null;
+        const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse return null;
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+        const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
+        if (source_layout_value.tag != .tag_union) return null;
+
+        const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
+        if (variants.len == 0) return null;
+        var all_variants_have_no_payload = true;
+        for (variants) |variant| {
+            const source_payloads = self.parent.plan.childSlice(variant.payloads);
+            if (source_payloads.len != 0) all_variants_have_no_payload = false;
+            var seen_payloads = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+            defer seen_payloads.deinit();
+            const target_payloads = (try self.dynamicTagPayloadsForTextInner(target_rep, self.tagVariantNameText(variant), &seen_payloads)) orelse return null;
+            if (source_payloads.len != target_payloads.len) return null;
+        }
+        // Reusing the concrete source descriptor relabels the source value's box
+        // as the open target without rewriting it. When the open row's storage
+        // is wider than the concrete tag, reading the relabelled box through the
+        // open descriptor runs past the boxed allocation. For payloadless
+        // variants the per-variant conversion below rebuilds the open tag
+        // exactly, so decline the relabel there and let it run.
+        const target_payload_layout = self.parent.descriptorPayloadLayoutForRep(target_rep);
+        const source_storage_size = self.parent.result.layouts.layoutSize(self.parent.result.layouts.getLayout(source_layout));
+        const target_storage_size = self.parent.result.layouts.layoutSize(self.parent.result.layouts.getLayout(target_payload_layout));
+        const relabel_would_overread = all_variants_have_no_payload and source_storage_size < target_storage_size;
+        if (!relabel_would_overread and
+            self.tagDomainHasOpenExtension(target_rep) and
+            try self.concreteTagUnionBoundaryCanReuseSourceDescriptor(target_rep, source_tag_rep, variants))
+        {
+            const source_desc = try self.descriptorRefForSourceStorageLocalRep(source, source_rep);
+            const existing_target_desc = self.parent.result.store.getLocal(target).boxy_desc;
+            const can_initialize_target_desc = if (existing_target_desc) |existing|
+                std.meta.eql(existing, source_desc) or
+                    if (existing.localOrNull()) |local| !self.localIsReadOnlyDescriptorInput(local) else false
+            else
+                true;
+            if (can_initialize_target_desc) {
+                const target_desc_info = self.resultDescriptorForCallTarget(target, .{ .desc = source_desc });
+                const target_desc = target_desc_info.desc orelse
+                    boxyLowerInvariant("boxy concrete tag relabel had no target descriptor");
+                if (existing_target_desc == null) {
+                    self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+                }
+                const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
+                    .target = target,
+                    .payload = source,
+                    .payload_layout = source_layout,
+                    .source_desc = source_desc,
+                    .payload_desc = target_desc,
+                    .payload_mode = .move,
+                    .next = next,
+                } }, self.glueOrigin());
+                return .{ .done = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, box) };
+            }
+        }
+
+        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
+        try self.pushBoundaryFrame(frames, .{ .state = .{ .tag_union = .{
+            .request = request,
+            .kind = .dynamic,
+            .source_tag_rep = source_tag_rep,
+            .source_variants = variants,
+            .branches = branches,
+        } } });
+        return .pushed;
+    }
+
+    /// Begin the current source variant's branch of a dynamic target.
+    fn beginConcreteTagVariantToDynamic(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), state: *TagUnionBoundaryState) Allocator.Error!BoundaryStep {
+        const variant_position = state.variant;
+        if (variant_position > std.math.maxInt(u16)) {
+            boxyLowerInvariant("boxy concrete-to-dynamic tag adapter variant index exceeded LIR variant range");
+        }
+        state.branches[variant_position].value = @intCast(variant_position);
+        const variant = state.source_variants[variant_position];
+        const variant_index: u16 = @intCast(variant_position);
+        const target = state.request.target;
+        const target_rep = state.request.target_rep;
+        const source = state.request.source;
+        const source_tag_rep = state.source_tag_rep;
+        const allocator = self.parent.allocator;
+
+        try self.bindConstructedTargetDescriptor(target, target_rep);
+        const target_desc = try self.constructedTargetDescForRep(target_rep);
+        const tag_name = try self.lirTagNameForVariant(variant);
+        const source_payloads = self.parent.plan.childSlice(variant.payloads);
+        const target_payloads = try self.dynamicTagPayloadsForVariantName(target_rep, variant);
+        if (source_payloads.len != target_payloads.len) {
+            boxyLowerInvariant("boxy concrete-to-dynamic tag adapter saw payload count mismatch between source and target variants");
+        }
+        if (target_payloads.len == 0) {
+            const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
+                .target = target,
+                .target_desc = target_desc,
+                .tag_name = tag_name,
+                .next = state.request.next,
+            } }, self.glueOrigin());
+            return .{ .done = try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag) };
+        }
+
+        const payload = try self.dynamicTagPayloadLocalForChildren(target_payloads);
+        const payload_desc = if (payload.desc_rep) |payload_rep| try self.descriptorRefForKnownRep(payload_rep) else null;
+        const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
+            .target = target,
+            .target_desc = target_desc,
+            .tag_name = tag_name,
+            .payload = payload.local,
+            .payload_layout = payload.layout_idx,
+            .payload_desc = payload_desc,
+            .payload_mode = .move,
+            .next = state.request.next,
+        } }, self.glueOrigin());
+        const continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag);
+        const source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].descriptor != null or
+            self.parent.result.store.getLocal(source).boxy_desc != null;
+
+        var frame: BoundaryFrame = .{ .state = .{ .payloads = .{
+            .target_locals = &.{},
+            .source_locals = &.{},
+            .target_children = target_payloads,
+            .source_children = source_payloads,
+            .source = source,
+            .source_tag_rep = source_tag_rep,
+            .tag_name = variant.name,
+            .variant_index = variant_index,
+            .remaining = source_payloads.len,
+            .current = continuation,
+        } } };
+        errdefer self.releaseBoundaryFrame(&frame);
+        const payloads = &frame.state.payloads;
+        payloads.source_locals = try allocator.alloc(ExtractedTagPayloadLocal, source_payloads.len);
+        payloads.target_locals = try allocator.alloc(LIR.LocalId, target_payloads.len);
+
+        if (target_payloads.len == 1) {
+            payloads.source_locals[0] = try self.addExtractedTagPayloadLocal(source_payloads[0].rep, source_has_payload_desc);
+            payloads.target_locals[0] = payload.local;
+            try frames.append(allocator, frame);
+            return .pushed;
+        }
+
+        for (source_payloads, payloads.source_locals) |source_payload, *field| {
+            field.* = try self.addExtractedTagPayloadLocal(source_payload.rep, source_has_payload_desc);
+        }
+        for (target_payloads, payloads.target_locals) |target_payload, *field| {
+            field.* = try self.addFrameLocalForRep(target_payload.rep);
+        }
+        payloads.current = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = payload.local,
+            .fields = try self.parent.result.store.addLocalSpan(payloads.target_locals),
+            .next = continuation,
+        } }, self.glueOrigin());
+        try frames.append(allocator, frame);
+        return .pushed;
+    }
+
+    fn finishTagUnionBoundary(self: *ProcBodyBuilder, state: *TagUnionBoundaryState) Allocator.Error!LIR.CFStmtId {
+        const default_branch = switch (state.kind) {
+            .concrete => state.unreachable_source_variant,
+            .dynamic => try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin()),
+        };
+        const discriminant = try self.addFrameLocal(.u16);
+        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = try self.parent.result.store.addCFSwitchBranches(state.branches),
+            .default_branch = default_branch,
+            .continuation = null,
+        } }, self.glueOrigin());
+        const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = state.request.source } },
+            .next = switch_stmt,
+        } }, self.glueOrigin());
+        const scope = state.scope orelse return read_discriminant;
+        const stmt = try self.leaveNominalBackingFormalScope(scope, read_discriminant);
+        state.scope = null;
+        return stmt;
+    }
+
+    fn beginDynamicTagUnionToDynamicBoundary(self: *ProcBodyBuilder, request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        const target_rep = request.target_rep;
+        if (!self.repHasTagDomain(target_rep)) return null;
+        const source_tag_rep = self.tagVariantRepForBoundary(request.source_rep) orelse return null;
+        if (self.tagDomainHasOpenExtension(source_tag_rep) and
+            try self.tagDomainDescriptorCanFlowTo(source_tag_rep, target_rep))
+        {
+            return null;
+        }
+        const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
+        if (variants.len == 0) return null;
+        for (variants) |variant| {
+            const source_payloads = self.parent.plan.childSlice(variant.payloads);
+            const target_payloads = (try self.dynamicTagPayloadsForRepTagNameOrNull(target_rep, source_tag_rep, variant.name)) orelse return null;
+            if (source_payloads.len != target_payloads.len) return null;
+        }
+        // A row-polymorphic source can carry its active variant in a runtime
+        // extension descriptor, so enumerating only the source rep's local
+        // variants is not exhaustive. The explicit adapter specializes the
+        // target descriptor from the exact source descriptor and materializes
+        // every local or extension variant through that descriptor pair.
+        if (try self.plannedCallBoundaryLowersStructure(request.target, request.source, target_rep, request.source_rep)) {
+            return .{ .request = .{
+                .target = request.target,
+                .source = request.source,
+                .target_rep = target_rep,
+                .source_rep = request.source_rep,
+                .mode = .move,
+                .next = request.next,
+            } };
+        }
+        return .{ .done = try self.assignRuntimeAdapterBoundary(request.target, request.source, target_rep, request.source_rep, .move, request.next) };
     }
 
     fn assignDescriptorAwareNominalBoundary(
@@ -37201,520 +38802,6 @@ const ProcBodyBuilder = struct {
         return if (target == source) next else try self.assignLocal(target, source, next);
     }
 
-    fn assignDynamicRecordToConcreteBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        const source_record_rep = self.recordRepForBoundary(source_rep) orelse return null;
-        const target_record_rep = self.recordRepForBoundary(target_rep) orelse return null;
-        if (source_record_rep == target_record_rep) return null;
-
-        const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
-        const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
-        if (source_record.kind != .dynamic) return null;
-        switch (target_record.kind) {
-            .record => {},
-            .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
-            .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
-        }
-
-        const source_payload_layout = self.parent.layout_plan.rep_layouts[@intFromEnum(source_record_rep)].descriptor_payload_layout orelse
-            boxyLowerInvariant("dynamic record boundary source had no descriptor payload layout");
-        const target_field_count = self.recordFieldCount(self.parent.plan.childSlice(target_record.children));
-        if (target_field_count == 0) return null;
-
-        const source_payload = try self.addFrameLocal(source_payload_layout);
-        // The unboxed source payload lives past the field conversions and is then
-        // dropped. When it carries an `erased_box` it must be
-        // reference-counted through a descriptor, so tag it with the source box's
-        // descriptor (which describes exactly this payload shape).
-        const source_payload_desc: ?LIR.BoxyDescRef = if (self.repContainsDynamicStorage(source_record_rep))
-            try self.descriptorRefForSourceLocalRep(source, source_rep)
-        else
-            null;
-        if (source_payload_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(source_payload, desc);
-        }
-        const target_fields = try self.parent.allocator.alloc(LIR.LocalId, target_field_count);
-        defer self.parent.allocator.free(target_fields);
-        const source_fields = try self.parent.allocator.alloc(LIR.LocalId, target_field_count);
-        defer self.parent.allocator.free(source_fields);
-        const target_field_reps = try self.parent.allocator.alloc(Plan.TypeRepId, target_field_count);
-        defer self.parent.allocator.free(target_field_reps);
-        const source_field_reps = try self.parent.allocator.alloc(Plan.TypeRepId, target_field_count);
-        defer self.parent.allocator.free(source_field_reps);
-        const source_field_indices = try self.parent.allocator.alloc(u16, target_field_count);
-        defer self.parent.allocator.free(source_field_indices);
-
-        var field_index: usize = 0;
-        for (self.parent.plan.childSlice(target_record.children)) |target_child| {
-            switch (target_child.role) {
-                .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(source_record_rep, procedureModuleById(self.parent.modules, target_child.source_type.module), target_label) orelse
-                        boxyLowerInvariant("dynamic record boundary source was missing target field");
-                    target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
-                        try self.addFrameLocalForRep(target_child.rep)
-                    else
-                        try self.addFrameBoundaryTargetLocalForRep(target_child.rep);
-                    source_fields[field_index] = try self.addFrameLocalForRep(source_field.rep);
-                    target_field_reps[field_index] = target_child.rep;
-                    source_field_reps[field_index] = source_field.rep;
-                    source_field_indices[field_index] = source_field.index;
-                    field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(target_child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("dynamic record boundary target had non-record child role"),
-            }
-        }
-        if (field_index != target_field_count) {
-            boxyLowerInvariant("dynamic record boundary field count disagreed with target record children");
-        }
-
-        const descriptor_fields = try self.parent.allocator.alloc(AggregateDescriptorField, target_field_count);
-        defer self.parent.allocator.free(descriptor_fields);
-        for (target_fields, target_field_reps, source_field_reps, descriptor_fields) |field_local, target_field_rep, source_field_rep, *field| {
-            field.* = .{
-                .local = field_local,
-                .target_rep = target_field_rep,
-                // This local is the boundary output, not the original field.
-                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
-                    source_field_rep
-                else
-                    target_field_rep,
-            };
-        }
-        const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
-        defer aggregate_desc.deinit(self.parent.allocator);
-
-        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
-            .target = target,
-            .fields = try self.parent.result.store.addLocalSpan(target_fields),
-            .contents_desc = aggregate_desc.contents_desc,
-            .next = next,
-        } }, self.glueOrigin());
-        continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
-
-        var index = target_field_count;
-        while (index > 0) {
-            index -= 1;
-            try self.propagateLocalDescriptorEnvironmentToField(source_fields[index], source_field_reps[index], source_payload);
-            continuation = try self.assignRepresentationBoundary(
-                target_fields[index],
-                source_fields[index],
-                target_field_reps[index],
-                source_field_reps[index],
-                continuation,
-            );
-            const read_field = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                .target = source_fields[index],
-                .op = .{ .field = .{
-                    .source = source_payload,
-                    .field_idx = source_field_indices[index],
-                } },
-                .next = continuation,
-            } }, self.glueOrigin());
-            continuation = try self.prependRecordFieldDescriptorBind(
-                source_fields[index],
-                source_payload,
-                source_record_rep,
-                source_field_indices[index],
-                read_field,
-            );
-        }
-
-        try self.recordAggregateLocalDescriptorEnvironment(target, target_rep, target_fields);
-
-        const unbox_source = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
-            .target = source_payload,
-            .source = source,
-            .source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep),
-            .target_desc = source_payload_desc,
-            .target_layout = source_payload_layout,
-            .source_mode = .borrow,
-            .next = continuation,
-        } }, self.glueOrigin());
-        return try self.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, unbox_source);
-    }
-
-    fn assignConcreteRecordToConcreteBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        if (target_rep == source_rep) return null;
-
-        const source_record_rep = self.recordRepForBoundary(source_rep) orelse return null;
-        const target_record_rep = self.recordRepForBoundary(target_rep) orelse return null;
-        if (source_record_rep == target_record_rep) {
-            // The same backing record rep can be laid out at two different byte
-            // layouts: a transparent nominal that opts into declared field order
-            // reserves unnamed padding its structural backing omits (z@0, pad@4,
-            // a@8 vs the structural a@0, z@4). A flat nominal reinterpret would
-            // land each field at the wrong host-visible offset, so when the byte
-            // layouts differ the fields must be repositioned by their identity
-            // index; when the layouts already match a plain reinterpret suffices.
-            const target_layout = self.parent.result.store.getLocal(target).layout_idx;
-            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-            if (target_layout == source_layout) return null;
-        }
-
-        const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
-        const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
-        switch (source_record.kind) {
-            .record => {},
-            .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(source_record)) return null,
-            .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
-        }
-        switch (target_record.kind) {
-            .record => {},
-            .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
-            .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
-        }
-        const boxed_source_layout = self.workerRuntimeLayoutForRep(source_record_rep).layoutIdx();
-        const boxed_source_layout_value = self.parent.result.layouts.getLayout(boxed_source_layout);
-        const source_backing_is_box = switch (boxed_source_layout_value.tag) {
-            .box, .box_of_zst, .erased_box => true,
-            .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
-        };
-        // A plan-dynamic record whose backing is concrete at this site (fully
-        // known instantiation) converts field-by-field like a concrete record;
-        // only genuinely boxed backings take the box round-trip.
-        if ((source_record.kind == .dynamic or target_record.kind == .dynamic) and source_backing_is_box) {
-            const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
-            try self.bindConstructedTargetDescriptor(target, target_rep);
-            const target_desc = try self.constructedTargetDescForRep(target_rep);
-            const target_layout = self.parent.result.store.getLocal(target).layout_idx;
-            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-            const boxed_source = try self.addFrameLocal(boxed_source_layout);
-            self.parent.result.store.setLocalBoxyDesc(boxed_source, source_desc);
-            var continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
-                .target = target,
-                .source = boxed_source,
-                .source_desc = source_desc,
-                .target_desc = target_desc,
-                .target_layout = target_layout,
-                .source_mode = .move,
-                .next = next,
-            } }, self.glueOrigin());
-            continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, continuation);
-            return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
-                .target = boxed_source,
-                .payload = source,
-                .payload_layout = source_layout,
-                .payload_desc = source_desc,
-                .payload_mode = .borrow,
-                .next = continuation,
-            } }, self.glueOrigin());
-        }
-
-        const target_field_count = self.recordFieldCount(self.parent.plan.childSlice(target_record.children));
-        if (target_field_count == 0) return null;
-
-        const target_fields = try self.parent.allocator.alloc(LIR.LocalId, target_field_count);
-        defer self.parent.allocator.free(target_fields);
-        const source_fields = try self.parent.allocator.alloc(LIR.LocalId, target_field_count);
-        defer self.parent.allocator.free(source_fields);
-        const target_field_reps = try self.parent.allocator.alloc(Plan.TypeRepId, target_field_count);
-        defer self.parent.allocator.free(target_field_reps);
-        const source_field_reps = try self.parent.allocator.alloc(Plan.TypeRepId, target_field_count);
-        defer self.parent.allocator.free(source_field_reps);
-        const source_field_indices = try self.parent.allocator.alloc(u16, target_field_count);
-        defer self.parent.allocator.free(source_field_indices);
-
-        var field_index: usize = 0;
-        for (self.parent.plan.childSlice(target_record.children)) |target_child| {
-            switch (target_child.role) {
-                .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(source_record_rep, procedureModuleById(self.parent.modules, target_child.source_type.module), target_label) orelse
-                        boxyLowerInvariant("concrete record boundary source was missing target field");
-                    target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
-                        try self.addFrameLocalForRep(target_child.rep)
-                    else
-                        try self.addFrameBoundaryTargetLocalForRep(target_child.rep);
-                    source_fields[field_index] = try self.addFrameLocalForRep(source_field.rep);
-                    target_field_reps[field_index] = target_child.rep;
-                    source_field_reps[field_index] = source_field.rep;
-                    source_field_indices[field_index] = source_field.index;
-                    field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(target_child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("concrete record boundary target had non-record child role"),
-            }
-        }
-        if (field_index != target_field_count) {
-            boxyLowerInvariant("concrete record boundary field count disagreed with target record children");
-        }
-
-        const descriptor_fields = try self.parent.allocator.alloc(AggregateDescriptorField, target_field_count);
-        defer self.parent.allocator.free(descriptor_fields);
-        for (target_fields, target_field_reps, source_field_reps, descriptor_fields) |field_local, target_field_rep, source_field_rep, *field| {
-            field.* = .{
-                .local = field_local,
-                .target_rep = target_field_rep,
-                // This local is the boundary output, not the original field.
-                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
-                    source_field_rep
-                else
-                    target_field_rep,
-            };
-        }
-        const aggregate_desc = try self.constructedAggregateDescriptorForFields(target, target_rep, descriptor_fields);
-        defer aggregate_desc.deinit(self.parent.allocator);
-
-        var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
-            .target = target,
-            .fields = try self.parent.result.store.addLocalSpan(target_fields),
-            .contents_desc = aggregate_desc.contents_desc,
-            .next = next,
-        } }, self.glueOrigin());
-        continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
-
-        var index = target_field_count;
-        while (index > 0) {
-            index -= 1;
-            try self.propagateLocalDescriptorEnvironmentToField(source_fields[index], source_field_reps[index], source);
-            continuation = try self.assignRepresentationBoundary(
-                target_fields[index],
-                source_fields[index],
-                target_field_reps[index],
-                source_field_reps[index],
-                continuation,
-            );
-            const read_field = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                .target = source_fields[index],
-                .op = .{ .field = .{
-                    .source = source,
-                    .field_idx = source_field_indices[index],
-                } },
-                .next = continuation,
-            } }, self.glueOrigin());
-            continuation = try self.prependRecordFieldDescriptorBind(
-                source_fields[index],
-                source,
-                source_record_rep,
-                source_field_indices[index],
-                read_field,
-            );
-        }
-
-        try self.recordAggregateLocalDescriptorEnvironment(target, target_rep, target_fields);
-
-        return try self.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
-    }
-
-    fn assignListRepresentationBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        const target_list_rep = self.listRepForBoundary(target_rep) orelse return null;
-        const source_list_rep = self.listRepForBoundary(source_rep) orelse return null;
-
-        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
-        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-        const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
-        const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-        if (!layoutIsList(target_layout_value) or !layoutIsList(source_layout_value)) return null;
-
-        const target_elem = self.repQuery().requiredSingleChild(target_list_rep, .list_elem);
-        const source_elem = self.repQuery().requiredSingleChild(source_list_rep, .list_elem);
-        // This list owns its element descriptor identity. A representation's
-        // existing descriptor local can still describe live source values.
-        const target_elem_desc_local = if (self.parent.plan.representations.items[@intFromEnum(target_elem.rep)].descriptor != null or
-            self.parent.layoutNeedsNestedBoxyDesc(self.parent.listElementLayout(target_layout)))
-            try self.addFrameLocal(.opaque_ptr)
-        else
-            null;
-
-        const len = try self.addFrameLocal(.u64);
-        const capacity = try self.addFrameLocal(.u64);
-        const index = try self.addFrameLocal(.u64);
-        const zero = try self.addFrameLocal(.u64);
-        const initial_list = try self.addFrameLocal(target_layout);
-        const acc = try self.addFrameLocal(target_layout);
-        const source_elem_desc_info = try self.descriptorForSourceListElement(source, source_list_rep, source_elem.rep);
-        var elem_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
-        defer elem_desc_initializers.deinit(self.parent.allocator);
-        try self.appendResultDescriptorInitializers(&elem_desc_initializers, source_elem_desc_info);
-        // Storage conversion needs a target-shaped item descriptor, which
-        // differs from the source's when the item storage layouts differ.
-        // Materialize once outside the loop, including for an empty list.
-        const target_elem_desc_info = if (target_elem_desc_local != null and self.parent.listElementLayout(source_layout) != self.parent.listElementLayout(target_layout))
-            try self.adapterDescriptorForCallBoundary(target_elem.rep, source_elem.rep, source_elem_desc_info, &elem_desc_initializers)
-        else
-            source_elem_desc_info;
-        try self.appendResultDescriptorInitializers(&elem_desc_initializers, target_elem_desc_info);
-        const target_desc_info = if (target_elem_desc_local) |elem_desc_local|
-            try self.constructedListDescriptorForElementLocal(target, target_rep, elem_desc_local)
-        else
-            try self.stableDescriptorForConstructedValue(target, target_rep);
-        if (target_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
-            self.parent.result.store.setLocalBoxyDesc(initial_list, desc);
-            self.parent.result.store.setLocalBoxyDesc(acc, desc);
-        }
-        const join_id = self.freshJoinPointId();
-
-        const body = try self.assignListRepresentationBoundaryLoopBody(
-            target,
-            source,
-            source_rep,
-            target_elem.rep,
-            source_elem.rep,
-            target_elem_desc_local,
-            len,
-            index,
-            acc,
-            join_id,
-            next,
-        );
-
-        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
-        initial_jump = try self.setLocalInitializeJoinParam(acc, initial_list, initial_jump);
-        initial_jump = try self.setLocalInitializeJoinParam(index, zero, initial_jump);
-        initial_jump = try self.assignU64Literal(zero, 0, initial_jump);
-        initial_jump = try self.assignUnaryLowLevel(initial_list, .list_with_capacity, capacity, initial_jump);
-        initial_jump = try self.assignUnaryLowLevel(capacity, .list_capacity, source, initial_jump);
-        initial_jump = try self.assignUnaryLowLevel(len, .list_len, source, initial_jump);
-        initial_jump = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, initial_jump);
-        if (target_elem_desc_local) |elem_desc_local| {
-            const target_elem_desc = target_elem_desc_info.desc orelse
-                boxyLowerInvariant("boxy list boundary initial element descriptor had no target descriptor");
-            initial_jump = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-                .target = elem_desc_local,
-                .desc = target_elem_desc,
-                .next = initial_jump,
-            } }, self.glueOrigin());
-            initial_jump = try self.prependDescriptorArgMaterializations(elem_desc_initializers.items, initial_jump);
-        }
-        initial_jump = try self.prependConstructedDescriptorRebindForRep(source_rep, initial_jump);
-
-        return try self.parent.result.store.addCFStmt(.{ .join = .{
-            .id = join_id,
-            .params = try self.joinParamSpan(&[_]LIR.LocalId{ index, acc }),
-            .body = body,
-            .remainder = initial_jump,
-        } }, self.glueOrigin());
-    }
-
-    fn assignListRepresentationBoundaryLoopBody(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        source_rep: Plan.TypeRepId,
-        target_elem_rep: Plan.TypeRepId,
-        source_elem_rep: Plan.TypeRepId,
-        target_elem_desc_local: ?LIR.LocalId,
-        len: LIR.LocalId,
-        index: LIR.LocalId,
-        acc: LIR.LocalId,
-        join_id: LIR.JoinPointId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const done = try self.addFrameLocal(.bool);
-        const finish = try self.assignLocal(target, acc, next);
-        const step = try self.assignListRepresentationBoundaryLoopStep(
-            source,
-            source_rep,
-            target_elem_rep,
-            source_elem_rep,
-            target_elem_desc_local,
-            index,
-            acc,
-            join_id,
-        );
-        const switch_stmt = try self.boolSwitchNoContinuation(done, finish, step);
-        return try self.assignBinaryLowLevel(done, .num_is_eq, index, len, switch_stmt);
-    }
-
-    fn assignListRepresentationBoundaryLoopStep(
-        self: *ProcBodyBuilder,
-        source: LIR.LocalId,
-        source_list_rep: Plan.TypeRepId,
-        target_elem_rep: Plan.TypeRepId,
-        source_elem_rep: Plan.TypeRepId,
-        target_elem_desc_local: ?LIR.LocalId,
-        index: LIR.LocalId,
-        acc: LIR.LocalId,
-        join_id: LIR.JoinPointId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const source_list_layout = self.parent.result.store.getLocal(source).layout_idx;
-        const target_list_layout = self.parent.result.store.getLocal(acc).layout_idx;
-        const source_storage_layout = self.parent.listElementLayout(source_list_layout);
-        const target_storage_layout = self.parent.listElementLayout(target_list_layout);
-        const source_worker_layout = self.workerRuntimeLayoutForRep(source_elem_rep).layoutIdx();
-        const requires_storage_adapter = source_storage_layout != source_worker_layout or
-            source_storage_layout != target_storage_layout;
-        const source_elem = try self.addFrameLocal(if (requires_storage_adapter)
-            source_storage_layout
-        else
-            source_worker_layout);
-        const target_elem = if (requires_storage_adapter)
-            try self.addFrameLocal(target_storage_layout)
-        else if (self.representationBoundaryIsDirect(target_elem_rep, source_elem_rep) or
-            self.repsUseSameDynamicBoxStorage(target_elem_rep, source_elem_rep))
-            source_elem
-        else if (target_elem_desc_local != null)
-            // The enclosing list owns this element descriptor. Reserve the
-            // value with that descriptor instead of creating a second identity.
-            try self.addFrameLocal(target_storage_layout)
-        else
-            try self.addFrameBoundaryTargetLocalForRep(target_elem_rep);
-        if (target_elem != source_elem) {
-            if (target_elem_desc_local) |desc_local| {
-                self.parent.result.store.setLocalBoxyDesc(target_elem, .{ .local = desc_local });
-            }
-        }
-        const source_elem_desc_info = try self.descriptorForSourceListElement(source, source_list_rep, source_elem_rep);
-        const source_elem_desc = source_elem_desc_info.desc orelse
-            boxyLowerInvariant("boxy list boundary source element descriptor had no descriptor");
-        self.parent.result.store.setLocalBoxyDesc(source_elem, source_elem_desc);
-        const next_acc = try self.addFrameLocal(self.parent.result.store.getLocal(acc).layout_idx);
-        if (self.parent.result.store.getLocal(acc).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(next_acc, desc);
-        }
-        const one = try self.addFrameLocal(.u64);
-        const next_index = try self.addFrameLocal(.u64);
-
-        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.glueOrigin());
-        continuation = try self.setLocalInitializeJoinParam(acc, next_acc, continuation);
-        continuation = try self.setLocalInitializeJoinParam(index, next_index, continuation);
-        continuation = try self.assignListAppendMovingElement(next_acc, acc, target_elem, continuation);
-        if (requires_storage_adapter) {
-            const source_desc = source_elem_desc_info.desc orelse
-                boxyLowerInvariant("contextual list element storage had no exact source descriptor");
-            continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
-                .target = target_elem,
-                .source = source_elem,
-                .adapter = try self.internMoveAdapter(
-                    if (source_storage_layout == target_storage_layout) .relabel else .materialize,
-                    source_storage_layout,
-                    target_storage_layout,
-                ),
-                .source_desc = source_desc,
-                .target_desc = if (target_elem_desc_local) |local| .{ .local = local } else try self.parent.staticDescRefForRep(target_elem_rep),
-                .source_mode = .move,
-                .next = continuation,
-            } }, self.glueOrigin());
-        } else if (target_elem != source_elem) {
-            continuation = try self.assignRepresentationBoundary(target_elem, source_elem, target_elem_rep, source_elem_rep, continuation);
-        }
-        continuation = try self.assignBinaryLowLevel(source_elem, .list_get_unsafe, source, index, continuation);
-        continuation = try self.prependOptionalDescriptorMaterialization(source_elem_desc_info.materialize, continuation);
-        continuation = try self.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
-        return try self.assignU64Literal(one, 1, continuation);
-    }
-
     fn descriptorForSourceListElement(
         self: *ProcBodyBuilder,
         source: LIR.LocalId,
@@ -37791,123 +38878,6 @@ const ProcBodyBuilder = struct {
         }
 
         return null;
-    }
-
-    fn assignConcreteTagUnionToConcreteBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        const target_tag_rep = self.tagVariantRepForBoundary(target_rep) orelse return null;
-        const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse return null;
-
-        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
-        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-        const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
-        const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-        if (target_layout_value.tag != .tag_union or source_layout_value.tag != .tag_union) return null;
-
-        // Equal-layout tag unions can preserve the source value and its exact
-        // descriptor when the planned representations prove that every source
-        // payload uses storage accepted by the target. This is an explicit
-        // descriptor transfer, not a representation-identity shortcut: the
-        // target's reserved descriptor local is initialized by assignLocal.
-        if (target_layout == source_layout and
-            self.parent.result.store.getLocal(source).boxy_desc != null and
-            try self.repsCanReuseSourceDescriptor(source_tag_rep, target_tag_rep))
-        {
-            return try self.assignLocal(target, source, next);
-        }
-
-        const target_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(target_tag_rep)].tag_variants);
-        const source_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
-        if (target_variants.len == 0 or source_variants.len == 0) return null;
-
-        // Checked row coercions can widen or narrow a concrete tag union. Prove
-        // that one row is a subset of the other before emitting either form;
-        // partially overlapping rows would indicate invalid producer data.
-        var source_has_excluded_variant = false;
-        for (source_variants) |source_variant| {
-            const source_name = self.tagVariantNameText(source_variant);
-            for (target_variants) |target_variant| {
-                if (std.mem.eql(u8, source_name, self.tagVariantNameText(target_variant))) break;
-            } else {
-                source_has_excluded_variant = true;
-            }
-        }
-        var target_has_added_variant = false;
-        for (target_variants) |target_variant| {
-            const target_name = self.tagVariantNameText(target_variant);
-            for (source_variants) |source_variant| {
-                if (std.mem.eql(u8, target_name, self.tagVariantNameText(source_variant))) break;
-            } else {
-                target_has_added_variant = true;
-            }
-        }
-        if (source_has_excluded_variant and target_has_added_variant) {
-            boxyLowerInvariant("boxy concrete tag boundary rows overlapped without a subset relationship");
-        }
-        // The target's payloads are written against the formals of the nominal
-        // wrappers `tagVariantRepForBoundary` passed through.
-        const scope = try self.enterNominalWrapperFormalScopes(target_rep);
-        defer self.dropNominalBackingFormalScope(scope);
-        const unreachable_source_variant = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
-        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, source_variants.len);
-        defer self.parent.allocator.free(branches);
-        for (source_variants, branches, 0..) |source_variant, *branch, source_index| {
-            if (source_index > std.math.maxInt(u16)) {
-                boxyLowerInvariant("boxy concrete-to-concrete tag adapter variant index exceeded LIR variant range");
-            }
-            const target_match: ?struct { variant: Plan.TagVariant, index: u16 } = blk: {
-                const source_name = self.tagVariantNameText(source_variant);
-                for (target_variants, 0..) |target_candidate, candidate_index| {
-                    if (!std.mem.eql(u8, source_name, self.tagVariantNameText(target_candidate))) continue;
-                    if (candidate_index > std.math.maxInt(u16)) {
-                        boxyLowerInvariant("boxy concrete-to-concrete tag adapter target variant index exceeded LIR variant range");
-                    }
-                    break :blk .{ .variant = target_candidate, .index = @intCast(candidate_index) };
-                }
-                break :blk null;
-            };
-            const target_variant_match = target_match orelse {
-                branch.* = .{
-                    .value = @intCast(source_index),
-                    .body = unreachable_source_variant,
-                };
-                continue;
-            };
-            branch.* = .{
-                .value = @intCast(source_index),
-                .body = try self.assignConcreteTagVariantToConcrete(
-                    target,
-                    source,
-                    target_rep,
-                    source_tag_rep,
-                    target_variant_match.variant,
-                    source_variant,
-                    target_variant_match.index,
-                    @intCast(source_index),
-                    next,
-                ),
-            };
-        }
-
-        const discriminant = try self.addFrameLocal(.u16);
-        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = discriminant,
-            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
-            .default_branch = unreachable_source_variant,
-            .continuation = null,
-        } }, self.glueOrigin());
-        const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
-            .next = switch_stmt,
-        } }, self.glueOrigin());
-        return try self.leaveNominalBackingFormalScope(scope, read_discriminant);
     }
 
     /// Adapt a concrete tag union into a target whose every payload is
@@ -38008,290 +38978,6 @@ const ProcBodyBuilder = struct {
                 .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
             }
         }
-    }
-
-    fn assignConcreteTagVariantToConcrete(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_tag_rep: Plan.TypeRepId,
-        target_variant: Plan.TagVariant,
-        source_variant: Plan.TagVariant,
-        target_variant_index: u16,
-        source_variant_index: u16,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const target_payloads = self.parent.plan.childSlice(target_variant.payloads);
-        const source_payloads = self.parent.plan.childSlice(source_variant.payloads);
-        if (target_payloads.len != source_payloads.len) {
-            boxyLowerInvariant("boxy concrete tag adapter saw payload count mismatch between source and target variants");
-        }
-
-        if (target_payloads.len == 0) {
-            const target_desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
-            const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
-                .target = target,
-                .target_desc = target_desc_info.desc,
-                .variant_index = target_variant_index,
-                .discriminant = target_variant_index,
-                .payload = null,
-                .next = next,
-            } }, self.glueOrigin());
-            return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
-        }
-
-        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
-        const target_payload_layout = self.tagUnionPayloadLayout(target_layout, target_variant_index);
-        if (self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(target_payload_layout))) {
-            const target_desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
-            const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
-                .target = target,
-                .target_desc = target_desc_info.desc,
-                .variant_index = target_variant_index,
-                .discriminant = target_variant_index,
-                .payload = null,
-                .next = next,
-            } }, self.glueOrigin());
-            return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
-        }
-
-        const target_payload = try self.addFrameLocal(target_payload_layout);
-        const source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].descriptor != null or
-            self.parent.result.store.getLocal(source).boxy_desc != null;
-
-        if (target_payloads.len == 1) {
-            const source_payload = try self.addExtractedTagPayloadLocal(source_payloads[0].rep, source_has_payload_desc);
-            const descriptor_fields = [_]AggregateDescriptorField{.{
-                .local = target_payload,
-                .target_rep = target_payloads[0].rep,
-                .source_rep = source_payloads[0].rep,
-            }};
-            const tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, &descriptor_fields);
-            defer tag_desc.deinit(self.parent.allocator);
-            const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
-                .target = target,
-                .target_desc = tag_desc.desc,
-                .variant_index = target_variant_index,
-                .discriminant = target_variant_index,
-                .payload = target_payload,
-                .next = next,
-            } }, self.glueOrigin());
-            var continuation = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign_tag);
-            continuation = try self.assignRepresentationBoundary(
-                target_payload,
-                source_payload.local,
-                target_payloads[0].rep,
-                source_payloads[0].rep,
-                continuation,
-            );
-            continuation = try self.assignConcreteTagPayloadRead(
-                source_payload.local,
-                source_payloads[0].rep,
-                source_payload.desc_local,
-                source,
-                source_tag_rep,
-                source_variant.name,
-                source_variant_index,
-                0,
-                source_payloads.len,
-                continuation,
-            );
-            return try self.prependDescriptorArgMaterializations(tag_desc.field_initializers, continuation);
-        }
-
-        return try self.assignConcreteTagPayloadStructToConcrete(
-            target,
-            target_rep,
-            target_payload,
-            source,
-            source_tag_rep,
-            source_variant,
-            target_variant_index,
-            source_variant_index,
-            target_payloads,
-            source_payloads,
-            next,
-        );
-    }
-
-    fn assignConcreteTagPayloadStructToConcrete(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        target_payload: LIR.LocalId,
-        source: LIR.LocalId,
-        source_tag_rep: Plan.TypeRepId,
-        source_variant: Plan.TagVariant,
-        target_variant_index: u16,
-        source_variant_index: u16,
-        target_payloads: []const Plan.RepChild,
-        source_payloads: []const Plan.RepChild,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (target_payloads.len != source_payloads.len) {
-            boxyLowerInvariant("boxy concrete tag payload adapter saw mismatched struct field counts");
-        }
-
-        const target_fields = try self.parent.allocator.alloc(LIR.LocalId, target_payloads.len);
-        defer self.parent.allocator.free(target_fields);
-        const source_fields = try self.parent.allocator.alloc(ExtractedTagPayloadLocal, source_payloads.len);
-        defer self.parent.allocator.free(source_fields);
-        const source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].descriptor != null or
-            self.parent.result.store.getLocal(source).boxy_desc != null;
-
-        const target_payload_layout = self.parent.result.store.getLocal(target_payload).layout_idx;
-        for (target_fields, 0..) |*local, index| {
-            local.* = try self.addFrameLocal(try self.aggregateFieldLayout(target_payload_layout, index));
-        }
-        for (source_payloads, source_fields) |child, *local| {
-            local.* = try self.addExtractedTagPayloadLocal(child.rep, source_has_payload_desc);
-        }
-
-        const descriptor_fields = try self.parent.allocator.alloc(AggregateDescriptorField, target_payloads.len);
-        defer self.parent.allocator.free(descriptor_fields);
-        for (target_fields, target_payloads, source_payloads, descriptor_fields) |field_local, target_child, source_child, *field| {
-            field.* = .{
-                .local = field_local,
-                .target_rep = target_child.rep,
-                .source_rep = source_child.rep,
-            };
-        }
-        const tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, descriptor_fields);
-        defer tag_desc.deinit(self.parent.allocator);
-        const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
-            .target = target,
-            .target_desc = tag_desc.desc,
-            .variant_index = target_variant_index,
-            .discriminant = target_variant_index,
-            .payload = target_payload,
-            .next = next,
-        } }, self.glueOrigin());
-        var continuation = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign_tag);
-        continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
-            .target = target_payload,
-            .fields = try self.parent.result.store.addLocalSpan(target_fields),
-            .next = continuation,
-        } }, self.glueOrigin());
-
-        var index = target_payloads.len;
-        while (index > 0) {
-            index -= 1;
-            continuation = try self.assignRepresentationBoundary(
-                target_fields[index],
-                source_fields[index].local,
-                target_payloads[index].rep,
-                source_payloads[index].rep,
-                continuation,
-            );
-            continuation = try self.assignConcreteTagPayloadRead(
-                source_fields[index].local,
-                source_payloads[index].rep,
-                source_fields[index].desc_local,
-                source,
-                source_tag_rep,
-                source_variant.name,
-                source_variant_index,
-                @intCast(index),
-                source_payloads.len,
-                continuation,
-            );
-        }
-
-        return try self.prependDescriptorArgMaterializations(tag_desc.field_initializers, continuation);
-    }
-
-    fn assignConcreteTagUnionToDynamicBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        if (!self.repHasTagDomain(target_rep)) return null;
-        const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse return null;
-        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-        const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-        if (source_layout_value.tag != .tag_union) return null;
-
-        const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
-        if (variants.len == 0) return null;
-        var all_variants_have_no_payload = true;
-        for (variants) |variant| {
-            const source_payloads = self.parent.plan.childSlice(variant.payloads);
-            if (source_payloads.len != 0) all_variants_have_no_payload = false;
-            var seen_payloads = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-            defer seen_payloads.deinit();
-            const target_payloads = (try self.dynamicTagPayloadsForTextInner(target_rep, self.tagVariantNameText(variant), &seen_payloads)) orelse return null;
-            if (source_payloads.len != target_payloads.len) return null;
-        }
-        // Reusing the concrete source descriptor relabels the source value's box
-        // as the open target without rewriting it. When the open row's storage
-        // is wider than the concrete tag, reading the relabelled box through the
-        // open descriptor runs past the boxed allocation. For payloadless
-        // variants the per-variant conversion below rebuilds the open tag
-        // exactly, so decline the relabel there and let it run.
-        const target_payload_layout = self.parent.descriptorPayloadLayoutForRep(target_rep);
-        const source_storage_size = self.parent.result.layouts.layoutSize(self.parent.result.layouts.getLayout(source_layout));
-        const target_storage_size = self.parent.result.layouts.layoutSize(self.parent.result.layouts.getLayout(target_payload_layout));
-        const relabel_would_overread = all_variants_have_no_payload and source_storage_size < target_storage_size;
-        if (!relabel_would_overread and
-            self.tagDomainHasOpenExtension(target_rep) and
-            try self.concreteTagUnionBoundaryCanReuseSourceDescriptor(target_rep, source_tag_rep, variants))
-        {
-            const source_desc = try self.descriptorRefForSourceStorageLocalRep(source, source_rep);
-            const existing_target_desc = self.parent.result.store.getLocal(target).boxy_desc;
-            const can_initialize_target_desc = if (existing_target_desc) |existing|
-                std.meta.eql(existing, source_desc) or
-                    if (existing.localOrNull()) |local| !self.localIsReadOnlyDescriptorInput(local) else false
-            else
-                true;
-            if (can_initialize_target_desc) {
-                const target_desc_info = self.resultDescriptorForCallTarget(target, .{ .desc = source_desc });
-                const target_desc = target_desc_info.desc orelse
-                    boxyLowerInvariant("boxy concrete tag relabel had no target descriptor");
-                if (existing_target_desc == null) {
-                    self.parent.result.store.setLocalBoxyDesc(target, target_desc);
-                }
-                const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
-                    .target = target,
-                    .payload = source,
-                    .payload_layout = source_layout,
-                    .source_desc = source_desc,
-                    .payload_desc = target_desc,
-                    .payload_mode = .move,
-                    .next = next,
-                } }, self.glueOrigin());
-                return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, box);
-            }
-        }
-
-        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
-        defer self.parent.allocator.free(branches);
-        for (variants, branches, 0..) |variant, *branch, index| {
-            if (index > std.math.maxInt(u16)) {
-                boxyLowerInvariant("boxy concrete-to-dynamic tag adapter variant index exceeded LIR variant range");
-            }
-            branch.* = .{
-                .value = @intCast(index),
-                .body = try self.assignConcreteTagVariantToDynamic(target, source, target_rep, source_tag_rep, variant, @intCast(index), next),
-            };
-        }
-
-        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
-        const discriminant = try self.addFrameLocal(.u16);
-        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = discriminant,
-            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
-            .default_branch = bad_discriminant,
-            .continuation = null,
-        } }, self.glueOrigin());
-        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
-            .next = switch_stmt,
-        } }, self.glueOrigin());
     }
 
     fn concreteTagUnionBoundaryCanReuseSourceDescriptor(
@@ -38525,36 +39211,6 @@ const ProcBodyBuilder = struct {
         return self.targetAcceptsUnconstrainedDynamicTagDescriptor(ext_rep);
     }
 
-    fn assignDynamicTagUnionToDynamicBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        if (!self.repHasTagDomain(target_rep)) return null;
-        const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse return null;
-        if (self.tagDomainHasOpenExtension(source_tag_rep) and
-            try self.tagDomainDescriptorCanFlowTo(source_tag_rep, target_rep))
-        {
-            return null;
-        }
-        const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].tag_variants);
-        if (variants.len == 0) return null;
-        for (variants) |variant| {
-            const source_payloads = self.parent.plan.childSlice(variant.payloads);
-            const target_payloads = (try self.dynamicTagPayloadsForRepTagNameOrNull(target_rep, source_tag_rep, variant.name)) orelse return null;
-            if (source_payloads.len != target_payloads.len) return null;
-        }
-        // A row-polymorphic source can carry its active variant in a runtime
-        // extension descriptor, so enumerating only the source rep's local
-        // variants is not exhaustive. The explicit adapter specializes the
-        // target descriptor from the exact source descriptor and materializes
-        // every local or extension variant through that descriptor pair.
-        return try self.assignPlannedCallBoundary(target, source, target_rep, source_rep, next);
-    }
-
     fn repHasTagDomain(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
         const tag_rep_id = self.tagDomainRep(rep_id) orelse return false;
         const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
@@ -38595,109 +39251,6 @@ const ProcBodyBuilder = struct {
                 .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
             }
         }
-    }
-
-    fn assignConcreteTagVariantToDynamic(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_tag_rep: Plan.TypeRepId,
-        variant: Plan.TagVariant,
-        variant_index: u16,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        try self.bindConstructedTargetDescriptor(target, target_rep);
-        const target_desc = try self.constructedTargetDescForRep(target_rep);
-        const tag_name = try self.lirTagNameForVariant(variant);
-        const source_payloads = self.parent.plan.childSlice(variant.payloads);
-        const target_payloads = try self.dynamicTagPayloadsForVariantName(target_rep, variant);
-        if (source_payloads.len != target_payloads.len) {
-            boxyLowerInvariant("boxy concrete-to-dynamic tag adapter saw payload count mismatch between source and target variants");
-        }
-        if (target_payloads.len == 0) {
-            const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
-                .target = target,
-                .target_desc = target_desc,
-                .tag_name = tag_name,
-                .next = next,
-            } }, self.glueOrigin());
-            return try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag);
-        }
-
-        const payload = try self.dynamicTagPayloadLocalForChildren(target_payloads);
-        const payload_desc = if (payload.desc_rep) |payload_rep| try self.descriptorRefForKnownRep(payload_rep) else null;
-        const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
-            .target = target,
-            .target_desc = target_desc,
-            .tag_name = tag_name,
-            .payload = payload.local,
-            .payload_layout = payload.layout_idx,
-            .payload_desc = payload_desc,
-            .payload_mode = .move,
-            .next = next,
-        } }, self.glueOrigin());
-        var continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag);
-        const source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].descriptor != null or
-            self.parent.result.store.getLocal(source).boxy_desc != null;
-
-        if (target_payloads.len == 1) {
-            const source_payload = try self.addExtractedTagPayloadLocal(source_payloads[0].rep, source_has_payload_desc);
-            continuation = try self.assignRepresentationBoundary(payload.local, source_payload.local, target_payloads[0].rep, source_payloads[0].rep, continuation);
-            return try self.assignConcreteTagPayloadRead(
-                source_payload.local,
-                source_payloads[0].rep,
-                source_payload.desc_local,
-                source,
-                source_tag_rep,
-                variant.name,
-                variant_index,
-                0,
-                source_payloads.len,
-                continuation,
-            );
-        }
-
-        const source_fields = try self.parent.allocator.alloc(ExtractedTagPayloadLocal, source_payloads.len);
-        defer self.parent.allocator.free(source_fields);
-        const target_fields = try self.parent.allocator.alloc(LIR.LocalId, target_payloads.len);
-        defer self.parent.allocator.free(target_fields);
-        for (source_payloads, source_fields) |source_payload, *field| {
-            field.* = try self.addExtractedTagPayloadLocal(source_payload.rep, source_has_payload_desc);
-        }
-        for (target_payloads, target_fields) |target_payload, *field| {
-            field.* = try self.addFrameLocalForRep(target_payload.rep);
-        }
-
-        continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
-            .target = payload.local,
-            .fields = try self.parent.result.store.addLocalSpan(target_fields),
-            .next = continuation,
-        } }, self.glueOrigin());
-        var payload_index = source_payloads.len;
-        while (payload_index > 0) {
-            payload_index -= 1;
-            continuation = try self.assignRepresentationBoundary(
-                target_fields[payload_index],
-                source_fields[payload_index].local,
-                target_payloads[payload_index].rep,
-                source_payloads[payload_index].rep,
-                continuation,
-            );
-            continuation = try self.assignConcreteTagPayloadRead(
-                source_fields[payload_index].local,
-                source_payloads[payload_index].rep,
-                source_fields[payload_index].desc_local,
-                source,
-                source_tag_rep,
-                variant.name,
-                variant_index,
-                @intCast(payload_index),
-                source_payloads.len,
-                continuation,
-            );
-        }
-        return continuation;
     }
 
     fn assignConcreteTagPayloadRead(
