@@ -14658,6 +14658,15 @@ A list's length term follows the list through `list_append_unsafe` (plus one),
 table that grows by one per iteration keeps a provable length lower bound
 across the loop.
 
+An integer loop parameter's lower bound follows the same induction as a list
+parameter's length: a bound every entry edge proves is seeded as an
+assumption and verifies once the back edges re-derive it under it, so a
+counter that starts at three and only grows is known to stay at least three.
+Each fact carries the assumptions its derivation touched, an assumption
+verifies once the assumptions it rested on are itself or already verified,
+and a survivor of a round in which some other assumption died simply retries,
+since the recorded dependencies cover every fact a query relaxed through.
+
 Equality comparisons participate alongside orderings. A holding `==` edge
 asserts both orderings; a holding `!=` edge makes an ordering the path already
 proves non-strict strict, so a counter tested against its limit with `!=` is
