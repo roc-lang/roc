@@ -18263,6 +18263,11 @@ fn publishLocalMethodDispatchScopes(
 /// `SchemeUseRecord`s, whose fresh vars are resolved against the
 /// settled type store.
 const EvidencePass = struct {
+    const PairRootKey = struct {
+        pairs_start: u32,
+        pairs_len: u32,
+        old_root: Var,
+    };
     const PublishedScheme = struct {
         vars: artifact_serialize.Span,
         params: artifact_serialize.Span,
@@ -18328,6 +18333,10 @@ const EvidencePass = struct {
     local_value_scheme_by_var: std.AutoHashMap(u32, u32),
     /// First value_use record per looked-up pattern.
     value_use_record_by_pattern: std.AutoHashMap(u32, u32),
+    /// Each scheme-use record's substitution, indexed by the resolved root of
+    /// each pair's scheme-side var; the first pair recorded for a root wins.
+    /// The store is read-only during this pass, so resolved roots are fixed.
+    fresh_by_pair_root: std.AutoHashMapUnmanaged(PairRootKey, Var) = .empty,
     /// Memoized evidence node per dispatch_target record.
     node_by_record: std.AutoHashMap(u32, static_dispatch.EvidenceNodeId),
     /// Hash buckets and collision chains for structurally interned evidence
@@ -18461,6 +18470,7 @@ const EvidencePass = struct {
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
+        self.fresh_by_pair_root.deinit(self.allocator);
         self.node_by_record.deinit();
         self.evidence_node_buckets.deinit();
         self.evidence_node_next.deinit(self.allocator);
@@ -18895,6 +18905,15 @@ const EvidencePass = struct {
             entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(index)));
         }
         for (module_env.scheme_uses.items.items, 0..) |record, i| {
+            const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+            for (pairs) |pair| {
+                const entry = try self.fresh_by_pair_root.getOrPut(self.allocator, .{
+                    .pairs_start = record.pairs_start,
+                    .pairs_len = record.pairs_len,
+                    .old_root = self.types.resolveVar(@enumFromInt(pair.old_var)).var_,
+                });
+                if (!entry.found_existing) entry.value_ptr.* = @enumFromInt(pair.fresh_var);
+            }
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
                 .value_use, .shared_value_use => {
                     // Re-checks can record the same binding use twice. A
@@ -20652,13 +20671,22 @@ const EvidencePass = struct {
         try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
     }
 
-    /// `pairFor`, but comparing RESOLVED roots on both sides: finalization
-    /// after record time can move the pristine var's root.
+    /// The fresh var one scheme-use record's substitution pairs with
+    /// `old_root`, comparing RESOLVED roots on both sides: finalization after
+    /// record time can move the pristine var's root. `pairs` is that record's
+    /// range of `scheme_use_pairs`.
     fn pairForResolved(self: *EvidencePass, pairs: []const ModuleEnv.SchemeUsePair, old_root: Var) ?Var {
-        for (pairs) |pair| {
-            if (self.types.resolveVar(@enumFromInt(pair.old_var)).var_ == old_root) return @enumFromInt(pair.fresh_var);
-        }
-        return null;
+        if (pairs.len == 0) return null;
+        const all_pairs = self.module.moduleEnvConst().scheme_use_pairs.items.items;
+        const offset = @intFromPtr(pairs.ptr) - @intFromPtr(all_pairs.ptr);
+        std.debug.assert(offset % @sizeOf(ModuleEnv.SchemeUsePair) == 0);
+        const pairs_start: u32 = @intCast(offset / @sizeOf(ModuleEnv.SchemeUsePair));
+        std.debug.assert(pairs_start + pairs.len <= all_pairs.len);
+        return self.fresh_by_pair_root.get(.{
+            .pairs_start = pairs_start,
+            .pairs_len = @intCast(pairs.len),
+            .old_root = old_root,
+        });
     }
 };
 
