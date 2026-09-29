@@ -403,6 +403,9 @@ const LenInvariant = struct {
     /// every assumption it used is itself or has verified; resting on one
     /// that died kills it too.
     hit_deps: u64 = 0,
+    /// The progress epoch in which this invariant last failed verification;
+    /// it is seeded again only once a later epoch has strengthened the facts.
+    died_epoch: u32 = 0,
 };
 
 /// Cross-round bounds of one loop parameter, complete once every jump into
@@ -643,6 +646,10 @@ const Pass = struct {
     live_pending: bool,
     /// A provable rewrite was deferred by `live_pending`; forces another round.
     deferred_rewrites: bool,
+    /// Counts the rounds of this procedure that rewrote a statement or
+    /// persisted new bounds, so a failed invariant can tell whether the
+    /// facts have grown since it failed.
+    progress_epoch: u32,
     max_join_id: u32,
     scratch: std.ArrayList(CFStmtId),
     query_best: collections.DenseMap(NodeId, i128),
@@ -707,6 +714,7 @@ const Pass = struct {
             .new_loop_bounds = false,
             .live_pending = false,
             .deferred_rewrites = false,
+            .progress_epoch = 0,
             .max_join_id = 0,
             .scratch = .empty,
             .query_best = collections.DenseMap(NodeId, i128).init(allocator),
@@ -910,6 +918,17 @@ const Pass = struct {
 
     // Fact base and inequality queries
 
+    /// Magnitude past which an accumulated slack can only mean the facts
+    /// contradict one another (a negative cycle, on a path no execution
+    /// takes): every genuine bound stays within a few word-widths of zero,
+    /// so clamping here keeps the arithmetic downstream in range while
+    /// preserving the contradiction's effect on every query.
+    const slack_limit: i128 = 1 << 100;
+
+    fn clampSlack(x: i128) i128 {
+        return @max(-slack_limit, @min(slack_limit, x));
+    }
+
     fn addFact(self: *Pass, fact: Fact) ResourceError!void {
         if (self.facts.items.len >= max_facts) return;
         try self.facts.append(self.allocator, fact);
@@ -966,13 +985,13 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = acc + fact.c;
+                const next_acc = clampSlack(acc + fact.c);
                 const known = self.query_best.get(fact.b);
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
                     try self.query_best.put(fact.b, next_acc);
                     self.query_used |= fact.assumed;
-                    const through = self.nodes.items[fact.b].hi + next_acc;
+                    const through = clampSlack(self.nodes.items[fact.b].hi + next_acc);
                     if (through < best) best = through;
                     changed = true;
                 }
@@ -993,13 +1012,13 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.b) orelse continue;
-                const next_acc = acc + fact.c;
+                const next_acc = clampSlack(acc + fact.c);
                 const known = self.query_best.get(fact.a);
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
                     try self.query_best.put(fact.a, next_acc);
                     self.query_used |= fact.assumed;
-                    const through = self.nodes.items[fact.a].lo - next_acc;
+                    const through = clampSlack(self.nodes.items[fact.a].lo - next_acc);
                     if (through > best) best = through;
                     changed = true;
                 }
@@ -1029,7 +1048,7 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = acc + fact.c;
+                const next_acc = clampSlack(acc + fact.c);
                 const known = self.query_best.get(fact.b);
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
@@ -1074,7 +1093,7 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = acc + fact.c;
+                const next_acc = clampSlack(acc + fact.c);
                 const known = self.query_best.get(fact.b);
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
@@ -2217,26 +2236,29 @@ const Pass = struct {
             });
         }
         if (meet.bounds.len == 0 and meet.lower.len == 0) return null;
-        var hi: i128 = std.math.maxInt(u64);
+        // Only a bound resting on no assumption folds into the value's own
+        // range; a range carries no dependency mask, so an assumed bound
+        // stays a fact that keeps naming what it rests on.
+        var hi = trackedIntMax(self.localLayout(meet.local)) orelse std.math.maxInt(u64);
         for (meet.bounds.slice()) |bound| {
             const root = self.nodes.items[bound.root];
-            if (root.lo == root.hi) hi = @min(hi, root.lo + bound.c);
+            if (root.lo == root.hi and bound.assumed == 0) hi = @min(hi, root.lo + bound.c);
         }
         var lo: i128 = 0;
         for (meet.lower.slice()) |bound| {
             const root = self.nodes.items[bound.root];
-            if (root.lo == root.hi) lo = @max(lo, root.lo - bound.c);
+            if (root.lo == root.hi and bound.assumed == 0) lo = @max(lo, root.lo - bound.c);
         }
         if (lo > hi) lo = hi;
         const node = (try self.freshRoot(lo, hi)) orelse return null;
         for (meet.bounds.slice()) |bound| {
             const root = self.nodes.items[bound.root];
-            if (root.lo == root.hi) continue;
+            if (root.lo == root.hi and bound.assumed == 0) continue;
             try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
         }
         for (meet.lower.slice()) |bound| {
             const root = self.nodes.items[bound.root];
-            if (root.lo == root.hi) continue;
+            if (root.lo == root.hi and bound.assumed == 0) continue;
             try self.addFact(.{ .a = bound.root, .b = node, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
         }
         return node;
@@ -2288,31 +2310,9 @@ const Pass = struct {
                 try self.bind(meet.local, .{ .node = list_node });
                 continue;
             }
-            if (meet.bounds.len == 0 and meet.lower.len == 0) continue;
             // The edges bind different values, but each proves the same
             // bounds; a fresh value carrying those bounds preserves them.
-            var hi = trackedIntMax(self.localLayout(meet.local)) orelse std.math.maxInt(u64);
-            for (meet.bounds.slice()) |bound| {
-                const root = self.nodes.items[bound.root];
-                if (root.lo == root.hi) hi = @min(hi, root.lo + bound.c);
-            }
-            var lo: i128 = 0;
-            for (meet.lower.slice()) |bound| {
-                const root = self.nodes.items[bound.root];
-                if (root.lo == root.hi) lo = @max(lo, root.lo - bound.c);
-            }
-            if (lo > hi) lo = hi;
-            const node = (try self.freshRoot(lo, hi)) orelse continue;
-            for (meet.bounds.slice()) |bound| {
-                const root = self.nodes.items[bound.root];
-                if (root.lo == root.hi) continue;
-                try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
-            }
-            for (meet.lower.slice()) |bound| {
-                const root = self.nodes.items[bound.root];
-                if (root.lo == root.hi) continue;
-                try self.addFact(.{ .a = bound.root, .b = node, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
-            }
+            const node = (try self.metScalarNode(meet)) orelse continue;
             try self.bind(meet.local, .{ .node = node });
         }
     }
@@ -2354,6 +2354,22 @@ const Pass = struct {
         if (node.lo == node.hi) return .{ .base = .constant, .c = bound.c - node.lo };
         return null;
     }
+
+    /// Whether a bound on `base` persisted last round as `old` makes `c`
+    /// a widening: a bound that only weakens from round to round is being
+    /// pushed along by the loop it describes and would never settle, so it
+    /// is dropped instead of iterated.
+    fn widensBound(old: []const StableBound, base: StableBase, c: i128) bool {
+        for (old) |prev| {
+            if (sameLenBase(prev.base, base)) return prev.c >= widened_slack or c > prev.c;
+        }
+        return false;
+    }
+
+    /// A bound persisted with this slack has been widened away: it stays in
+    /// the list so the widening is remembered from round to round, and
+    /// every consumer skips it.
+    const widened_slack: i128 = 1 << 62;
 
     fn sameLenBase(a: StableBase, b: StableBase) bool {
         return switch (a) {
@@ -2475,7 +2491,19 @@ const Pass = struct {
     /// Persist a fully-captured merge's all-edge fact intersection for
     /// seeding when a later round must walk it before capture completes.
     fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
-        const stable = state.stable;
+        var stable = state.stable;
+        if (self.merge_facts.get(head)) |previous| {
+            // A fact whose slack only grew since last round is a widening;
+            // it is dropped rather than iterated.
+            for (stable.items[0..stable.len]) |*fact| {
+                for (previous.items[0..previous.len]) |old| {
+                    if (std.meta.eql(old.a, fact.a) and std.meta.eql(old.b, fact.b)) {
+                        if (old.c >= widened_slack or fact.c > old.c) fact.c = widened_slack;
+                        break;
+                    }
+                }
+            }
+        }
         if (stable.len == 0) return;
         if (self.merge_facts.get(head)) |previous| {
             if (previous.len != stable.len) {
@@ -2503,6 +2531,7 @@ const Pass = struct {
     /// value_b <= root_b + off_hi_b.
     fn seedStableFacts(self: *Pass, stored: *const LoopFacts) ResourceError!void {
         for (stored.items[0..stored.len]) |fact| {
+            if (fact.c >= widened_slack) continue;
             const a = (try self.materializeTerm(fact.a)) orelse continue;
             const b = (try self.materializeTerm(fact.b)) orelse continue;
             const c = fact.c + self.offHiOf(b) - self.offLoOf(a);
@@ -2513,22 +2542,35 @@ const Pass = struct {
     /// Persist a fully-captured merge's env meet in round-stable form.
     fn persistMergeEnv(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
         var stable = MergeEnvBounds{};
+        const previous_env = self.merge_env.get(head);
         for (state.env.items) |meet| {
             if (meet.field != null) continue;
             if (stable.len >= merge_env_persist_cap) break;
             var entry = StoredEnvBound{ .local = meet.local, .bounds = undefined, .len = 0, .lower = undefined, .lower_len = 0 };
+            var old_bounds: []const StableBound = &.{};
+            var old_lower: []const StableBound = &.{};
+            if (previous_env) |prev| {
+                for (prev.items[0..prev.len]) |old| {
+                    if (old.local != meet.local) continue;
+                    old_bounds = old.bounds[0..old.len];
+                    old_lower = old.lower[0..old.lower_len];
+                    break;
+                }
+            }
             for (meet.bounds.slice()) |bound| {
                 if (self.stableBase(bound.root)) |base| {
+                    const c = if (widensBound(old_bounds, base.base, base.c + bound.c)) widened_slack else base.c + bound.c;
                     if (entry.len < meet_bound_cap) {
-                        entry.bounds[entry.len] = .{ .base = base.base, .c = base.c + bound.c };
+                        entry.bounds[entry.len] = .{ .base = base.base, .c = c };
                         entry.len += 1;
                     }
                 }
             }
             for (meet.lower.slice()) |bound| {
                 if (self.lenStable(bound)) |stable_lower| {
+                    const c = if (widensBound(old_lower, stable_lower.base, stable_lower.c)) widened_slack else stable_lower.c;
                     if (entry.lower_len < meet_bound_cap) {
-                        entry.lower[entry.lower_len] = .{ .base = stable_lower.base, .c = stable_lower.c };
+                        entry.lower[entry.lower_len] = .{ .base = stable_lower.base, .c = c };
                         entry.lower_len += 1;
                     }
                 }
@@ -2573,6 +2615,7 @@ const Pass = struct {
             var used = false;
             used = try self.seedLowerBounds(node, entry.lower[0..entry.lower_len]) or used;
             for (entry.bounds[0..entry.len]) |bound| {
+                if (bound.c >= widened_slack) continue;
                 switch (bound.base) {
                     .len_of => |list_local| {
                         const term = (try self.materializeTerm(.{ .len_of = list_local })) orelse continue;
@@ -2598,10 +2641,12 @@ const Pass = struct {
     fn metValueNode(self: *Pass, local: LocalId, bounds: []const StableBound, lower: []const StableBound) ResourceError!?NodeId {
         var hi = trackedIntMax(self.localLayout(local)) orelse std.math.maxInt(u64);
         for (bounds) |bound| {
+            if (bound.c >= widened_slack) continue;
             if (bound.base == .constant) hi = @min(hi, bound.c);
         }
         var lo: i128 = 0;
         for (lower) |bound| {
+            if (bound.c >= widened_slack) continue;
             // `0 <= value + c` is `value >= -c`.
             if (bound.base == .constant) lo = @max(lo, -bound.c);
         }
@@ -2615,6 +2660,7 @@ const Pass = struct {
     fn seedLowerBounds(self: *Pass, node: NodeId, lower: []const StableBound) ResourceError!bool {
         var used = false;
         for (lower) |bound| {
+            if (bound.c >= widened_slack) continue;
             switch (bound.base) {
                 .len_of => |list_local| {
                     const term = (try self.materializeTerm(.{ .len_of = list_local })) orelse continue;
@@ -2670,18 +2716,23 @@ const Pass = struct {
                 }
 
                 var stable = LoopBounds{ .complete = true };
+                const previous_bounds = self.loop_bounds.get(key);
+                const old_items: []const StableBound = if (previous_bounds) |prev| prev.items[0..prev.len] else &.{};
+                const old_lower: []const StableBound = if (previous_bounds) |prev| prev.lower_items[0..prev.lower_len] else &.{};
                 for (meet.bounds.slice()) |bound| {
                     if (self.stableBase(bound.root)) |base| {
+                        const c = if (widensBound(old_items, base.base, base.c + bound.c)) widened_slack else base.c + bound.c;
                         if (stable.len < meet_bound_cap) {
-                            stable.items[stable.len] = .{ .base = base.base, .c = base.c + bound.c };
+                            stable.items[stable.len] = .{ .base = base.base, .c = c };
                             stable.len += 1;
                         }
                     }
                 }
                 for (meet.lower.slice()) |bound| {
                     if (self.lenStable(bound)) |stable_lower| {
+                        const c = if (widensBound(old_lower, stable_lower.base, stable_lower.c)) widened_slack else stable_lower.c;
                         if (stable.lower_len < meet_bound_cap) {
-                            stable.lower_items[stable.lower_len] = .{ .base = stable_lower.base, .c = stable_lower.c };
+                            stable.lower_items[stable.lower_len] = .{ .base = stable_lower.base, .c = c };
                             stable.lower_len += 1;
                         }
                     }
@@ -2733,19 +2784,25 @@ const Pass = struct {
     /// Resolution of the assumed invariants at round end. In an assumption
     /// round, the assumptions re-derived on every edge stand together
     /// (simultaneous induction): failures die, one resting on a fallen
-    /// assumption retries next round without it, and the rest verify. In a
-    /// round that made progress, dead assumptions are seeded again, since a
-    /// failure only means unprovable under that round's facts.
+    /// assumption retries next round without it, and the rest verify. Once
+    /// the rounds after a round that made progress reach their fixpoint,
+    /// assumptions that died under an earlier epoch's facts are seeded
+    /// again, since a failure only means unprovable under those facts.
     fn resolvePendingInvariants(self: *Pass) void {
         if (!self.live_pending) {
-            // A round that rewrote statements or persisted new bounds has a
-            // stronger fact base than the one an assumption failed under, so
-            // every failed assumption is worth one more try against it.
-            if (self.rewrites == 0 and !self.new_loop_bounds) return;
+            // A round that rewrote statements or persisted new bounds opens a
+            // new epoch; the rounds after it run to their fixpoint first.
+            if (self.rewrites > 0 or self.new_loop_bounds) {
+                self.progress_epoch += 1;
+                return;
+            }
+            // At the fixpoint, an assumption that failed under an earlier
+            // epoch's facts is worth one more try against the stronger ones;
+            // one that failed under these very facts is not.
             var revive_it = self.loop_bounds.valueIterator();
             while (revive_it.next()) |stored| {
                 for (stored.len_items[0..stored.len_count]) |*item| {
-                    if (item.status != .dead) continue;
+                    if (item.status != .dead or item.died_epoch >= self.progress_epoch) continue;
                     item.status = .pending;
                     self.new_loop_bounds = true;
                 }
@@ -2758,7 +2815,10 @@ const Pass = struct {
             for (stored.len_items[0..stored.len_count]) |*item| {
                 if (item.status != .pending) continue;
                 any_pending = true;
-                if (!item.hit) item.status = .dead;
+                if (!item.hit) {
+                    item.status = .dead;
+                    item.died_epoch = self.progress_epoch;
+                }
             }
         }
         if (!any_pending) return;
@@ -2862,6 +2922,7 @@ const Pass = struct {
         }
         used = try self.seedLowerBounds(node, stored.lower_items[0..stored.lower_len]) or used;
         for (stored.items[0..stored.len]) |bound| {
+            if (bound.c >= widened_slack) continue;
             switch (bound.base) {
                 .len_of => |list_local| {
                     const list_node = (try self.valueOf(list_local)) orelse continue;
@@ -2962,7 +3023,7 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = acc + fact.c;
+                const next_acc = clampSlack(acc + fact.c);
                 const known = self.query_best.get(fact.b);
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
@@ -3062,7 +3123,7 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.b) orelse continue;
-                const next_acc = acc + fact.c;
+                const next_acc = clampSlack(acc + fact.c);
                 const known = self.query_best.get(fact.a);
                 if (known == null or next_acc < known.?) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
@@ -3408,6 +3469,7 @@ const Pass = struct {
         if (proc.body == null or proc.hosted != null) return;
 
         self.loop_bounds.clearRetainingCapacity();
+        self.progress_epoch = 0;
         self.loop_facts.clearRetainingCapacity();
         self.merge_facts.clearRetainingCapacity();
         self.merge_env.clearRetainingCapacity();

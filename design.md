@@ -14682,10 +14682,22 @@ assumptions re-derived on every edge stand together: one resting on an
 assumption that fell (not re-derived, or shed in turn) is shed and retries
 next round, and the rest verify at once, so assumptions that support one
 another promote together. An assumption that fails is not refuted, only
-unprovable under that round's facts; a later round that rewrites a
-statement or persists a new bound seeds it again, since the stronger fact
-base may carry its verification (a counter's floor that needs the bound on
-its increment, which itself takes rounds to settle).
+unprovable under that round's facts. Rounds that rewrite a statement or
+persist a new bound open a new epoch; once the rounds after one reach their
+fixpoint, every assumption that died under an earlier epoch's facts is
+seeded once more, since the stronger fact base may carry its verification (a
+counter's floor that needs the bound on its increment, which itself takes
+rounds to settle). Assumptions are never retried against the facts they
+already failed under, which is what bounds the round count.
+
+Bounds persisted from round to round are widened rather than iterated: a
+persisted bound whose slack only grew since the previous round is being
+pushed along by the loop it describes (a cursor that advances by a constant
+each iteration bounded against a length, say) and would weaken forever, so
+it is replaced by a tombstone that later rounds skip and that keeps the
+widening from being forgotten. Accumulated slack inside a query is clamped
+far outside any genuine bound; past that magnitude the facts contradict one
+another, which the clamp preserves without letting the arithmetic overflow.
 
 A loop parameter that a back edge carries back as the very value its body
 was seeded with is unchanged around the loop, so the meet keeps the entry
