@@ -1659,6 +1659,40 @@ test "parseFloatFromStr matches IEEE bit fixtures for finite edge cases" {
     }
 }
 
+test "parseFloatFromStr rounds hex floats with more significant digits than the mantissa holds" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (&[_]struct { text: []const u8, bits: u32 }{
+        // 1 + 2^-24 is exactly halfway between 1 and 1 + 2^-23, so it rounds to even.
+        .{ .text = "0x1.00000100000000000000p0", .bits = 0x3f800000 },
+        .{ .text = "0x1.00000100000000000001p0", .bits = 0x3f800001 },
+    }) |text| {
+        try expectParseFloatBits(f32, text.text, text.bits, test_env.getOps());
+    }
+
+    inline for (&[_]struct { text: []const u8, bits: u64 }{
+        // 1 + 2^-53 is exactly halfway between 1 and 1 + 2^-52.
+        .{ .text = "0x1.000000000000080000p0", .bits = 0x3ff0000000000000 },
+        .{ .text = "0x1.0000000000000800000000000000p0", .bits = 0x3ff0000000000000 },
+        .{ .text = "0x1.0000000000000801p0", .bits = 0x3ff0000000000001 },
+        .{ .text = "0x1.0000000000000800000001p0", .bits = 0x3ff0000000000001 },
+        .{ .text = "0x1.0000000000000800000000000001p0", .bits = 0x3ff0000000000001 },
+        // 1 + 3 * 2^-53 is halfway between 1 + 2^-52 and 1 + 2^-51, so it rounds to even.
+        .{ .text = "0x1.00000000000018000p0", .bits = 0x3ff0000000000002 },
+        .{ .text = "0x1.0000000000001800000000000000p0", .bits = 0x3ff0000000000002 },
+        .{ .text = "0x123456789abcdef01", .bits = 0x43f23456789abcdf },
+        // 2^72 + 2^19 is halfway between 2^72 and 2^72 + 2^20.
+        .{ .text = "0x1000000000000080000p0", .bits = 0x4470000000000000 },
+        .{ .text = "0x1_0000_0000_0000_0800_01p0", .bits = 0x4470000000000001 },
+        .{ .text = "0x0.00000000000000000010000000000000080000p0", .bits = 0x3b30000000000000 },
+        .{ .text = "1.00000000000000000000000000", .bits = 0x3ff0000000000000 },
+        .{ .text = "12345678901234567890123.0000000000000", .bits = 0x4484ea15b273b38a },
+    }) |text| {
+        try expectParseFloatBits(f64, text.text, text.bits, test_env.getOps());
+    }
+}
+
 test "parseFloatFromStr ignores digit separators wherever they appear issue 10660" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();

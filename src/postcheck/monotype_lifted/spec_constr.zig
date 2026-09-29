@@ -73,6 +73,7 @@
 //! starting_plants! : () => List(Plant)
 //! starting_plants! = || {
 //!     (0.I64..=15)
+//!         .iter()
 //!         .stream()
 //!         .map(|i| random_plant!(i * 12))
 //!         .collect!()
@@ -86,7 +87,7 @@
 //!
 //! ```roc
 //! starting_plants! = || {
-//!     range_iter = 0.I64..=15
+//!     range_iter = (0.I64..=15).iter()
 //!
 //!     source_stream = {
 //!         len_if_known: Known(16),
@@ -3198,7 +3199,7 @@ const Pass = struct {
     /// representation for its result, so the return type is not its checked
     /// procedure identity.
     fn callIsSuffixAppend(self: *Pass, call: DirectCall) bool {
-        if (call.iterator_procedure != .iter_append) return false;
+        if (call.iterator_procedure != .append) return false;
         const raw = @intFromEnum(call.fn_id);
         if (raw >= self.program.fnCount()) return false;
         return self.program.typedLocalSpan(self.program.getFnAt(raw).args).len == 2;
@@ -13097,6 +13098,7 @@ const Cloner = struct {
                         },
                         .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
                             frame.stage = .from_value;
+                            if (isOpaqueBehindWrappers(record_value)) return .{ .done = .unknown };
                             frame.record = recordFromValue(record_value) orelse switch (record_value) {
                                 .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
                                 .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
@@ -13131,6 +13133,7 @@ const Cloner = struct {
                         },
                         .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
                             frame.stage = .from_value;
+                            if (isOpaqueBehindWrappers(tuple_value)) return .{ .done = .unknown };
                             frame.tuple = tupleFromValue(tuple_value) orelse switch (tuple_value) {
                                 .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
                                 .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
@@ -13156,7 +13159,7 @@ const Cloner = struct {
             .tag => |tag_pat| {
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
                 if (frame.stage == .start) {
-                    if (value == .expr) return .{ .done = .unknown };
+                    if (isOpaqueBehindWrappers(value)) return .{ .done = .unknown };
                     frame.tag = tagFromValue(value) orelse switch (value) {
                         .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
                         .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
@@ -15772,6 +15775,24 @@ fn itemFromValueStripping(start: Value, index: u32, strip_depth: usize) ?Value {
     }
 }
 
+/// Whether stripping every value wrapper, including nominal backings, leaves only
+/// an opaque runtime expression. A nominal such as `Bool` can wrap a runtime
+/// local, so its constructor is unknown even though the wrapper is structured.
+fn isOpaqueBehindWrappers(start: Value) bool {
+    var value = start;
+    var depth: usize = 0;
+    while (true) : (depth += 1) {
+        if (depth >= value_wrapper_strip_cap) Common.invariant("isOpaqueBehindWrappers followed a value wrapper chain past the strip cap");
+        value = switch (value) {
+            .runtime_anchor => |anchor| anchor.structure.*,
+            .static_data_candidate => |candidate| candidate.structure.*,
+            .nominal => |nominal| nominal.backing.*,
+            .expr => return true,
+            .tag, .record, .tuple, .callable => return false,
+        };
+    }
+}
+
 fn tagFromValue(value: Value) ?TagValue {
     return tagFromValueStripping(value, 0);
 }
@@ -16810,7 +16831,7 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
         const expensive_arg = try program.addExpr(.{ .ty = tag_ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = producer },
             .args = .empty(),
-            .iterator_procedure = .iter_single,
+            .iterator_procedure = .single,
         } } });
         const duplicate = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = consumers[0] },
@@ -17824,6 +17845,13 @@ test "static match verdicts separate definite no-match from statically undecidab
     const nominal_value = Value{ .nominal = .{ .ty = union_ty, .backing = &backing } };
     try std.testing.expectEqual(MatchVerdict.match, try cloner.bindPatToValue(nominal_pat, nominal_value));
     try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(nominal_pat, opaque_value));
+
+    // A structured wrapper does not make its opaque backing statically known.
+    const wrapped_opaque = Value{ .nominal = .{ .ty = union_ty, .backing = &opaque_value } };
+    const record_pat = try program.addPat(.{ .ty = u8_ty, .data = .{ .record = Ast.Span(Ast.RecordDestruct).empty() } });
+    try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(foo_pat, wrapped_opaque));
+    try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(both_undecidable, wrapped_opaque));
+    try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(record_pat, wrapped_opaque));
 }
 
 test "static value matchers bound wrapper strips over a cyclic value" {
