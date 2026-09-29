@@ -106,6 +106,7 @@ pub const BuiltinKind = enum {
     list_slack_unique,
     list_owned_unique,
     list_drop_at,
+    list_prepend,
     list_reserve,
     list_replace,
     list_set,
