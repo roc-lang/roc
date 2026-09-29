@@ -5756,6 +5756,26 @@ no public chain type, iterator trait, extra public step tag, or source-visible
 compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
 
+`Iter` and `Stream` share one representation protocol. The only difference
+the compiler observes between them is the step field's spelling (`step` versus
+`step!`), which the checker outputs as one `IteratorRepresentationTopology`
+per `IteratorOwner`. Every other part of the protocol (minted chains, the
+forced-dynamic fixed point, callable flow, and SpecConstr fusion) is keyed by
+operation and reads the owner from the solved type's builtin identity.
+
+The checker stamps compiler-owned iterator procedures with an
+`IteratorProcedureId` that names an operation, not a public type: `Iter.map`,
+`Stream.map`, and `Stream.map!` all carry `.map`, and `Iter.stream` and
+`Stream.from_iter` both carry `.from_iter`. Each operation declares its Builtin
+definitions for both owners in `IteratorProcedureId.builtinNames`, stating
+explicitly when a type does not provide it, and the stamp table is generated
+from that declaration alone. Every `Stream` source and adapter builds its value
+through the stamped `stream_from_step` constructor, the counterpart of
+`iter_from_step`, so Monotype attaches the minted representation at the same
+point for both types. A LIR test derives its required rows from the operations
+both owners provide and holds each owner's pipeline to the same fused,
+allocation-free lowering.
+
 Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
 exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
 `num.range_inclusive_to`, respectively. `Range.step_by` replaces the stored
@@ -5809,6 +5829,7 @@ const IteratorKind = enum(u8) {
     append,
     with_index,
     step_by,
+    from_iter,
     forced_dynamic,
 };
 
@@ -6277,8 +6298,9 @@ an exit, and no backend participates in this decision. Every selected exit must
 transfer exactly the components declared by its demand plan.
 
 Iterator classification in this pass consumes the explicit iterator
-representation field (or the checked public `Builtin.Iter` identity). It does
-not identify generated iterator types solely from a nullable generated digest.
+representation field (or the checked public `Builtin.Iter` or `Builtin.Stream`
+identity). It does not identify generated iterator types solely from a nullable
+generated digest.
 The checked public identity is an interned module-and-declaration identity, not
 a comparison against type-name text. Adapter-specific rewrites consume the
 exact checker-authored `IteratorProcedureId` on the call. The procedure id
