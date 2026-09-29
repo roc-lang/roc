@@ -1603,13 +1603,11 @@ test "boxy representation queries have one definition on the plan" {
     };
     const shared = [_][]const u8{
         "repSubtreeHasDescriptor",
-        "repSubtreeHasDescriptorInner",
         "repSubtreeHasDescriptorInOtherChildren",
         "repSubtreeHasDictionary",
-        "repSubtreeHasDictionaryInner",
         "repSubtreeHasDictionaryInOtherChildren",
         "repSubtreeContainsRep",
-        "repSubtreeContainsRepInner",
+        "repSubtreeAny",
         "structuralWrapperBackingRep",
         "structureBackingRep",
         "bindCallWrappedStructure",

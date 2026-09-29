@@ -202,13 +202,20 @@ fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
 
 fn checkedExprIsListMapCanReuseWrapper(
     module: ProcedureModuleView,
-    expr_id: checked.CheckedExprId,
+    root: checked.CheckedExprId,
 ) bool {
-    return switch (module.checked_bodies.expr(expr_id).data) {
+    var expr_id = root;
+    while (true) return switch (module.checked_bodies.expr(expr_id).data) {
         .run_low_level => |low_level| low_level.op == .list_map_can_reuse,
-        .lambda => |lambda| checkedExprIsListMapCanReuseWrapper(module, lambda.body),
-        .block => |block| block.statements.len == 0 and
-            checkedExprIsListMapCanReuseWrapper(module, block.final_expr),
+        .lambda => |lambda| {
+            expr_id = lambda.body;
+            continue;
+        },
+        .block => |block| {
+            if (block.statements.len != 0) return false;
+            expr_id = block.final_expr;
+            continue;
+        },
         .pending,
         .numeral,
         .str_from_quote,
@@ -1556,16 +1563,36 @@ const ProcedureBuilder = struct {
     /// Whether a dictionary built from `method_evidence` names values only
     /// `frame` supplies: a nested dictionary the frame binds, or a method
     /// descriptor whose representation the frame's own descriptors describe.
+    /// Whether any method evidence `root` reaches reads a value only the
+    /// building frame supplies. Which evidence is reached does not depend
+    /// on visiting order.
     fn dictEvidenceNeedsFrame(
         self: *ProcedureBuilder,
         frame: *ProcBodyBuilder,
-        method_evidence: Plan.Span,
+        root: Plan.Span,
         visited: *std.ArrayList(Plan.Span),
     ) Allocator.Error!bool {
-        for (visited.items) |seen| {
-            if (std.meta.eql(seen, method_evidence)) return false;
+        var pending: std.ArrayList(Plan.Span) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        spans: while (pending.pop()) |method_evidence| {
+            for (visited.items) |seen| {
+                if (std.meta.eql(seen, method_evidence)) continue :spans;
+            }
+            try visited.append(self.allocator, method_evidence);
+            if (try self.dictEvidenceSpanNeedsFrame(frame, method_evidence, &pending)) return true;
         }
-        try visited.append(self.allocator, method_evidence);
+        return false;
+    }
+
+    /// Whether one span of method evidence reads a frame value directly;
+    /// the nested evidence it carries is queued.
+    fn dictEvidenceSpanNeedsFrame(
+        self: *ProcedureBuilder,
+        frame: *ProcBodyBuilder,
+        method_evidence: Plan.Span,
+        pending: *std.ArrayList(Plan.Span),
+    ) Allocator.Error!bool {
         for (self.plan.dictionaryMethodEvidenceSlice(method_evidence)) |method| {
             switch (method.resolution) {
                 .worker => {},
@@ -1592,7 +1619,7 @@ const ProcedureBuilder = struct {
                     .literal => |literal| if (literal == .parameter) return true,
                     .static_rep => |source_rep| {
                         if (try frame.repDescriptorNeedsFrame(source_rep)) return true;
-                        if (try self.dictEvidenceNeedsFrame(frame, arg.method_evidence, visited)) return true;
+                        try pending.append(self.allocator, arg.method_evidence);
                     },
                 }
             }
@@ -1917,36 +1944,45 @@ const ProcedureBuilder = struct {
 
     /// The type variables `frame_template`'s frame binds that `rep_id`
     /// names, each carried by the method slot for its adapter.
+    /// Collect, in pre-order, the frame descriptors `root` reaches.
     fn collectFrameCallableDescriptors(
         self: *ProcedureBuilder,
         frame_template: *DictTemplateFrame,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         visited: *collections.DenseMap(Plan.TypeRepId, void),
         descs: *std.ArrayList(FrameRequirementDescriptor),
         refs: *std.ArrayList(LIR.BoxyDescRef),
     ) Allocator.Error!void {
-        if ((try visited.getOrPut(rep_id)).found_existing) return;
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor) |desc| {
-            if (!try frame_template.frame.repDescriptorNeedsFrame(rep_id)) return;
-            const materialization = try frame_template.frame.descriptorMaterializationForSourceRep(rep_id);
-            if (materialization.desc.localOrNull()) |local| {
-                if (materialization.captures.len == 0) {
-                    if (frameRequirementDescriptorIndex(descs.items, desc) != null) return;
-                    try frame_template.capture(self.allocator, local);
-                    try descs.append(self.allocator, .{
-                        .desc = desc,
-                        .rep = rep_id,
-                        .slot = @intCast(refs.items.len),
-                        .kind = .frame_variable,
-                    });
-                    try refs.append(self.allocator, materialization.desc);
-                    return;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        reps: while (pending.pop()) |rep_id| {
+            if ((try visited.getOrPut(rep_id)).found_existing) continue;
+            const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.descriptor) |desc| {
+                if (!try frame_template.frame.repDescriptorNeedsFrame(rep_id)) continue;
+                const materialization = try frame_template.frame.descriptorMaterializationForSourceRep(rep_id);
+                if (materialization.desc.localOrNull()) |local| {
+                    if (materialization.captures.len == 0) {
+                        if (frameRequirementDescriptorIndex(descs.items, desc) != null) continue :reps;
+                        try frame_template.capture(self.allocator, local);
+                        try descs.append(self.allocator, .{
+                            .desc = desc,
+                            .rep = rep_id,
+                            .slot = @intCast(refs.items.len),
+                            .kind = .frame_variable,
+                        });
+                        try refs.append(self.allocator, materialization.desc);
+                        continue :reps;
+                    }
                 }
             }
-        }
-        for (self.plan.childSlice(rep.children)) |child| {
-            try self.collectFrameCallableDescriptors(frame_template, child.rep, visited, descs, refs);
+            const children = self.plan.childSlice(rep.children);
+            var index = children.len;
+            while (index > 0) {
+                index -= 1;
+                try pending.append(self.allocator, children[index].rep);
+            }
         }
     }
 
@@ -2943,11 +2979,7 @@ const ProcedureBuilder = struct {
 
     fn staticMethodFunctionForRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) ?StaticMethodFunction {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("static boxy dictionary method function alias chain exceeded lowerer limit");
-            depth += 1;
-
             const rep = self.plan.representations.items[@intFromEnum(current)];
             if (rep.kind == .alias) {
                 current = self.singleChildRepForDesc(current, .alias_backing) orelse
@@ -3000,30 +3032,39 @@ const ProcedureBuilder = struct {
         try self.collectStaticMethodCallDescIndexesForRep(function.ret, indexes, &seen_reps, &seen_descs);
     }
 
+    /// Index, in pre-order, the descriptors `root` carries.
     fn collectStaticMethodCallDescIndexesForRep(
         self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         indexes: *StaticMethodCallDescIndexMap,
         seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
         seen_descs: *collections.DenseMap(Plan.DescriptorRequirementId, void),
     ) Allocator.Error!void {
-        const rep_entry = try seen_reps.getOrPut(rep_id);
-        if (rep_entry.found_existing) return;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |rep_id| {
+            const rep_entry = try seen_reps.getOrPut(rep_id);
+            if (rep_entry.found_existing) continue;
 
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor) |desc| {
-            const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
-            const identity_desc = self.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
-            const desc_entry = try seen_descs.getOrPut(identity_desc);
-            if (!desc_entry.found_existing) {
-                try indexes.put(self.allocator, desc);
+            const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.descriptor) |desc| {
+                const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
+                const identity_desc = self.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
+                const desc_entry = try seen_descs.getOrPut(identity_desc);
+                if (!desc_entry.found_existing) {
+                    try indexes.put(self.allocator, desc);
+                }
             }
-        }
 
-        if (rep.kind == .erased_callable) return;
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (!self.plan.childCarriesHiddenDescriptor(rep_id, child)) continue;
-            try self.collectStaticMethodCallDescIndexesForRep(child.rep, indexes, seen_reps, seen_descs);
+            if (rep.kind == .erased_callable) continue;
+            const children = self.plan.childSlice(rep.children);
+            var index = children.len;
+            while (index > 0) {
+                index -= 1;
+                if (!self.plan.childCarriesHiddenDescriptor(rep_id, children[index])) continue;
+                try pending.append(self.allocator, children[index].rep);
+            }
         }
     }
 
@@ -3072,6 +3113,35 @@ const ProcedureBuilder = struct {
         );
     }
 
+    /// The fixed inputs of one static method call's descriptor source walk.
+    const StaticMethodCallDescWalk = struct {
+        params: []const Plan.HiddenDescriptorParam,
+        descriptor_sources: *const StaticDescriptorSourceMap,
+        call_desc_indexes: *const StaticMethodCallDescIndexMap,
+        call_desc_reps: *StaticMethodCallDescRepMap,
+        call_sources: *StaticMethodCallDescSourceMap,
+        seen: *std.AutoHashMap(u64, void),
+    };
+
+    /// A worker and requirement representation pair whose children are
+    /// being aligned.
+    const StaticMethodCallDescFrame = struct {
+        worker_rep_id: Plan.TypeRepId,
+        requirement_rep_id: Plan.TypeRepId,
+        phase: enum {
+            /// An empty worker row against the requirement's children.
+            requirement_under_empty_worker,
+            /// The worker's children against an empty requirement row.
+            worker_under_empty_requirement,
+            worker_children,
+            requirement_children,
+        },
+        wrapper_bindings: Plan.CallWrapperBindings = .{},
+        structure_call_rep_id: Plan.TypeRepId = undefined,
+        through_wrapper: bool = false,
+        index: usize = 0,
+    };
+
     fn collectStaticMethodCallDescSourcesForRep(
         self: *ProcedureBuilder,
         worker_rep_id: Plan.TypeRepId,
@@ -3083,38 +3153,71 @@ const ProcedureBuilder = struct {
         call_sources: *StaticMethodCallDescSourceMap,
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!void {
+        const walk = StaticMethodCallDescWalk{
+            .params = params,
+            .descriptor_sources = descriptor_sources,
+            .call_desc_indexes = call_desc_indexes,
+            .call_desc_reps = call_desc_reps,
+            .call_sources = call_sources,
+            .seen = seen,
+        };
+        var frames: std.ArrayList(StaticMethodCallDescFrame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.wrapper_bindings.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
+        try self.enterStaticMethodCallDescPair(&walk, &frames, worker_rep_id, requirement_rep_id);
+        while (frames.items.len != 0) {
+            const next = try self.nextStaticMethodCallDescPair(&walk, &frames.items[frames.items.len - 1]) orelse {
+                var done = frames.pop().?;
+                done.wrapper_bindings.deinit(self.allocator);
+                continue;
+            };
+            try self.enterStaticMethodCallDescPair(&walk, &frames, next[0], next[1]);
+        }
+    }
+
+    /// Record one pair's descriptor sources and push the frame that aligns
+    /// its children, unless the pair was already walked.
+    fn enterStaticMethodCallDescPair(
+        self: *ProcedureBuilder,
+        walk: *const StaticMethodCallDescWalk,
+        frames: *std.ArrayList(StaticMethodCallDescFrame),
+        worker_rep_id: Plan.TypeRepId,
+        requirement_rep_id: Plan.TypeRepId,
+    ) Allocator.Error!void {
         const seen_key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) | @as(u64, @intFromEnum(requirement_rep_id));
-        const seen_entry = try seen.getOrPut(seen_key);
+        const seen_entry = try walk.seen.getOrPut(seen_key);
         if (seen_entry.found_existing) return;
 
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
         const requirement_rep = self.plan.representations.items[@intFromEnum(requirement_rep_id)];
 
         if (requirement_rep.descriptor) |requirement_desc| {
-            const call_index = call_desc_indexes.get(requirement_desc) orelse
+            const call_index = walk.call_desc_indexes.get(requirement_desc) orelse
                 boxyLowerInvariant("static dictionary method call descriptor mapping referenced an unindexed generic descriptor");
             const call_source_rep = if (worker_rep.descriptor) |worker_desc|
-                descriptor_sources.get(worker_desc) orelse worker_rep_id
+                walk.descriptor_sources.get(worker_desc) orelse worker_rep_id
             else
                 worker_rep_id;
-            try call_desc_reps.put(self.allocator, call_index, call_source_rep);
+            try walk.call_desc_reps.put(self.allocator, call_index, call_source_rep);
         }
 
         if (worker_rep.descriptor) |worker_desc| {
-            const static_source = descriptor_sources.get(worker_desc);
+            const static_source = walk.descriptor_sources.get(worker_desc);
             const source_needs_runtime_instantiation = if (static_source) |source_rep|
                 try self.repQuery().repSubtreeHasDescriptor(source_rep)
             else
                 true;
-            if (hiddenDescriptorParamContains(params, worker_desc) and source_needs_runtime_instantiation) {
+            if (hiddenDescriptorParamContains(walk.params, worker_desc) and source_needs_runtime_instantiation) {
                 if (requirement_rep.descriptor) |requirement_desc| {
-                    const call_index = call_desc_indexes.get(requirement_desc) orelse
+                    const call_index = walk.call_desc_indexes.get(requirement_desc) orelse
                         boxyLowerInvariant("static dictionary method call descriptor mapping referenced an unindexed generic descriptor");
-                    try call_sources.put(self.allocator, worker_desc, .{ .call = call_index });
+                    try walk.call_sources.put(self.allocator, worker_desc, .{ .call = call_index });
                 } else {
-                    const slot_index = hiddenDescriptorParamIndex(params, worker_desc) orelse
+                    const slot_index = hiddenDescriptorParamIndex(walk.params, worker_desc) orelse
                         boxyLowerInvariant("static dictionary method worker descriptor was missing from its hidden parameter list");
-                    try call_sources.put(self.allocator, worker_desc, .{ .slot = slot_index });
+                    try walk.call_sources.put(self.allocator, worker_desc, .{ .slot = slot_index });
                 }
             }
         }
@@ -3122,20 +3225,7 @@ const ProcedureBuilder = struct {
         if (requirement_rep.kind == .erased_callable) return;
 
         if (worker_rep.kind == .empty_tag_union and requirement_rep.children.len != 0) {
-            for (self.plan.childSlice(requirement_rep.children)) |requirement_child| {
-                if (!self.plan.childCarriesHiddenDescriptor(requirement_rep_id, requirement_child)) continue;
-                if (!try self.repQuery().repSubtreeHasDescriptor(requirement_child.rep)) continue;
-                try self.collectStaticMethodCallDescSourcesForRep(
-                    worker_rep_id,
-                    requirement_child.rep,
-                    params,
-                    descriptor_sources,
-                    call_desc_indexes,
-                    call_desc_reps,
-                    call_sources,
-                    seen,
-                );
-            }
+            try frames.append(self.allocator, .{ .worker_rep_id = worker_rep_id, .requirement_rep_id = requirement_rep_id, .phase = .requirement_under_empty_worker });
             return;
         }
 
@@ -3143,90 +3233,115 @@ const ProcedureBuilder = struct {
 
         // Children align with the structure the requirement's value stands for.
         var wrapper_bindings: Plan.CallWrapperBindings = .{};
-        defer wrapper_bindings.deinit(self.allocator);
+        errdefer wrapper_bindings.deinit(self.allocator);
         const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, requirement_rep_id, &wrapper_bindings);
-        const through_wrapper = structure_call_rep_id != requirement_rep_id;
         const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+        try frames.append(self.allocator, .{
+            .worker_rep_id = worker_rep_id,
+            .requirement_rep_id = requirement_rep_id,
+            .phase = if (structure_rep.kind == .empty_tag_union) .worker_under_empty_requirement else .worker_children,
+            .wrapper_bindings = wrapper_bindings,
+            .structure_call_rep_id = structure_call_rep_id,
+            .through_wrapper = structure_call_rep_id != requirement_rep_id,
+        });
+    }
 
-        if (structure_rep.kind == .empty_tag_union) {
-            for (self.plan.childSlice(worker_rep.children)) |worker_child| {
-                if (!self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
-                if (!try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, params, descriptor_sources)) continue;
-                try self.collectStaticMethodCallDescSourcesForRep(
-                    worker_child.rep,
-                    requirement_rep_id,
-                    params,
-                    descriptor_sources,
-                    call_desc_indexes,
-                    call_desc_reps,
-                    call_sources,
-                    seen,
-                );
-            }
-            return;
-        }
-
+    /// The next child pair `frame` aligns, or null once its children are
+    /// aligned.
+    fn nextStaticMethodCallDescPair(
+        self: *ProcedureBuilder,
+        walk: *const StaticMethodCallDescWalk,
+        frame: *StaticMethodCallDescFrame,
+    ) Allocator.Error!?[2]Plan.TypeRepId {
+        const worker_rep_id = frame.worker_rep_id;
+        const requirement_rep_id = frame.requirement_rep_id;
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        const requirement_rep = self.plan.representations.items[@intFromEnum(requirement_rep_id)];
         const worker_children = self.plan.childSlice(worker_rep.children);
         const requirement_children = self.plan.childSlice(requirement_rep.children);
-        const requirement_structure_children = self.plan.childSlice(structure_rep.children);
-        for (worker_children) |worker_child| {
-            if (!self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
-            const has_call_supplied_desc = try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, params, descriptor_sources);
-            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
-                const row_target = if (structure_row_target == structure_call_rep_id)
-                    requirement_rep_id
-                else
-                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, row_target, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (self.namedQuery().findMatchingChildByRole(requirement_structure_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, requirement_child.rep), params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (self.repQuery().structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
-                const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |requirement_child| {
-                    try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                    continue;
+        while (true) switch (frame.phase) {
+            .requirement_under_empty_worker => {
+                while (frame.index < requirement_children.len) {
+                    const requirement_child = requirement_children[frame.index];
+                    frame.index += 1;
+                    if (!self.plan.childCarriesHiddenDescriptor(requirement_rep_id, requirement_child)) continue;
+                    if (!try self.repQuery().repSubtreeHasDescriptor(requirement_child.rep)) continue;
+                    return .{ worker_rep_id, requirement_child.rep };
                 }
-            }
-            if (!has_call_supplied_desc) continue;
-            if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (worker_child.role == .tag_ext and requirement_structure_children.len == 0 and requirement_rep.descriptor != null) {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            boxyLowerInvariant("static dictionary method call descriptor mapping saw mismatched child roles");
-        }
-
-        for (requirement_children) |requirement_child| {
-            if (!self.plan.childCarriesHiddenDescriptor(requirement_rep_id, requirement_child)) continue;
-            if (!try self.repSubtreeHasUnmappedCallDesc(requirement_child.rep, call_desc_indexes, call_desc_reps)) continue;
-            if (self.namedQuery().findMatchingChildByRole(worker_children, requirement_child)) |worker_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (self.repQuery().structuralWrapperBackingRep(worker_rep_id)) |worker_backing| {
-                const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, requirement_child)) |worker_child| {
-                    try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                    continue;
+                return null;
+            },
+            .worker_under_empty_requirement => {
+                while (frame.index < worker_children.len) {
+                    const worker_child = worker_children[frame.index];
+                    frame.index += 1;
+                    if (!self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
+                    if (!try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, walk.params, walk.descriptor_sources)) continue;
+                    return .{ worker_child.rep, requirement_rep_id };
                 }
-            }
-            if (try self.workerChildCanMatchUnwrappedSourceRep(requirement_rep_id, requirement_child)) {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_rep_id, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            if (requirement_child.role == .tag_ext and worker_children.len == 0 and worker_rep.descriptor != null) {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_rep_id, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
-                continue;
-            }
-            boxyLowerInvariant("static dictionary method call descriptor alignment saw mismatched child roles");
-        }
+                return null;
+            },
+            .worker_children => {
+                const structure_call_rep_id = frame.structure_call_rep_id;
+                const requirement_structure_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(structure_call_rep_id)].children);
+                while (frame.index < worker_children.len) {
+                    const worker_child = worker_children[frame.index];
+                    frame.index += 1;
+                    if (!self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
+                    const has_call_supplied_desc = try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, walk.params, walk.descriptor_sources);
+                    if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                        const row_target = if (structure_row_target == structure_call_rep_id)
+                            requirement_rep_id
+                        else
+                            Plan.structureChildCallRep(&frame.wrapper_bindings, frame.through_wrapper, structure_row_target);
+                        return .{ worker_child.rep, row_target };
+                    }
+                    if (self.namedQuery().findMatchingChildByRole(requirement_structure_children, worker_child)) |requirement_child| {
+                        return .{ worker_child.rep, Plan.structureChildCallRep(&frame.wrapper_bindings, frame.through_wrapper, requirement_child.rep) };
+                    }
+                    if (self.repQuery().structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
+                        const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_backing)].children);
+                        if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |requirement_child| {
+                            return .{ worker_child.rep, requirement_child.rep };
+                        }
+                    }
+                    if (!has_call_supplied_desc) continue;
+                    if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
+                        return .{ worker_child.rep, requirement_rep_id };
+                    }
+                    if (worker_child.role == .tag_ext and requirement_structure_children.len == 0 and requirement_rep.descriptor != null) {
+                        return .{ worker_child.rep, requirement_rep_id };
+                    }
+                    boxyLowerInvariant("static dictionary method call descriptor mapping saw mismatched child roles");
+                }
+                frame.phase = .requirement_children;
+                frame.index = 0;
+            },
+            .requirement_children => {
+                while (frame.index < requirement_children.len) {
+                    const requirement_child = requirement_children[frame.index];
+                    frame.index += 1;
+                    if (!self.plan.childCarriesHiddenDescriptor(requirement_rep_id, requirement_child)) continue;
+                    if (!try self.repSubtreeHasUnmappedCallDesc(requirement_child.rep, walk.call_desc_indexes, walk.call_desc_reps)) continue;
+                    if (self.namedQuery().findMatchingChildByRole(worker_children, requirement_child)) |worker_child| {
+                        return .{ worker_child.rep, requirement_child.rep };
+                    }
+                    if (self.repQuery().structuralWrapperBackingRep(worker_rep_id)) |worker_backing| {
+                        const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_backing)].children);
+                        if (self.namedQuery().findMatchingChildByRole(backing_children, requirement_child)) |worker_child| {
+                            return .{ worker_child.rep, requirement_child.rep };
+                        }
+                    }
+                    if (try self.workerChildCanMatchUnwrappedSourceRep(requirement_rep_id, requirement_child)) {
+                        return .{ worker_rep_id, requirement_child.rep };
+                    }
+                    if (requirement_child.role == .tag_ext and worker_children.len == 0 and worker_rep.descriptor != null) {
+                        return .{ worker_rep_id, requirement_child.rep };
+                    }
+                    boxyLowerInvariant("static dictionary method call descriptor alignment saw mismatched child roles");
+                }
+                return null;
+            },
+        };
     }
 
     fn repSubtreeHasUnmappedCallDesc(
@@ -3237,29 +3352,22 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!bool {
         var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.allocator);
         defer seen.deinit();
-        return try self.repSubtreeHasUnmappedCallDescInner(rep_id, indexes, reps, &seen);
-    }
-
-    fn repSubtreeHasUnmappedCallDescInner(
-        self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
-        indexes: *const StaticMethodCallDescIndexMap,
-        reps: *const StaticMethodCallDescRepMap,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!bool {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return false;
-
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor) |desc| {
-            const index = indexes.get(desc) orelse
-                boxyLowerInvariant("static dictionary method call descriptor mapping referenced an unindexed generic descriptor");
-            if (reps.reps.items[index] == null) return true;
-        }
-        if (rep.kind == .erased_callable) return false;
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (!self.plan.childCarriesHiddenDescriptor(rep_id, child)) continue;
-            if (try self.repSubtreeHasUnmappedCallDescInner(child.rep, indexes, reps, seen)) return true;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, rep_id);
+        while (pending.pop()) |current| {
+            if ((try seen.getOrPut(current)).found_existing) continue;
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            if (rep.descriptor) |desc| {
+                const index = indexes.get(desc) orelse
+                    boxyLowerInvariant("static dictionary method call descriptor mapping referenced an unindexed generic descriptor");
+                if (reps.reps.items[index] == null) return true;
+            }
+            if (rep.kind == .erased_callable) continue;
+            for (self.plan.childSlice(rep.children)) |child| {
+                if (!self.plan.childCarriesHiddenDescriptor(current, child)) continue;
+                try pending.append(self.allocator, child.rep);
+            }
         }
         return false;
     }
@@ -3272,26 +3380,19 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!bool {
         var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.allocator);
         defer seen.deinit();
-        return try self.repSubtreeHasCallSuppliedDescriptorInner(rep_id, params, descriptor_sources, &seen);
-    }
-
-    fn repSubtreeHasCallSuppliedDescriptorInner(
-        self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
-        params: []const Plan.HiddenDescriptorParam,
-        descriptor_sources: *const StaticDescriptorSourceMap,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!bool {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return false;
-
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor) |desc| {
-            if (hiddenDescriptorParamContains(params, desc) and descriptor_sources.get(desc) == null) return true;
-        }
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (self.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
-            if (try self.repSubtreeHasCallSuppliedDescriptorInner(child.rep, params, descriptor_sources, seen)) return true;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, rep_id);
+        while (pending.pop()) |current| {
+            if ((try seen.getOrPut(current)).found_existing) continue;
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            if (rep.descriptor) |desc| {
+                if (hiddenDescriptorParamContains(params, desc) and descriptor_sources.get(desc) == null) return true;
+            }
+            for (self.plan.childSlice(rep.children)) |child| {
+                if (self.plan.childIsSharedBackingTemplate(current, child)) continue;
+                try pending.append(self.allocator, child.rep);
+            }
         }
         return false;
     }
@@ -3349,10 +3450,12 @@ const ProcedureBuilder = struct {
         );
     }
 
+    /// Record, in pre-order, the static descriptor sources a worker
+    /// representation aligned with a dictionary requirement reaches.
     fn collectStaticDictionaryDescriptorSourcesForAlignedRep(
         self: *ProcedureBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        requirement_rep_id: Plan.TypeRepId,
+        root_worker_rep_id: Plan.TypeRepId,
+        root_requirement_rep_id: Plan.TypeRepId,
         owner_requirement_rep_id: Plan.TypeRepId,
         source_rep_id: Plan.TypeRepId,
         params: []const Plan.HiddenDescriptorParam,
@@ -3360,158 +3463,125 @@ const ProcedureBuilder = struct {
         sources: *StaticDescriptorSourceMap,
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!void {
-        const identity_requirement = self.repQuery().descriptorArgumentIdentityRep(requirement_rep_id);
-        const identity_owner = self.repQuery().descriptorArgumentIdentityRep(owner_requirement_rep_id);
-        if (identity_requirement == identity_owner) {
-            var source_seen = std.AutoHashMap(u64, void).init(self.allocator);
-            defer source_seen.deinit();
-            try self.collectStaticDescriptorSourcesForWorkerSource(worker_rep_id, source_rep_id, params, binding_scope, sources, &source_seen);
-            return;
-        }
-        if (binding_scope == .all_worker_descriptors and !try self.repQuery().repSubtreeHasDescriptor(requirement_rep_id)) {
-            var source_seen = std.AutoHashMap(u64, void).init(self.allocator);
-            defer source_seen.deinit();
-            try self.collectStaticDescriptorSourcesForWorkerSource(worker_rep_id, requirement_rep_id, params, binding_scope, sources, &source_seen);
-            return;
-        }
+        var pending: std.ArrayList([2]Plan.TypeRepId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ root_worker_rep_id, root_requirement_rep_id });
+        while (pending.pop()) |pair| {
+            const worker_rep_id = pair[0];
+            const requirement_rep_id = pair[1];
+            const identity_requirement = self.repQuery().descriptorArgumentIdentityRep(requirement_rep_id);
+            const identity_owner = self.repQuery().descriptorArgumentIdentityRep(owner_requirement_rep_id);
+            if (identity_requirement == identity_owner) {
+                var source_seen = std.AutoHashMap(u64, void).init(self.allocator);
+                defer source_seen.deinit();
+                try self.collectStaticDescriptorSourcesForWorkerSource(worker_rep_id, source_rep_id, params, binding_scope, sources, &source_seen);
+                continue;
+            }
+            if (binding_scope == .all_worker_descriptors and !try self.repQuery().repSubtreeHasDescriptor(requirement_rep_id)) {
+                var source_seen = std.AutoHashMap(u64, void).init(self.allocator);
+                defer source_seen.deinit();
+                try self.collectStaticDescriptorSourcesForWorkerSource(worker_rep_id, requirement_rep_id, params, binding_scope, sources, &source_seen);
+                continue;
+            }
 
-        const seen_key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) | @as(u64, @intFromEnum(requirement_rep_id));
-        const seen_entry = try seen.getOrPut(seen_key);
-        if (seen_entry.found_existing) return;
+            const seen_key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) | @as(u64, @intFromEnum(requirement_rep_id));
+            const seen_entry = try seen.getOrPut(seen_key);
+            if (seen_entry.found_existing) continue;
+            try self.pushAlignedDescriptorSourceChildren(&pending, worker_rep_id, requirement_rep_id);
+        }
+    }
 
+    /// Queue, so that they are visited in child order, the child pairs of a
+    /// worker representation aligned with a source representation.
+    fn pushAlignedDescriptorSourceChildren(
+        self: *ProcedureBuilder,
+        pending: *std.ArrayList([2]Plan.TypeRepId),
+        worker_rep_id: Plan.TypeRepId,
+        source_rep_id: Plan.TypeRepId,
+    ) Allocator.Error!void {
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
         if (worker_rep.children.len == 0) return;
 
-        const requirement_rep = self.plan.representations.items[@intFromEnum(requirement_rep_id)];
-        // Children align with the structure the requirement's value stands for.
+        const source_rep = self.plan.representations.items[@intFromEnum(source_rep_id)];
+        // Children align with the structure the source's value stands for.
         var wrapper_bindings: Plan.CallWrapperBindings = .{};
         defer wrapper_bindings.deinit(self.allocator);
-        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, requirement_rep_id, &wrapper_bindings);
-        const through_wrapper = structure_call_rep_id != requirement_rep_id;
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, source_rep_id, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != source_rep_id;
         const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+        const children_start = pending.items.len;
+        defer std.mem.reverse([2]Plan.TypeRepId, pending.items[children_start..]);
+
+        const worker_children = self.plan.childSlice(worker_rep.children);
         if (structure_rep.kind == .empty_tag_union) {
-            for (self.plan.childSlice(worker_rep.children)) |worker_child| {
+            for (worker_children) |worker_child| {
                 if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(
-                    worker_child.rep,
-                    requirement_rep_id,
-                    owner_requirement_rep_id,
-                    source_rep_id,
-                    params,
-                    binding_scope,
-                    sources,
-                    seen,
-                );
+                try pending.append(self.allocator, .{ worker_child.rep, source_rep_id });
             }
             return;
         }
 
-        const worker_children = self.plan.childSlice(worker_rep.children);
-        const requirement_children = self.plan.childSlice(structure_rep.children);
+        const source_children = self.plan.childSlice(structure_rep.children);
         for (worker_children) |worker_child| {
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
             if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
                 const row_target = if (structure_row_target == structure_call_rep_id)
-                    requirement_rep_id
+                    source_rep_id
                 else
                     Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, row_target, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
+                try pending.append(self.allocator, .{ worker_child.rep, row_target });
                 continue;
             }
-            if (self.namedQuery().findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, requirement_child.rep), owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
+            if (self.namedQuery().findMatchingChildByRole(source_children, worker_child)) |source_child| {
+                try pending.append(self.allocator, .{ worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, source_child.rep) });
                 continue;
             }
-            if (self.repQuery().structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
-                const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |requirement_child| {
-                    try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
+            if (self.repQuery().structuralWrapperBackingRep(source_rep_id)) |source_backing| {
+                const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(source_backing)].children);
+                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |source_child| {
+                    try pending.append(self.allocator, .{ worker_child.rep, source_child.rep });
                     continue;
                 }
             }
             if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_rep_id, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
+                try pending.append(self.allocator, .{ worker_child.rep, source_rep_id });
                 continue;
             }
-            if (worker_child.role == .tag_ext and requirement_children.len == 0 and requirement_rep.descriptor != null) {
-                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_rep_id, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
+            if (worker_child.role == .tag_ext and source_children.len == 0 and source_rep.descriptor != null) {
+                try pending.append(self.allocator, .{ worker_child.rep, source_rep_id });
                 continue;
             }
         }
     }
 
+    /// Record, in pre-order, the static descriptor source of each worker
+    /// descriptor a worker representation aligned with a source reaches.
     fn collectStaticDescriptorSourcesForWorkerSource(
         self: *ProcedureBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        source_rep_id: Plan.TypeRepId,
+        root_worker_rep_id: Plan.TypeRepId,
+        root_source_rep_id: Plan.TypeRepId,
         params: []const Plan.HiddenDescriptorParam,
         binding_scope: StaticDescriptorBindingScope,
         sources: *StaticDescriptorSourceMap,
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!void {
-        const identity_worker = self.descriptorStorageRep(worker_rep_id);
-        const identity_source = self.repQuery().descriptorArgumentIdentityRep(source_rep_id);
-        const seen_key = (@as(u64, @intFromEnum(identity_worker)) << 32) | @as(u64, @intFromEnum(identity_source));
-        const entry = try seen.getOrPut(seen_key);
-        if (entry.found_existing) return;
+        var pending: std.ArrayList([2]Plan.TypeRepId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ root_worker_rep_id, root_source_rep_id });
+        while (pending.pop()) |pair| {
+            const identity_worker = self.descriptorStorageRep(pair[0]);
+            const identity_source = self.repQuery().descriptorArgumentIdentityRep(pair[1]);
+            const seen_key = (@as(u64, @intFromEnum(identity_worker)) << 32) | @as(u64, @intFromEnum(identity_source));
+            const entry = try seen.getOrPut(seen_key);
+            if (entry.found_existing) continue;
 
-        const worker_rep = self.plan.representations.items[@intFromEnum(identity_worker)];
-        const source_rep = self.plan.representations.items[@intFromEnum(identity_source)];
-
-        if (worker_rep.descriptor) |worker_desc| {
-            if (binding_scope == .all_worker_descriptors or hiddenDescriptorParamContains(params, worker_desc)) {
-                try sources.put(self.allocator, worker_desc, identity_source);
-            }
-        }
-
-        if (worker_rep.children.len == 0) return;
-
-        // Children align with the structure the source's value stands for.
-        var wrapper_bindings: Plan.CallWrapperBindings = .{};
-        defer wrapper_bindings.deinit(self.allocator);
-        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, identity_worker, identity_source, &wrapper_bindings);
-        const through_wrapper = structure_call_rep_id != identity_source;
-        const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
-
-        if (structure_rep.kind == .empty_tag_union) {
-            for (self.plan.childSlice(worker_rep.children)) |worker_child| {
-                if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, identity_source, params, binding_scope, sources, seen);
-            }
-            return;
-        }
-
-        const worker_children = self.plan.childSlice(worker_rep.children);
-        const source_children = self.plan.childSlice(structure_rep.children);
-        for (worker_children) |worker_child| {
-            if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.namedQuery().rowInstantiationTarget(identity_worker, structure_call_rep_id, worker_child)) |structure_row_target| {
-                const row_target = if (structure_row_target == structure_call_rep_id)
-                    identity_source
-                else
-                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, row_target, params, binding_scope, sources, seen);
-                continue;
-            }
-            if (self.namedQuery().findMatchingChildByRole(source_children, worker_child)) |source_child| {
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, source_child.rep), params, binding_scope, sources, seen);
-                continue;
-            }
-            if (self.repQuery().structuralWrapperBackingRep(identity_source)) |source_backing| {
-                const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(source_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |source_child| {
-                    try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
-                    continue;
+            const worker_rep = self.plan.representations.items[@intFromEnum(identity_worker)];
+            if (worker_rep.descriptor) |worker_desc| {
+                if (binding_scope == .all_worker_descriptors or hiddenDescriptorParamContains(params, worker_desc)) {
+                    try sources.put(self.allocator, worker_desc, identity_source);
                 }
             }
-            if (try self.workerChildCanMatchUnwrappedSourceRep(identity_worker, worker_child)) {
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, identity_source, params, binding_scope, sources, seen);
-                continue;
-            }
-            if (worker_child.role == .tag_ext and source_children.len == 0 and source_rep.descriptor != null) {
-                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, identity_source, params, binding_scope, sources, seen);
-                continue;
-            }
+            try self.pushAlignedDescriptorSourceChildren(&pending, identity_worker, identity_source);
         }
     }
 
@@ -3708,13 +3778,7 @@ const ProcedureBuilder = struct {
         else
             source_rep_id orelse return null;
 
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) {
-                boxyLowerInvariant("static descriptor source chain exceeded boxy procedure builder limit");
-            }
-            depth += 1;
-
             const identity = self.descriptorIdentityRep(current);
             const source_rep = self.plan.representations.items[@intFromEnum(identity)];
             const desc = source_rep.descriptor orelse return current;
@@ -4089,11 +4153,7 @@ const ProcedureBuilder = struct {
         worker_field: Plan.DeclaredField,
     ) Allocator.Error!?Plan.TypeRepId {
         var current = source_rep_id orelse return null;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("declared-field descriptor source wrapper chain exceeded boxy procedure builder limit");
-            depth += 1;
-
             const source_rep = self.plan.representations.items[@intFromEnum(current)];
             if (source_rep.declared_fields.len != 0) {
                 for (self.plan.declaredFieldSlice(source_rep.declared_fields)) |source_field| {
@@ -4395,35 +4455,42 @@ const ProcedureBuilder = struct {
 
     /// The type variables `rep_id` names outside nominal backing templates,
     /// each once, a formal of `bindings` naming what its actual names.
+    /// Collect, in pre-order, the type variables `root` reaches under
+    /// `bindings`.
     fn collectDerivedFrameVariables(
         self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         bindings: []const Plan.DerivedBinding,
         visited: *collections.DenseMap(Plan.TypeRepId, void),
         variables: *std.ArrayList(Plan.TypeRepId),
     ) Allocator.Error!void {
-        if ((try visited.getOrPut(rep_id)).found_existing) return;
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.kind == .dynamic) {
-            if (Plan.derivedEnvActual(bindings, rep_id)) |actual| return try self.collectDerivedFrameVariables(actual, bindings, visited, variables);
-            if (rep.sealed_default) |sealed| return try self.collectDerivedFrameVariables(sealed, bindings, visited, variables);
-            try variables.append(self.allocator, rep_id);
-            return;
-        }
-        if (rep.nominal_backing_arg_substitutions.len != 0) {
-            var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
-            while (substitutions.next()) |substitution| {
-                try self.collectDerivedFrameVariables(substitution.actual_rep, bindings, visited, variables);
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |rep_id| {
+            if ((try visited.getOrPut(rep_id)).found_existing) continue;
+            const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.kind == .dynamic) {
+                if (Plan.derivedEnvActual(bindings, rep_id)) |actual| {
+                    try pending.append(self.allocator, actual);
+                } else if (rep.sealed_default) |sealed| {
+                    try pending.append(self.allocator, sealed);
+                } else {
+                    try variables.append(self.allocator, rep_id);
+                }
+                continue;
             }
-            return;
-        }
-        for (self.plan.childSlice(rep.children)) |child| {
-            try self.collectDerivedFrameVariables(child.rep, bindings, visited, variables);
-        }
-        for (self.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-            for (self.plan.childSlice(variant.payloads)) |payload| {
-                try self.collectDerivedFrameVariables(payload.rep, bindings, visited, variables);
+            const children_start = pending.items.len;
+            if (rep.nominal_backing_arg_substitutions.len != 0) {
+                var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+                while (substitutions.next()) |substitution| try pending.append(self.allocator, substitution.actual_rep);
+            } else {
+                for (self.plan.childSlice(rep.children)) |child| try pending.append(self.allocator, child.rep);
+                for (self.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+                    for (self.plan.childSlice(variant.payloads)) |payload| try pending.append(self.allocator, payload.rep);
+                }
             }
+            std.mem.reverse(Plan.TypeRepId, pending.items[children_start..]);
         }
     }
 
@@ -5133,38 +5200,58 @@ const ProcedureBuilder = struct {
         return .{ .start = start, .len = 1 };
     }
 
+    /// The descriptor of a kind of generated evidence. Each kind's contents
+    /// are described by the next inner kind's descriptor, so descriptors
+    /// along that chain are reserved outermost first and filled innermost
+    /// first.
     fn generatedEvidenceTypeDesc(
         self: *ProcedureBuilder,
-        kind: GeneratedEvidenceDescKind,
+        root: GeneratedEvidenceDescKind,
     ) Allocator.Error!LIR.BoxyTypeDescId {
-        const cache_index = @intFromEnum(kind);
-        if (self.generated_evidence_desc_ids[cache_index]) |existing| return existing;
-
-        const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.result.boxy_type_descs.items.len)));
-        self.generated_evidence_desc_ids[cache_index] = desc_id;
-        try self.result.boxy_type_descs.append(self.allocator, reserved_boxy_type_desc);
-
-        const payload_layout = switch (kind) {
-            .field => self.layout_plan.generated_evidence.field,
-            .field_list => self.layout_plan.generated_evidence.field_list,
-            .field_names => self.layout_plan.generated_evidence.field_names,
-            .field_names_list => self.layout_plan.generated_evidence.field_names_list,
-        };
-        const nested_descs: LIR.BoxySpan = switch (kind) {
-            .field => try self.generatedEvidenceStructNestedDescRefs(payload_layout, .{ .static = try self.internalLeafTypeDesc(.str) }),
-            .field_list => try self.generatedEvidenceListNestedDescRefs(try self.generatedEvidenceTypeDesc(.field)),
-            .field_names => try self.generatedEvidenceStructNestedDescRefs(payload_layout, .{ .static = try self.generatedEvidenceTypeDesc(.field_list) }),
-            .field_names_list => try self.generatedEvidenceListNestedDescRefs(try self.generatedEvidenceTypeDesc(.field_names)),
-        };
-        const layout_value = self.result.layouts.getLayout(payload_layout);
-        self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = .{
-            .payload_layout = payload_layout,
-            .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value),
-            .shape = .internal,
-            .nested_descs = nested_descs,
-            .inspect_opaque = true,
-        };
-        return desc_id;
+        var chain: [4]GeneratedEvidenceDescKind = undefined;
+        var chain_len: usize = 0;
+        var next_kind: ?GeneratedEvidenceDescKind = root;
+        while (next_kind) |kind| {
+            if (self.generated_evidence_desc_ids[@intFromEnum(kind)] != null) break;
+            const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.result.boxy_type_descs.items.len)));
+            self.generated_evidence_desc_ids[@intFromEnum(kind)] = desc_id;
+            try self.result.boxy_type_descs.append(self.allocator, reserved_boxy_type_desc);
+            chain[chain_len] = kind;
+            chain_len += 1;
+            next_kind = switch (kind) {
+                .field => null,
+                .field_list => .field,
+                .field_names => .field_list,
+                .field_names_list => .field_names,
+            };
+        }
+        var index = chain_len;
+        while (index > 0) {
+            index -= 1;
+            const kind = chain[index];
+            const desc_id = self.generated_evidence_desc_ids[@intFromEnum(kind)].?;
+            const payload_layout = switch (kind) {
+                .field => self.layout_plan.generated_evidence.field,
+                .field_list => self.layout_plan.generated_evidence.field_list,
+                .field_names => self.layout_plan.generated_evidence.field_names,
+                .field_names_list => self.layout_plan.generated_evidence.field_names_list,
+            };
+            const nested_descs: LIR.BoxySpan = switch (kind) {
+                .field => try self.generatedEvidenceStructNestedDescRefs(payload_layout, .{ .static = try self.internalLeafTypeDesc(.str) }),
+                .field_list => try self.generatedEvidenceListNestedDescRefs(self.generated_evidence_desc_ids[@intFromEnum(GeneratedEvidenceDescKind.field)].?),
+                .field_names => try self.generatedEvidenceStructNestedDescRefs(payload_layout, .{ .static = self.generated_evidence_desc_ids[@intFromEnum(GeneratedEvidenceDescKind.field_list)].? }),
+                .field_names_list => try self.generatedEvidenceListNestedDescRefs(self.generated_evidence_desc_ids[@intFromEnum(GeneratedEvidenceDescKind.field_names)].?),
+            };
+            const layout_value = self.result.layouts.getLayout(payload_layout);
+            self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = .{
+                .payload_layout = payload_layout,
+                .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value),
+                .shape = .internal,
+                .nested_descs = nested_descs,
+                .inspect_opaque = true,
+            };
+        }
+        return self.generated_evidence_desc_ids[@intFromEnum(root)].?;
     }
 
     /// Descriptor for a compiler-internal leaf value stored in `layout_idx`,
@@ -5318,18 +5405,19 @@ const ProcedureBuilder = struct {
         return .{ .start = start, .len = @intCast(descs.items.len) };
     }
 
-    fn tagVariantRepForDesc(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.kind == .alias) {
-            return self.tagVariantRepForDesc(self.singleChildRepForDesc(rep_id, .alias_backing) orelse rep_id);
+    fn tagVariantRepForDesc(self: *const ProcedureBuilder, root: Plan.TypeRepId) Plan.TypeRepId {
+        var rep_id = root;
+        while (true) {
+            const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+            const backing = if (rep.kind == .alias)
+                self.singleChildRepForDesc(rep_id, .alias_backing)
+            else if (rep.kind == .nominal) switch (rep.kind.nominal) {
+                .transparent, .builtin_other => self.singleChildRepForDesc(rep_id, .nominal_backing),
+                .opaque_nominal => return rep_id,
+            } else return rep_id;
+            // A wrapper without its backing child describes its own variants.
+            rep_id = backing orelse return rep_id;
         }
-        if (rep.kind == .nominal) {
-            return switch (rep.kind.nominal) {
-                .transparent, .builtin_other => self.tagVariantRepForDesc(self.singleChildRepForDesc(rep_id, .nominal_backing) orelse rep_id),
-                .opaque_nominal => rep_id,
-            };
-        }
-        return rep_id;
     }
 
     fn tagPayloadStorageDescRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
@@ -5485,11 +5573,7 @@ const ProcedureBuilder = struct {
 
     fn descriptorStorageRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("descriptor representation wrapper chain exceeded boxy procedure builder limit");
-            depth += 1;
-
             const rep = self.plan.representations.items[@intFromEnum(current)];
             if (rep.kind == .alias) {
                 current = self.singleChildRepForDesc(current, .alias_backing) orelse
@@ -5517,10 +5601,7 @@ const ProcedureBuilder = struct {
 
     fn descriptorIdentityRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("descriptor identity wrapper chain exceeded boxy procedure builder limit");
-            depth += 1;
             if (self.plan.inspectMethodForRep(current) != null) return current;
 
             const rep = self.plan.representations.items[@intFromEnum(current)];
@@ -5566,30 +5647,39 @@ const ProcedureBuilder = struct {
         return null;
     }
 
-    fn repNeedsTagPayloadDesc(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) bool {
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor != null) return true;
-        return switch (rep.kind) {
-            .tag_union,
-            .bool_tag_union,
-            .record,
-            .tuple,
-            .list,
-            .box,
-            .generated_field,
-            .generated_field_names,
-            .generated_tag_union_spec,
-            => true,
-            .alias => self.repNeedsTagPayloadDesc(self.singleChildRepForDesc(rep_id, .alias_backing) orelse return true),
-            .nominal => self.repNeedsTagPayloadDesc(self.singleChildRepForDesc(rep_id, .nominal_backing) orelse return true),
-            .primitive => |primitive| Common.primitiveInspectLowering(primitive) == .builtin_method,
-            .in_progress,
-            .dynamic,
-            .erased_callable,
-            .empty_record,
-            .empty_tag_union,
-            => false,
-        };
+    fn repNeedsTagPayloadDesc(self: *const ProcedureBuilder, root: Plan.TypeRepId) bool {
+        var rep_id = root;
+        while (true) {
+            const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.descriptor != null) return true;
+            return switch (rep.kind) {
+                .tag_union,
+                .bool_tag_union,
+                .record,
+                .tuple,
+                .list,
+                .box,
+                .generated_field,
+                .generated_field_names,
+                .generated_tag_union_spec,
+                => true,
+                .alias => {
+                    rep_id = self.singleChildRepForDesc(rep_id, .alias_backing) orelse return true;
+                    continue;
+                },
+                .nominal => {
+                    rep_id = self.singleChildRepForDesc(rep_id, .nominal_backing) orelse return true;
+                    continue;
+                },
+                .primitive => |primitive| Common.primitiveInspectLowering(primitive) == .builtin_method,
+                .in_progress,
+                .dynamic,
+                .erased_callable,
+                .empty_record,
+                .empty_tag_union,
+                => false,
+            };
+        }
     }
 
     fn singleChildRepForDesc(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) ?Plan.TypeRepId {
@@ -5639,9 +5729,10 @@ const ProcedureBuilder = struct {
     /// backed nominal stores exactly its backing's fields, so it names them; a
     /// structural record can then receive it by field name. A declared
     /// nominal's unnamed padding field is named `padding_field`.
-    fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
+    fn staticFieldNamesForRep(self: *ProcedureBuilder, root: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
         // Field names describe the same payload the nested descriptors do.
-        if (self.descriptorBackingShapeRep(rep_id)) |backing_rep| return try self.staticFieldNamesForRep(backing_rep);
+        var rep_id = root;
+        while (self.descriptorBackingShapeRep(rep_id)) |backing_rep| rep_id = backing_rep;
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
 
         var field_name_ids = std.ArrayList(LIR.BoxyNameId).empty;
@@ -7026,10 +7117,7 @@ const ProcedureBuilder = struct {
         const root = proc.tagVariantRepForBoundary(shape_rep) orelse
             boxyLowerInvariant("generated tag-union plan shape had no tag representation");
         var current = root;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("generated tag-union plan row exceeded lowerer limit");
-            depth += 1;
             const rep = self.plan.representations.items[@intFromEnum(current)];
             for (self.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
                 if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated tag-union variant index exceeded LIR range");
@@ -7510,18 +7598,23 @@ const ProcedureBuilder = struct {
     fn lowerGeneratedInterpolationIterInto(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
+        requested_target: LIR.LocalId,
+        requested_target_rep: Plan.TypeRepId,
         expr_id: checked.CheckedExprId,
-        next: LIR.CFStmtId,
+        requested_next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const interpolation_id = Plan.CheckedExprIdentity{ .module = proc.module.key, .expr = expr_id };
         const planned = self.plan.generatedInterpolationPlan(interpolation_id, proc.worker_layout.worker) orelse
             boxyLowerInvariant("generated interpolation operand had no worker plan");
-        if (planned.iter_rep != target_rep) {
+        // The iterator is built at its planned representation and converted
+        // into the requested one.
+        var target = requested_target;
+        const target_rep = planned.iter_rep;
+        var next = requested_next;
+        if (planned.iter_rep != requested_target_rep) {
             const exact_target = try proc.addFrameBoundaryTargetLocalForRep(planned.iter_rep);
-            const transfer = try proc.assignRepresentationBoundary(target, exact_target, target_rep, planned.iter_rep, next);
-            return try self.lowerGeneratedInterpolationIterInto(proc, exact_target, planned.iter_rep, expr_id, transfer);
+            next = try proc.assignRepresentationBoundary(requested_target, exact_target, requested_target_rep, planned.iter_rep, requested_next);
+            target = exact_target;
         }
 
         const expr = proc.module.checked_bodies.expr(expr_id);
@@ -8430,25 +8523,36 @@ const ProcedureBuilder = struct {
         return try proc.assignIntLiteral(count, @intCast(fields.len), continuation);
     }
 
+    /// Count the fields from `first_field` on that are present, built from
+    /// the last field backward.
     fn lowerGeneratedEncoderRecordCount(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         fields: []const GeneratedEncoderRecordField,
-        field_index: usize,
+        first_field: usize,
         record_value: LIR.LocalId,
         count: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (field_index == fields.len) return next;
-        const field = fields[field_index];
-        const continuation = try self.lowerGeneratedEncoderRecordCount(
-            proc,
-            fields,
-            field_index + 1,
-            record_value,
-            count,
-            next,
-        );
+        var continuation = next;
+        var field_index = fields.len;
+        while (field_index > first_field) {
+            field_index -= 1;
+            continuation = try self.lowerGeneratedEncoderRecordFieldCount(proc, fields[field_index], record_value, count, continuation);
+        }
+        return continuation;
+    }
+
+    /// Decrement `count` when an optional field is missing, before
+    /// `continuation`.
+    fn lowerGeneratedEncoderRecordFieldCount(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        field: GeneratedEncoderRecordField,
+        record_value: LIR.LocalId,
+        count: LIR.LocalId,
+        continuation: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         if (!field.optional_missing) return continuation;
 
         const field_value = try proc.addFrameLocalForRep(field.rep);
@@ -8749,10 +8853,7 @@ const ProcedureBuilder = struct {
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.role == .tag_ext) {
                 var extension = child.rep;
-                var depth: u16 = 0;
                 while (true) {
-                    if (depth == 1024) boxyLowerInvariant("generated tag encoder extension wrapper chain exceeded limit");
-                    depth += 1;
                     const extension_rep = self.plan.representations.items[@intFromEnum(extension)];
                     if (extension_rep.kind == .alias) {
                         extension = proc.repQuery().requiredSingleChild(extension, .alias_backing).rep;
@@ -17205,7 +17306,7 @@ const ProcBodyBuilder = struct {
         expr_id: checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        if (self.declOmitsRuntimeBinding(pattern_id, expr_id)) return exprDone(next);
+        if (try self.declOmitsRuntimeBinding(pattern_id, expr_id)) return exprDone(next);
 
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const source = switch (pattern.data) {
@@ -18597,11 +18698,27 @@ const ProcBodyBuilder = struct {
             const initializer = self.parent.plan.literal_evidence.?.initializers.items[index];
             const callable = self.functionChildrenForRep(initializer.callable_rep).?;
             if (source_rep != callable.ret) {
+                // The result is read at the initializer's own result
+                // representation.
                 const concrete = try self.addFrameLocalForRep(callable.ret);
-                const unwrap = try self.lowerLiteralConversionResultInto(target, target_rep, concrete, callable.ret, invalid_message, next);
+                const unwrap = try self.lowerLiteralConversionResultAtRepInto(target, target_rep, concrete, callable.ret, invalid_message, next);
                 return try self.assignRepresentationBoundary(concrete, source, callable.ret, source_rep, unwrap);
             }
         }
+        return try self.lowerLiteralConversionResultAtRepInto(target, target_rep, source, source_rep, invalid_message, next);
+    }
+
+    /// Unwrap a literal conversion's `Ok` result read at its own
+    /// representation.
+    fn lowerLiteralConversionResultAtRepInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source: LIR.LocalId,
+        source_rep: Plan.TypeRepId,
+        invalid_message: []const u8,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const tag_rep_id = self.tagVariantRepForBoundary(source_rep) orelse
             boxyLowerInvariant("literal conversion result did not have a tag-union representation");
         const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
@@ -19126,11 +19243,7 @@ const ProcBodyBuilder = struct {
         const root_rep = self.tagVariantRepForBoundary(rep_id) orelse
             boxyLowerInvariant("generated parser expected a closed tag-union representation");
         var current = root_rep;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("generated parser tag row exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             for (self.parent.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
                 if (!std.mem.eql(u8, self.tagVariantNameText(variant), tag_text)) continue;
@@ -19318,10 +19431,7 @@ const ProcBodyBuilder = struct {
     ) Plan.RepChild {
         var current = self.recordRepForBoundary(rep_id) orelse
             boxyLowerInvariant("generated record field lookup did not receive a record representation");
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("generated record field lookup exceeded the row chain limit");
-            depth += 1;
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             const view = procedureModuleById(self.parent.modules, rep.source_type.module);
             var extension: ?Plan.TypeRepId = null;
@@ -20044,7 +20154,17 @@ const ProcBodyBuilder = struct {
                 },
                 .opaque_nominal => boxyLowerInvariant("opaque stored constant had no restorable backing representation"),
             },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
+            // `Bool` is represented as its tag directly, beneath any nominal
+            // nodes that wrap the stored tag.
+            .bool_tag_union => {
+                var bool_node = node;
+                while (true) switch (store_module.const_store.get(bool_node)) {
+                    .nominal => |nominal| bool_node = nominal.backing,
+                    .tag => |tag| return exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                };
+            },
+            .in_progress, .dynamic, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
         }
 
         return switch (store_module.const_store.get(node)) {
@@ -21216,20 +21336,31 @@ const ProcBodyBuilder = struct {
         return try self.canMaterializeDescriptorRefForKnownRepVisited(rep_id, &visited);
     }
 
+    /// Whether every descriptor `root` reaches can be materialized here.
+    /// Which representations are reached does not depend on visiting order.
     fn canMaterializeDescriptorRefForKnownRepVisited(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         visited: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!bool {
-        const identity_rep = self.descriptorStorageRep(rep_id);
-        if ((try visited.getOrPut(identity_rep)).found_existing) return true;
-        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
-        const desc = rep.descriptor orelse return true;
-        if (self.descriptorBindingIsBoundForRep(identity_rep) and self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return true;
-        if (rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0) return rep.sealed_default != null;
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (self.parent.plan.childIsSharedBackingTemplate(identity_rep, child)) continue;
-            if (!try self.canMaterializeDescriptorRefForKnownRepVisited(child.rep, visited)) return false;
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |rep_id| {
+            const identity_rep = self.descriptorStorageRep(rep_id);
+            if ((try visited.getOrPut(identity_rep)).found_existing) continue;
+            const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+            const desc = rep.descriptor orelse continue;
+            if (self.descriptorBindingIsBoundForRep(identity_rep) and self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) continue;
+            if (rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0) {
+                if (rep.sealed_default == null) return false;
+                continue;
+            }
+            for (self.parent.plan.childSlice(rep.children)) |child| {
+                if (self.parent.plan.childIsSharedBackingTemplate(identity_rep, child)) continue;
+                try pending.append(allocator, child.rep);
+            }
         }
         return true;
     }
@@ -22297,57 +22428,20 @@ const ProcBodyBuilder = struct {
         module: ProcedureModuleView,
         ref_id: checked.ResolvedValueRefId,
     ) ?Plan.WorkerSource {
-        const record = module.resolved_value_refs.callableTarget(ref_id);
-        return switch (record.ref) {
-            .local_proc => |local| if (topLevelProcedureBindingForExpr(module, local.expr)) |binding|
-                .{ .procedure_binding = binding }
-            else
-                .{ .nested_expr = .{ .module = module.key, .expr = nestedCallableSiteExprForExpr(module, local.expr) orelse local.expr } },
-            .top_level_proc,
-            .promoted_top_level_proc,
-            => |procedure| self.workerSourceForProcedureUse(procedure),
-            .platform_required_proc => |required| self.workerSourceForProcedureUse(required.procedure),
-            .imported_proc => |procedure| self.workerSourceForProcedureUse(procedure),
-            .hosted_proc => |procedure| self.workerSourceForProcedureUse(procedure),
-            .local_param,
-            .local_value,
-            .local_mutable_version,
-            .pattern_binder,
-            .selected_hoisted_const,
-            .top_level_const,
-            .imported_const,
-            .platform_required_declaration,
-            .platform_required_const,
-            => null,
-        };
+        return self.resolveWorkerSource(.{ .value_ref = .{ .module = module, .ref_id = ref_id } });
     }
 
     fn workerSourceForProcedureUse(self: *ProcBodyBuilder, procedure: checked.ProcedureUseTemplate) Plan.WorkerSource {
-        return switch (procedure.binding) {
-            .top_level => |top_level| self.workerSourceForTopLevelProcedureBinding(top_level),
-            .platform_required => |required| self.workerSourceForTopLevelProcedureBinding(.{
-                .artifact = required.app_value.artifact,
-                .binding = required.procedure_binding,
-            }),
-            .imported => .{ .procedure_use = procedure },
-            .hosted => .{ .procedure_use = procedure },
-        };
+        return self.resolveWorkerSource(.{ .procedure_use = procedure }) orelse
+            boxyLowerInvariant("procedure use resolved to no worker source");
     }
 
     fn workerSourceForTopLevelProcedureBinding(
         self: *ProcBodyBuilder,
         binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
     ) Plan.WorkerSource {
-        const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
-        const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
-        switch (binding.body) {
-            .checked_error => boxyLowerInvariant("rejected binding reached Boxy lowering callable consumption"),
-            .callable_eval_template => |template| if (self.workerSourceForCallableEvalTemplate(module, template)) |source| {
-                return source;
-            },
-            .direct_template => {},
-        }
-        return .{ .procedure_binding = binding_ref };
+        return self.resolveWorkerSource(.{ .top_level_binding = binding_ref }) orelse
+            boxyLowerInvariant("procedure binding resolved to no worker source");
     }
 
     fn workerSourceForCallableEvalTemplate(
@@ -22355,22 +22449,128 @@ const ProcBodyBuilder = struct {
         module: ProcedureModuleView,
         template_id: checked.CallableEvalTemplateId,
     ) ?Plan.WorkerSource {
-        const raw = @intFromEnum(template_id);
-        if (raw >= module.callable_eval_templates.templates.len) {
-            boxyLowerInvariant("callable eval binding referenced a missing checked template");
+        return self.resolveWorkerSource(.{ .eval_template = .{ .module = module, .template = template_id } });
+    }
+
+    fn workerSourceForCallableRootExpr(
+        self: *ProcBodyBuilder,
+        module: ProcedureModuleView,
+        expr_id: checked.CheckedExprId,
+    ) ?Plan.WorkerSource {
+        return self.resolveWorkerSource(.{ .root_expr = .{ .module = module, .expr = expr_id } });
+    }
+
+    /// One reference on a chain of callable references.
+    const WorkerSourceQuery = union(enum) {
+        value_ref: struct { module: ProcedureModuleView, ref_id: checked.ResolvedValueRefId },
+        root_expr: struct { module: ProcedureModuleView, expr: checked.CheckedExprId },
+        procedure_use: checked.ProcedureUseTemplate,
+        top_level_binding: checked.ArtifactTopLevelProcedureBindingRef,
+        eval_template: struct { module: ProcedureModuleView, template: checked.CallableEvalTemplateId },
+    };
+
+    /// Follow a chain of callable references (a lookup, the procedure it
+    /// names, that procedure's evaluated callable, and so on) to the worker
+    /// source it ends at. Each step names a source, names none, or forwards
+    /// to the next reference. A top-level binding whose evaluated callable
+    /// names no source is itself the source; since that always names one,
+    /// only the most recent such binding can apply.
+    fn resolveWorkerSource(self: *ProcBodyBuilder, first: WorkerSourceQuery) ?Plan.WorkerSource {
+        var query = first;
+        var fallback: ?checked.ArtifactTopLevelProcedureBindingRef = null;
+        while (true) {
+            query = switch (query) {
+                .value_ref => |ref| next: {
+                    const module = ref.module;
+                    const record = module.resolved_value_refs.callableTarget(ref.ref_id);
+                    break :next switch (record.ref) {
+                        .local_proc => |local| return if (topLevelProcedureBindingForExpr(module, local.expr)) |binding|
+                            .{ .procedure_binding = binding }
+                        else
+                            .{ .nested_expr = .{ .module = module.key, .expr = nestedCallableSiteExprForExpr(module, local.expr) orelse local.expr } },
+                        .top_level_proc,
+                        .promoted_top_level_proc,
+                        => |procedure| .{ .procedure_use = procedure },
+                        .platform_required_proc => |required| .{ .procedure_use = required.procedure },
+                        .imported_proc => |procedure| .{ .procedure_use = procedure },
+                        .hosted_proc => |procedure| .{ .procedure_use = procedure },
+                        .local_param,
+                        .local_value,
+                        .local_mutable_version,
+                        .pattern_binder,
+                        .selected_hoisted_const,
+                        .top_level_const,
+                        .imported_const,
+                        .platform_required_declaration,
+                        .platform_required_const,
+                        => return bindingFallback(fallback),
+                    };
+                },
+                .procedure_use => |procedure| switch (procedure.binding) {
+                    .top_level => |top_level| .{ .top_level_binding = top_level },
+                    .platform_required => |required| .{ .top_level_binding = .{
+                        .artifact = required.app_value.artifact,
+                        .binding = required.procedure_binding,
+                    } },
+                    .imported, .hosted => return .{ .procedure_use = procedure },
+                },
+                .top_level_binding => |binding_ref| next: {
+                    const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
+                    const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
+                    switch (binding.body) {
+                        .checked_error => boxyLowerInvariant("rejected binding reached Boxy lowering callable consumption"),
+                        .callable_eval_template => |template| {
+                            fallback = binding_ref;
+                            break :next .{ .eval_template = .{ .module = module, .template = template } };
+                        },
+                        .direct_template => return .{ .procedure_binding = binding_ref },
+                    }
+                },
+                .eval_template => |eval| next: {
+                    const module = eval.module;
+                    const raw = @intFromEnum(eval.template);
+                    if (raw >= module.callable_eval_templates.templates.len) {
+                        boxyLowerInvariant("callable eval binding referenced a missing checked template");
+                    }
+                    const template = module.callable_eval_templates.templates[raw];
+                    const root = module.compile_time_roots.root(template.root);
+                    break :next switch (root.payload) {
+                        .fn_value => |fn_id| {
+                            if (@intFromEnum(fn_id) >= module.const_store.fns.items.len) {
+                                boxyLowerInvariant("finalized callable eval root referenced a missing ConstStore function");
+                            }
+                            return self.workerSourceForConstFnValue(module.const_store.getFn(fn_id));
+                        },
+                        .pending => .{ .root_expr = .{ .module = module, .expr = root.expr } },
+                        .const_node, .discarded, .expect => return bindingFallback(fallback),
+                    };
+                },
+                .root_expr => |root| next: {
+                    const module = root.module;
+                    const expr = module.checked_bodies.expr(root.expr);
+                    if (expr.data == .lambda or expr.data == .closure) {
+                        return .{ .nested_expr = .{ .module = module.key, .expr = root.expr } };
+                    }
+                    const maybe_ref: ?checked.ResolvedValueRefId = if (expr.data == .lookup_local)
+                        expr.data.lookup_local.resolved
+                    else if (expr.data == .lookup_external)
+                        expr.data.lookup_external
+                    else if (expr.data == .lookup_required)
+                        expr.data.lookup_required
+                    else
+                        return bindingFallback(fallback);
+                    const ref_id = maybe_ref orelse return bindingFallback(fallback);
+                    break :next .{ .value_ref = .{ .module = module, .ref_id = ref_id } };
+                },
+            };
         }
-        const template = module.callable_eval_templates.templates[raw];
-        const root = module.compile_time_roots.root(template.root);
-        return switch (root.payload) {
-            .fn_value => |fn_id| blk: {
-                if (@intFromEnum(fn_id) >= module.const_store.fns.items.len) {
-                    boxyLowerInvariant("finalized callable eval root referenced a missing ConstStore function");
-                }
-                break :blk self.workerSourceForConstFnValue(module.const_store.getFn(fn_id));
-            },
-            .pending => self.workerSourceForCallableRootExpr(module, root.expr),
-            .const_node, .discarded, .expect => null,
-        };
+    }
+
+    /// The source a top-level binding names when its evaluated callable names
+    /// none: the binding itself.
+    fn bindingFallback(maybe_binding: ?checked.ArtifactTopLevelProcedureBindingRef) ?Plan.WorkerSource {
+        const binding = maybe_binding orelse return null;
+        return .{ .procedure_binding = binding };
     }
 
     fn workerSourceForConstFnValue(
@@ -22439,71 +22639,6 @@ const ProcBodyBuilder = struct {
             .capture_type = .{ .module = module.key, .ty = constructor.args[0] },
             .contract_expr = .{ .module = module.key, .expr = expr_id },
         } };
-    }
-
-    fn workerSourceForCallableRootExpr(
-        self: *ProcBodyBuilder,
-        module: ProcedureModuleView,
-        expr_id: checked.CheckedExprId,
-    ) ?Plan.WorkerSource {
-        const expr = module.checked_bodies.expr(expr_id);
-        return switch (expr.data) {
-            .lookup_local => |lookup| if (lookup.resolved) |ref_id|
-                self.workerSourceForProcedureValueRefInModule(module, ref_id)
-            else
-                null,
-            .lookup_external,
-            .lookup_required,
-            => |maybe_ref| if (maybe_ref) |ref_id|
-                self.workerSourceForProcedureValueRefInModule(module, ref_id)
-            else
-                null,
-            .lambda,
-            .closure,
-            => .{ .nested_expr = .{ .module = module.key, .expr = expr_id } },
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .list,
-            .empty_list,
-            .tuple,
-            .match_,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .interpolation,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => null,
-        };
     }
 
     fn directTargetIsLocalProc(self: *const ProcBodyBuilder, target: checked.ResolvedValueId) bool {
@@ -23721,21 +23856,26 @@ const ProcBodyBuilder = struct {
         return holds;
     }
 
+    /// Whether a value of `root` holds a callable in its own structure.
     fn repHoldsCallableInStructureVisited(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         visited: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!bool {
-        if ((try visited.getOrPut(rep_id)).found_existing) return false;
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.kind == .erased_callable) return true;
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (self.parent.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
-            switch (child.role) {
-                .record_field, .tuple_elem, .tag_payload, .alias_backing, .nominal_backing => {
-                    if (try self.repHoldsCallableInStructureVisited(child.rep, visited)) return true;
-                },
-                .alias_arg, .nominal_arg, .nominal_padding_field, .record_ext, .tag_ext, .function_arg, .function_ret, .list_elem, .box_payload => {},
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |rep_id| {
+            if ((try visited.getOrPut(rep_id)).found_existing) continue;
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.kind == .erased_callable) return true;
+            for (self.parent.plan.childSlice(rep.children)) |child| {
+                if (self.parent.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
+                switch (child.role) {
+                    .record_field, .tuple_elem, .tag_payload, .alias_backing, .nominal_backing => try pending.append(allocator, child.rep),
+                    .alias_arg, .nominal_arg, .nominal_padding_field, .record_ext, .tag_ext, .function_arg, .function_ret, .list_elem, .box_payload => {},
+                }
             }
         }
         return false;
@@ -23905,442 +24045,6 @@ const ProcBodyBuilder = struct {
         boxyLowerInvariant("cyclic nominal backing chain at a call boundary");
     }
 
-    fn adapterTagDescriptorForCallBoundary(
-        self: *ProcBodyBuilder,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        source_desc_info: ResultDescriptorSource,
-        prerequisites: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!?ResultDescriptorSource {
-        const source_tag_rep = self.parent.tagVariantRepForDesc(source_rep);
-        const source_tag = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)];
-        if (source_tag.tag_variants.len == 0 and source_tag.kind != .bool_tag_union) return null;
-
-        const materialization = try self.descriptorMaterializationForExactRep(target_rep);
-        const template_id = switch (materialization.desc) {
-            .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy adapter descriptor template was not static"),
-        };
-        const template = self.parent.result.boxy_type_descs.items[@intFromEnum(template_id)];
-
-        const source_desc = source_desc_info.desc orelse
-            boxyLowerInvariant("boxy call adapter tag source had no descriptor");
-        const source_materialization = self.descriptorTemplateOf(source_desc_info);
-
-        // A fully concrete source has exactly one descriptor, so its static
-        // descriptor describes a source whose descriptor was read at runtime.
-        const source_template_desc: ?LIR.BoxyDescRef = if (source_materialization) |source_materialize|
-            source_materialize.desc
-        else if (self.repIsFullyConcrete(source_rep))
-            try self.parent.staticDescRefForRep(self.descriptorStorageRep(source_rep))
-        else
-            null;
-        const source_template: ?LirProgram.BoxyTypeDesc = if (source_template_desc) |template_desc| blk: {
-            const source_template_id = switch (template_desc) {
-                .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
-            };
-            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
-        } else null;
-
-        if (source_template == null) {
-            return try self.adapterDescriptorFromMaterialization(
-                try self.descriptorMaterializationForExactRep(target_rep),
-            );
-        }
-
-        var specialized_tag_variants: ?LIR.BoxySpan = null;
-        var payload_desc_specialized = false;
-        var extra_captures = std.ArrayList(LIR.LocalId).empty;
-        defer extra_captures.deinit(self.parent.allocator);
-        if (source_template) |source_template_value| {
-            const target_plan_rep = self.parent.tagVariantRepForDesc(target_rep);
-            const source_plan_rep = self.parent.tagVariantRepForDesc(source_rep);
-            const target_plan_variants = self.parent.plan.tagVariantSlice(
-                self.parent.plan.representations.items[@intFromEnum(target_plan_rep)].tag_variants,
-            );
-            const source_plan_variants = self.parent.plan.tagVariantSlice(
-                self.parent.plan.representations.items[@intFromEnum(source_plan_rep)].tag_variants,
-            );
-            // Payload specialization recurses and appends to the global tag
-            // descriptor tables. Snapshot the entries this invocation walks so
-            // those appends cannot invalidate its slices.
-            const target_template_variants = try self.parent.allocator.dupe(
-                LirProgram.BoxyTagVariant,
-                self.parent.result.boxy_tag_variants.items[template.tag_variants.start..][0..template.tag_variants.len],
-            );
-            defer self.parent.allocator.free(target_template_variants);
-            const source_template_variants = try self.parent.allocator.dupe(
-                LirProgram.BoxyTagVariant,
-                self.parent.result.boxy_tag_variants.items[source_template_value.tag_variants.start..][0..source_template_value.tag_variants.len],
-            );
-            defer self.parent.allocator.free(source_template_variants);
-            var specialized_variants = std.ArrayList(LirProgram.BoxyTagVariant).empty;
-            defer specialized_variants.deinit(self.parent.allocator);
-
-            for (target_template_variants) |target_variant| {
-                var specialized_variant = target_variant;
-                const target_name = self.parent.result.store.getBoxyName(target_variant.name);
-                var target_plan_variant: ?Plan.TagVariant = null;
-                for (target_plan_variants) |plan_variant| {
-                    if (std.mem.eql(u8, target_name, self.tagVariantNameText(plan_variant))) {
-                        target_plan_variant = plan_variant;
-                        break;
-                    }
-                }
-                var source_plan_variant: ?Plan.TagVariant = null;
-                for (source_plan_variants) |plan_variant| {
-                    if (std.mem.eql(u8, target_name, self.tagVariantNameText(plan_variant))) {
-                        source_plan_variant = plan_variant;
-                        break;
-                    }
-                }
-                var source_variant: ?LirProgram.BoxyTagVariant = null;
-                for (source_template_variants) |candidate| {
-                    if (target_variant.name == candidate.name) {
-                        source_variant = candidate;
-                        break;
-                    }
-                }
-
-                if (target_plan_variant != null and source_plan_variant != null and source_variant != null and target_variant.payload_descs.len != 0) {
-                    const target_payloads = self.parent.plan.childSlice(target_plan_variant.?.payloads);
-                    const source_payloads = self.parent.plan.childSlice(source_plan_variant.?.payloads);
-                    if (target_payloads.len != source_payloads.len) {
-                        boxyLowerInvariant("boxy tag adapter matching variants had different payload counts");
-                    }
-                    const target_descs = try self.parent.allocator.dupe(
-                        LirProgram.BoxyTagPayloadDesc,
-                        self.parent.result.boxy_tag_payload_descs.items[target_variant.payload_descs.start..][0..target_variant.payload_descs.len],
-                    );
-                    defer self.parent.allocator.free(target_descs);
-                    const source_descs = try self.parent.allocator.dupe(
-                        LirProgram.BoxyTagPayloadDesc,
-                        self.parent.result.boxy_tag_payload_descs.items[source_variant.?.payload_descs.start..][0..source_variant.?.payload_descs.len],
-                    );
-                    defer self.parent.allocator.free(source_descs);
-                    var specialized_descs = std.ArrayList(LirProgram.BoxyTagPayloadDesc).empty;
-                    defer specialized_descs.deinit(self.parent.allocator);
-                    var variant_specialized = false;
-
-                    for (target_descs) |target_payload_desc| {
-                        var specialized_desc = target_payload_desc;
-                        if (target_payload_desc.payload_index >= target_payloads.len) {
-                            boxyLowerInvariant("boxy tag adapter target payload descriptor index exceeded variant payloads");
-                        }
-                        const payload_index = target_payload_desc.payload_index;
-                        // Payload storage belongs to this nominal application,
-                        // not to the declaration formal shared by other uses.
-                        const target_payload_rep = self.nominalBackingActualRep(target_rep, target_payloads[payload_index].rep);
-                        const source_payload_rep = self.nominalBackingActualRep(source_rep, source_payloads[payload_index].rep);
-                        var source_payload_desc_info: ?ResultDescriptorSource = null;
-                        for (source_descs) |source_payload_desc| {
-                            if (source_payload_desc.payload_index == payload_index) {
-                                source_payload_desc_info = .{ .desc = source_payload_desc.desc };
-                                break;
-                            }
-                        }
-                        const exact_source_desc_info = source_payload_desc_info orelse
-                            try self.adapterDescriptorForKnownRep(source_payload_rep);
-                        try self.appendResultDescriptorInitializers(prerequisites, exact_source_desc_info);
-                        const exact_source_payload_rep = self.descriptorSourceRep(
-                            exact_source_desc_info,
-                            source_payload_rep,
-                        );
-
-                        const target_payload_layout = self.parent.tagVariantPayloadFieldLayout(
-                            target_variant.payload_layout,
-                            payload_index,
-                            target_payloads.len,
-                        );
-                        const target_payload_tag = self.parent.result.layouts.getLayout(target_payload_layout).tag;
-                        const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst or target_payload_tag == .erased_box;
-                        const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payload_rep).layoutIdx();
-                        const adapted_payload_desc_info = if (self.representationBoundaryIsDirect(
-                            target_payload_rep,
-                            exact_source_payload_rep,
-                        ) or
-                            (target_payload_is_box and
-                                self.repIsBareDynamic(self.descriptorStorageRep(target_payload_rep))))
-                            exact_source_desc_info
-                        else if (target_payload_layout != target_standalone_layout)
-                            ResultDescriptorSource{ .desc = target_payload_desc.desc }
-                        else
-                            try self.adapterDescriptorForCallBoundary(
-                                target_payload_rep,
-                                exact_source_payload_rep,
-                                exact_source_desc_info,
-                                prerequisites,
-                            );
-                        try self.appendResultDescriptorInitializers(prerequisites, adapted_payload_desc_info);
-                        specialized_desc.desc = adapted_payload_desc_info.desc orelse
-                            boxyLowerInvariant("boxy tag adapter target payload had no descriptor");
-                        if (specialized_desc.desc.localOrNull()) |local| {
-                            try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
-                        }
-                        variant_specialized = true;
-                        payload_desc_specialized = true;
-                        try specialized_descs.append(self.parent.allocator, specialized_desc);
-                    }
-
-                    if (variant_specialized) {
-                        const payload_start: u32 = @intCast(self.parent.result.boxy_tag_payload_descs.items.len);
-                        try self.parent.result.boxy_tag_payload_descs.appendSlice(self.parent.allocator, specialized_descs.items);
-                        specialized_variant.payload_descs = .{ .start = payload_start, .len = @intCast(specialized_descs.items.len) };
-                    }
-                }
-                try specialized_variants.append(self.parent.allocator, specialized_variant);
-            }
-
-            if (payload_desc_specialized) {
-                const variants_start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
-                try self.parent.result.boxy_tag_variants.appendSlice(self.parent.allocator, specialized_variants.items);
-                specialized_tag_variants = .{ .start = variants_start, .len = @intCast(specialized_variants.items.len) };
-            }
-        }
-
-        if (!payload_desc_specialized and template.tag_ext_desc == null) return null;
-
-        var prerequisite: ?DescriptorArgLocal = null;
-        const residual_desc: ?LIR.BoxyDescRef = if (template.tag_ext_desc == null) null else if (source_template) |source_template_value| static_residual: {
-            const target_variants = self.parent.result.boxy_tag_variants.items[template.tag_variants.start..][0..template.tag_variants.len];
-            const source_variants = self.parent.result.boxy_tag_variants.items[source_template_value.tag_variants.start..][0..source_template_value.tag_variants.len];
-            var has_residual_variant = false;
-            for (source_variants) |source_variant| {
-                var belongs_to_target = false;
-                for (target_variants) |target_variant| {
-                    if (source_variant.name == target_variant.name) {
-                        belongs_to_target = true;
-                        break;
-                    }
-                }
-                if (!belongs_to_target) {
-                    has_residual_variant = true;
-                    break;
-                }
-            }
-
-            // Removing local variants would renumber the extension
-            // discriminant without changing the source storage layout. Keep
-            // the exact source descriptor whenever local residual variants
-            // remain or the source row is closed; otherwise project its
-            // already-layout-correct extension.
-            if (has_residual_variant) break :static_residual source_desc;
-            break :static_residual source_template_value.tag_ext_desc orelse source_desc;
-        } else runtime_residual: {
-            const target_tag_rep = self.parent.tagVariantRepForDesc(target_rep);
-            const target_tag = self.parent.plan.representations.items[@intFromEnum(target_tag_rep)];
-            const source_variants = self.parent.plan.tagVariantSlice(source_tag.tag_variants);
-            const target_variants = self.parent.plan.tagVariantSlice(target_tag.tag_variants);
-            var has_residual_variant = false;
-            for (source_variants) |source_variant| {
-                if (self.parent.findMatchingTagVariant(target_variants, source_variant) != null) {
-                    continue;
-                } else {
-                    has_residual_variant = true;
-                }
-            }
-            if (has_residual_variant or !self.tagUnionRepHasExtension(source_tag)) {
-                break :runtime_residual source_desc;
-            }
-
-            const ext_local = try self.addFrameLocal(.opaque_ptr);
-            prerequisite = .{
-                .local = ext_local,
-                .materialize = source_desc,
-                .tag_ext = true,
-            };
-            break :runtime_residual LIR.BoxyDescRef{ .local = ext_local };
-        };
-
-        const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-        var specialized = template;
-        if (specialized_tag_variants) |variants| specialized.tag_variants = variants;
-        if (template.tag_ext_desc != null) specialized.tag_ext_desc = residual_desc;
-        try self.parent.result.boxy_type_descs.append(self.parent.allocator, specialized);
-
-        var captures = std.ArrayList(LIR.LocalId).empty;
-        defer captures.deinit(self.parent.allocator);
-        const template_captures = self.parent.result.store.getLocalSpan(materialization.captures);
-        for (0..GuardedList.borrowLen(template_captures)) |index| {
-            try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(template_captures, index));
-        }
-        if (source_materialization) |source_materialize| {
-            const source_captures = self.parent.result.store.getLocalSpan(source_materialize.captures);
-            for (0..GuardedList.borrowLen(source_captures)) |index| {
-                try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(source_captures, index));
-            }
-        }
-        if (residual_desc) |desc| {
-            if (desc.localOrNull()) |local| try appendUniqueLocal(self.parent.allocator, &captures, local);
-        }
-        for (extra_captures.items) |local| {
-            try appendUniqueLocal(self.parent.allocator, &captures, local);
-        }
-
-        const capture_span = if (captures.items.len == 0)
-            LIR.LocalSpan.empty()
-        else
-            try self.parent.result.store.addLocalSpan(captures.items);
-        var result = try self.adapterDescriptorFromMaterialization(.{
-            .desc = .{ .static = desc_id },
-            .captures = capture_span,
-        });
-        result.prerequisite = prerequisite;
-        return result;
-    }
-
-    fn adapterRecordDescriptorForCallBoundary(
-        self: *ProcBodyBuilder,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        source_desc_info: ResultDescriptorSource,
-        prerequisites: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!?ResultDescriptorSource {
-        const target_record_rep = self.recordRepForBoundary(target_rep) orelse return null;
-        const source_record_rep = self.recordRepForBoundary(source_rep) orelse return null;
-        const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
-        const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
-        if (!self.repHasRecordFieldChildrenForBoundary(target_record) or
-            !self.repHasRecordFieldChildrenForBoundary(source_record))
-        {
-            return null;
-        }
-
-        const target_materialization = try self.descriptorMaterializationForExactRep(target_rep);
-        const target_template_id = switch (target_materialization.desc) {
-            .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy record adapter target descriptor template was not static"),
-        };
-        const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
-
-        const source_desc = source_desc_info.desc orelse
-            boxyLowerInvariant("boxy record adapter source had no descriptor");
-        const source_materialization = self.descriptorTemplateOf(source_desc_info);
-        const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
-            const source_template_id = switch (materialization.desc) {
-                .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy record adapter source descriptor template was not static"),
-            };
-            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
-        } else null;
-
-        const target_nested = self.parent.result.boxy_desc_refs.items[target_template.nested_descs.start..][0..target_template.nested_descs.len];
-        var specialized_nested = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer specialized_nested.deinit(self.parent.allocator);
-        try specialized_nested.appendSlice(self.parent.allocator, target_nested);
-
-        var extra_captures = std.ArrayList(LIR.LocalId).empty;
-        defer extra_captures.deinit(self.parent.allocator);
-        var specialized = false;
-        var target_field_index: u16 = 0;
-        for (self.parent.plan.childSlice(target_record.children)) |target_child| {
-            switch (target_child.role) {
-                .record_field => |target_label| {
-                    const target_nested_index = self.recordFieldNestedDescriptorIndex(target_record_rep, target_field_index);
-                    if (target_nested_index >= specialized_nested.items.len) {
-                        boxyLowerInvariant("boxy record adapter target nested descriptor index exceeded template");
-                    }
-                    const source_field = self.findRecordFieldByLabel(
-                        source_record_rep,
-                        procedureModuleById(self.parent.modules, target_child.source_type.module),
-                        target_label,
-                    ) orelse {
-                        switch (target_child.record_field_kind.tag) {
-                            .optional, .undetermined => {
-                                target_field_index += 1;
-                                continue;
-                            },
-                            .required, .defaulted, .err => boxyLowerInvariant("boxy record adapter source was missing target field"),
-                        }
-                    };
-                    if (self.boundaryFieldKeepsStaticDescriptor(target_child.rep, source_field.rep)) {
-                        target_field_index += 1;
-                        continue;
-                    }
-
-                    const source_nested_index = self.recordFieldNestedDescriptorIndex(source_record_rep, source_field.index);
-                    const source_field_desc_info: ResultDescriptorSource = if (source_template) |template| source_nested: {
-                        if (source_nested_index >= template.nested_descs.len) {
-                            boxyLowerInvariant("boxy record adapter source nested descriptor index exceeded template");
-                        }
-                        break :source_nested .{
-                            .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index],
-                        };
-                    } else if (self.payloadFieldCarriesRuntimeDesc(source_record_rep, source_nested_index)) source_nested: {
-                        const nested_local = try self.addFrameLocal(.opaque_ptr);
-                        try prerequisites.append(self.parent.allocator, .{
-                            .local = nested_local,
-                            .materialize = source_desc,
-                            .nested_index = source_nested_index,
-                        });
-                        break :source_nested .{ .desc = .{ .local = nested_local } };
-                    } else try self.adapterDescriptorForKnownRep(source_field.rep);
-                    try self.appendResultDescriptorInitializers(prerequisites, source_field_desc_info);
-
-                    const adapted_field_desc_info = if (self.representationBoundaryIsDirect(
-                        target_child.rep,
-                        source_field.rep,
-                    ) or
-                        self.repIsBareDynamic(self.descriptorStorageRep(target_child.rep)))
-                        source_field_desc_info
-                    else
-                        try self.adapterDescriptorForCallBoundary(
-                            target_child.rep,
-                            source_field.rep,
-                            source_field_desc_info,
-                            prerequisites,
-                        );
-                    try self.appendResultDescriptorInitializers(prerequisites, adapted_field_desc_info);
-                    const adapted_field_desc = adapted_field_desc_info.desc orelse
-                        boxyLowerInvariant("boxy record adapter target field had no descriptor");
-
-                    specialized_nested.items[target_nested_index] = adapted_field_desc;
-                    if (adapted_field_desc.localOrNull()) |local| {
-                        try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
-                    }
-                    specialized = true;
-                    target_field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(target_child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("boxy record adapter target had a non-record child role"),
-            }
-        }
-        if (!specialized) return null;
-
-        const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
-        try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, specialized_nested.items);
-        const specialized_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-        var specialized_template = target_template;
-        specialized_template.nested_descs = .{ .start = nested_start, .len = @intCast(specialized_nested.items.len) };
-        try self.parent.result.boxy_type_descs.append(self.parent.allocator, specialized_template);
-
-        var captures = std.ArrayList(LIR.LocalId).empty;
-        defer captures.deinit(self.parent.allocator);
-        const target_captures = self.parent.result.store.getLocalSpan(target_materialization.captures);
-        for (0..GuardedList.borrowLen(target_captures)) |index| {
-            try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(target_captures, index));
-        }
-        if (source_materialization) |materialization| {
-            const source_captures = self.parent.result.store.getLocalSpan(materialization.captures);
-            for (0..GuardedList.borrowLen(source_captures)) |index| {
-                try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(source_captures, index));
-            }
-        }
-        for (extra_captures.items) |local| {
-            try appendUniqueLocal(self.parent.allocator, &captures, local);
-        }
-
-        const capture_span = if (captures.items.len == 0)
-            LIR.LocalSpan.empty()
-        else
-            try self.parent.result.store.addLocalSpan(captures.items);
-        return try self.adapterDescriptorFromMaterialization(.{
-            .desc = .{ .static = specialized_id },
-            .captures = capture_span,
-        });
-    }
-
     /// Whether a boxed target position's formal is bound, by an enclosing
     /// nominal scope, to a known actual. Such a box stores the actual's own
     /// representation, which the target template describes; materialization
@@ -24505,143 +24209,152 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn adapterDeclaredAggregateDescriptorForCallBoundary(
-        self: *ProcBodyBuilder,
+    // Call-boundary adapter descriptors //
+    //
+    // A boundary's adapter descriptor specializes the target's descriptor
+    // template by the adapted descriptors of the source's components, and
+    // components follow type nesting, so each boundary still waiting on a
+    // component's adapted descriptor is a frame on one heap-backed stack.
+    // Frames append descriptors, spans, locals, and prerequisites in the
+    // order a direct recursive adaptation would.
+
+    const AdapterRequest = struct {
         target_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
         source_desc_info: ResultDescriptorSource,
-        prerequisites: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!?ResultDescriptorSource {
-        const target_aggregate_rep = self.declaredAggregateRepForBoundary(target_rep) orelse return null;
-        const source_aggregate_rep = self.declaredAggregateRepForBoundary(source_rep) orelse return null;
-        const target_aggregate = self.parent.plan.representations.items[@intFromEnum(target_aggregate_rep)];
+    };
 
-        const target_materialization = try self.descriptorMaterializationForExactRep(target_rep);
-        const target_template_id = switch (target_materialization.desc) {
-            .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy declared aggregate adapter target descriptor template was not static"),
+    const AdapterStep = union(enum) {
+        /// The frame needs this component boundary's adapted descriptor.
+        request: AdapterRequest,
+        /// The frame's boundary is adapted.
+        done: ResultDescriptorSource,
+        /// The boundary moved on to a frame of its next specialization, which
+        /// runs next.
+        next_frame,
+    };
+
+    /// An attempt's outcome: its descriptor, its declining, or the component
+    /// boundary it needs next.
+    const AdapterAttemptStep = union(enum) {
+        request: AdapterRequest,
+        finished: ?ResultDescriptorSource,
+    };
+
+    /// One boundary being adapted.
+    const AdapterFrame = struct {
+        request: AdapterRequest,
+        entry_index: usize,
+        stage: union(enum) {
+            tag: *AdapterTagState,
+            aggregate: *AdapterFieldsState,
+            record: *AdapterFieldsState,
+            list: *AdapterListState,
+        },
+
+        fn deinit(self: *AdapterFrame, allocator: Allocator) void {
+            switch (self.stage) {
+                .tag => |state| {
+                    state.deinit(allocator);
+                    allocator.destroy(state);
+                },
+                .aggregate, .record => |state| {
+                    state.deinit(allocator);
+                    allocator.destroy(state);
+                },
+                .list => |state| allocator.destroy(state),
+            }
+        }
+    };
+
+    /// A tag union boundary's payload specialization.
+    const AdapterTagState = struct {
+        materialization: DescriptorMaterialization,
+        template: LirProgram.BoxyTypeDesc,
+        source_desc: LIR.BoxyDescRef,
+        source_materialization: ?DescriptorMaterialization,
+        source_template: LirProgram.BoxyTypeDesc,
+        target_plan_variants: []const Plan.TagVariant,
+        source_plan_variants: []const Plan.TagVariant,
+        // Payload specialization appends to the global tag descriptor
+        // tables, so the entries this boundary walks are snapshots.
+        target_template_variants: []LirProgram.BoxyTagVariant,
+        source_template_variants: []LirProgram.BoxyTagVariant,
+        specialized_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
+        payload_desc_specialized: bool = false,
+        extra_captures: std.ArrayList(LIR.LocalId) = .empty,
+        variant: usize = 0,
+        current: ?struct {
+            specialized_variant: LirProgram.BoxyTagVariant,
+            target_payloads: []const Plan.RepChild,
+            source_payloads: []const Plan.RepChild,
+            target_descs: []LirProgram.BoxyTagPayloadDesc,
+            source_descs: []LirProgram.BoxyTagPayloadDesc,
+            specialized_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
+            variant_specialized: bool = false,
+            payload: usize = 0,
+            /// The payload descriptor waiting on its adapted descriptor.
+            pending: LirProgram.BoxyTagPayloadDesc = undefined,
+        } = null,
+
+        fn deinit(self: *AdapterTagState, allocator: Allocator) void {
+            allocator.free(self.target_template_variants);
+            allocator.free(self.source_template_variants);
+            self.specialized_variants.deinit(allocator);
+            self.extra_captures.deinit(allocator);
+            if (self.current) |*current| {
+                allocator.free(current.target_descs);
+                allocator.free(current.source_descs);
+                current.specialized_descs.deinit(allocator);
+            }
+        }
+    };
+
+    /// A record or declared aggregate boundary's field specialization.
+    const AdapterFieldsState = struct {
+        kind: AdapterFieldsKind,
+        target_materialization: DescriptorMaterialization,
+        target_template: LirProgram.BoxyTypeDesc,
+        source_desc: LIR.BoxyDescRef,
+        source_materialization: ?DescriptorMaterialization,
+        source_template: ?LirProgram.BoxyTypeDesc,
+        target_aggregate_rep: Plan.TypeRepId,
+        source_aggregate_rep: Plan.TypeRepId,
+        specialized_nested: std.ArrayList(LIR.BoxyDescRef) = .empty,
+        extra_captures: std.ArrayList(LIR.LocalId) = .empty,
+        specialized: bool = false,
+        /// The declared aggregate's fields in layout order; empty for a record.
+        declared_fields: []Plan.DeclaredField = &.{},
+        index: usize = 0,
+        target_field_index: u16 = 0,
+        /// The nested descriptor slot waiting on its adapted descriptor.
+        pending_nested_index: usize = 0,
+
+        fn deinit(self: *AdapterFieldsState, allocator: Allocator) void {
+            self.specialized_nested.deinit(allocator);
+            self.extra_captures.deinit(allocator);
+            allocator.free(self.declared_fields);
+        }
+    };
+
+    /// A list boundary waiting on its element boundary.
+    const AdapterListState = struct {
+        known: ResultDescriptorSource,
+        known_desc: LirProgram.BoxyTypeDesc,
+        target_layout: layout.Idx,
+        source_elem_desc_info: ResultDescriptorSource,
+        element: AdapterRequest,
+    };
+
+    /// How an attempt at a specialization begins.
+    fn AdapterAttemptBegin(comptime State: type) type {
+        return union(enum) {
+            /// The attempt finished without a component boundary: with its
+            /// descriptor, or declining.
+            finished: ?ResultDescriptorSource,
+            /// The attempt walks component boundaries.
+            state: *State,
         };
-        const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
-
-        const source_desc = source_desc_info.desc orelse
-            boxyLowerInvariant("boxy declared aggregate adapter source had no descriptor");
-        const source_materialization = self.descriptorTemplateOf(source_desc_info);
-        const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
-            const source_template_id = switch (materialization.desc) {
-                .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy declared aggregate adapter source descriptor template was not static"),
-            };
-            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
-        } else null;
-
-        const target_nested = self.parent.result.boxy_desc_refs.items[target_template.nested_descs.start..][0..target_template.nested_descs.len];
-        var specialized_nested = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer specialized_nested.deinit(self.parent.allocator);
-        try specialized_nested.appendSlice(self.parent.allocator, target_nested);
-
-        var extra_captures = std.ArrayList(LIR.LocalId).empty;
-        defer extra_captures.deinit(self.parent.allocator);
-        var specialized = false;
-        const target_fields = try self.parent.declaredFieldsInLayoutOrder(
-            self.parent.plan.declaredFieldSlice(target_aggregate.declared_fields),
-        );
-        defer self.parent.allocator.free(target_fields);
-        for (target_fields) |target_field| {
-            const target_nested_index = self.recordFieldNestedDescriptorIndex(
-                target_aggregate_rep,
-                target_field.index,
-            );
-            if (target_nested_index >= specialized_nested.items.len) {
-                boxyLowerInvariant("boxy declared aggregate target nested descriptor index exceeded template");
-            }
-
-            // Field storage belongs to this nominal application, not to the
-            // declaration formal shared by other uses.
-            const target_field_rep = self.nominalBackingActualRep(target_rep, target_field.rep);
-            const source_field_rep = self.nominalBackingActualRep(source_rep, try self.parent.matchingDeclaredFieldInstantiationSource(
-                source_aggregate_rep,
-                target_field,
-            ) orelse boxyLowerInvariant("boxy declared aggregate source was missing target field"));
-            if (self.boundaryFieldKeepsStaticDescriptor(target_field_rep, source_field_rep)) continue;
-            const nested_index = self.recordFieldNestedDescriptorIndex(
-                source_aggregate_rep,
-                target_field.index,
-            );
-            const source_field_desc_info: ResultDescriptorSource = if (source_template) |template| source_nested: {
-                if (nested_index >= template.nested_descs.len) {
-                    boxyLowerInvariant("boxy declared aggregate source nested descriptor index exceeded template");
-                }
-                break :source_nested .{
-                    .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + nested_index],
-                };
-            } else if (self.payloadFieldCarriesRuntimeDesc(source_aggregate_rep, nested_index)) source_nested: {
-                const nested_local = try self.addFrameLocal(.opaque_ptr);
-                const initializer = DescriptorArgLocal{
-                    .local = nested_local,
-                    .materialize = source_desc,
-                    .nested_index = nested_index,
-                };
-                try prerequisites.append(self.parent.allocator, initializer);
-                break :source_nested .{ .desc = .{ .local = nested_local } };
-            } else try self.adapterDescriptorForKnownRep(source_field_rep);
-            try self.appendResultDescriptorInitializers(prerequisites, source_field_desc_info);
-
-            const adapted_field_desc_info = if (self.representationBoundaryIsDirect(
-                target_field_rep,
-                source_field_rep,
-            ) or
-                self.repIsBareDynamic(self.descriptorStorageRep(target_field_rep)))
-                source_field_desc_info
-            else
-                try self.adapterDescriptorForCallBoundary(
-                    target_field_rep,
-                    source_field_rep,
-                    source_field_desc_info,
-                    prerequisites,
-                );
-            try self.appendResultDescriptorInitializers(prerequisites, adapted_field_desc_info);
-            const adapted_field_desc = adapted_field_desc_info.desc orelse
-                boxyLowerInvariant("boxy declared aggregate target field had no descriptor");
-
-            specialized_nested.items[target_nested_index] = adapted_field_desc;
-            if (adapted_field_desc.localOrNull()) |local| {
-                try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
-            }
-            specialized = true;
-        }
-        if (!specialized) return null;
-
-        const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
-        try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, specialized_nested.items);
-        const specialized_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-        var specialized_template = target_template;
-        specialized_template.nested_descs = .{ .start = nested_start, .len = @intCast(specialized_nested.items.len) };
-        try self.parent.result.boxy_type_descs.append(self.parent.allocator, specialized_template);
-
-        var captures = std.ArrayList(LIR.LocalId).empty;
-        defer captures.deinit(self.parent.allocator);
-        const target_captures = self.parent.result.store.getLocalSpan(target_materialization.captures);
-        for (0..GuardedList.borrowLen(target_captures)) |index| {
-            try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(target_captures, index));
-        }
-        if (source_materialization) |materialization| {
-            const source_captures = self.parent.result.store.getLocalSpan(materialization.captures);
-            for (0..GuardedList.borrowLen(source_captures)) |index| {
-                try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(source_captures, index));
-            }
-        }
-        for (extra_captures.items) |local| {
-            try appendUniqueLocal(self.parent.allocator, &captures, local);
-        }
-
-        const capture_span = if (captures.items.len == 0)
-            LIR.LocalSpan.empty()
-        else
-            try self.parent.result.store.addLocalSpan(captures.items);
-        return try self.adapterDescriptorFromMaterialization(.{
-            .desc = .{ .static = specialized_id },
-            .captures = capture_span,
-        });
     }
 
     fn adapterDescriptorForCallBoundary(
@@ -24651,11 +24364,42 @@ const ProcBodyBuilder = struct {
         source_desc_info: ResultDescriptorSource,
         prerequisites: *std.ArrayList(DescriptorArgLocal),
     ) Allocator.Error!ResultDescriptorSource {
-        const source_desc = source_desc_info.desc orelse
-            boxyLowerInvariant("planned call adapter source descriptor was unavailable");
-        const key = AdapterDescriptorIdentity{
+        const allocator = self.parent.allocator;
+        var frames: std.ArrayList(AdapterFrame) = .empty;
+        const entries_len = self.adapter_descriptor_entries.items.len;
+        defer {
+            for (frames.items) |*frame| frame.deinit(allocator);
+            frames.deinit(allocator);
+            self.adapter_descriptor_entries.shrinkRetainingCapacity(entries_len);
+        }
+        var result = try self.beginAdapterBoundary(&frames, .{
             .target_rep = target_rep,
             .source_rep = source_rep,
+            .source_desc_info = source_desc_info,
+        }, prerequisites);
+        while (frames.items.len != 0) {
+            switch (try self.stepAdapterFrame(&frames, result, prerequisites)) {
+                .request => |request| result = try self.beginAdapterBoundary(&frames, request, prerequisites),
+                .done => |done| result = done,
+                .next_frame => result = null,
+            }
+        }
+        return result.?;
+    }
+
+    /// Begin adapting a boundary: its descriptor when no component needs
+    /// adapting, or null with its frame pushed.
+    fn beginAdapterBoundary(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(AdapterFrame),
+        request: AdapterRequest,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?ResultDescriptorSource {
+        const source_desc = request.source_desc_info.desc orelse
+            boxyLowerInvariant("planned call adapter source descriptor was unavailable");
+        const key = AdapterDescriptorIdentity{
+            .target_rep = request.target_rep,
+            .source_rep = request.source_rep,
             .source_desc = source_desc,
         };
         for (self.adapter_descriptor_entries.items, 0..) |entry, index| {
@@ -24671,14 +24415,13 @@ const ProcBodyBuilder = struct {
 
         const entry_index = self.adapter_descriptor_entries.items.len;
         try self.adapter_descriptor_entries.append(self.parent.allocator, .{ .key = key });
-        defer _ = self.adapter_descriptor_entries.pop();
+        const result = try self.startAdapterBody(frames, request, entry_index, prerequisites) orelse return null;
+        return try self.finishAdapterEntry(entry_index, result);
+    }
 
-        const result = try self.adapterDescriptorForCallBoundaryBody(
-            target_rep,
-            source_rep,
-            source_desc_info,
-            prerequisites,
-        );
+    /// Fill a recursive reservation of this boundary's descriptor, and leave
+    /// the boundary.
+    fn finishAdapterEntry(self: *ProcBodyBuilder, entry_index: usize, result: ResultDescriptorSource) Allocator.Error!ResultDescriptorSource {
         if (self.adapter_descriptor_entries.items[entry_index].recursive_desc) |recursive_desc| {
             const template_ref = if (result.materialize) |materialize|
                 materialize.materialize orelse
@@ -24695,18 +24438,23 @@ const ProcBodyBuilder = struct {
             self.parent.result.boxy_type_descs.items[@intFromEnum(recursive_desc)] =
                 self.parent.result.boxy_type_descs.items[@intFromEnum(template_id)];
         }
+        std.debug.assert(self.adapter_descriptor_entries.items.len == entry_index + 1);
+        self.adapter_descriptor_entries.items.len -= 1;
         return result;
     }
 
-    fn adapterDescriptorForCallBoundaryBody(
+    /// The body's result when it needs no component adapted; otherwise
+    /// null, with the frame waiting on a component pushed.
+    fn startAdapterBody(
         self: *ProcBodyBuilder,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        source_desc_info: ResultDescriptorSource,
+        frames: *std.ArrayList(AdapterFrame),
+        request: AdapterRequest,
+        entry_index: usize,
         prerequisites: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!ResultDescriptorSource {
-        const source_desc = source_desc_info.desc orelse
-            boxyLowerInvariant("planned call adapter source descriptor was unavailable");
+    ) Allocator.Error!?ResultDescriptorSource {
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        const source_desc_info = request.source_desc_info;
         const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_tag = self.parent.result.layouts.getLayout(target_layout).tag;
@@ -24739,38 +24487,733 @@ const ProcBodyBuilder = struct {
                 try self.descriptorMaterializationForExactRep(target_rep),
             );
         }
-        if (try self.adapterTagDescriptorForCallBoundary(
-            target_rep,
-            source_rep,
-            source_desc_info,
-            prerequisites,
-        )) |tag_desc| {
-            return tag_desc;
+        switch (try self.beginAdapterTag(request)) {
+            .finished => |finished| if (finished) |result| return result,
+            .state => |state| {
+                try self.pushAdapterFrame(frames, .{ .request = request, .entry_index = entry_index, .stage = .{ .tag = state } });
+                return null;
+            },
         }
-        if (try self.adapterDeclaredAggregateDescriptorForCallBoundary(
-            target_rep,
-            source_rep,
-            source_desc_info,
-            prerequisites,
-        )) |aggregate_desc| {
-            return aggregate_desc;
+        return try self.continueAdapterAfterTag(frames, request, entry_index, prerequisites);
+    }
+
+    fn pushAdapterFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(AdapterFrame), frame: AdapterFrame) Allocator.Error!void {
+        var pending = frame;
+        frames.append(self.parent.allocator, pending) catch |err| {
+            pending.deinit(self.parent.allocator);
+            return err;
+        };
+    }
+
+    fn popAdapterFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(AdapterFrame)) void {
+        var frame = frames.pop().?;
+        frame.deinit(self.parent.allocator);
+    }
+
+    /// Continue a boundary whose tag specialization declined: the declared
+    /// aggregate, record, tuple, and list specializations in turn.
+    fn continueAdapterAfterTag(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(AdapterFrame),
+        request: AdapterRequest,
+        entry_index: usize,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?ResultDescriptorSource {
+        if (try self.beginAdapterFields(request, .aggregate)) |state| {
+            try self.pushAdapterFrame(frames, .{ .request = request, .entry_index = entry_index, .stage = .{ .aggregate = state } });
+            return null;
         }
-        if (try self.adapterRecordDescriptorForCallBoundary(
-            target_rep,
-            source_rep,
-            source_desc_info,
-            prerequisites,
-        )) |record_desc| {
-            return record_desc;
+        return try self.continueAdapterAfterAggregate(frames, request, entry_index, prerequisites);
+    }
+
+    fn continueAdapterAfterAggregate(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(AdapterFrame),
+        request: AdapterRequest,
+        entry_index: usize,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?ResultDescriptorSource {
+        if (try self.beginAdapterFields(request, .record)) |state| {
+            try self.pushAdapterFrame(frames, .{ .request = request, .entry_index = entry_index, .stage = .{ .record = state } });
+            return null;
         }
+        return try self.continueAdapterAfterRecord(frames, request, entry_index, prerequisites);
+    }
+
+    fn continueAdapterAfterRecord(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(AdapterFrame),
+        request: AdapterRequest,
+        entry_index: usize,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?ResultDescriptorSource {
         if (try self.adapterTupleDescriptorForCallBoundary(
-            target_rep,
-            source_rep,
-            source_desc_info,
+            request.target_rep,
+            request.source_rep,
+            request.source_desc_info,
             prerequisites,
         )) |tuple_desc| {
             return tuple_desc;
         }
+        return try self.beginAdapterList(frames, request, entry_index, prerequisites);
+    }
+
+    fn stepAdapterFrame(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(AdapterFrame),
+        delivered: ?ResultDescriptorSource,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!AdapterStep {
+        const frame = frames.items[frames.items.len - 1];
+        const request = frame.request;
+        const entry_index = frame.entry_index;
+        const next: ?ResultDescriptorSource = switch (frame.stage) {
+            .tag => |state| switch (try self.stepAdapterTag(state, request, delivered, prerequisites)) {
+                .request => |component| return .{ .request = component },
+                .finished => |finished| declined: {
+                    self.popAdapterFrame(frames);
+                    if (finished) |result| return .{ .done = try self.finishAdapterEntry(entry_index, result) };
+                    break :declined try self.continueAdapterAfterTag(frames, request, entry_index, prerequisites);
+                },
+            },
+            .aggregate => |state| switch (try self.stepAdapterFields(state, request, delivered, prerequisites)) {
+                .request => |component| return .{ .request = component },
+                .finished => |finished| declined: {
+                    self.popAdapterFrame(frames);
+                    if (finished) |result| return .{ .done = try self.finishAdapterEntry(entry_index, result) };
+                    break :declined try self.continueAdapterAfterAggregate(frames, request, entry_index, prerequisites);
+                },
+            },
+            .record => |state| switch (try self.stepAdapterFields(state, request, delivered, prerequisites)) {
+                .request => |component| return .{ .request = component },
+                .finished => |finished| declined: {
+                    self.popAdapterFrame(frames);
+                    if (finished) |result| return .{ .done = try self.finishAdapterEntry(entry_index, result) };
+                    break :declined try self.continueAdapterAfterRecord(frames, request, entry_index, prerequisites);
+                },
+            },
+            .list => |state| list: {
+                const element = delivered orelse return .{ .request = state.element };
+                const result = try self.finishAdapterList(state.*, element, prerequisites);
+                self.popAdapterFrame(frames);
+                break :list result;
+            },
+        };
+        const result = next orelse return .next_frame;
+        return .{ .done = try self.finishAdapterEntry(entry_index, result) };
+    }
+
+    /// Begin a tag union boundary's payload specialization.
+    fn beginAdapterTag(self: *ProcBodyBuilder, request: AdapterRequest) Allocator.Error!AdapterAttemptBegin(AdapterTagState) {
+        const allocator = self.parent.allocator;
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        const source_desc_info = request.source_desc_info;
+        const source_tag_rep = self.parent.tagVariantRepForDesc(source_rep);
+        const source_tag = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)];
+        if (source_tag.tag_variants.len == 0 and source_tag.kind != .bool_tag_union) return .{ .finished = null };
+
+        const materialization = try self.descriptorMaterializationForExactRep(target_rep);
+        const template_id = switch (materialization.desc) {
+            .static => |desc_id| desc_id,
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy adapter descriptor template was not static"),
+        };
+        const template = self.parent.result.boxy_type_descs.items[@intFromEnum(template_id)];
+
+        const source_desc = source_desc_info.desc orelse
+            boxyLowerInvariant("boxy call adapter tag source had no descriptor");
+        const source_materialization = self.descriptorTemplateOf(source_desc_info);
+
+        // A fully concrete source has exactly one descriptor, so its static
+        // descriptor describes a source whose descriptor was read at runtime.
+        const source_template_desc: ?LIR.BoxyDescRef = if (source_materialization) |source_materialize|
+            source_materialize.desc
+        else if (self.repIsFullyConcrete(source_rep))
+            try self.parent.staticDescRefForRep(self.descriptorStorageRep(source_rep))
+        else
+            null;
+        const source_template: LirProgram.BoxyTypeDesc = if (source_template_desc) |template_desc| blk: {
+            const source_template_id = switch (template_desc) {
+                .static => |desc_id| desc_id,
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
+            };
+            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
+        } else return .{ .finished = try self.adapterDescriptorFromMaterialization(
+            try self.descriptorMaterializationForExactRep(target_rep),
+        ) };
+
+        const target_plan_rep = self.parent.tagVariantRepForDesc(target_rep);
+        const source_plan_rep = self.parent.tagVariantRepForDesc(source_rep);
+        const state = try allocator.create(AdapterTagState);
+        errdefer allocator.destroy(state);
+        const target_template_variants = try allocator.dupe(
+            LirProgram.BoxyTagVariant,
+            self.parent.result.boxy_tag_variants.items[template.tag_variants.start..][0..template.tag_variants.len],
+        );
+        errdefer allocator.free(target_template_variants);
+        const source_template_variants = try allocator.dupe(
+            LirProgram.BoxyTagVariant,
+            self.parent.result.boxy_tag_variants.items[source_template.tag_variants.start..][0..source_template.tag_variants.len],
+        );
+        state.* = .{
+            .materialization = materialization,
+            .template = template,
+            .source_desc = source_desc,
+            .source_materialization = source_materialization,
+            .source_template = source_template,
+            .target_plan_variants = self.parent.plan.tagVariantSlice(
+                self.parent.plan.representations.items[@intFromEnum(target_plan_rep)].tag_variants,
+            ),
+            .source_plan_variants = self.parent.plan.tagVariantSlice(
+                self.parent.plan.representations.items[@intFromEnum(source_plan_rep)].tag_variants,
+            ),
+            .target_template_variants = target_template_variants,
+            .source_template_variants = source_template_variants,
+        };
+        return .{ .state = state };
+    }
+
+    fn stepAdapterTag(
+        self: *ProcBodyBuilder,
+        state: *AdapterTagState,
+        request: AdapterRequest,
+        delivered: ?ResultDescriptorSource,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!AdapterAttemptStep {
+        const allocator = self.parent.allocator;
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        if (delivered) |adapted| try self.finishAdapterTagPayload(state, adapted, prerequisites);
+        while (true) {
+            if (state.current) |*current| {
+                while (current.payload < current.target_descs.len) {
+                    const target_payload_desc = current.target_descs[current.payload];
+                    current.payload += 1;
+                    const specialized_desc = target_payload_desc;
+                    if (target_payload_desc.payload_index >= current.target_payloads.len) {
+                        boxyLowerInvariant("boxy tag adapter target payload descriptor index exceeded variant payloads");
+                    }
+                    const payload_index = target_payload_desc.payload_index;
+                    // Payload storage belongs to this nominal application,
+                    // not to the declaration formal shared by other uses.
+                    const target_payload_rep = self.nominalBackingActualRep(target_rep, current.target_payloads[payload_index].rep);
+                    const source_payload_rep = self.nominalBackingActualRep(source_rep, current.source_payloads[payload_index].rep);
+                    var source_payload_desc_info: ?ResultDescriptorSource = null;
+                    for (current.source_descs) |source_payload_desc| {
+                        if (source_payload_desc.payload_index == payload_index) {
+                            source_payload_desc_info = .{ .desc = source_payload_desc.desc };
+                            break;
+                        }
+                    }
+                    const exact_source_desc_info = source_payload_desc_info orelse
+                        try self.adapterDescriptorForKnownRep(source_payload_rep);
+                    try self.appendResultDescriptorInitializers(prerequisites, exact_source_desc_info);
+                    const exact_source_payload_rep = self.descriptorSourceRep(
+                        exact_source_desc_info,
+                        source_payload_rep,
+                    );
+
+                    const target_payload_layout = self.parent.tagVariantPayloadFieldLayout(
+                        current.specialized_variant.payload_layout,
+                        payload_index,
+                        current.target_payloads.len,
+                    );
+                    const target_payload_tag = self.parent.result.layouts.getLayout(target_payload_layout).tag;
+                    const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst or target_payload_tag == .erased_box;
+                    const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payload_rep).layoutIdx();
+                    const adapted_payload_desc_info = if (self.representationBoundaryIsDirect(
+                        target_payload_rep,
+                        exact_source_payload_rep,
+                    ) or
+                        (target_payload_is_box and
+                            self.repIsBareDynamic(self.descriptorStorageRep(target_payload_rep))))
+                        exact_source_desc_info
+                    else if (target_payload_layout != target_standalone_layout)
+                        ResultDescriptorSource{ .desc = target_payload_desc.desc }
+                    else {
+                        current.pending = specialized_desc;
+                        return .{ .request = .{
+                            .target_rep = target_payload_rep,
+                            .source_rep = exact_source_payload_rep,
+                            .source_desc_info = exact_source_desc_info,
+                        } };
+                    };
+                    current.pending = specialized_desc;
+                    try self.finishAdapterTagPayload(state, adapted_payload_desc_info, prerequisites);
+                }
+                var specialized_variant = current.specialized_variant;
+                if (current.variant_specialized) {
+                    const payload_start: u32 = @intCast(self.parent.result.boxy_tag_payload_descs.items.len);
+                    try self.parent.result.boxy_tag_payload_descs.appendSlice(allocator, current.specialized_descs.items);
+                    specialized_variant.payload_descs = .{ .start = payload_start, .len = @intCast(current.specialized_descs.items.len) };
+                }
+                allocator.free(current.target_descs);
+                allocator.free(current.source_descs);
+                current.specialized_descs.deinit(allocator);
+                state.current = null;
+                try state.specialized_variants.append(allocator, specialized_variant);
+            }
+            if (state.variant == state.target_template_variants.len) break;
+            const target_variant = state.target_template_variants[state.variant];
+            state.variant += 1;
+            const target_name = self.parent.result.store.getBoxyName(target_variant.name);
+            var target_plan_variant: ?Plan.TagVariant = null;
+            for (state.target_plan_variants) |plan_variant| {
+                if (std.mem.eql(u8, target_name, self.tagVariantNameText(plan_variant))) {
+                    target_plan_variant = plan_variant;
+                    break;
+                }
+            }
+            var source_plan_variant: ?Plan.TagVariant = null;
+            for (state.source_plan_variants) |plan_variant| {
+                if (std.mem.eql(u8, target_name, self.tagVariantNameText(plan_variant))) {
+                    source_plan_variant = plan_variant;
+                    break;
+                }
+            }
+            var source_variant: ?LirProgram.BoxyTagVariant = null;
+            for (state.source_template_variants) |candidate| {
+                if (target_variant.name == candidate.name) {
+                    source_variant = candidate;
+                    break;
+                }
+            }
+
+            if (target_plan_variant == null or source_plan_variant == null or source_variant == null or target_variant.payload_descs.len == 0) {
+                try state.specialized_variants.append(allocator, target_variant);
+                continue;
+            }
+            const target_payloads = self.parent.plan.childSlice(target_plan_variant.?.payloads);
+            const source_payloads = self.parent.plan.childSlice(source_plan_variant.?.payloads);
+            if (target_payloads.len != source_payloads.len) {
+                boxyLowerInvariant("boxy tag adapter matching variants had different payload counts");
+            }
+            const target_descs = try allocator.dupe(
+                LirProgram.BoxyTagPayloadDesc,
+                self.parent.result.boxy_tag_payload_descs.items[target_variant.payload_descs.start..][0..target_variant.payload_descs.len],
+            );
+            errdefer allocator.free(target_descs);
+            const source_descs = try allocator.dupe(
+                LirProgram.BoxyTagPayloadDesc,
+                self.parent.result.boxy_tag_payload_descs.items[source_variant.?.payload_descs.start..][0..source_variant.?.payload_descs.len],
+            );
+            state.current = .{
+                .specialized_variant = target_variant,
+                .target_payloads = target_payloads,
+                .source_payloads = source_payloads,
+                .target_descs = target_descs,
+                .source_descs = source_descs,
+            };
+        }
+
+        if (!state.payload_desc_specialized and state.template.tag_ext_desc == null) return .{ .finished = null };
+        const specialized_tag_variants: ?LIR.BoxySpan = if (state.payload_desc_specialized) span: {
+            const variants_start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
+            try self.parent.result.boxy_tag_variants.appendSlice(allocator, state.specialized_variants.items);
+            break :span .{ .start = variants_start, .len = @intCast(state.specialized_variants.items.len) };
+        } else null;
+        return .{ .finished = try self.finishAdapterTag(state, specialized_tag_variants) };
+    }
+
+    /// Record one payload's adapted descriptor in its variant's
+    /// specialization.
+    fn finishAdapterTagPayload(
+        self: *ProcBodyBuilder,
+        state: *AdapterTagState,
+        adapted_payload_desc_info: ResultDescriptorSource,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!void {
+        const allocator = self.parent.allocator;
+        const current = &state.current.?;
+        var specialized_desc = current.pending;
+        try self.appendResultDescriptorInitializers(prerequisites, adapted_payload_desc_info);
+        specialized_desc.desc = adapted_payload_desc_info.desc orelse
+            boxyLowerInvariant("boxy tag adapter target payload had no descriptor");
+        if (specialized_desc.desc.localOrNull()) |local| {
+            try appendUniqueLocal(allocator, &state.extra_captures, local);
+        }
+        current.variant_specialized = true;
+        state.payload_desc_specialized = true;
+        try current.specialized_descs.append(allocator, specialized_desc);
+    }
+
+    /// The specialized tag descriptor once every variant is specialized.
+    fn finishAdapterTag(
+        self: *ProcBodyBuilder,
+        state: *AdapterTagState,
+        specialized_tag_variants: ?LIR.BoxySpan,
+    ) Allocator.Error!ResultDescriptorSource {
+        const allocator = self.parent.allocator;
+        const template = state.template;
+        const source_desc = state.source_desc;
+        const source_template_value = state.source_template;
+        const residual_desc: ?LIR.BoxyDescRef = if (template.tag_ext_desc == null) null else static_residual: {
+            const target_variants = self.parent.result.boxy_tag_variants.items[template.tag_variants.start..][0..template.tag_variants.len];
+            const source_variants = self.parent.result.boxy_tag_variants.items[source_template_value.tag_variants.start..][0..source_template_value.tag_variants.len];
+            var has_residual_variant = false;
+            for (source_variants) |source_variant| {
+                var belongs_to_target = false;
+                for (target_variants) |target_variant| {
+                    if (source_variant.name == target_variant.name) {
+                        belongs_to_target = true;
+                        break;
+                    }
+                }
+                if (!belongs_to_target) {
+                    has_residual_variant = true;
+                    break;
+                }
+            }
+
+            // Removing local variants would renumber the extension
+            // discriminant without changing the source storage layout. Keep
+            // the exact source descriptor whenever local residual variants
+            // remain or the source row is closed; otherwise project its
+            // already-layout-correct extension.
+            if (has_residual_variant) break :static_residual source_desc;
+            break :static_residual source_template_value.tag_ext_desc orelse source_desc;
+        };
+
+        const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+        var specialized = template;
+        if (specialized_tag_variants) |variants| specialized.tag_variants = variants;
+        if (template.tag_ext_desc != null) specialized.tag_ext_desc = residual_desc;
+        try self.parent.result.boxy_type_descs.append(allocator, specialized);
+
+        var captures = std.ArrayList(LIR.LocalId).empty;
+        defer captures.deinit(allocator);
+        const template_captures = self.parent.result.store.getLocalSpan(state.materialization.captures);
+        for (0..GuardedList.borrowLen(template_captures)) |index| {
+            try appendUniqueLocal(allocator, &captures, GuardedList.at(template_captures, index));
+        }
+        if (state.source_materialization) |source_materialize| {
+            const source_captures = self.parent.result.store.getLocalSpan(source_materialize.captures);
+            for (0..GuardedList.borrowLen(source_captures)) |index| {
+                try appendUniqueLocal(allocator, &captures, GuardedList.at(source_captures, index));
+            }
+        }
+        if (residual_desc) |desc| {
+            if (desc.localOrNull()) |local| try appendUniqueLocal(allocator, &captures, local);
+        }
+        for (state.extra_captures.items) |local| {
+            try appendUniqueLocal(allocator, &captures, local);
+        }
+
+        const capture_span = if (captures.items.len == 0)
+            LIR.LocalSpan.empty()
+        else
+            try self.parent.result.store.addLocalSpan(captures.items);
+        return try self.adapterDescriptorFromMaterialization(.{
+            .desc = .{ .static = desc_id },
+            .captures = capture_span,
+        });
+    }
+
+    const AdapterFieldsKind = enum { aggregate, record };
+
+    /// Begin a record's or declared aggregate's field specialization, or
+    /// decline when the boundary is not one.
+    fn beginAdapterFields(self: *ProcBodyBuilder, request: AdapterRequest, kind: AdapterFieldsKind) Allocator.Error!?*AdapterFieldsState {
+        const allocator = self.parent.allocator;
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        const source_desc_info = request.source_desc_info;
+        const target_aggregate_rep = switch (kind) {
+            .aggregate => self.declaredAggregateRepForBoundary(target_rep) orelse return null,
+            .record => self.recordRepForBoundary(target_rep) orelse return null,
+        };
+        const source_aggregate_rep = switch (kind) {
+            .aggregate => self.declaredAggregateRepForBoundary(source_rep) orelse return null,
+            .record => self.recordRepForBoundary(source_rep) orelse return null,
+        };
+        if (kind == .record) {
+            const target_record = self.parent.plan.representations.items[@intFromEnum(target_aggregate_rep)];
+            const source_record = self.parent.plan.representations.items[@intFromEnum(source_aggregate_rep)];
+            if (!self.repHasRecordFieldChildrenForBoundary(target_record) or
+                !self.repHasRecordFieldChildrenForBoundary(source_record))
+            {
+                return null;
+            }
+        }
+
+        const target_materialization = try self.descriptorMaterializationForExactRep(target_rep);
+        const target_template_id = switch (target_materialization.desc) {
+            .static => |desc_id| desc_id,
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => switch (kind) {
+                .aggregate => boxyLowerInvariant("boxy declared aggregate adapter target descriptor template was not static"),
+                .record => boxyLowerInvariant("boxy record adapter target descriptor template was not static"),
+            },
+        };
+        const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
+
+        const source_desc = source_desc_info.desc orelse switch (kind) {
+            .aggregate => boxyLowerInvariant("boxy declared aggregate adapter source had no descriptor"),
+            .record => boxyLowerInvariant("boxy record adapter source had no descriptor"),
+        };
+        const source_materialization = self.descriptorTemplateOf(source_desc_info);
+        const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
+            const source_template_id = switch (materialization.desc) {
+                .static => |desc_id| desc_id,
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => switch (kind) {
+                    .aggregate => boxyLowerInvariant("boxy declared aggregate adapter source descriptor template was not static"),
+                    .record => boxyLowerInvariant("boxy record adapter source descriptor template was not static"),
+                },
+            };
+            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
+        } else null;
+
+        const state = try allocator.create(AdapterFieldsState);
+        state.* = .{
+            .kind = kind,
+            .target_materialization = target_materialization,
+            .target_template = target_template,
+            .source_desc = source_desc,
+            .source_materialization = source_materialization,
+            .source_template = source_template,
+            .target_aggregate_rep = target_aggregate_rep,
+            .source_aggregate_rep = source_aggregate_rep,
+        };
+        errdefer {
+            state.deinit(allocator);
+            allocator.destroy(state);
+        }
+        const target_nested = self.parent.result.boxy_desc_refs.items[target_template.nested_descs.start..][0..target_template.nested_descs.len];
+        try state.specialized_nested.appendSlice(allocator, target_nested);
+        if (kind == .aggregate) {
+            const target_aggregate = self.parent.plan.representations.items[@intFromEnum(target_aggregate_rep)];
+            state.declared_fields = try self.parent.declaredFieldsInLayoutOrder(
+                self.parent.plan.declaredFieldSlice(target_aggregate.declared_fields),
+            );
+        }
+        return state;
+    }
+
+    fn stepAdapterFields(
+        self: *ProcBodyBuilder,
+        state: *AdapterFieldsState,
+        request: AdapterRequest,
+        delivered: ?ResultDescriptorSource,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!AdapterAttemptStep {
+        if (delivered) |adapted| try self.finishAdapterField(state, adapted, prerequisites);
+        while (true) {
+            const field = switch (state.kind) {
+                .aggregate => try self.nextAdapterAggregateField(state, request, prerequisites) orelse break,
+                .record => try self.nextAdapterRecordField(state, prerequisites) orelse break,
+            };
+            try self.appendResultDescriptorInitializers(prerequisites, field.source_desc_info);
+            state.pending_nested_index = field.target_nested_index;
+            if (self.representationBoundaryIsDirect(field.target_rep, field.source_rep) or
+                self.repIsBareDynamic(self.descriptorStorageRep(field.target_rep)))
+            {
+                try self.finishAdapterField(state, field.source_desc_info, prerequisites);
+                continue;
+            }
+            return .{ .request = .{
+                .target_rep = field.target_rep,
+                .source_rep = field.source_rep,
+                .source_desc_info = field.source_desc_info,
+            } };
+        }
+        if (!state.specialized) return .{ .finished = null };
+        return .{ .finished = try self.finishAdapterFields(state) };
+    }
+
+    /// One field boundary of a record or declared aggregate boundary.
+    const AdapterField = struct {
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        source_desc_info: ResultDescriptorSource,
+        target_nested_index: usize,
+    };
+
+    /// The source field descriptor at `nested_index`: the source template's,
+    /// the source descriptor's read at runtime, or the field's known one.
+    fn adapterSourceFieldDescriptor(
+        self: *ProcBodyBuilder,
+        state: *AdapterFieldsState,
+        nested_index: u32,
+        source_field_rep: Plan.TypeRepId,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!ResultDescriptorSource {
+        if (state.source_template) |template| {
+            if (nested_index >= template.nested_descs.len) switch (state.kind) {
+                .aggregate => boxyLowerInvariant("boxy declared aggregate source nested descriptor index exceeded template"),
+                .record => boxyLowerInvariant("boxy record adapter source nested descriptor index exceeded template"),
+            };
+            return .{ .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + nested_index] };
+        }
+        if (self.payloadFieldCarriesRuntimeDesc(state.source_aggregate_rep, nested_index)) {
+            const nested_local = try self.addFrameLocal(.opaque_ptr);
+            try prerequisites.append(self.parent.allocator, .{
+                .local = nested_local,
+                .materialize = state.source_desc,
+                .nested_index = nested_index,
+            });
+            return .{ .desc = .{ .local = nested_local } };
+        }
+        return try self.adapterDescriptorForKnownRep(source_field_rep);
+    }
+
+    fn nextAdapterRecordField(
+        self: *ProcBodyBuilder,
+        state: *AdapterFieldsState,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?AdapterField {
+        const target_record = self.parent.plan.representations.items[@intFromEnum(state.target_aggregate_rep)];
+        const target_children = self.parent.plan.childSlice(target_record.children);
+        while (state.index < target_children.len) {
+            const target_child = target_children[state.index];
+            state.index += 1;
+            switch (target_child.role) {
+                .record_field => |target_label| {
+                    const target_field_index = state.target_field_index;
+                    state.target_field_index += 1;
+                    const target_nested_index = self.recordFieldNestedDescriptorIndex(state.target_aggregate_rep, target_field_index);
+                    if (target_nested_index >= state.specialized_nested.items.len) {
+                        boxyLowerInvariant("boxy record adapter target nested descriptor index exceeded template");
+                    }
+                    const source_field = self.findRecordFieldByLabel(
+                        state.source_aggregate_rep,
+                        procedureModuleById(self.parent.modules, target_child.source_type.module),
+                        target_label,
+                    ) orelse {
+                        switch (target_child.record_field_kind.tag) {
+                            .optional, .undetermined => continue,
+                            .required, .defaulted, .err => boxyLowerInvariant("boxy record adapter source was missing target field"),
+                        }
+                    };
+                    if (self.boundaryFieldKeepsStaticDescriptor(target_child.rep, source_field.rep)) continue;
+
+                    const source_nested_index = self.recordFieldNestedDescriptorIndex(state.source_aggregate_rep, source_field.index);
+                    return .{
+                        .target_rep = target_child.rep,
+                        .source_rep = source_field.rep,
+                        .source_desc_info = try self.adapterSourceFieldDescriptor(state, @intCast(source_nested_index), source_field.rep, prerequisites),
+                        .target_nested_index = target_nested_index,
+                    };
+                },
+                .record_ext => self.requireEmptyRecordExtension(target_child.rep),
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("boxy record adapter target had a non-record child role"),
+            }
+        }
+        return null;
+    }
+
+    fn nextAdapterAggregateField(
+        self: *ProcBodyBuilder,
+        state: *AdapterFieldsState,
+        request: AdapterRequest,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?AdapterField {
+        while (state.index < state.declared_fields.len) {
+            const target_field = state.declared_fields[state.index];
+            state.index += 1;
+            const target_nested_index = self.recordFieldNestedDescriptorIndex(
+                state.target_aggregate_rep,
+                target_field.index,
+            );
+            if (target_nested_index >= state.specialized_nested.items.len) {
+                boxyLowerInvariant("boxy declared aggregate target nested descriptor index exceeded template");
+            }
+
+            // Field storage belongs to this nominal application, not to the
+            // declaration formal shared by other uses.
+            const target_field_rep = self.nominalBackingActualRep(request.target_rep, target_field.rep);
+            const source_field_rep = self.nominalBackingActualRep(request.source_rep, try self.parent.matchingDeclaredFieldInstantiationSource(
+                state.source_aggregate_rep,
+                target_field,
+            ) orelse boxyLowerInvariant("boxy declared aggregate source was missing target field"));
+            if (self.boundaryFieldKeepsStaticDescriptor(target_field_rep, source_field_rep)) continue;
+            const nested_index = self.recordFieldNestedDescriptorIndex(
+                state.source_aggregate_rep,
+                target_field.index,
+            );
+            return .{
+                .target_rep = target_field_rep,
+                .source_rep = source_field_rep,
+                .source_desc_info = try self.adapterSourceFieldDescriptor(state, @intCast(nested_index), source_field_rep, prerequisites),
+                .target_nested_index = target_nested_index,
+            };
+        }
+        return null;
+    }
+
+    /// Record one field's adapted descriptor in the specialization.
+    fn finishAdapterField(
+        self: *ProcBodyBuilder,
+        state: *AdapterFieldsState,
+        adapted_field_desc_info: ResultDescriptorSource,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!void {
+        try self.appendResultDescriptorInitializers(prerequisites, adapted_field_desc_info);
+        const adapted_field_desc = adapted_field_desc_info.desc orelse switch (state.kind) {
+            .aggregate => boxyLowerInvariant("boxy declared aggregate target field had no descriptor"),
+            .record => boxyLowerInvariant("boxy record adapter target field had no descriptor"),
+        };
+        state.specialized_nested.items[state.pending_nested_index] = adapted_field_desc;
+        if (adapted_field_desc.localOrNull()) |local| {
+            try appendUniqueLocal(self.parent.allocator, &state.extra_captures, local);
+        }
+        state.specialized = true;
+    }
+
+    /// The specialized descriptor once every field is specialized.
+    fn finishAdapterFields(self: *ProcBodyBuilder, state: *AdapterFieldsState) Allocator.Error!ResultDescriptorSource {
+        const allocator = self.parent.allocator;
+        const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
+        try self.parent.result.boxy_desc_refs.appendSlice(allocator, state.specialized_nested.items);
+        const specialized_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+        var specialized_template = state.target_template;
+        specialized_template.nested_descs = .{ .start = nested_start, .len = @intCast(state.specialized_nested.items.len) };
+        try self.parent.result.boxy_type_descs.append(allocator, specialized_template);
+
+        var captures = std.ArrayList(LIR.LocalId).empty;
+        defer captures.deinit(allocator);
+        const target_captures = self.parent.result.store.getLocalSpan(state.target_materialization.captures);
+        for (0..GuardedList.borrowLen(target_captures)) |index| {
+            try appendUniqueLocal(allocator, &captures, GuardedList.at(target_captures, index));
+        }
+        if (state.source_materialization) |materialization| {
+            const source_captures = self.parent.result.store.getLocalSpan(materialization.captures);
+            for (0..GuardedList.borrowLen(source_captures)) |index| {
+                try appendUniqueLocal(allocator, &captures, GuardedList.at(source_captures, index));
+            }
+        }
+        for (state.extra_captures.items) |local| {
+            try appendUniqueLocal(allocator, &captures, local);
+        }
+
+        const capture_span = if (captures.items.len == 0)
+            LIR.LocalSpan.empty()
+        else
+            try self.parent.result.store.addLocalSpan(captures.items);
+        return try self.adapterDescriptorFromMaterialization(.{
+            .desc = .{ .static = specialized_id },
+            .captures = capture_span,
+        });
+    }
+
+    /// Begin a list boundary's element specialization: its descriptor when
+    /// the element needs no adapting, or null with the frame waiting on the
+    /// element boundary pushed.
+    fn beginAdapterList(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(AdapterFrame),
+        request: AdapterRequest,
+        entry_index: usize,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?ResultDescriptorSource {
+        const target_rep = request.target_rep;
+        const source_rep = request.source_rep;
+        const source_desc_info = request.source_desc_info;
+        const source_desc = source_desc_info.desc orelse
+            boxyLowerInvariant("planned call adapter source descriptor was unavailable");
+        const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
+        const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
+        const target_tag = self.parent.result.layouts.getLayout(target_layout).tag;
+        const source_tag = self.parent.result.layouts.getLayout(source_layout).tag;
+        const source_is_box = source_tag == .box or source_tag == .box_of_zst or source_tag == .erased_box;
         const known = try self.adapterDescriptorFromMaterialization(
             try self.descriptorMaterializationForExactRep(target_rep),
         );
@@ -24850,17 +25293,45 @@ const ProcBodyBuilder = struct {
             try prerequisites.append(self.parent.allocator, materialize);
         }
 
-        const target_elem_desc_info = if (self.repIsBareDynamic(self.descriptorStorageRep(target_elem_rep)) or
+        if (self.repIsBareDynamic(self.descriptorStorageRep(target_elem_rep)) or
             (source_elem_rep != null and self.repsUseSameBoxStorage(target_elem_rep, source_elem_rep.?)))
-            source_elem_desc_info
-        else
-            try self.adapterDescriptorForCallBoundary(
-                target_elem_rep,
-                source_elem_rep orelse
+        {
+            return try self.finishAdapterList(.{
+                .known = known,
+                .known_desc = known_desc,
+                .target_layout = target_layout,
+                .source_elem_desc_info = source_elem_desc_info,
+                .element = undefined,
+            }, source_elem_desc_info, prerequisites);
+        }
+        const state = try self.parent.allocator.create(AdapterListState);
+        state.* = .{
+            .known = known,
+            .known_desc = known_desc,
+            .target_layout = target_layout,
+            .source_elem_desc_info = source_elem_desc_info,
+            .element = .{
+                .target_rep = target_elem_rep,
+                .source_rep = source_elem_rep orelse
                     boxyLowerInvariant("planned non-dynamic list element adapter had no source representation"),
-                source_elem_desc_info,
-                prerequisites,
-            );
+                .source_desc_info = source_elem_desc_info,
+            },
+        };
+        try self.pushAdapterFrame(frames, .{ .request = request, .entry_index = entry_index, .stage = .{ .list = state } });
+        return null;
+    }
+
+    /// The list descriptor once its element's descriptor is adapted.
+    fn finishAdapterList(
+        self: *ProcBodyBuilder,
+        state: AdapterListState,
+        target_elem_desc_info: ResultDescriptorSource,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!ResultDescriptorSource {
+        const known = state.known;
+        const known_desc = state.known_desc;
+        const target_layout = state.target_layout;
+        const source_elem_desc_info = state.source_elem_desc_info;
         const source_elem_desc = source_elem_desc_info.desc orelse
             boxyLowerInvariant("planned list adapter source element had no descriptor");
         const target_elem_desc = target_elem_desc_info.desc orelse
@@ -25071,15 +25542,16 @@ const ProcBodyBuilder = struct {
 
     fn listMapCanReuseArgs(
         self: *ProcBodyBuilder,
-        cond: checked.CheckedExprId,
+        root: checked.CheckedExprId,
     ) ?[]const checked.CheckedExprId {
-        const expr = self.module.checked_bodies.expr(cond);
-        return switch (expr.data) {
+        var cond = root;
+        while (true) return switch (self.module.checked_bodies.expr(cond).data) {
             .run_low_level => |low_level| if (low_level.op == .list_map_can_reuse) low_level.args else null,
-            .block => |block| if (block.statements.len == 0)
-                self.listMapCanReuseArgs(block.final_expr)
-            else
-                null,
+            .block => |block| {
+                if (block.statements.len != 0) return null;
+                cond = block.final_expr;
+                continue;
+            },
             .call => |call| blk: {
                 if (call.direct_target == null) break :blk null;
                 const direct = self.parent.plan.directCallPlanForCall(
@@ -25528,26 +26000,37 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("dynamic tag expression referenced a variant outside its checked row representation");
     }
 
+    /// The payloads of the first variant along the tag row `root` whose
+    /// name matches, searching the row and its extensions in order.
     fn dynamicTagPayloadsForNameInner(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         name: names.TagNameId,
         seen: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!?[]const Plan.RepChild {
-        const tag_rep_id = self.tagDomainRep(rep_id) orelse return null;
-        const entry = try seen.getOrPut(tag_rep_id);
-        if (entry.found_existing) return null;
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |rep_id| {
+            const tag_rep_id = self.tagDomainRep(rep_id) orelse continue;
+            const entry = try seen.getOrPut(tag_rep_id);
+            if (entry.found_existing) continue;
 
-        const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-        for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-            if (self.tagVariantNameMatches(variant, self.module, name)) {
-                return self.parent.plan.childSlice(variant.payloads);
+            const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
+            for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+                if (self.tagVariantNameMatches(variant, self.module, name)) {
+                    return self.parent.plan.childSlice(variant.payloads);
+                }
             }
-        }
 
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (child.role != .tag_ext) continue;
-            if (try self.dynamicTagPayloadsForNameInner(child.rep, name, seen)) |payloads| return payloads;
+            const children = self.parent.plan.childSlice(rep.children);
+            var index = children.len;
+            while (index > 0) {
+                index -= 1;
+                if (children[index].role != .tag_ext) continue;
+                try pending.append(allocator, children[index].rep);
+            }
         }
         return null;
     }
@@ -25579,166 +26062,233 @@ const ProcBodyBuilder = struct {
         return try self.dynamicTagPayloadsForTextInner(target_rep, name_text, &seen);
     }
 
+    /// The payloads of the first variant along the tag row `root` whose
+    /// name matches, searching the row and its extensions in order.
     fn dynamicTagPayloadsForTextInner(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         name_text: []const u8,
         seen: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!?[]const Plan.RepChild {
-        const tag_rep_id = self.tagDomainRep(rep_id) orelse return null;
-        const entry = try seen.getOrPut(tag_rep_id);
-        if (entry.found_existing) return null;
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |rep_id| {
+            const tag_rep_id = self.tagDomainRep(rep_id) orelse continue;
+            const entry = try seen.getOrPut(tag_rep_id);
+            if (entry.found_existing) continue;
 
-        const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-        for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-            if (std.mem.eql(u8, self.tagVariantNameText(variant), name_text)) {
-                return self.parent.plan.childSlice(variant.payloads);
+            const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
+            for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+                if (std.mem.eql(u8, self.tagVariantNameText(variant), name_text)) {
+                    return self.parent.plan.childSlice(variant.payloads);
+                }
             }
-        }
 
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (child.role != .tag_ext) continue;
-            if (try self.dynamicTagPayloadsForTextInner(child.rep, name_text, seen)) |payloads| return payloads;
+            const children = self.parent.plan.childSlice(rep.children);
+            var index = children.len;
+            while (index > 0) {
+                index -= 1;
+                if (children[index].role != .tag_ext) continue;
+                try pending.append(allocator, children[index].rep);
+            }
         }
         return null;
     }
 
+    /// The locals one field-access segment reads into, made before the
+    /// segments after it.
+    const OptionalFieldSegmentLocals = union(enum) {
+        required: struct { field_local: LIR.LocalId, field_rep: Plan.TypeRepId },
+        optional: struct {
+            slot_rep: Plan.TypeRepId,
+            slot_local: LIR.LocalId,
+            present: TagVariantLookup,
+            payload_rep: Plan.TypeRepId,
+            payload: ExtractedTagPayloadLocal,
+        },
+    };
+
+    /// Lower the chain `segments[first..]` from `receiver` into a `Try`
+    /// result: each segment's locals are made in order, then each segment's
+    /// reads are built from the last segment backward.
     fn lowerOptionalFieldAccessSegments(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         result_rep: Plan.TypeRepId,
         segments: []const checked.CheckedFieldAccessSegment,
-        index: usize,
-        current: LIR.LocalId,
-        current_rep: Plan.TypeRepId,
+        first: usize,
+        receiver: LIR.LocalId,
+        receiver_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (index == segments.len) {
-            const ok = self.generatedParserTagVariant(result_rep, "Ok");
-            return try self.assignGeneratedParserTag(
-                target,
-                result_rep,
-                ok,
-                current,
-                current_rep,
-                next,
-            );
+        const chain = segments[first..];
+        const segment_locals = try self.parent.allocator.alloc(OptionalFieldSegmentLocals, chain.len);
+        defer self.parent.allocator.free(segment_locals);
+        var current = receiver;
+        var current_rep = receiver_rep;
+        for (chain, segment_locals) |segment, *locals| {
+            const access = self.recordFieldAccessInfo(current_rep, self.module, segment.field_name);
+            switch (segment.mode) {
+                .required => {
+                    if (access.field_kind == .optional) {
+                        boxyLowerInvariant("required field-access segment selected an optional slot");
+                    }
+                    const field_rep = self.repForType(segment.success_ty);
+                    const field_local = try self.addFrameLocalForRep(field_rep);
+                    locals.* = .{ .required = .{ .field_local = field_local, .field_rep = field_rep } };
+                    current = field_local;
+                    current_rep = field_rep;
+                },
+                .optional => {
+                    if (access.field_kind != .optional) {
+                        boxyLowerInvariant("optional field-access segment did not select an optional slot");
+                    }
+                    const slot_rep = access.field_rep;
+                    const slot_local = try self.addFrameLocalForRep(slot_rep);
+                    const slot_rep_info = self.parent.plan.representations.items[@intFromEnum(slot_rep)];
+                    const present = self.plannedTagVariantByText(slot_rep, "#Present");
+                    const payload_children = self.parent.plan.childSlice(present.payloads);
+                    if (payload_children.len != 1) {
+                        boxyLowerInvariant("optional field Present slot did not carry one payload");
+                    }
+                    const payload_rep = payload_children[0].rep;
+                    const payload = try self.addExtractedTagPayloadLocal(payload_rep, slot_rep_info.descriptor != null);
+                    locals.* = .{ .optional = .{
+                        .slot_rep = slot_rep,
+                        .slot_local = slot_local,
+                        .present = present,
+                        .payload_rep = payload_rep,
+                        .payload = payload,
+                    } };
+                    current = payload.local;
+                    current_rep = payload_rep;
+                },
+            }
         }
 
-        const segment = segments[index];
-        const access = self.recordFieldAccessInfo(current_rep, self.module, segment.field_name);
-        return switch (segment.mode) {
-            .required => blk: {
-                if (access.field_kind == .optional) {
-                    boxyLowerInvariant("required field-access segment selected an optional slot");
-                }
-                const field_rep = self.repForType(segment.success_ty);
-                const field_local = try self.addFrameLocalForRep(field_rep);
-                const rest = try self.lowerOptionalFieldAccessSegments(
-                    target,
-                    result_rep,
-                    segments,
-                    index + 1,
-                    field_local,
-                    field_rep,
-                    next,
-                );
-                break :blk try self.lowerRecordFieldFromLocalInto(
-                    field_local,
-                    field_rep,
-                    current,
-                    current_rep,
+        const ok = self.generatedParserTagVariant(result_rep, "Ok");
+        var rest = try self.assignGeneratedParserTag(
+            target,
+            result_rep,
+            ok,
+            current,
+            current_rep,
+            next,
+        );
+        var index = chain.len;
+        while (index > 0) {
+            index -= 1;
+            const segment = chain[index];
+            const source = if (index == 0) receiver else segmentValueLocal(segment_locals[index - 1]);
+            const source_rep = if (index == 0) receiver_rep else segmentValueRep(segment_locals[index - 1]);
+            rest = switch (segment_locals[index]) {
+                .required => |required| try self.lowerRecordFieldFromLocalInto(
+                    required.field_local,
+                    required.field_rep,
+                    source,
+                    source_rep,
                     self.module,
                     segment.field_name,
                     rest,
-                );
-            },
-            .optional => blk: {
-                if (access.field_kind != .optional) {
-                    boxyLowerInvariant("optional field-access segment did not select an optional slot");
-                }
-                const slot_rep = access.field_rep;
-                const slot_local = try self.addFrameLocalForRep(slot_rep);
-                const slot_rep_info = self.parent.plan.representations.items[@intFromEnum(slot_rep)];
-                const present = self.plannedTagVariantByText(slot_rep, "#Present");
-                const payload_children = self.parent.plan.childSlice(present.payloads);
-                if (payload_children.len != 1) {
-                    boxyLowerInvariant("optional field Present slot did not carry one payload");
-                }
-                const payload_rep = payload_children[0].rep;
-                const payload = try self.addExtractedTagPayloadLocal(payload_rep, slot_rep_info.descriptor != null);
-                const present_rest = try self.lowerOptionalFieldAccessSegments(
-                    target,
-                    result_rep,
-                    segments,
-                    index + 1,
-                    payload.local,
-                    payload_rep,
-                    next,
-                );
-                const present_body = try self.assignConcreteTagPayloadRead(
-                    payload.local,
-                    payload_rep,
-                    payload.desc_local,
-                    slot_local,
-                    slot_rep,
-                    present.name,
-                    present.index,
-                    0,
-                    1,
-                    present_rest,
-                );
+                ),
+                .optional => |optional| try self.lowerOptionalFieldSegmentReads(target, result_rep, segment, optional, source, source_rep, rest, next),
+            };
+        }
+        return rest;
+    }
 
-                const err = self.generatedParserTagVariant(result_rep, "Err");
-                const err_payloads = self.parent.plan.childSlice(err.variant.payloads);
-                if (err_payloads.len != 1) {
-                    boxyLowerInvariant("optional field access Try Err variant did not carry one payload");
-                }
-                const error_rep = self.nominalBackingActualRep(result_rep, err_payloads[0].rep);
-                const error_local = try self.addFrameLocalForRep(error_rep);
-                const err_body = try self.assignGeneratedParserTag(
-                    target,
-                    result_rep,
-                    err,
-                    error_local,
-                    error_rep,
-                    next,
-                );
-                const missing = self.generatedParserTagVariant(error_rep, "MissingField");
-                const missing_body = try self.assignGeneratedParserZeroTag(
-                    error_local,
-                    error_rep,
-                    missing,
-                    err_body,
-                );
-
-                const discriminant = try self.addFrameLocal(.u16);
-                const branches = [_]LIR.CFSwitchBranch{.{
-                    .value = present.index,
-                    .body = present_body,
-                }};
-                const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-                    .cond = discriminant,
-                    .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
-                    .default_branch = missing_body,
-                    .continuation = null,
-                } }, self.origin);
-                const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                    .target = discriminant,
-                    .op = .{ .discriminant = .{ .source = slot_local } },
-                    .next = switch_stmt,
-                } }, self.origin);
-                break :blk try self.lowerRecordFieldFromLocalInto(
-                    slot_local,
-                    slot_rep,
-                    current,
-                    current_rep,
-                    self.module,
-                    segment.field_name,
-                    read_discriminant,
-                );
-            },
+    fn segmentValueLocal(locals: OptionalFieldSegmentLocals) LIR.LocalId {
+        return switch (locals) {
+            .required => |required| required.field_local,
+            .optional => |optional| optional.payload.local,
         };
+    }
+
+    fn segmentValueRep(locals: OptionalFieldSegmentLocals) Plan.TypeRepId {
+        return switch (locals) {
+            .required => |required| required.field_rep,
+            .optional => |optional| optional.payload_rep,
+        };
+    }
+
+    /// Read an optional segment's slot from `source`: its payload continues
+    /// the chain into `present_rest`, and a missing slot makes the result
+    /// `Err(MissingField)` before `next`.
+    fn lowerOptionalFieldSegmentReads(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        result_rep: Plan.TypeRepId,
+        segment: checked.CheckedFieldAccessSegment,
+        optional: @FieldType(OptionalFieldSegmentLocals, "optional"),
+        source: LIR.LocalId,
+        source_rep: Plan.TypeRepId,
+        present_rest: LIR.CFStmtId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const present = optional.present;
+        const present_body = try self.assignConcreteTagPayloadRead(
+            optional.payload.local,
+            optional.payload_rep,
+            optional.payload.desc_local,
+            optional.slot_local,
+            optional.slot_rep,
+            present.name,
+            present.index,
+            0,
+            1,
+            present_rest,
+        );
+
+        const err = self.generatedParserTagVariant(result_rep, "Err");
+        const err_payloads = self.parent.plan.childSlice(err.variant.payloads);
+        if (err_payloads.len != 1) {
+            boxyLowerInvariant("optional field access Try Err variant did not carry one payload");
+        }
+        const error_rep = self.nominalBackingActualRep(result_rep, err_payloads[0].rep);
+        const error_local = try self.addFrameLocalForRep(error_rep);
+        const err_body = try self.assignGeneratedParserTag(
+            target,
+            result_rep,
+            err,
+            error_local,
+            error_rep,
+            next,
+        );
+        const missing = self.generatedParserTagVariant(error_rep, "MissingField");
+        const missing_body = try self.assignGeneratedParserZeroTag(
+            error_local,
+            error_rep,
+            missing,
+            err_body,
+        );
+
+        const discriminant = try self.addFrameLocal(.u16);
+        const branches = [_]LIR.CFSwitchBranch{.{
+            .value = present.index,
+            .body = present_body,
+        }};
+        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
+            .default_branch = missing_body,
+            .continuation = null,
+        } }, self.origin);
+        const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = optional.slot_local } },
+            .next = switch_stmt,
+        } }, self.origin);
+        return try self.lowerRecordFieldFromLocalInto(
+            optional.slot_local,
+            optional.slot_rep,
+            source,
+            source_rep,
+            self.module,
+            segment.field_name,
+            read_discriminant,
+        );
     }
 
     fn nominalBackingActualRep(
@@ -25747,13 +26297,7 @@ const ProcBodyBuilder = struct {
         backing_rep: Plan.TypeRepId,
     ) Plan.TypeRepId {
         var current = owner_rep;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) {
-                boxyLowerInvariant("nominal backing substitution wrapper chain exceeded boxy lowerer limit");
-            }
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -26078,31 +26622,35 @@ const ProcBodyBuilder = struct {
         return try self.repDependsOnNominalFormalsInner(rep_id, &seen);
     }
 
+    /// Whether `root` reads a formal an active scope binds. Which
+    /// representations are reached does not depend on visiting order.
     fn repDependsOnNominalFormalsInner(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         seen: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!bool {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return false;
-        if (self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, rep_id) != null) return true;
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        // A nested nominal rebinds its own formals: only its actuals can read
-        // an enclosing binding.
-        if (rep.kind == .nominal and rep.nominal_backing_arg_substitutions.len != 0) {
-            var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
-            while (substitutions.next()) |substitution| {
-                if (try self.repDependsOnNominalFormalsInner(substitution.actual_rep, seen)) return true;
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |rep_id| {
+            const entry = try seen.getOrPut(rep_id);
+            if (entry.found_existing) continue;
+            if (self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, rep_id) != null) return true;
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            // A nested nominal rebinds its own formals: only its actuals can read
+            // an enclosing binding.
+            if (rep.kind == .nominal and rep.nominal_backing_arg_substitutions.len != 0) {
+                var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+                while (substitutions.next()) |substitution| try pending.append(allocator, substitution.actual_rep);
+                continue;
             }
-            return false;
-        }
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (!Plan.childCarriesRuntimeDescriptor(child.role)) continue;
-            if (try self.repDependsOnNominalFormalsInner(child.rep, seen)) return true;
-        }
-        for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-            for (self.parent.plan.childSlice(variant.payloads)) |payload| {
-                if (try self.repDependsOnNominalFormalsInner(payload.rep, seen)) return true;
+            for (self.parent.plan.childSlice(rep.children)) |child| {
+                if (!Plan.childCarriesRuntimeDescriptor(child.role)) continue;
+                try pending.append(allocator, child.rep);
+            }
+            for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+                for (self.parent.plan.childSlice(variant.payloads)) |payload| try pending.append(allocator, payload.rep);
             }
         }
         return false;
@@ -26246,7 +26794,7 @@ const ProcBodyBuilder = struct {
             };
             if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) continue;
             switch (statement.data) {
-                .decl => |decl| if (!self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
+                .decl => |decl| if (!try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
                 .var_ => |decl| try self.reservePatternBindings(decl.pattern),
                 .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
@@ -26266,8 +26814,8 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         pattern_id: checked.CheckedPatternId,
         expr_id: checked.CheckedExprId,
-    ) bool {
-        return Plan.declarationOmitsRuntimeBinding(self.module, pattern_id, expr_id);
+    ) Allocator.Error!bool {
+        return try Plan.declarationOmitsRuntimeBinding(self.parent.allocator, self.module, pattern_id, expr_id);
     }
 
     fn bindPatternFromLocal(
@@ -27557,33 +28105,172 @@ const ProcBodyBuilder = struct {
         return self.module.checked_bodies.pattern(pattern_id).ty;
     }
 
+    /// One pending step of a reassignment binding. Bindings are built from
+    /// their continuation backward: each step wraps the statements the
+    /// steps after it built.
+    const ReassignAction = union(enum) {
+        pattern: struct { pattern_id: checked.CheckedPatternId, source: LIR.LocalId },
+        binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId },
+        tuple_field: struct { tuple_ty: checked.CheckedTypeId, pattern_id: checked.CheckedPatternId, source: LIR.LocalId, field_index: u16 },
+        tuple_read: struct { field_local: LIR.LocalId, source: LIR.LocalId, tuple_rep: Plan.TypeRepId, field_index: u16 },
+        record_field: struct { pattern_id: checked.CheckedPatternId, field_read: RecordFieldReadSource, access: RecordFieldAccessInfo },
+        record_read: struct { field_local: LIR.LocalId, field_rep: Plan.TypeRepId, field_read: RecordFieldReadSource, access: RecordFieldAccessInfo },
+        record_rest: struct { pattern_id: checked.CheckedPatternId, field_read: RecordFieldReadSource, record_ty: checked.CheckedTypeId },
+        record_rest_value: struct { rest_local: LIR.LocalId, field_read: RecordFieldReadSource, record_ty: checked.CheckedTypeId, rest_ty: checked.CheckedTypeId },
+        /// Leave the nominal scopes a tuple or record destructure entered;
+        /// a record's field reads are read first.
+        leave_scope: struct { scope: NominalBackingFormalScope, field_read: ?RecordFieldReadSource },
+        nominal_boundary: struct { backing_local: LIR.LocalId, source: LIR.LocalId, backing_rep: Plan.TypeRepId, nominal_rep: Plan.TypeRepId },
+    };
+
     fn bindReassignPatternFromLocal(
         self: *ProcBodyBuilder,
-        pattern_id: checked.CheckedPatternId,
-        source: LIR.LocalId,
+        root: checked.CheckedPatternId,
+        root_source: LIR.LocalId,
         reassigned_binders: []const checked.PatternBinderId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        return switch (pattern.data) {
-            .assign => |binder| try self.bindReassignBinder(binder, source, reassigned_binders, next),
-            .as => |as| blk: {
-                const inner = try self.bindReassignPatternFromLocal(as.pattern, source, reassigned_binders, next);
-                break :blk try self.bindReassignBinder(as.binder, source, reassigned_binders, inner);
+        const allocator = self.parent.allocator;
+        var actions: std.ArrayList(ReassignAction) = .empty;
+        defer actions.deinit(allocator);
+        errdefer {
+            // Leave the scopes still open, innermost first, as the direct
+            // binding's defers would.
+            var index = actions.items.len;
+            while (index > 0) {
+                index -= 1;
+                switch (actions.items[index]) {
+                    .leave_scope => |leave| self.dropNominalBackingFormalScope(leave.scope),
+                    .pattern, .binder, .tuple_field, .tuple_read, .record_field, .record_read, .record_rest, .record_rest_value, .nominal_boundary => {},
+                }
+            }
+        }
+        try actions.append(allocator, .{ .pattern = .{ .pattern_id = root, .source = root_source } });
+        var continuation = next;
+        while (actions.pop()) |action| switch (action) {
+            .pattern => |item| {
+                const source = item.source;
+                const pattern = self.module.checked_bodies.pattern(item.pattern_id);
+                switch (pattern.data) {
+                    .assign => |binder| continuation = try self.bindReassignBinder(binder, source, reassigned_binders, continuation),
+                    .as => |as| {
+                        try actions.append(allocator, .{ .binder = .{ .binder = as.binder, .source = source } });
+                        try actions.append(allocator, .{ .pattern = .{ .pattern_id = as.pattern, .source = source } });
+                    },
+                    .tuple => |items| {
+                        const scope = try self.enterNominalWrapperFormalScopes(self.repForType(pattern.ty));
+                        actions.append(allocator, .{ .leave_scope = .{ .scope = scope, .field_read = null } }) catch |err| {
+                            self.dropNominalBackingFormalScope(scope);
+                            return err;
+                        };
+                        for (items, 0..) |tuple_item, index| {
+                            if (index > std.math.maxInt(u16)) {
+                                boxyLowerInvariant("tuple reassign pattern index exceeded LIR field index range");
+                            }
+                            try actions.append(allocator, .{ .tuple_field = .{ .tuple_ty = pattern.ty, .pattern_id = tuple_item, .source = source, .field_index = @intCast(index) } });
+                        }
+                    },
+                    .record_destructure => |destructs| {
+                        if (!self.recordDestructureNeedsSource(destructs)) continue;
+                        const scope = try self.enterNominalWrapperFormalScopes(self.repForType(pattern.ty));
+                        const field_read = self.recordFieldReadSourceForType(source, pattern.ty) catch |err| {
+                            self.dropNominalBackingFormalScope(scope);
+                            return err;
+                        };
+                        actions.append(allocator, .{ .leave_scope = .{ .scope = scope, .field_read = field_read } }) catch |err| {
+                            self.dropNominalBackingFormalScope(scope);
+                            return err;
+                        };
+                        // Destructs are bound last first.
+                        for (destructs) |destruct| {
+                            switch (destruct.kind) {
+                                .required,
+                                .sub_pattern,
+                                => |child_pattern| try actions.append(allocator, .{ .record_field = .{
+                                    .pattern_id = child_pattern,
+                                    .field_read = field_read,
+                                    .access = self.recordFieldAccessInfo(self.repForType(pattern.ty), self.module, destruct.label),
+                                } }),
+                                .rest => |child_pattern| {
+                                    if (!self.patternIsIgnored(child_pattern)) {
+                                        try actions.append(allocator, .{ .record_rest = .{ .pattern_id = child_pattern, .field_read = field_read, .record_ty = pattern.ty } });
+                                    }
+                                },
+                            }
+                        }
+                    },
+                    .nominal => |nominal| {
+                        const backing = self.module.checked_bodies.pattern(nominal.backing_pattern);
+                        const backing_local = try self.addFrameLocalForType(backing.ty);
+                        try actions.append(allocator, .{ .nominal_boundary = .{
+                            .backing_local = backing_local,
+                            .source = source,
+                            .backing_rep = self.repForType(backing.ty),
+                            .nominal_rep = self.repForType(pattern.ty),
+                        } });
+                        try actions.append(allocator, .{ .pattern = .{ .pattern_id = nominal.backing_pattern, .source = backing_local } });
+                    },
+                    .list => |list| {
+                        if (list.patterns.len != 0) {
+                            boxyLowerInvariant("refutable list pattern reached boxy irrefutable reassign binding");
+                        }
+                        if (list.rest) |rest| {
+                            if (rest.pattern) |rest_pattern| try actions.append(allocator, .{ .pattern = .{ .pattern_id = rest_pattern, .source = source } });
+                        }
+                    },
+                    .underscore => {},
+                    .applied_tag,
+                    .numeral_literal,
+                    .str_literal,
+                    .str_interpolation,
+                    .runtime_error,
+                    .pending,
+                    => boxyLowerInvariant("refutable or pending checked pattern reached boxy reassign binding"),
+                }
             },
-            .tuple => |items| try self.bindReassignTuplePattern(pattern.ty, items, source, reassigned_binders, next),
-            .record_destructure => |destructs| try self.bindReassignRecordPattern(pattern.ty, destructs, source, reassigned_binders, next),
-            .nominal => |nominal| try self.bindReassignNominalPattern(pattern.ty, nominal.backing_pattern, source, reassigned_binders, next),
-            .list => |list| try self.bindReassignIrrefutableListPattern(list, source, reassigned_binders, next),
-            .underscore => next,
-            .applied_tag,
-            .numeral_literal,
-            .str_literal,
-            .str_interpolation,
-            .runtime_error,
-            .pending,
-            => boxyLowerInvariant("refutable or pending checked pattern reached boxy reassign binding"),
+            .binder => |item| continuation = try self.bindReassignBinder(item.binder, item.source, reassigned_binders, continuation),
+            .tuple_field => |field| {
+                if (self.patternIsIgnored(field.pattern_id)) continue;
+                const pattern = self.module.checked_bodies.pattern(field.pattern_id);
+                const field_local = try self.addFrameLocalForRepWithFreshDescriptor(self.repForType(pattern.ty));
+                try actions.append(allocator, .{ .tuple_read = .{ .field_local = field_local, .source = field.source, .tuple_rep = self.repForType(field.tuple_ty), .field_index = field.field_index } });
+                try actions.append(allocator, .{ .pattern = .{ .pattern_id = field.pattern_id, .source = field_local } });
+            },
+            .tuple_read => |read| continuation = try self.lowerTupleFieldReadInto(
+                read.field_local,
+                read.source,
+                read.tuple_rep,
+                read.field_index,
+                continuation,
+            ),
+            .record_field => |field| {
+                if (self.patternIsIgnored(field.pattern_id)) continue;
+                const pattern = self.module.checked_bodies.pattern(field.pattern_id);
+                const field_local = try self.addFrameLocalForType(pattern.ty);
+                try actions.append(allocator, .{ .record_read = .{ .field_local = field_local, .field_rep = self.repForType(pattern.ty), .field_read = field.field_read, .access = field.access } });
+                try actions.append(allocator, .{ .pattern = .{ .pattern_id = field.pattern_id, .source = field_local } });
+            },
+            .record_read => |read| continuation = try self.lowerRecordFieldReadInto(
+                read.field_local,
+                read.field_rep,
+                read.field_read,
+                read.access,
+                continuation,
+            ),
+            .record_rest => |rest| {
+                const pattern = self.module.checked_bodies.pattern(rest.pattern_id);
+                const rest_local = try self.addFrameLocalForType(pattern.ty);
+                try actions.append(allocator, .{ .record_rest_value = .{ .rest_local = rest_local, .field_read = rest.field_read, .record_ty = rest.record_ty, .rest_ty = pattern.ty } });
+                try actions.append(allocator, .{ .pattern = .{ .pattern_id = rest.pattern_id, .source = rest_local } });
+            },
+            .record_rest_value => |rest| continuation = try self.lowerRecordRestValueInto(rest.rest_local, rest.field_read, rest.record_ty, rest.rest_ty, continuation),
+            .leave_scope => |leave| {
+                if (leave.field_read) |field_read| continuation = try self.prependRecordFieldReadSource(field_read, continuation);
+                continuation = try self.leaveNominalBackingFormalScope(leave.scope, continuation);
+            },
+            .nominal_boundary => |boundary| continuation = try self.assignRepresentationBoundary(boundary.backing_local, boundary.source, boundary.backing_rep, boundary.nominal_rep, continuation),
         };
+        return continuation;
     }
 
     fn bindReassignBinder(
@@ -27618,28 +28305,6 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("tuple pattern index exceeded LIR field index range");
             }
             continuation = try self.bindFieldPattern(tuple_ty, items[index], source, @intCast(index), continuation);
-        }
-        return try self.leaveNominalBackingFormalScope(scope, continuation);
-    }
-
-    fn bindReassignTuplePattern(
-        self: *ProcBodyBuilder,
-        tuple_ty: checked.CheckedTypeId,
-        items: []const checked.CheckedPatternId,
-        source: LIR.LocalId,
-        reassigned_binders: []const checked.PatternBinderId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const scope = try self.enterNominalWrapperFormalScopes(self.repForType(tuple_ty));
-        defer self.dropNominalBackingFormalScope(scope);
-        var continuation = next;
-        var index = items.len;
-        while (index > 0) {
-            index -= 1;
-            if (index > std.math.maxInt(u16)) {
-                boxyLowerInvariant("tuple reassign pattern index exceeded LIR field index range");
-            }
-            continuation = try self.bindReassignFieldPattern(tuple_ty, items[index], source, @intCast(index), reassigned_binders, continuation);
         }
         return try self.leaveNominalBackingFormalScope(scope, continuation);
     }
@@ -27686,51 +28351,6 @@ const ProcBodyBuilder = struct {
         return try self.leaveNominalBackingFormalScope(scope, try self.prependRecordFieldReadSource(field_read, continuation));
     }
 
-    fn bindReassignRecordPattern(
-        self: *ProcBodyBuilder,
-        record_ty: checked.CheckedTypeId,
-        destructs: []const checked.CheckedRecordDestruct,
-        source: LIR.LocalId,
-        reassigned_binders: []const checked.PatternBinderId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (!self.recordDestructureNeedsSource(destructs)) return next;
-        const scope = try self.enterNominalWrapperFormalScopes(self.repForType(record_ty));
-        defer self.dropNominalBackingFormalScope(scope);
-        const field_read = try self.recordFieldReadSourceForType(source, record_ty);
-        var continuation = next;
-        var index = destructs.len;
-        while (index > 0) {
-            index -= 1;
-            const destruct = destructs[index];
-            switch (destruct.kind) {
-                .required,
-                .sub_pattern,
-                => |child_pattern| {
-                    continuation = try self.bindReassignRecordFieldPattern(
-                        child_pattern,
-                        field_read,
-                        self.recordFieldAccessInfo(self.repForType(record_ty), self.module, destruct.label),
-                        reassigned_binders,
-                        continuation,
-                    );
-                },
-                .rest => |child_pattern| {
-                    if (!self.patternIsIgnored(child_pattern)) {
-                        continuation = try self.bindReassignRecordRestPattern(
-                            child_pattern,
-                            field_read,
-                            record_ty,
-                            reassigned_binders,
-                            continuation,
-                        );
-                    }
-                },
-            }
-        }
-        return try self.leaveNominalBackingFormalScope(scope, try self.prependRecordFieldReadSource(field_read, continuation));
-    }
-
     fn bindIrrefutableListPattern(
         self: *ProcBodyBuilder,
         list: anytype,
@@ -27743,24 +28363,6 @@ const ProcBodyBuilder = struct {
         if (list.rest) |rest| {
             if (rest.pattern) |rest_pattern| {
                 return try self.bindPatternFromLocal(rest_pattern, source, next);
-            }
-        }
-        return next;
-    }
-
-    fn bindReassignIrrefutableListPattern(
-        self: *ProcBodyBuilder,
-        list: anytype,
-        source: LIR.LocalId,
-        reassigned_binders: []const checked.PatternBinderId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (list.patterns.len != 0) {
-            boxyLowerInvariant("refutable list pattern reached boxy irrefutable reassign binding");
-        }
-        if (list.rest) |rest| {
-            if (rest.pattern) |rest_pattern| {
-                return try self.bindReassignPatternFromLocal(rest_pattern, source, reassigned_binders, next);
             }
         }
         return next;
@@ -27791,20 +28393,6 @@ const ProcBodyBuilder = struct {
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const rest_local = try self.addFrameLocalForType(pattern.ty);
         const bound = try self.bindPatternFromLocal(pattern_id, rest_local, next);
-        return try self.lowerRecordRestValueInto(rest_local, source, source_record_ty, pattern.ty, bound);
-    }
-
-    fn bindReassignRecordRestPattern(
-        self: *ProcBodyBuilder,
-        pattern_id: checked.CheckedPatternId,
-        source: RecordFieldReadSource,
-        source_record_ty: checked.CheckedTypeId,
-        reassigned_binders: []const checked.PatternBinderId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        const rest_local = try self.addFrameLocalForType(pattern.ty);
-        const bound = try self.bindReassignPatternFromLocal(pattern_id, rest_local, reassigned_binders, next);
         return try self.lowerRecordRestValueInto(rest_local, source, source_record_ty, pattern.ty, bound);
     }
 
@@ -27889,20 +28477,6 @@ const ProcBodyBuilder = struct {
         return try self.assignRepresentationBoundary(backing_local, source, self.repForType(backing.ty), self.repForType(nominal_ty), bound);
     }
 
-    fn bindReassignNominalPattern(
-        self: *ProcBodyBuilder,
-        nominal_ty: checked.CheckedTypeId,
-        backing_pattern: checked.CheckedPatternId,
-        source: LIR.LocalId,
-        reassigned_binders: []const checked.PatternBinderId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const backing = self.module.checked_bodies.pattern(backing_pattern);
-        const backing_local = try self.addFrameLocalForType(backing.ty);
-        const bound = try self.bindReassignPatternFromLocal(backing_pattern, backing_local, reassigned_binders, next);
-        return try self.assignRepresentationBoundary(backing_local, source, self.repForType(backing.ty), self.repForType(nominal_ty), bound);
-    }
-
     fn bindFieldPattern(
         self: *ProcBodyBuilder,
         tuple_ty: checked.CheckedTypeId,
@@ -27945,108 +28519,69 @@ const ProcBodyBuilder = struct {
         );
     }
 
-    fn bindReassignFieldPattern(
-        self: *ProcBodyBuilder,
-        tuple_ty: checked.CheckedTypeId,
-        pattern_id: checked.CheckedPatternId,
-        source: LIR.LocalId,
-        field_index: u16,
-        reassigned_binders: []const checked.PatternBinderId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (self.patternIsIgnored(pattern_id)) return next;
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        const field_rep = self.repForType(pattern.ty);
-        const field_local = try self.addFrameLocalForRepWithFreshDescriptor(field_rep);
-        const bound = try self.bindReassignPatternFromLocal(pattern_id, field_local, reassigned_binders, next);
-        return try self.lowerTupleFieldReadInto(
-            field_local,
-            source,
-            self.repForType(tuple_ty),
-            field_index,
-            bound,
-        );
-    }
-
-    fn bindReassignRecordFieldPattern(
-        self: *ProcBodyBuilder,
-        pattern_id: checked.CheckedPatternId,
-        field_read: RecordFieldReadSource,
-        access: RecordFieldAccessInfo,
-        reassigned_binders: []const checked.PatternBinderId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (self.patternIsIgnored(pattern_id)) return next;
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        const field_local = try self.addFrameLocalForType(pattern.ty);
-        const bound = try self.bindReassignPatternFromLocal(pattern_id, field_local, reassigned_binders, next);
-        return try self.lowerRecordFieldReadInto(
-            field_local,
-            self.repForType(pattern.ty),
-            field_read,
-            access,
-            bound,
-        );
-    }
-
+    /// Initialize the locals `root` binds as uninitialized, before `next`.
+    /// Each binding wraps the statements after it, so bindings are visited
+    /// in reverse source order.
     fn lowerUninitializedPattern(
         self: *ProcBodyBuilder,
-        pattern_id: checked.CheckedPatternId,
+        root: checked.CheckedPatternId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        return switch (pattern.data) {
-            .assign => try self.initUninitializedLocal(self.localForPattern(pattern_id), next),
-            .as => |as| blk: {
-                const inner = try self.lowerUninitializedPattern(as.pattern, next);
-                break :blk try self.initUninitializedLocal(self.localForBinder(as.binder), inner);
-            },
-            .tuple => |items| blk: {
-                var continuation = next;
-                var index = items.len;
-                while (index > 0) {
-                    index -= 1;
-                    continuation = try self.lowerUninitializedPattern(items[index], continuation);
-                }
-                break :blk continuation;
-            },
-            .record_destructure => |destructs| blk: {
-                var continuation = next;
-                var index = destructs.len;
-                while (index > 0) {
-                    index -= 1;
-                    const child = switch (destructs[index].kind) {
+        const allocator = self.parent.allocator;
+        const Action = union(enum) {
+            pattern: checked.CheckedPatternId,
+            binder: checked.PatternBinderId,
+        };
+        var actions: std.ArrayList(Action) = .empty;
+        defer actions.deinit(allocator);
+        try actions.append(allocator, .{ .pattern = root });
+        var continuation = next;
+        while (actions.pop()) |action| {
+            const pattern_id = switch (action) {
+                .binder => |binder| {
+                    continuation = try self.initUninitializedLocal(self.localForBinder(binder), continuation);
+                    continue;
+                },
+                .pattern => |pattern_id| pattern_id,
+            };
+            const pattern = self.module.checked_bodies.pattern(pattern_id);
+            switch (pattern.data) {
+                .assign => continuation = try self.initUninitializedLocal(self.localForPattern(pattern_id), continuation),
+                .as => |as| {
+                    try actions.append(allocator, .{ .binder = as.binder });
+                    try actions.append(allocator, .{ .pattern = as.pattern });
+                },
+                .tuple => |items| for (items) |item| try actions.append(allocator, .{ .pattern = item }),
+                .record_destructure => |destructs| for (destructs) |destruct| {
+                    const child = switch (destruct.kind) {
                         .required,
                         .sub_pattern,
                         .rest,
                         => |child_pattern| child_pattern,
                     };
-                    continuation = try self.lowerUninitializedPattern(child, continuation);
-                }
-                break :blk continuation;
-            },
-            .nominal => |nominal| try self.lowerUninitializedPattern(nominal.backing_pattern, next),
-            .list => |list| blk: {
-                if (list.patterns.len != 0) {
-                    boxyLowerInvariant("refutable list pattern reached boxy uninitialized binding");
-                }
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| {
-                        break :blk try self.lowerUninitializedPattern(rest_pattern, next);
+                    try actions.append(allocator, .{ .pattern = child });
+                },
+                .nominal => |nominal| try actions.append(allocator, .{ .pattern = nominal.backing_pattern }),
+                .list => |list| {
+                    if (list.patterns.len != 0) {
+                        boxyLowerInvariant("refutable list pattern reached boxy uninitialized binding");
                     }
-                }
-                break :blk next;
-            },
-            .underscore,
-            .numeral_literal,
-            .str_literal,
-            .str_interpolation,
-            => next,
-            .applied_tag,
-            .runtime_error,
-            .pending,
-            => boxyLowerInvariant("refutable or pending checked pattern reached boxy uninitialized binding"),
-        };
+                    if (list.rest) |rest| {
+                        if (rest.pattern) |rest_pattern| try actions.append(allocator, .{ .pattern = rest_pattern });
+                    }
+                },
+                .underscore,
+                .numeral_literal,
+                .str_literal,
+                .str_interpolation,
+                => {},
+                .applied_tag,
+                .runtime_error,
+                .pending,
+                => boxyLowerInvariant("refutable or pending checked pattern reached boxy uninitialized binding"),
+            }
+        }
+        return continuation;
     }
 
     fn initUninitializedLocal(
@@ -28815,64 +29350,86 @@ const ProcBodyBuilder = struct {
         }
     }
 
+    /// Collect, in pre-order, the hidden descriptor parameters `root`
+    /// carries.
     fn collectRuntimeHiddenDescriptorParamsForRep(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         pending: *std.ArrayList(Plan.HiddenDescriptorParam),
         seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
         seen_descs: *collections.DenseMap(Plan.DescriptorRequirementId, void),
     ) Allocator.Error!void {
-        const rep_entry = try seen_reps.getOrPut(rep_id);
-        if (rep_entry.found_existing) return;
+        const allocator = self.parent.allocator;
+        var reps: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer reps.deinit(allocator);
+        try reps.append(allocator, root);
+        while (reps.pop()) |rep_id| {
+            const rep_entry = try seen_reps.getOrPut(rep_id);
+            if (rep_entry.found_existing) continue;
 
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor) |desc| {
-            const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
-            const identity_desc = self.parent.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
-            const desc_entry = try seen_descs.getOrPut(identity_desc);
-            if (!desc_entry.found_existing) {
-                try pending.append(self.parent.allocator, .{
-                    .source_type = rep.source_type,
-                    .rep = rep_id,
-                    .desc = desc,
-                });
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.descriptor) |desc| {
+                const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
+                const identity_desc = self.parent.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
+                const desc_entry = try seen_descs.getOrPut(identity_desc);
+                if (!desc_entry.found_existing) {
+                    try pending.append(allocator, .{
+                        .source_type = rep.source_type,
+                        .rep = rep_id,
+                        .desc = desc,
+                    });
+                }
             }
-        }
 
-        if (rep.kind == .erased_callable) return;
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (!self.parent.plan.childCarriesHiddenDescriptor(rep_id, child)) continue;
-            try self.collectRuntimeHiddenDescriptorParamsForRep(child.rep, pending, seen_reps, seen_descs);
+            if (rep.kind == .erased_callable) continue;
+            const children = self.parent.plan.childSlice(rep.children);
+            var index = children.len;
+            while (index > 0) {
+                index -= 1;
+                if (!self.parent.plan.childCarriesHiddenDescriptor(rep_id, children[index])) continue;
+                try reps.append(allocator, children[index].rep);
+            }
         }
     }
 
+    /// Collect, in pre-order, the hidden descriptor parameters `root`
+    /// carries.
     fn collectHiddenDescriptorParamsForRep(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         pending: *std.ArrayList(Plan.HiddenDescriptorParam),
         seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
         seen_descs: *collections.DenseMap(Plan.DescriptorRequirementId, void),
     ) Allocator.Error!void {
-        const rep_entry = try seen_reps.getOrPut(rep_id);
-        if (rep_entry.found_existing) return;
+        const allocator = self.parent.allocator;
+        var reps: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer reps.deinit(allocator);
+        try reps.append(allocator, root);
+        while (reps.pop()) |rep_id| {
+            const rep_entry = try seen_reps.getOrPut(rep_id);
+            if (rep_entry.found_existing) continue;
 
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor) |desc| {
-            const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
-            const identity_desc = self.parent.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
-            const desc_entry = try seen_descs.getOrPut(identity_desc);
-            if (!desc_entry.found_existing) {
-                try pending.append(self.parent.allocator, .{
-                    .source_type = rep.source_type,
-                    .rep = rep_id,
-                    .desc = desc,
-                });
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.descriptor) |desc| {
+                const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
+                const identity_desc = self.parent.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
+                const desc_entry = try seen_descs.getOrPut(identity_desc);
+                if (!desc_entry.found_existing) {
+                    try pending.append(allocator, .{
+                        .source_type = rep.source_type,
+                        .rep = rep_id,
+                        .desc = desc,
+                    });
+                }
             }
-        }
 
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (self.parent.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
-            try self.collectHiddenDescriptorParamsForRep(child.rep, pending, seen_reps, seen_descs);
+            const children = self.parent.plan.childSlice(rep.children);
+            var index = children.len;
+            while (index > 0) {
+                index -= 1;
+                if (self.parent.plan.childIsSharedBackingTemplate(rep_id, children[index])) continue;
+                try reps.append(allocator, children[index].rep);
+            }
         }
     }
 
@@ -28888,10 +29445,13 @@ const ProcBodyBuilder = struct {
         try self.collectHiddenDescriptorParamsForRep(rep_id, pending, &seen_reps, &seen_descs);
     }
 
+    /// Collect, in pre-order, the hidden descriptor arguments a dictionary
+    /// call passes for the worker representation `root_worker` at the call
+    /// representation `root_call`.
     fn collectDictionaryCallHiddenDescriptorArgs(
         self: *ProcBodyBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        call_rep_id: Plan.TypeRepId,
+        root_worker: Plan.TypeRepId,
+        root_call: Plan.TypeRepId,
         source_value_rep: Plan.TypeRepId,
         source_arg_index: ?u32,
         params: []const Plan.HiddenDescriptorParam,
@@ -28900,86 +29460,95 @@ const ProcBodyBuilder = struct {
         seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
         seen_descriptor_reps: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!void {
-        const rep_entry = try seen_reps.getOrPut(worker_rep_id);
-        if (rep_entry.found_existing) return;
+        const allocator = self.parent.allocator;
+        var pairs: std.ArrayList([2]Plan.TypeRepId) = .empty;
+        defer pairs.deinit(allocator);
+        try pairs.append(allocator, .{ root_worker, root_call });
+        while (pairs.pop()) |pair| {
+            const worker_rep_id = pair[0];
+            const call_rep_id = pair[1];
+            const rep_entry = try seen_reps.getOrPut(worker_rep_id);
+            if (rep_entry.found_existing) continue;
 
-        const worker_rep = self.parent.plan.representations.items[@intFromEnum(worker_rep_id)];
-        const call_rep = self.parent.plan.representations.items[@intFromEnum(call_rep_id)];
+            const worker_rep = self.parent.plan.representations.items[@intFromEnum(worker_rep_id)];
+            const call_rep = self.parent.plan.representations.items[@intFromEnum(call_rep_id)];
 
-        if (worker_rep.descriptor) |worker_desc| {
-            const worker_identity = self.repQuery().descriptorArgumentIdentityRep(worker_rep_id);
-            const identity_entry = try seen_descriptor_reps.getOrPut(worker_identity);
-            if (!identity_entry.found_existing) {
-                if (next_param.* >= params.len or params[next_param.*].desc != worker_desc) {
-                    boxyLowerInvariant("boxy dictionary call hidden descriptor order disagreed with method descriptor params");
+            if (worker_rep.descriptor) |worker_desc| {
+                const worker_identity = self.repQuery().descriptorArgumentIdentityRep(worker_rep_id);
+                const identity_entry = try seen_descriptor_reps.getOrPut(worker_identity);
+                if (!identity_entry.found_existing) {
+                    if (next_param.* >= params.len or params[next_param.*].desc != worker_desc) {
+                        boxyLowerInvariant("boxy dictionary call hidden descriptor order disagreed with method descriptor params");
+                    }
+                    next_param.* += 1;
+                    const desc_arg_rep_id = self.repQuery().descriptorArgumentIdentityRep(call_rep_id);
+                    const desc_arg_rep = self.parent.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
+                    try pending.append(allocator, .{
+                        .worker_desc = worker_desc,
+                        .worker_rep = worker_rep_id,
+                        .source_type = desc_arg_rep.source_type,
+                        .rep = desc_arg_rep_id,
+                        .source_arg_index = source_arg_index,
+                        .source_value_rep = source_value_rep,
+                    });
                 }
-                next_param.* += 1;
-                const desc_arg_rep_id = self.repQuery().descriptorArgumentIdentityRep(call_rep_id);
-                const desc_arg_rep = self.parent.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
-                try pending.append(self.parent.allocator, .{
-                    .worker_desc = worker_desc,
-                    .worker_rep = worker_rep_id,
-                    .source_type = desc_arg_rep.source_type,
-                    .rep = desc_arg_rep_id,
-                    .source_arg_index = source_arg_index,
-                    .source_value_rep = source_value_rep,
-                });
             }
-        }
 
-        if (worker_rep.kind == .erased_callable) return;
+            if (worker_rep.kind == .erased_callable) continue;
+            if (worker_rep.children.len == 0) continue;
 
-        if (worker_rep.children.len == 0) return;
+            // Children align with the structure the call's value stands for.
+            var wrapper_bindings: Plan.CallWrapperBindings = .{};
+            defer wrapper_bindings.deinit(allocator);
+            const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(allocator, worker_rep_id, call_rep_id, &wrapper_bindings);
+            const through_wrapper = structure_call_rep_id != call_rep_id;
+            const structure_rep = self.parent.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+            const children_start = pairs.items.len;
+            defer std.mem.reverse([2]Plan.TypeRepId, pairs.items[children_start..]);
 
-        // Children align with the structure the call's value stands for.
-        var wrapper_bindings: Plan.CallWrapperBindings = .{};
-        defer wrapper_bindings.deinit(self.parent.allocator);
-        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.parent.allocator, worker_rep_id, call_rep_id, &wrapper_bindings);
-        const through_wrapper = structure_call_rep_id != call_rep_id;
-        const structure_rep = self.parent.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+            if (structure_rep.kind == .empty_tag_union) {
+                for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
+                    if (!self.parent.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
+                    if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+                    try pairs.append(allocator, .{ worker_child.rep, call_rep_id });
+                }
+                continue;
+            }
 
-        if (structure_rep.kind == .empty_tag_union) {
-            for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
+            const worker_children = self.parent.plan.childSlice(worker_rep.children);
+            const call_children = self.parent.plan.childSlice(structure_rep.children);
+            for (worker_children) |worker_child| {
                 if (!self.parent.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
                 if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-            }
-            return;
-        }
-
-        const worker_children = self.parent.plan.childSlice(worker_rep.children);
-        const call_children = self.parent.plan.childSlice(structure_rep.children);
-        for (worker_children) |worker_child| {
-            if (!self.parent.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
-            if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
-                const row_target = if (structure_row_target == structure_call_rep_id)
-                    call_rep_id
-                else
-                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, row_target, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-                continue;
-            }
-            if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-                continue;
-            }
-            if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |call_backing| {
-                const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(call_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |call_child| {
-                    try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
+                if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                    const row_target = if (structure_row_target == structure_call_rep_id)
+                        call_rep_id
+                    else
+                        Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
+                    try pairs.append(allocator, .{ worker_child.rep, row_target });
                     continue;
                 }
+                if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
+                    try pairs.append(allocator, .{ worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep) });
+                    continue;
+                }
+                if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |call_backing| {
+                    const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(call_backing)].children);
+                    if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |call_child| {
+                        try pairs.append(allocator, .{ worker_child.rep, call_child.rep });
+                        continue;
+                    }
+                }
+                if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
+                    try pairs.append(allocator, .{ worker_child.rep, call_rep_id });
+                    continue;
+                }
+                if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor != null) {
+                    try pairs.append(allocator, .{ worker_child.rep, call_rep_id });
+                    continue;
+                }
+                boxyLowerInvariant("boxy dictionary call hidden descriptor mapping saw mismatched child roles");
             }
-            if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-                continue;
-            }
-            if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor != null) {
-                try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
-                continue;
-            }
-            boxyLowerInvariant("boxy dictionary call hidden descriptor mapping saw mismatched child roles");
         }
     }
 
@@ -29179,19 +29748,90 @@ const ProcBodyBuilder = struct {
         return try self.parent.addDescriptorReadPath(read_path.items);
     }
 
+    /// A representation whose descriptor read steps are being searched, in
+    /// child order.
+    const ReadPathFrame = struct {
+        rep_id: Plan.TypeRepId,
+        /// Whether a step toward this frame's current child is on the path.
+        stepped: bool = false,
+        kind: union(enum) {
+            tag: struct {
+                tag_rep_id: Plan.TypeRepId,
+                /// The committed tag layout; a zero-sized union has none.
+                tag_layout: ?layout.Layout,
+                variant: usize = 0,
+                payload: usize = 0,
+                ext_index: usize = 0,
+            },
+            box: struct { visited: bool = false },
+            nested: struct { slots: []ProcedureBuilder.NestedDescriptorSlot, position: usize = 0 },
+        },
+    };
+
+    /// Find the first read path, in child order, from `root` to
+    /// `target_rep_id`'s descriptor. `read_path` holds the steps taken;
+    /// `active` holds the representations on the path, so a recursive type
+    /// is not re-entered.
     fn findDescriptorReadPath(
         self: *ProcBodyBuilder,
-        current_rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         target_rep_id: Plan.TypeRepId,
         read_path: *std.ArrayList(DescriptorReadStep),
         active: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!bool {
-        const current_rep_identity = self.descriptorStorageRep(current_rep_id);
+        const allocator = self.parent.allocator;
+        var frames: std.ArrayList(ReadPathFrame) = .empty;
+        defer {
+            for (frames.items) |frame| {
+                _ = active.remove(frame.rep_id);
+                switch (frame.kind) {
+                    .tag, .box => {},
+                    .nested => |nested| allocator.free(nested.slots),
+                }
+            }
+            frames.deinit(allocator);
+        }
+        if (try self.enterReadPath(root, target_rep_id, &frames, active)) |found| return found;
+        while (frames.items.len != 0) {
+            const top = &frames.items[frames.items.len - 1];
+            if (top.stepped) {
+                read_path.items.len -= 1;
+                top.stepped = false;
+            }
+            const next = try self.nextReadPathStep(top) orelse {
+                var done = frames.pop().?;
+                _ = active.remove(done.rep_id);
+                switch (done.kind) {
+                    .tag, .box => {},
+                    .nested => |*nested| allocator.free(nested.slots),
+                }
+                continue;
+            };
+            try read_path.append(allocator, next.step);
+            top.stepped = true;
+            if (try self.enterReadPath(next.rep, target_rep_id, &frames, active)) |found| {
+                if (found) return true;
+            }
+        }
+        return false;
+    }
+
+    /// Whether `rep_id` is the target (true) or already on the path (false);
+    /// otherwise null, with its frame pushed.
+    fn enterReadPath(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        target_rep_id: Plan.TypeRepId,
+        frames: *std.ArrayList(ReadPathFrame),
+        active: *collections.DenseMap(Plan.TypeRepId, void),
+    ) Allocator.Error!?bool {
+        const allocator = self.parent.allocator;
+        const current_rep_identity = self.descriptorStorageRep(rep_id);
         if (current_rep_identity == target_rep_id) return true;
 
         const active_entry = try active.getOrPut(current_rep_identity);
         if (active_entry.found_existing) return false;
-        defer _ = active.remove(current_rep_identity);
+        errdefer _ = active.remove(current_rep_identity);
 
         if (self.tagVariantRepForBoundary(current_rep_identity)) |tag_rep_id| {
             const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
@@ -29204,7 +29844,6 @@ const ProcBodyBuilder = struct {
                 .zst => null,
                 .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy descriptor read_path tag had a non-tag payload layout"),
             };
-
             if (tag_layout) |layout_value| {
                 if (layout_value.tag != .tag_union) {
                     boxyLowerInvariant("boxy descriptor read_path tag box had a non-tag payload");
@@ -29213,94 +29852,95 @@ const ProcBodyBuilder = struct {
                 if (tag_info.variants.len < variants.len) {
                     boxyLowerInvariant("boxy descriptor read_path tag layout had too few variants");
                 }
-                for (variants, 0..) |variant, variant_index| {
-                    if (try self.findDescriptorReadPathInTagPayloads(
-                        variant,
-                        tag_info.variants.get(variant_index).payload_layout,
-                        target_rep_id,
-                        read_path,
-                        active,
-                    )) return true;
-                }
-            } else {
-                if (variants.len != 1) {
-                    boxyLowerInvariant("boxy zero-sized tag descriptor read_path had multiple variants");
-                }
-                if (try self.findDescriptorReadPathInTagPayloads(
-                    variants[0],
-                    .zst,
-                    target_rep_id,
-                    read_path,
-                    active,
-                )) return true;
+            } else if (variants.len != 1) {
+                boxyLowerInvariant("boxy zero-sized tag descriptor read_path had multiple variants");
             }
-
-            for (self.parent.plan.childSlice(tag_rep.children)) |child| {
-                if (child.role != .tag_ext) continue;
-                const ext_identity = self.descriptorStorageRep(child.rep);
-                const ext_rep = self.parent.plan.representations.items[@intFromEnum(ext_identity)];
-                if (ext_identity == tag_rep_id or ext_rep.kind == .empty_tag_union) continue;
-                try read_path.append(self.parent.allocator, .tag_ext);
-                if (try self.findDescriptorReadPath(child.rep, target_rep_id, read_path, active)) return true;
-                read_path.items.len -= 1;
-            }
-            return false;
+            try frames.append(allocator, .{ .rep_id = current_rep_identity, .kind = .{ .tag = .{ .tag_rep_id = tag_rep_id, .tag_layout = tag_layout } } });
+            return null;
         }
 
         const current_rep = self.parent.plan.representations.items[@intFromEnum(current_rep_identity)];
         if (current_rep.kind == .box and current_rep.declared_fields.len == 0) {
-            // A Box payload read is its own descriptor operation: Box
-            // descriptors are box-self or payload-direct.
-            const payload = self.parent.repQuery().requiredSingleChild(current_rep_identity, .box_payload);
-            try read_path.append(self.parent.allocator, .{ .box_payload = self.workerRuntimeLayoutForRep(current_rep_identity).layoutIdx() });
-            if (try self.findDescriptorReadPath(payload.rep, target_rep_id, read_path, active)) return true;
-            read_path.items.len -= 1;
-            return false;
+            try frames.append(allocator, .{ .rep_id = current_rep_identity, .kind = .{ .box = .{} } });
+            return null;
         }
 
         var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
-        defer slots.deinit(self.parent.allocator);
+        defer slots.deinit(allocator);
         try self.parent.appendNestedDescriptorSlots(
             current_rep_identity,
             self.parent.descriptorPayloadLayoutForRep(current_rep_identity),
             &slots,
         );
-        for (slots.items, 0..) |slot, position| {
-            try read_path.append(self.parent.allocator, .{ .nested = @intCast(position) });
-            if (try self.findDescriptorReadPath(self.parent.nestedDescriptorSlotDescRep(slot), target_rep_id, read_path, active)) return true;
-            read_path.items.len -= 1;
-        }
-        return false;
+        const owned_slots = try slots.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_slots);
+        try frames.append(allocator, .{ .rep_id = current_rep_identity, .kind = .{ .nested = .{ .slots = owned_slots } } });
+        return null;
     }
 
-    fn findDescriptorReadPathInTagPayloads(
-        self: *ProcBodyBuilder,
-        variant: Plan.TagVariant,
-        variant_payload_layout: layout.Idx,
-        target_rep_id: Plan.TypeRepId,
-        read_path: *std.ArrayList(DescriptorReadStep),
-        active: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!bool {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        for (payloads, 0..) |payload, payload_index| {
-            const field_layout = self.parent.tagVariantPayloadFieldLayout(
-                variant_payload_layout,
-                payload_index,
-                payloads.len,
-            );
-            const payload_rep = self.parent.tagPayloadStorageDescRepForLayout(
-                payload.rep,
-                field_layout,
-                true,
-            ) orelse continue;
-            try read_path.append(self.parent.allocator, .{ .tag_payload = .{
-                .tag_name = try self.lirTagNameForVariant(variant),
-                .payload_index = @intCast(payload_index),
-            } });
-            if (try self.findDescriptorReadPath(payload_rep, target_rep_id, read_path, active)) return true;
-            read_path.items.len -= 1;
+    /// The next step a read path search tries from `frame`, or null once
+    /// every step was tried.
+    fn nextReadPathStep(self: *ProcBodyBuilder, frame: *ReadPathFrame) Allocator.Error!?struct { step: DescriptorReadStep, rep: Plan.TypeRepId } {
+        switch (frame.kind) {
+            .tag => |*tag| {
+                const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag.tag_rep_id)];
+                const variants = self.parent.plan.tagVariantSlice(tag_rep.tag_variants);
+                const variant_count: usize = if (tag.tag_layout == null) 1 else variants.len;
+                while (tag.variant < variant_count) {
+                    const variant = variants[tag.variant];
+                    const variant_payload_layout: layout.Idx = if (tag.tag_layout) |layout_value|
+                        self.parent.result.layouts.getTagUnionInfo(layout_value).variants.get(tag.variant).payload_layout
+                    else
+                        .zst;
+                    const payloads = self.parent.plan.childSlice(variant.payloads);
+                    while (tag.payload < payloads.len) {
+                        const payload_index = tag.payload;
+                        tag.payload += 1;
+                        const field_layout = self.parent.tagVariantPayloadFieldLayout(
+                            variant_payload_layout,
+                            payload_index,
+                            payloads.len,
+                        );
+                        const payload_rep = self.parent.tagPayloadStorageDescRepForLayout(
+                            payloads[payload_index].rep,
+                            field_layout,
+                            true,
+                        ) orelse continue;
+                        return .{ .step = .{ .tag_payload = .{
+                            .tag_name = try self.lirTagNameForVariant(variant),
+                            .payload_index = @intCast(payload_index),
+                        } }, .rep = payload_rep };
+                    }
+                    tag.variant += 1;
+                    tag.payload = 0;
+                }
+                const children = self.parent.plan.childSlice(tag_rep.children);
+                while (tag.ext_index < children.len) {
+                    const child = children[tag.ext_index];
+                    tag.ext_index += 1;
+                    if (child.role != .tag_ext) continue;
+                    const ext_identity = self.descriptorStorageRep(child.rep);
+                    const ext_rep = self.parent.plan.representations.items[@intFromEnum(ext_identity)];
+                    if (ext_identity == tag.tag_rep_id or ext_rep.kind == .empty_tag_union) continue;
+                    return .{ .step = .tag_ext, .rep = child.rep };
+                }
+                return null;
+            },
+            .box => |*box| {
+                if (box.visited) return null;
+                box.visited = true;
+                // A Box payload read is its own descriptor operation: Box
+                // descriptors are box-self or payload-direct.
+                const payload = self.parent.repQuery().requiredSingleChild(frame.rep_id, .box_payload);
+                return .{ .step = .{ .box_payload = self.workerRuntimeLayoutForRep(frame.rep_id).layoutIdx() }, .rep = payload.rep };
+            },
+            .nested => |*nested| {
+                if (nested.position == nested.slots.len) return null;
+                const position = nested.position;
+                nested.position += 1;
+                return .{ .step = .{ .nested = @intCast(position) }, .rep = self.parent.nestedDescriptorSlotDescRep(nested.slots[position]) };
+            },
         }
-        return false;
     }
 
     fn immediateNestedDescriptorIndexForRep(
@@ -30219,12 +30859,13 @@ const ProcBodyBuilder = struct {
 
     fn descriptorMaterializationForKnownRepExcludingLocal(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         excluded_local: ?LIR.LocalId,
     ) Allocator.Error!DescriptorMaterialization {
-        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
-        if (self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, identity_rep)) |actual| {
-            return try self.descriptorMaterializationForKnownRepExcludingLocal(actual, excluded_local);
+        // A bound formal is described by its actual.
+        var identity_rep = self.parent.descriptorIdentityRep(root);
+        while (self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, identity_rep)) |actual| {
+            identity_rep = self.parent.descriptorIdentityRep(actual);
         }
         const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
         // A type-wide binding describes the representation outside the active
@@ -30310,56 +30951,70 @@ const ProcBodyBuilder = struct {
         return .{ .desc = desc, .captures = span };
     }
 
+    /// Whether describing `rep_id` as a template captures a bound
+    /// descriptor local anywhere its template reaches. Which references are
+    /// reached does not depend on visiting order.
     fn descriptorTemplateNeedsCapturesForKnownRep(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!bool {
-        const visited = try self.parent.allocator.alloc(bool, self.parent.plan.representations.items.len);
-        defer self.parent.allocator.free(visited);
+        const allocator = self.parent.allocator;
+        const visited = try allocator.alloc(bool, self.parent.plan.representations.items.len);
+        defer allocator.free(visited);
         @memset(visited, false);
-
-        return self.descriptorTemplateBodyNeedsCaptures(rep_id, visited);
+        var pending: std.ArrayList(TemplateCaptureProbe) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, .{ .body = rep_id });
+        while (pending.pop()) |probe| switch (probe) {
+            .ref => |ref| {
+                const identity_rep = self.parent.descriptorIdentityRep(ref.rep);
+                const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+                if (rep.descriptor) |desc| {
+                    if (ref.parent_desc == null or desc != ref.parent_desc.?) {
+                        if (self.descriptorBindingIsBoundForRep(identity_rep) and
+                            self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return true;
+                    }
+                }
+                try pending.append(allocator, .{ .body = identity_rep });
+            },
+            .body => |body_rep| try self.probeTemplateBodyCaptures(body_rep, visited, &pending),
+        };
+        return false;
     }
 
-    fn descriptorTemplateRefNeedsCaptures(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        parent_desc: ?Plan.DescriptorRequirementId,
-        visited: []bool,
-    ) bool {
-        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
-        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
-        if (rep.descriptor) |desc| {
-            if (parent_desc == null or desc != parent_desc.?) {
-                if (self.descriptorBindingIsBoundForRep(identity_rep) and
-                    self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return true;
-            }
-        }
-        return self.descriptorTemplateBodyNeedsCaptures(identity_rep, visited);
-    }
+    /// One pending step of a template capture probe.
+    const TemplateCaptureProbe = union(enum) {
+        /// A reference to `rep` inside the descriptor for `parent_desc`.
+        ref: struct { rep: Plan.TypeRepId, parent_desc: ?Plan.DescriptorRequirementId },
+        /// The template body describing `rep`.
+        body: Plan.TypeRepId,
+    };
 
-    fn descriptorTemplateBodyNeedsCaptures(
+    /// Queue the references a template body describing `rep_id` makes.
+    fn probeTemplateBodyCaptures(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
         visited: []bool,
-    ) bool {
+        pending: *std.ArrayList(TemplateCaptureProbe),
+    ) Allocator.Error!void {
+        const allocator = self.parent.allocator;
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep_index = @intFromEnum(identity_rep);
-        if (visited[rep_index]) return false;
+        if (visited[rep_index]) return;
         visited[rep_index] = true;
 
         const rep = self.parent.plan.representations.items[rep_index];
         var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
         while (substitutions.next()) |substitution| {
             const formal_rep = substitution.formal_rep orelse continue;
-            if (substitution.actual_rep != formal_rep and
-                self.descriptorTemplateRefNeedsCaptures(substitution.actual_rep, rep.descriptor, visited)) return true;
+            if (substitution.actual_rep != formal_rep) try pending.append(allocator, .{ .ref = .{ .rep = substitution.actual_rep, .parent_desc = rep.descriptor } });
         }
         const current_desc = rep.descriptor;
         const rep_layout = self.parent.layout_plan.rep_layouts[rep_index];
         const payload_layout = rep_layout.descriptor_payload_layout orelse rep_layout.worker.layoutIdx();
         if (self.parent.descriptorBackingShapeRep(identity_rep)) |backing_rep| {
-            return self.descriptorTemplateBodyNeedsCaptures(backing_rep, visited);
+            try pending.append(allocator, .{ .body = backing_rep });
+            return;
         }
 
         if (rep.declared_fields.len != 0) {
@@ -30367,7 +31022,7 @@ const ProcBodyBuilder = struct {
                 const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
                 const force_field = self.parent.layoutIsBoxStorage(field_layout);
                 const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(field.rep, field_layout, force_field) orelse continue;
-                if (self.descriptorTemplateRefNeedsCaptures(desc_rep, current_desc, visited)) return true;
+                try pending.append(allocator, .{ .ref = .{ .rep = desc_rep, .parent_desc = current_desc } });
             }
         } else {
             var record_field_index: usize = 0;
@@ -30386,13 +31041,13 @@ const ProcBodyBuilder = struct {
                 };
                 const force_desc = child.role == .box_payload or self.parent.layoutIsBoxStorage(field_layout);
                 const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_desc) orelse continue;
-                if (self.descriptorTemplateRefNeedsCaptures(desc_rep, current_desc, visited)) return true;
+                try pending.append(allocator, .{ .ref = .{ .rep = desc_rep, .parent_desc = current_desc } });
             }
         }
 
         const tag_rep_id = self.parent.tagVariantRepForDesc(identity_rep);
         const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-        if (tag_rep.kind == .bool_tag_union) return false;
+        if (tag_rep.kind == .bool_tag_union) return;
 
         // A row with no named variants still captures its extension descriptor,
         // independently of the storage layout used for its dynamic value.
@@ -30404,17 +31059,18 @@ const ProcBodyBuilder = struct {
         }
         if (found_ext) |ext_rep_id| {
             const ext_rep = self.parent.plan.representations.items[@intFromEnum(ext_rep_id)];
-            if (ext_rep_id != tag_rep_id and ext_rep.kind != .empty_tag_union and
-                self.descriptorTemplateRefNeedsCaptures(ext_rep_id, current_desc, visited)) return true;
+            if (ext_rep_id != tag_rep_id and ext_rep.kind != .empty_tag_union) {
+                try pending.append(allocator, .{ .ref = .{ .rep = ext_rep_id, .parent_desc = current_desc } });
+            }
         }
 
         const layout_value = self.parent.result.layouts.getLayout(payload_layout);
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
-            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return false,
+            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return,
         };
-        if (tag_layout.tag != .tag_union) return false;
+        if (tag_layout.tag != .tag_union) return;
         const tag_info = self.parent.result.layouts.getTagUnionInfo(tag_layout);
 
         for (self.parent.plan.tagVariantSlice(tag_rep.tag_variants), 0..) |variant, variant_index| {
@@ -30423,11 +31079,9 @@ const ProcBodyBuilder = struct {
             for (payloads, 0..) |child, payload_index| {
                 const field_layout = self.parent.tagVariantPayloadFieldLayout(variant_payload_layout, payload_index, payloads.len);
                 const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(child.rep, field_layout, true) orelse continue;
-                if (self.descriptorTemplateRefNeedsCaptures(desc_rep, current_desc, visited)) return true;
+                try pending.append(allocator, .{ .ref = .{ .rep = desc_rep, .parent_desc = current_desc } });
             }
         }
-
-        return false;
     }
 
     fn descriptorMaterializationForSourceRep(
@@ -30585,6 +31239,75 @@ const ProcBodyBuilder = struct {
         context.env = scope.env;
     }
 
+    // A template descriptor is built from references to its components'
+    // descriptors, and components follow type nesting, so each descriptor
+    // still waiting on a component's reference is a frame on one heap-backed
+    // stack. Frames reserve descriptor ids and append spans, names, and
+    // method slots in the order a direct recursive build would.
+
+    /// A template descriptor under construction.
+    const TemplateDescFrame = struct {
+        rep_id: Plan.TypeRepId,
+        desc_id: LIR.BoxyTypeDescId,
+        /// The template bindings this descriptor's descent made.
+        scope: DescriptorTemplateScope,
+        current_desc: ?Plan.DescriptorRequirementId,
+        payload_layout: layout.Idx,
+        phase: enum {
+            nested_begin,
+            nested,
+            tag_begin,
+            tag_ext_probe,
+            tag_payloads,
+            tag_ext,
+            fields,
+            inspect_hidden,
+            inspect_arg_begin,
+            inspect_arg,
+        } = .nested_begin,
+        /// Whether the frame's last requested reference is still due.
+        awaiting: bool = false,
+        nested_descs: LIR.BoxySpan = .{},
+        tag_variants: LIR.BoxySpan = .{},
+        tag_ext_desc: ?LIR.BoxyDescRef = null,
+        field_names: LIR.BoxySpan = .{},
+        inspect_method: ?LirProgram.BoxyMethodSlotId = null,
+        inspect_hidden_descs: LIR.BoxySpan = .{},
+        refs: std.ArrayList(LIR.BoxyDescRef) = .empty,
+        slots: std.ArrayList(ProcedureBuilder.NestedDescriptorSlot) = .empty,
+        index: usize = 0,
+        /// The tag variants being described.
+        tag: struct {
+            tag_rep_id: Plan.TypeRepId = undefined,
+            /// A zero-sized union's single variant is described alone.
+            zst: bool = false,
+            has_ext: bool = false,
+            /// Whether the current variant has begun.
+            started: bool = false,
+            variant: usize = 0,
+            payload: usize = 0,
+            name: LIR.BoxyNameId = undefined,
+            entries: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
+            payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
+        } = .{},
+        /// The bindings made for the inspect worker's argument descriptor.
+        inspect_scope: ?DescriptorTemplateScope = null,
+
+        fn deinit(self: *TemplateDescFrame, allocator: Allocator) void {
+            self.refs.deinit(allocator);
+            self.slots.deinit(allocator);
+            self.tag.entries.deinit(allocator);
+            self.tag.payload_descs.deinit(allocator);
+        }
+    };
+
+    const TemplateStep = union(enum) {
+        /// The frame needs the reference for `rep_id` next.
+        request: Plan.TypeRepId,
+        /// The frame finished with this descriptor and was popped.
+        done: LIR.BoxyTypeDescId,
+    };
+
     fn descriptorTemplateRefForRep(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
@@ -30592,9 +31315,80 @@ const ProcBodyBuilder = struct {
         captures: *std.ArrayList(LIR.LocalId),
         context: *DescriptorTemplateContext,
     ) Allocator.Error!LIR.BoxyDescRef {
-        const exact_rep = self.descriptorTemplateExactRep(rep_id, context);
-        if (exact_rep != rep_id) {
-            return try self.descriptorTemplateRefForRep(exact_rep, parent_desc, captures, context);
+        var frames: std.ArrayList(TemplateDescFrame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.deinit(self.parent.allocator);
+            frames.deinit(self.parent.allocator);
+        }
+        errdefer unwindTemplateDescFrames(&frames, context);
+        const first = try self.beginTemplateRef(rep_id, parent_desc, &frames, captures, context);
+        return try self.runTemplateDescFrames(&frames, first, captures, context);
+    }
+
+    fn descriptorTemplateTypeDescForRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        captures: *std.ArrayList(LIR.LocalId),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!LIR.BoxyTypeDescId {
+        var frames: std.ArrayList(TemplateDescFrame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.deinit(self.parent.allocator);
+            frames.deinit(self.parent.allocator);
+        }
+        errdefer unwindTemplateDescFrames(&frames, context);
+        const first: ?LIR.BoxyDescRef = if (try self.beginTemplateTypeDesc(rep_id, &frames, context)) |existing|
+            .{ .static = existing }
+        else
+            null;
+        return (try self.runTemplateDescFrames(&frames, first, captures, context)).static;
+    }
+
+    /// Undo the template bindings of every unfinished descriptor, innermost
+    /// first, as the direct build's scopes would.
+    fn unwindTemplateDescFrames(frames: *std.ArrayList(TemplateDescFrame), context: *DescriptorTemplateContext) void {
+        var index = frames.items.len;
+        while (index > 0) {
+            index -= 1;
+            const frame = frames.items[index];
+            if (frame.inspect_scope) |scope| popDescriptorTemplateExactReps(context, scope);
+            popDescriptorTemplateExactReps(context, frame.scope);
+        }
+    }
+
+    fn runTemplateDescFrames(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(TemplateDescFrame),
+        first: ?LIR.BoxyDescRef,
+        captures: *std.ArrayList(LIR.LocalId),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!LIR.BoxyDescRef {
+        var delivered = first;
+        while (frames.items.len != 0) {
+            const parent_desc = frames.items[frames.items.len - 1].current_desc;
+            switch (try self.stepTemplateDescFrame(frames, delivered, context)) {
+                .request => |rep_id| delivered = try self.beginTemplateRef(rep_id, parent_desc, frames, captures, context),
+                .done => |desc_id| delivered = .{ .static = desc_id },
+            }
+        }
+        return delivered orelse boxyLowerInvariant("boxy descriptor template finished without a reference");
+    }
+
+    /// The reference for `rep_id` when it needs no new descriptor; otherwise
+    /// null, with the frame that builds the descriptor pushed.
+    fn beginTemplateRef(
+        self: *ProcBodyBuilder,
+        root_rep_id: Plan.TypeRepId,
+        parent_desc: ?Plan.DescriptorRequirementId,
+        frames: *std.ArrayList(TemplateDescFrame),
+        captures: *std.ArrayList(LIR.LocalId),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!?LIR.BoxyDescRef {
+        var rep_id = root_rep_id;
+        while (true) {
+            const exact_rep = self.descriptorTemplateExactRep(rep_id, context);
+            if (exact_rep == rep_id) break;
+            rep_id = exact_rep;
         }
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);
         const exact_payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(rep_id);
@@ -30609,9 +31403,7 @@ const ProcBodyBuilder = struct {
             !try self.descriptorTemplateRebindsRep(identity_rep, context);
         if (may_reuse_rep_local) {
             if (context.forced_refs[@intFromEnum(identity_rep)]) |local| {
-                if (context.excluded_local == local) {
-                    return .{ .static = try self.descriptorTemplateTypeDescForRep(rep_id, captures, context) };
-                }
+                if (context.excluded_local == local) return try self.templateStaticRef(rep_id, frames, context);
                 try appendUniqueLocal(self.parent.allocator, captures, local);
                 return .{ .local = local };
             }
@@ -30627,7 +31419,341 @@ const ProcBodyBuilder = struct {
                 }
             }
         };
-        return .{ .static = try self.descriptorTemplateTypeDescForRep(rep_id, captures, context) };
+        return try self.templateStaticRef(rep_id, frames, context);
+    }
+
+    fn templateStaticRef(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        frames: *std.ArrayList(TemplateDescFrame),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!?LIR.BoxyDescRef {
+        const existing = try self.beginTemplateTypeDesc(rep_id, frames, context) orelse return null;
+        return .{ .static = existing };
+    }
+
+    /// The template descriptor of `rep_id` when this environment already
+    /// built it; otherwise null, with the frame that builds it pushed.
+    fn beginTemplateTypeDesc(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        frames: *std.ArrayList(TemplateDescFrame),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!?LIR.BoxyTypeDescId {
+        const scope = try self.pushDescriptorTemplateExactReps(rep_id, context);
+        var scope_owned = true;
+        defer if (scope_owned) popDescriptorTemplateExactReps(context, scope);
+        if (context.root_env == null) context.root_env = context.env;
+        const desc_key = DescriptorTemplateDescKey{ .rep = rep_id, .env = context.env };
+        if (context.ids.get(desc_key)) |existing| return existing;
+
+        const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+        try context.ids.put(desc_key, desc_id);
+        try self.parent.result.boxy_type_descs.append(self.parent.allocator, reserved_boxy_type_desc);
+        try frames.append(self.parent.allocator, .{
+            .rep_id = rep_id,
+            .desc_id = desc_id,
+            .scope = scope,
+            .current_desc = self.parent.plan.representations.items[@intFromEnum(rep_id)].descriptor,
+            .payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(rep_id),
+        });
+        scope_owned = false;
+        return null;
+    }
+
+    /// The row extension a tag representation's template describes, if any.
+    fn templateTagExtRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .bool_tag_union) return null;
+        if (rep.tag_variants.len == 0 and rep.kind != .tag_union and rep.kind != .dynamic) return null;
+
+        var found: ?Plan.TypeRepId = null;
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            if (child.role != .tag_ext) continue;
+            if (found != null) boxyLowerInvariant("boxy descriptor template tag representation had duplicate row extension children");
+            found = child.rep;
+        }
+        const ext_rep_id = found orelse return null;
+        if (ext_rep_id == rep_id) return null;
+        const ext_rep = self.parent.plan.representations.items[@intFromEnum(ext_rep_id)];
+        if (ext_rep.kind == .empty_tag_union) return null;
+        return ext_rep_id;
+    }
+
+    /// The committed tag layout a template descriptor's variants follow.
+    fn templateTagLayout(self: *ProcBodyBuilder, payload_layout: layout.Idx) ?layout.Layout {
+        const layout_value = self.parent.result.layouts.getLayout(payload_layout);
+        const tag_layout = switch (layout_value.tag) {
+            .tag_union => layout_value,
+            .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
+            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
+        };
+        if (tag_layout.tag != .tag_union) return null;
+        return tag_layout;
+    }
+
+    fn stepTemplateDescFrame(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(TemplateDescFrame),
+        delivered: ?LIR.BoxyDescRef,
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!TemplateStep {
+        const allocator = self.parent.allocator;
+        const plan = self.parent.plan;
+        const frame = &frames.items[frames.items.len - 1];
+        var ref: ?LIR.BoxyDescRef = if (frame.awaiting)
+            delivered orelse boxyLowerInvariant("boxy descriptor template frame resumed without its reference")
+        else
+            null;
+        frame.awaiting = false;
+        const rep_id = frame.rep_id;
+        while (true) switch (frame.phase) {
+            .nested_begin => {
+                var shape_rep = rep_id;
+                while (self.parent.descriptorBackingShapeRep(shape_rep)) |backing_rep| shape_rep = backing_rep;
+                frame.phase = .tag_begin;
+                const shape = plan.representations.items[@intFromEnum(shape_rep)];
+                if (try self.parent.staticGeneratedEvidenceNestedDescRefs(shape.kind)) |nested_descs| {
+                    frame.nested_descs = nested_descs;
+                    continue;
+                }
+                const shape_layout = self.parent.descriptorTemplatePayloadLayoutForRep(shape_rep);
+                try self.parent.appendNestedDescriptorSlots(shape_rep, shape_layout, &frame.slots);
+                if (frame.slots.items.len == 0) continue;
+                frame.refs.clearRetainingCapacity();
+                frame.index = 0;
+                frame.phase = .nested;
+            },
+            .nested => {
+                if (ref) |nested| {
+                    try frame.refs.append(allocator, nested);
+                    ref = null;
+                }
+                if (frame.index < frame.slots.items.len) {
+                    const slot = frame.slots.items[frame.index];
+                    frame.index += 1;
+                    frame.awaiting = true;
+                    return .{ .request = self.parent.nestedDescriptorSlotDescRep(slot) };
+                }
+                const start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
+                try self.parent.result.boxy_desc_refs.appendSlice(allocator, frame.refs.items);
+                frame.nested_descs = .{ .start = start, .len = @intCast(frame.refs.items.len) };
+                frame.phase = .tag_begin;
+            },
+            .tag_begin => {
+                frame.phase = .tag_ext;
+                const layout_value = self.parent.result.layouts.getLayout(frame.payload_layout);
+                if (layout_value.tag == .zst) {
+                    const tag_rep_id = self.parent.tagVariantRepForDesc(rep_id);
+                    const variants = plan.tagVariantSlice(plan.representations.items[@intFromEnum(tag_rep_id)].tag_variants);
+                    if (variants.len == 0) continue;
+                    if (variants.len != 1) {
+                        boxyLowerInvariant("zero-sized boxy descriptor template had multiple tag variants");
+                    }
+                    frame.tag.tag_rep_id = tag_rep_id;
+                    frame.tag.zst = true;
+                    frame.phase = .tag_payloads;
+                    continue;
+                }
+                if (self.templateTagLayout(frame.payload_layout) == null) continue;
+                const tag_rep_id = self.parent.tagVariantRepForDesc(rep_id);
+                const rep = plan.representations.items[@intFromEnum(tag_rep_id)];
+                if (rep.kind == .bool_tag_union) {
+                    frame.tag_variants = try self.parent.staticTagVariantsForRep(rep_id, frame.payload_layout);
+                    continue;
+                }
+                if (rep.tag_variants.len == 0) continue;
+                frame.tag.tag_rep_id = tag_rep_id;
+                frame.phase = .tag_ext_probe;
+                if (self.templateTagExtRep(tag_rep_id)) |ext_rep| {
+                    frame.awaiting = true;
+                    return .{ .request = ext_rep };
+                }
+            },
+            .tag_ext_probe => {
+                // Describing the row extension is what adds the layout's
+                // extension variant.
+                frame.tag.has_ext = ref != null;
+                ref = null;
+                const variants = plan.tagVariantSlice(plan.representations.items[@intFromEnum(frame.tag.tag_rep_id)].tag_variants);
+                const tag_info = self.parent.result.layouts.getTagUnionInfo(self.templateTagLayout(frame.payload_layout).?);
+                if (tag_info.variants.len != variants.len + @intFromBool(frame.tag.has_ext)) {
+                    boxyLowerInvariant("boxy descriptor template variant count disagreed with committed layout");
+                }
+                frame.phase = .tag_payloads;
+            },
+            .tag_payloads => {
+                const tag = &frame.tag;
+                const variants = plan.tagVariantSlice(plan.representations.items[@intFromEnum(tag.tag_rep_id)].tag_variants);
+                if (ref) |payload_desc| {
+                    try tag.payload_descs.append(allocator, .{
+                        .payload_index = @intCast(tag.payload - 1),
+                        .desc = payload_desc,
+                    });
+                    ref = null;
+                }
+                while (tag.variant < variants.len) {
+                    const variant = variants[tag.variant];
+                    const payloads = plan.childSlice(variant.payloads);
+                    const variant_payload_layout: layout.Idx = if (tag.zst)
+                        .zst
+                    else
+                        self.parent.result.layouts.getTagUnionInfo(self.templateTagLayout(frame.payload_layout).?).variants.get(tag.variant).payload_layout;
+                    if (!tag.started) {
+                        tag.started = true;
+                        tag.payload_descs.clearRetainingCapacity();
+                        if (!tag.zst) tag.name = try self.parent.result.store.insertBoxyName(self.tagVariantNameText(variant));
+                    }
+                    while (tag.payload < payloads.len) {
+                        const index = tag.payload;
+                        tag.payload += 1;
+                        const field_layout = self.parent.tagVariantPayloadFieldLayout(variant_payload_layout, index, payloads.len);
+                        // Match the static descriptor path: a concrete tag payload may flow
+                        // into a worker whose view of that payload is erased, so the
+                        // descriptor template must be able to capture the runtime payload
+                        // descriptor even when the payload's own representation would not
+                        // otherwise require one.
+                        const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(payloads[index].rep, field_layout, true) orelse continue;
+                        frame.awaiting = true;
+                        return .{ .request = desc_rep };
+                    }
+                    const payload_span: LIR.BoxySpan = if (tag.payload_descs.items.len == 0) .{} else span: {
+                        const start: u32 = @intCast(self.parent.result.boxy_tag_payload_descs.items.len);
+                        try self.parent.result.boxy_tag_payload_descs.appendSlice(allocator, tag.payload_descs.items);
+                        break :span .{ .start = start, .len = @intCast(tag.payload_descs.items.len) };
+                    };
+                    if (tag.zst) {
+                        const name = try self.parent.result.store.insertBoxyName(self.tagVariantNameText(variant));
+                        const start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
+                        try self.parent.result.boxy_tag_variants.append(allocator, .{
+                            .name = name,
+                            .discriminant = 0,
+                            .payload_count = @intCast(payloads.len),
+                            .payload_layout = .zst,
+                            .payload_descs = payload_span,
+                        });
+                        frame.tag_variants = .{ .start = start, .len = 1 };
+                    } else {
+                        try tag.entries.append(allocator, .{
+                            .name = tag.name,
+                            .discriminant = @intCast(tag.variant),
+                            .payload_count = @intCast(payloads.len),
+                            .payload_layout = variant_payload_layout,
+                            .payload_descs = payload_span,
+                        });
+                    }
+                    tag.variant += 1;
+                    tag.payload = 0;
+                    tag.started = false;
+                }
+                if (!tag.zst) {
+                    const start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
+                    try self.parent.result.boxy_tag_variants.appendSlice(allocator, tag.entries.items);
+                    frame.tag_variants = .{ .start = start, .len = @intCast(tag.entries.items.len) };
+                }
+                frame.phase = .tag_ext;
+            },
+            .tag_ext => {
+                if (ref) |ext_desc| {
+                    frame.tag_ext_desc = ext_desc;
+                    ref = null;
+                    frame.phase = .fields;
+                    continue;
+                }
+                if (self.templateTagExtRep(self.parent.tagVariantRepForDesc(rep_id))) |ext_rep| {
+                    frame.awaiting = true;
+                    return .{ .request = ext_rep };
+                }
+                frame.phase = .fields;
+            },
+            .fields => {
+                frame.field_names = try self.parent.staticFieldNamesForRep(rep_id);
+                frame.inspect_method = try self.parent.inspectMethodSlotForRep(rep_id);
+                frame.refs.clearRetainingCapacity();
+                frame.index = 0;
+                frame.phase = .inspect_hidden;
+            },
+            .inspect_hidden => {
+                const args: []const Plan.DirectCallHiddenDescriptorArg = if (plan.inspectMethodForRep(rep_id)) |inspect|
+                    plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)
+                else
+                    &.{};
+                if (ref) |hidden| {
+                    try frame.refs.append(allocator, hidden);
+                    ref = null;
+                }
+                const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+                while (frame.index < args.len) {
+                    const arg = args[frame.index];
+                    frame.index += 1;
+                    // The whole inspected value is described by the descriptor under
+                    // construction.
+                    if (self.parent.descriptorIdentityRep(arg.rep) == identity_rep) {
+                        try frame.refs.append(allocator, .{ .static = frame.desc_id });
+                        continue;
+                    }
+                    frame.awaiting = true;
+                    return .{ .request = arg.rep };
+                }
+                frame.inspect_hidden_descs = if (args.len == 0) .{} else try self.parent.appendStaticHiddenDescRefs(frame.refs.items);
+                frame.phase = .inspect_arg_begin;
+            },
+            .inspect_arg_begin => {
+                const inspect = plan.inspectMethodForRep(rep_id) orelse return try self.finishTemplateDesc(frames, context, .{});
+                if (self.parent.inspectArgumentIsIdentity(inspect)) {
+                    return try self.finishTemplateDesc(frames, context, try self.parent.appendStaticHiddenDescRefs(&.{.{ .static = frame.desc_id }}));
+                }
+                frame.inspect_scope = .{
+                    .bindings_start = context.bindings.items.len,
+                    .env = context.env,
+                };
+                for (plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+                    if (!self.repIsBareDynamic(arg.worker_rep)) continue;
+                    try self.bindDescriptorTemplateExactRep(arg.worker_rep, arg.rep, context);
+                }
+                frame.phase = .inspect_arg;
+                frame.awaiting = true;
+                return .{ .request = self.parent.inspectWorkerArgRep(inspect) };
+            },
+            .inspect_arg => {
+                const arg_ref = ref orelse boxyLowerInvariant("boxy descriptor template inspect argument had no reference");
+                const arg_descs = try self.parent.appendStaticHiddenDescRefs(&.{arg_ref});
+                popDescriptorTemplateExactReps(context, frame.inspect_scope.?);
+                frame.inspect_scope = null;
+                return try self.finishTemplateDesc(frames, context, arg_descs);
+            },
+        };
+    }
+
+    /// Store the finished descriptor and leave its descent's bindings.
+    fn finishTemplateDesc(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(TemplateDescFrame),
+        context: *DescriptorTemplateContext,
+        inspect_arg_descs: LIR.BoxySpan,
+    ) Allocator.Error!TemplateStep {
+        var frame = frames.pop().?;
+        defer frame.deinit(self.parent.allocator);
+        const rep_id = frame.rep_id;
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        const layout_value = self.parent.result.layouts.getLayout(frame.payload_layout);
+        self.parent.result.boxy_type_descs.items[@intFromEnum(frame.desc_id)] = .{
+            .payload_layout = frame.payload_layout,
+            .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
+            .shape = self.parent.descriptorShapeForRep(rep_id),
+            .nested_descs = frame.nested_descs,
+            .tag_variants = frame.tag_variants,
+            .tag_ext_desc = frame.tag_ext_desc,
+            .field_names = frame.field_names,
+            .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
+            .inspect_method = frame.inspect_method,
+            .inspect_hidden_descs = frame.inspect_hidden_descs,
+            .inspect_arg_descs = inspect_arg_descs,
+            .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
+            .debug_checked_type = rep.source_type.ty,
+        };
+        popDescriptorTemplateExactReps(context, frame.scope);
+        return .{ .done = frame.desc_id };
     }
 
     /// Whether describing `rep_id` here reads a formal that this template's
@@ -30639,144 +31765,37 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!bool {
         const root_env = context.root_env orelse return false;
         if (context.env == root_env or context.bindings.items.len == 0) return false;
-        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        // Which representations the walk reaches depends only on each
+        // representation, so the answer does not depend on visiting order.
+        const allocator = self.parent.allocator;
+        var seen = collections.DenseMap(Plan.TypeRepId, void).init(allocator);
         defer seen.deinit();
-        return try self.descriptorTemplateRepReadsBoundFormal(rep_id, context, &seen);
-    }
-
-    fn descriptorTemplateRepReadsBoundFormal(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        context: *const DescriptorTemplateContext,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!bool {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return false;
-        for (context.bindings.items) |binding| {
-            if (binding.formal == rep_id) return true;
-        }
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, rep_id);
         const plan = self.parent.plan;
-        const rep = plan.representations.items[@intFromEnum(rep_id)];
-        // A nested nominal rebinds its own formals: only its actuals can read
-        // an enclosing binding.
-        if (rep.kind == .nominal and rep.nominal_backing_arg_substitutions.len != 0) {
-            var substitutions = plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
-            while (substitutions.next()) |substitution| {
-                if (try self.descriptorTemplateRepReadsBoundFormal(substitution.actual_rep, context, seen)) return true;
+        while (pending.pop()) |current| {
+            if ((try seen.getOrPut(current)).found_existing) continue;
+            for (context.bindings.items) |binding| {
+                if (binding.formal == current) return true;
             }
-            return false;
-        }
-        for (plan.childSlice(rep.children)) |child| {
-            if (!Plan.childCarriesRuntimeDescriptor(child.role)) continue;
-            if (try self.descriptorTemplateRepReadsBoundFormal(child.rep, context, seen)) return true;
-        }
-        for (plan.tagVariantSlice(rep.tag_variants)) |variant| {
-            for (plan.childSlice(variant.payloads)) |payload| {
-                if (try self.descriptorTemplateRepReadsBoundFormal(payload.rep, context, seen)) return true;
+            const rep = plan.representations.items[@intFromEnum(current)];
+            // A nested nominal rebinds its own formals: only its actuals can read
+            // an enclosing binding.
+            if (rep.kind == .nominal and rep.nominal_backing_arg_substitutions.len != 0) {
+                var substitutions = plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+                while (substitutions.next()) |substitution| try pending.append(allocator, substitution.actual_rep);
+                continue;
+            }
+            for (plan.childSlice(rep.children)) |child| {
+                if (!Plan.childCarriesRuntimeDescriptor(child.role)) continue;
+                try pending.append(allocator, child.rep);
+            }
+            for (plan.tagVariantSlice(rep.tag_variants)) |variant| {
+                for (plan.childSlice(variant.payloads)) |payload| try pending.append(allocator, payload.rep);
             }
         }
         return false;
-    }
-
-    fn descriptorTemplateTypeDescForRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!LIR.BoxyTypeDescId {
-        const rep_index = @intFromEnum(rep_id);
-        const scope = try self.pushDescriptorTemplateExactReps(rep_id, context);
-        defer popDescriptorTemplateExactReps(context, scope);
-        if (context.root_env == null) context.root_env = context.env;
-        const desc_key = DescriptorTemplateDescKey{ .rep = rep_id, .env = context.env };
-        if (context.ids.get(desc_key)) |existing| return existing;
-
-        const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-        try context.ids.put(desc_key, desc_id);
-        try self.parent.result.boxy_type_descs.append(self.parent.allocator, reserved_boxy_type_desc);
-
-        const payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(rep_id);
-        const layout_value = self.parent.result.layouts.getLayout(payload_layout);
-        const rep = self.parent.plan.representations.items[rep_index];
-        const current_desc = rep.descriptor;
-
-        const nested_descs = try self.templateNestedDescRefsForRep(rep_id, current_desc, captures, context);
-        const tag_variants = try self.templateTagVariantsForRep(rep_id, payload_layout, current_desc, captures, context);
-        const tag_ext_desc = try self.templateTagExtDescForRep(rep_id, current_desc, captures, context);
-
-        // Inspect adapter emission can append more descriptors, so finish the
-        // value before taking the reserved ArrayList element's address.
-        const completed_desc = LirProgram.BoxyTypeDesc{
-            .payload_layout = payload_layout,
-            .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
-            .shape = self.parent.descriptorShapeForRep(rep_id),
-            .nested_descs = nested_descs,
-            .tag_variants = tag_variants,
-            .tag_ext_desc = tag_ext_desc,
-            .field_names = try self.parent.staticFieldNamesForRep(rep_id),
-            .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
-            .inspect_method = try self.parent.inspectMethodSlotForRep(rep_id),
-            .inspect_hidden_descs = try self.templateInspectHiddenDescsForRep(rep_id, desc_id, current_desc, captures, context),
-            .inspect_arg_descs = try self.templateInspectArgDescsForRep(rep_id, desc_id, current_desc, captures, context),
-            .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
-            .debug_checked_type = rep.source_type.ty,
-        };
-        self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
-        return desc_id;
-    }
-
-    /// The planned inspect worker's hidden descriptors for `rep_id`, in the
-    /// template's substitution environment.
-    fn templateInspectHiddenDescsForRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        self_desc: LIR.BoxyTypeDescId,
-        current_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!LIR.BoxySpan {
-        const inspect = self.parent.plan.inspectMethodForRep(rep_id) orelse return .{};
-        const args = self.parent.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args);
-        if (args.len == 0) return .{};
-        const refs = try self.parent.allocator.alloc(LIR.BoxyDescRef, args.len);
-        defer self.parent.allocator.free(refs);
-        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
-        for (args, refs) |arg, *ref| {
-            // The whole inspected value is described by the descriptor under
-            // construction.
-            ref.* = if (self.parent.descriptorIdentityRep(arg.rep) == identity_rep)
-                .{ .static = self_desc }
-            else
-                try self.descriptorTemplateRefForRep(arg.rep, current_desc, captures, context);
-        }
-        return try self.parent.appendStaticHiddenDescRefs(refs);
-    }
-
-    /// The inspected value's descriptor in the inspect worker's parameter
-    /// storage, with each worker type parameter bound to its planned
-    /// argument in this template's environment.
-    fn templateInspectArgDescsForRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        self_desc: LIR.BoxyTypeDescId,
-        current_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!LIR.BoxySpan {
-        const inspect = self.parent.plan.inspectMethodForRep(rep_id) orelse return .{};
-        if (self.parent.inspectArgumentIsIdentity(inspect)) return try self.parent.appendStaticHiddenDescRefs(&.{.{ .static = self_desc }});
-        const worker_arg = self.parent.inspectWorkerArgRep(inspect);
-        const scope = DescriptorTemplateScope{
-            .bindings_start = context.bindings.items.len,
-            .env = context.env,
-        };
-        defer popDescriptorTemplateExactReps(context, scope);
-        for (self.parent.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
-            if (!self.repIsBareDynamic(arg.worker_rep)) continue;
-            try self.bindDescriptorTemplateExactRep(arg.worker_rep, arg.rep, context);
-        }
-        const ref = try self.descriptorTemplateRefForRep(worker_arg, current_desc, captures, context);
-        return try self.parent.appendStaticHiddenDescRefs(&.{ref});
     }
 
     /// Bind one formal to its actual in the template environment; the
@@ -30806,208 +31825,6 @@ const ProcBodyBuilder = struct {
             entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
         }
         context.env = entry.value_ptr.*;
-    }
-
-    fn templateNestedDescRefsForRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        current_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!LIR.BoxySpan {
-        if (self.parent.descriptorBackingShapeRep(rep_id)) |backing_rep| {
-            return try self.templateNestedDescRefsForRep(backing_rep, current_desc, captures, context);
-        }
-
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        if (try self.parent.staticGeneratedEvidenceNestedDescRefs(rep.kind)) |nested_descs| {
-            return nested_descs;
-        }
-        const payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(rep_id);
-
-        var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
-        defer slots.deinit(self.parent.allocator);
-        try self.parent.appendNestedDescriptorSlots(rep_id, payload_layout, &slots);
-        if (slots.items.len == 0) return .{};
-
-        const refs = try self.parent.allocator.alloc(LIR.BoxyDescRef, slots.items.len);
-        defer self.parent.allocator.free(refs);
-        for (slots.items, refs) |slot, *ref| {
-            ref.* = try self.descriptorTemplateRefForRep(self.parent.nestedDescriptorSlotDescRep(slot), current_desc, captures, context);
-        }
-
-        const start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
-        try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, refs);
-        return .{ .start = start, .len = @intCast(refs.len) };
-    }
-
-    fn templateTagVariantsForRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        payload_layout: layout.Idx,
-        current_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!LIR.BoxySpan {
-        const layout_value = self.parent.result.layouts.getLayout(payload_layout);
-        if (layout_value.tag == .zst) {
-            return try self.templateZstTagVariantsForTagRep(
-                self.parent.tagVariantRepForDesc(rep_id),
-                current_desc,
-                captures,
-                context,
-            );
-        }
-        const tag_layout = switch (layout_value.tag) {
-            .tag_union => layout_value,
-            .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
-            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return .{},
-        };
-        if (tag_layout.tag != .tag_union) return .{};
-
-        const tag_rep_id = self.parent.tagVariantRepForDesc(rep_id);
-        const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-        if (rep.kind == .bool_tag_union) {
-            return try self.parent.staticTagVariantsForRep(rep_id, payload_layout);
-        }
-
-        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        if (variants.len == 0) return .{};
-
-        const tag_info = self.parent.result.layouts.getTagUnionInfo(tag_layout);
-        const has_ext = (try self.templateTagExtDescForTagRep(tag_rep_id, current_desc, captures, context)) != null;
-        const expected_layout_variants = variants.len + @intFromBool(has_ext);
-        if (tag_info.variants.len != expected_layout_variants) {
-            boxyLowerInvariant("boxy descriptor template variant count disagreed with committed layout");
-        }
-
-        var entries = std.ArrayList(LirProgram.BoxyTagVariant).empty;
-        defer entries.deinit(self.parent.allocator);
-
-        for (variants, 0..) |variant, index| {
-            const variant_payload_layout = tag_info.variants.get(index).payload_layout;
-            try entries.append(self.parent.allocator, .{
-                .name = try self.parent.result.store.insertBoxyName(self.tagVariantNameText(variant)),
-                .discriminant = @intCast(index),
-                .payload_count = @intCast(self.parent.plan.childSlice(variant.payloads).len),
-                .payload_layout = variant_payload_layout,
-                .payload_descs = try self.templatePayloadDescRefsForTagVariant(
-                    variant,
-                    variant_payload_layout,
-                    current_desc,
-                    captures,
-                    context,
-                ),
-            });
-        }
-
-        const start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
-        try self.parent.result.boxy_tag_variants.appendSlice(self.parent.allocator, entries.items);
-        return .{ .start = start, .len = @intCast(entries.items.len) };
-    }
-
-    fn templateZstTagVariantsForTagRep(
-        self: *ProcBodyBuilder,
-        tag_rep_id: Plan.TypeRepId,
-        current_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!LIR.BoxySpan {
-        const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        if (variants.len == 0) return .{};
-        if (variants.len != 1) {
-            boxyLowerInvariant("zero-sized boxy descriptor template had multiple tag variants");
-        }
-
-        const variant = variants[0];
-        const payload_descs = try self.templatePayloadDescRefsForTagVariant(
-            variant,
-            .zst,
-            current_desc,
-            captures,
-            context,
-        );
-        const name = try self.parent.result.store.insertBoxyName(self.tagVariantNameText(variant));
-        const start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
-        try self.parent.result.boxy_tag_variants.append(self.parent.allocator, .{
-            .name = name,
-            .discriminant = 0,
-            .payload_count = @intCast(self.parent.plan.childSlice(variant.payloads).len),
-            .payload_layout = .zst,
-            .payload_descs = payload_descs,
-        });
-        return .{ .start = start, .len = 1 };
-    }
-
-    fn templateTagExtDescForRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        current_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!?LIR.BoxyDescRef {
-        const tag_rep_id = self.parent.tagVariantRepForDesc(rep_id);
-        return try self.templateTagExtDescForTagRep(tag_rep_id, current_desc, captures, context);
-    }
-
-    fn templateTagExtDescForTagRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        current_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!?LIR.BoxyDescRef {
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.kind == .bool_tag_union) return null;
-        if (rep.tag_variants.len == 0 and rep.kind != .tag_union and rep.kind != .dynamic) return null;
-
-        var found: ?Plan.TypeRepId = null;
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (child.role != .tag_ext) continue;
-            if (found != null) boxyLowerInvariant("boxy descriptor template tag representation had duplicate row extension children");
-            found = child.rep;
-        }
-        const ext_rep_id = found orelse return null;
-        if (ext_rep_id == rep_id) return null;
-
-        const ext_rep = self.parent.plan.representations.items[@intFromEnum(ext_rep_id)];
-        if (ext_rep.kind == .empty_tag_union) return null;
-        return try self.descriptorTemplateRefForRep(ext_rep_id, current_desc, captures, context);
-    }
-
-    fn templatePayloadDescRefsForTagVariant(
-        self: *ProcBodyBuilder,
-        variant: Plan.TagVariant,
-        variant_payload_layout: layout.Idx,
-        current_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!LIR.BoxySpan {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        if (payloads.len == 0) return .{};
-
-        var descs = std.ArrayList(LirProgram.BoxyTagPayloadDesc).empty;
-        defer descs.deinit(self.parent.allocator);
-        for (payloads, 0..) |child, index| {
-            const field_layout = self.parent.tagVariantPayloadFieldLayout(variant_payload_layout, index, payloads.len);
-            // Match the static descriptor path: a concrete tag payload may flow
-            // into a worker whose view of that payload is erased, so the
-            // descriptor template must be able to capture the runtime payload
-            // descriptor even when the payload's own representation would not
-            // otherwise require one.
-            const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(child.rep, field_layout, true) orelse continue;
-            const desc_ref = try self.descriptorTemplateRefForRep(desc_rep, current_desc, captures, context);
-            try descs.append(self.parent.allocator, .{
-                .payload_index = @intCast(index),
-                .desc = desc_ref,
-            });
-        }
-        if (descs.items.len == 0) return .{};
-
-        const start: u32 = @intCast(self.parent.result.boxy_tag_payload_descs.items.len);
-        try self.parent.result.boxy_tag_payload_descs.appendSlice(self.parent.allocator, descs.items);
-        return .{ .start = start, .len = @intCast(descs.items.len) };
     }
 
     fn descriptorRefForRepIfNeeded(
@@ -31267,48 +32084,63 @@ const ProcBodyBuilder = struct {
         );
     }
 
+    /// Append, dependencies first, the materialization order of the hidden
+    /// descriptor `root` and each materialization it reads.
     fn appendHiddenDescriptorMaterializationOrder(
         self: *ProcBodyBuilder,
         hidden_args: []const DescriptorArgLocal,
-        index: usize,
+        root: usize,
         visit: []DescriptorMaterializationVisit,
         order: *std.ArrayList(usize),
     ) Allocator.Error!void {
-        switch (visit[index]) {
-            .done => return,
-            .visiting => boxyLowerInvariant("boxy hidden descriptor materializations contained a dependency cycle"),
-            .pending => {},
-        }
-
-        visit[index] = .visiting;
-        const hidden = hidden_args[index];
-        if (hidden.materialize) |materialize| {
-            if (materialize.localOrNull()) |desc_local| {
-                if (desc_local != hidden.local) {
-                    if (self.hiddenDescriptorMaterializationIndexForLocal(hidden_args, desc_local)) |dependency| {
-                        try self.appendHiddenDescriptorMaterializationOrder(hidden_args, dependency, visit, order);
-                    }
+        const allocator = self.parent.allocator;
+        const Frame = struct { index: usize, stage: usize = 0 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(allocator);
+        var request: ?usize = root;
+        while (true) {
+            if (request) |index| {
+                request = null;
+                switch (visit[index]) {
+                    .done => {},
+                    .visiting => boxyLowerInvariant("boxy hidden descriptor materializations contained a dependency cycle"),
+                    .pending => {
+                        visit[index] = .visiting;
+                        try frames.append(allocator, .{ .index = index });
+                    },
                 }
             }
-            if (hidden.tag_residual_for) |target_desc| {
-                if (target_desc.localOrNull()) |desc_local| {
-                    if (desc_local != hidden.local) {
-                        if (self.hiddenDescriptorMaterializationIndexForLocal(hidden_args, desc_local)) |dependency| {
-                            try self.appendHiddenDescriptorMaterializationOrder(hidden_args, dependency, visit, order);
-                        }
-                    }
-                }
-            }
+            if (frames.items.len == 0) return;
+            const top = &frames.items[frames.items.len - 1];
+            const hidden = hidden_args[top.index];
+            const materialize = hidden.materialize orelse {
+                visit[top.index] = .done;
+                frames.items.len -= 1;
+                continue;
+            };
             const captures = self.parent.result.store.getLocalSpan(hidden.captures);
-            for (0..GuardedList.borrowLen(captures)) |capture_index| {
-                const capture = GuardedList.at(captures, capture_index);
-                if (self.hiddenDescriptorMaterializationIndexForLocal(hidden_args, capture)) |dependency| {
-                    try self.appendHiddenDescriptorMaterializationOrder(hidden_args, dependency, visit, order);
-                }
-            }
-            try order.append(self.parent.allocator, index);
+            const stage = top.stage;
+            top.stage += 1;
+            // The descriptor it reads, then its residual target, then its
+            // captures, are materialized before it.
+            const read_local: ?LIR.LocalId = if (stage == 0)
+                materialize.localOrNull()
+            else if (stage == 1)
+                if (hidden.tag_residual_for) |target_desc| target_desc.localOrNull() else null
+            else if (stage - 2 < GuardedList.borrowLen(captures))
+                GuardedList.at(captures, stage - 2)
+            else {
+                try order.append(allocator, top.index);
+                visit[top.index] = .done;
+                frames.items.len -= 1;
+                continue;
+            };
+            const dependency_local: ?LIR.LocalId = if (read_local) |local|
+                (if (stage < 2 and local == hidden.local) null else local)
+            else
+                null;
+            if (dependency_local) |local| request = self.hiddenDescriptorMaterializationIndexForLocal(hidden_args, local);
         }
-        visit[index] = .done;
     }
 
     fn hiddenDescriptorMaterializationIndexForLocal(
@@ -31431,6 +32263,96 @@ const ProcBodyBuilder = struct {
         return try self.lowerInspectRepLocalInto(target, source, self.repForType(checked_ty), next);
     }
 
+    // Structural inspection //
+    //
+    // Inspecting a representation renders its components, and components
+    // follow type nesting, so each rendering still waiting on a component's
+    // rendering is a frame on one heap-backed stack. Renderings are built
+    // from their continuation backward; frames allocate locals, join points,
+    // and statements in the order a direct recursive build would.
+
+    const InspectRequest = struct {
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    };
+
+    const InspectStep = union(enum) {
+        /// The frame needs this component rendering next.
+        request: InspectRequest,
+        /// The frame finished with this statement and was popped.
+        done: LIR.CFStmtId,
+    };
+
+    /// A rendering concatenated from parts, rendered last first.
+    const InspectPartsState = struct {
+        target: LIR.LocalId,
+        parts: []InspectPart,
+        part_locals: []LIR.LocalId,
+        remaining: usize,
+        continuation: LIR.CFStmtId,
+        pending_value: LIR.LocalId = undefined,
+
+        fn deinit(self: InspectPartsState, allocator: Allocator) void {
+            allocator.free(self.parts);
+            allocator.free(self.part_locals);
+        }
+    };
+
+    const InspectFrame = struct {
+        /// Whether the frame's last requested rendering is still due.
+        awaiting: bool = false,
+        /// The rendering the frame needs before any of its own work.
+        first: ?InspectRequest = null,
+        state: union(enum) {
+            nominal: struct {
+                request: InspectRequest,
+                scope: NominalBackingFormalScope,
+                backing_rep: Plan.TypeRepId,
+                backing: ?LIR.LocalId,
+            },
+            parts: InspectPartsState,
+            tag: struct {
+                request: InspectRequest,
+                discriminant: LIR.LocalId,
+                done: LIR.JoinPointId,
+                branches: []LIR.CFSwitchBranch,
+                index: usize = 0,
+                variant: ?InspectPartsState = null,
+            },
+            presence: struct {
+                request: InspectRequest,
+                done: LIR.JoinPointId,
+                present_discriminant: u16,
+                missing_discriminant: u16,
+                value: LIR.LocalId,
+            },
+            box: struct {
+                request: InspectRequest,
+                payload_rep: Plan.TypeRepId,
+                payload: LIR.LocalId,
+                prefix: LIR.LocalId,
+            },
+            list: struct {
+                request: InspectRequest,
+                elem: LIR.LocalId,
+                index: LIR.LocalId,
+                out: LIR.LocalId,
+                len: LIR.LocalId,
+                zero_index: LIR.LocalId,
+                initial_out: LIR.LocalId,
+                join_id: LIR.JoinPointId,
+                done: LIR.LocalId,
+                finish: LIR.CFStmtId,
+                sep: LIR.LocalId,
+                zero: LIR.LocalId,
+                is_first: LIR.LocalId,
+                with_sep: LIR.LocalId,
+            },
+        },
+    };
+
     fn lowerInspectRepLocalInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -31438,45 +32360,585 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        return switch (rep.kind) {
-            .in_progress => boxyLowerInvariant("in-progress boxy representation reached inspect lowering"),
-            .dynamic => try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next),
-            .erased_callable => try self.assignStringBytesLiteral(target, "<function>", next),
-            .generated_field,
-            .generated_field_names,
-            .generated_tag_union_spec,
-            => try self.assignStringBytesLiteral(target, "<opaque>", next),
-            .list => try self.lowerListInspectLocalsInto(target, source, rep_id, next),
-            .box => try self.lowerBoxInspectLocalsInto(target, source, rep_id, next),
-            .primitive => |primitive| try self.lowerPrimitiveInspectLocalsInto(target, source, rep_id, primitive, next),
-            .bool_tag_union => try self.lowerBoolInspectLocalsInto(target, source, next),
-            .empty_record => try self.assignStringBytesLiteral(target, "{}", next),
-            .empty_tag_union => try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
-            } }, self.derivedOrigin()),
-            .alias => try self.lowerInspectRepLocalInto(target, source, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, next),
-            .nominal => |kind| switch (kind) {
-                .transparent => if (try self.lowerToInspectMethodInto(target, source, rep_id, next)) |method_call|
-                    method_call
-                else
-                    try self.lowerNominalBackingInspectLocalsInto(target, source, rep_id, next),
-                .opaque_nominal => if (try self.lowerToInspectMethodInto(target, source, rep_id, next)) |method_call|
-                    method_call
-                else
-                    try self.assignStringBytesLiteral(target, "<opaque>", next),
-                .builtin_other => try self.lowerNominalBackingInspectLocalsInto(target, source, rep_id, next),
+        const allocator = self.parent.allocator;
+        var frames: std.ArrayList(InspectFrame) = .empty;
+        defer {
+            var index = frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                self.releaseInspectFrame(&frames.items[index]);
+            }
+            frames.deinit(allocator);
+        }
+        var result = try self.beginInspect(&frames, .{ .target = target, .source = source, .rep_id = rep_id, .next = next });
+        while (frames.items.len != 0) {
+            switch (try self.stepInspectFrame(&frames, result)) {
+                .request => |request| result = try self.beginInspect(&frames, request),
+                .done => |stmt| result = stmt,
+            }
+        }
+        return result.?;
+    }
+
+    /// Free what an unfinished frame owns and leave the scope it holds, as
+    /// the direct build's defers would.
+    fn releaseInspectFrame(self: *ProcBodyBuilder, frame: *InspectFrame) void {
+        const allocator = self.parent.allocator;
+        switch (frame.state) {
+            .presence, .box, .list => {},
+            .nominal => |nominal| self.dropNominalBackingFormalScope(nominal.scope),
+            .parts => |parts| parts.deinit(allocator),
+            .tag => |tag| {
+                allocator.free(tag.branches);
+                if (tag.variant) |variant| variant.deinit(allocator);
             },
-            .record,
-            => try self.lowerRecordInspectLocalsInto(target, source, rep, next),
-            .tuple => try self.lowerTupleInspectLocalsInto(target, source, rep, next),
-            .tag_union => if (rep.presence_slot_present_discriminant != null)
-                try self.lowerPresenceSlotInspectLocalsInto(target, source, rep, next)
-            else if (self.tagUnionRepHasExtension(rep))
-                try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next)
-            else
-                try self.lowerTagUnionInspectLocalsInto(target, source, rep, next),
+        }
+    }
+
+    fn pushInspectFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), state: @FieldType(InspectFrame, "state")) Allocator.Error!?LIR.CFStmtId {
+        return try self.pushInspectFrameFirst(frames, state, null);
+    }
+
+    fn pushInspectFrameFirst(
+        self: *ProcBodyBuilder,
+        frames: *std.ArrayList(InspectFrame),
+        state: @FieldType(InspectFrame, "state"),
+        first: ?InspectRequest,
+    ) Allocator.Error!?LIR.CFStmtId {
+        var frame: InspectFrame = .{ .state = state, .first = first };
+        frames.append(self.parent.allocator, frame) catch |err| {
+            self.releaseInspectFrame(&frame);
+            return err;
         };
+        return null;
+    }
+
+    fn finishInspectFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), stmt: LIR.CFStmtId) InspectStep {
+        var frame = frames.pop().?;
+        switch (frame.state) {
+            // A finished nominal rendering has left its scope already.
+            .nominal => {},
+            .parts, .tag, .presence, .box, .list => self.releaseInspectFrame(&frame),
+        }
+        return .{ .done = stmt };
+    }
+
+    /// The rendering of `request` when it needs no component rendering;
+    /// otherwise null, with the frame that builds it pushed.
+    fn beginInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), root: InspectRequest) Allocator.Error!?LIR.CFStmtId {
+        var request = root;
+        while (true) {
+            const target = request.target;
+            const source = request.source;
+            const rep_id = request.rep_id;
+            const next = request.next;
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            switch (rep.kind) {
+                .in_progress => boxyLowerInvariant("in-progress boxy representation reached inspect lowering"),
+                .dynamic => return try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next),
+                .erased_callable => return try self.assignStringBytesLiteral(target, "<function>", next),
+                .generated_field,
+                .generated_field_names,
+                .generated_tag_union_spec,
+                => return try self.assignStringBytesLiteral(target, "<opaque>", next),
+                .list => return try self.beginListInspect(frames, request),
+                .box => {
+                    const payload_rep = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep;
+                    const payload = try self.addFrameLocalForRep(payload_rep);
+                    const prefix = try self.addFrameLocal(.str);
+                    const rendered = try self.addFrameLocal(.str);
+                    const with_value = try self.addFrameLocal(.str);
+                    const suffix = try self.addFrameLocal(.str);
+
+                    var continuation = try self.assignStrConcat(target, with_value, suffix, next);
+                    continuation = try self.assignStringBytesLiteral(suffix, ")", continuation);
+                    continuation = try self.assignStrConcat(with_value, prefix, rendered, continuation);
+                    return try self.pushInspectFrameFirst(
+                        frames,
+                        .{ .box = .{ .request = request, .payload_rep = payload_rep, .payload = payload, .prefix = prefix } },
+                        .{ .target = rendered, .source = payload, .rep_id = payload_rep, .next = continuation },
+                    );
+                },
+                .primitive => |primitive| return try self.lowerPrimitiveInspectLocalsInto(target, source, rep_id, primitive, next),
+                .bool_tag_union => return try self.lowerBoolInspectLocalsInto(target, source, next),
+                .empty_record => return try self.assignStringBytesLiteral(target, "{}", next),
+                .empty_tag_union => return try self.parent.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
+                } }, self.derivedOrigin()),
+                .alias => {
+                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
+                    continue;
+                },
+                .nominal => |kind| switch (kind) {
+                    .transparent => {
+                        if (try self.lowerToInspectMethodInto(target, source, rep_id, next)) |method_call| return method_call;
+                        return try self.beginNominalInspect(frames, request);
+                    },
+                    .opaque_nominal => return try self.lowerToInspectMethodInto(target, source, rep_id, next) orelse
+                        try self.assignStringBytesLiteral(target, "<opaque>", next),
+                    .builtin_other => return try self.beginNominalInspect(frames, request),
+                },
+                .record => return try self.beginRecordInspect(frames, request),
+                .tuple => return try self.beginTupleInspect(frames, request),
+                .tag_union => {
+                    if (rep.presence_slot_present_discriminant != null) return try self.beginPresenceSlotInspect(frames, request);
+                    if (self.tagUnionRepHasExtension(rep)) return try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next);
+                    return try self.beginTagUnionInspect(frames, request);
+                },
+            }
+        }
+    }
+
+    fn beginNominalInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
+        const scope = try self.enterNominalBackingFormalScope(request.rep_id);
+        errdefer self.dropNominalBackingFormalScope(scope);
+        const backing_rep = self.repQuery().requiredSingleChild(request.rep_id, .nominal_backing).rep;
+        const backing: ?LIR.LocalId = if (self.parent.plan.representations.items[@intFromEnum(request.rep_id)].declared_fields.len == 0)
+            null
+        else
+            try self.addFrameLocalForRep(backing_rep);
+        try frames.append(self.parent.allocator, .{ .state = .{ .nominal = .{
+            .request = request,
+            .scope = scope,
+            .backing_rep = backing_rep,
+            .backing = backing,
+        } } });
+        return null;
+    }
+
+    /// Begin rendering `parts` into `target` before `next`: the statement
+    /// when every part is a literal, or null with the parts frame pushed.
+    fn beginInspectParts(self: *ProcBodyBuilder, target: LIR.LocalId, parts: []const InspectPart, next: LIR.CFStmtId) Allocator.Error!InspectPartsState {
+        const allocator = self.parent.allocator;
+        const owned_parts = try allocator.dupe(InspectPart, parts);
+        errdefer allocator.free(owned_parts);
+        const part_locals = try allocator.alloc(LIR.LocalId, parts.len);
+        errdefer allocator.free(part_locals);
+        for (part_locals) |*local| {
+            local.* = try self.addFrameLocal(.str);
+        }
+        return .{
+            .target = target,
+            .parts = owned_parts,
+            .part_locals = part_locals,
+            .remaining = parts.len,
+            .continuation = try self.concatStringLocalsInto(target, part_locals, next),
+        };
+    }
+
+    /// Advance a parts rendering: the next part's component rendering, or
+    /// null once every part is rendered.
+    fn nextInspectPart(self: *ProcBodyBuilder, state: *InspectPartsState, delivered: ?LIR.CFStmtId) Allocator.Error!?InspectRequest {
+        if (delivered) |rendered| {
+            var continuation = rendered;
+            const value = state.pending_value;
+            if (!self.isZstLocal(value)) {
+                continuation = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = value,
+                    .op = switch (state.parts[state.remaining]) {
+                        .literal => unreachable,
+                        .field => |field| .{ .field = .{
+                            .source = field.source,
+                            .field_idx = field.field_index,
+                        } },
+                        .tag_payload => |payload| if (payload.payload_index) |index| .{ .tag_payload = .{
+                            .source = payload.source,
+                            .payload_idx = index,
+                            .variant_index = payload.variant_index,
+                            .tag_discriminant = payload.variant_index,
+                        } } else .{ .tag_payload_struct = .{
+                            .source = payload.source,
+                            .variant_index = payload.variant_index,
+                            .tag_discriminant = payload.variant_index,
+                        } },
+                    },
+                    .next = continuation,
+                } }, self.derivedOrigin());
+            }
+            state.continuation = continuation;
+        }
+        while (state.remaining > 0) {
+            state.remaining -= 1;
+            const part_local = state.part_locals[state.remaining];
+            switch (state.parts[state.remaining]) {
+                .literal => |text| state.continuation = try self.assignStringBytesLiteral(part_local, text, state.continuation),
+                .field => |field| {
+                    state.pending_value = try self.addFrameLocalForRep(field.rep);
+                    return .{ .target = part_local, .source = state.pending_value, .rep_id = field.rep, .next = state.continuation };
+                },
+                .tag_payload => |payload| {
+                    state.pending_value = try self.addFrameLocalForRep(payload.rep);
+                    return .{ .target = part_local, .source = state.pending_value, .rep_id = payload.rep, .next = state.continuation };
+                },
+            }
+        }
+        return null;
+    }
+
+    fn beginRecordInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(request.rep_id)];
+        const children = self.parent.plan.childSlice(rep.children);
+        const field_count = recordEqualityFieldCount(children);
+        if (field_count == 0) return try self.assignStringBytesLiteral(request.target, "{}", request.next);
+
+        var parts = std.ArrayList(InspectPart).empty;
+        defer parts.deinit(self.parent.allocator);
+        try parts.append(self.parent.allocator, .{ .literal = "{ " });
+
+        var field_index: u16 = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => |label| {
+                    if (field_index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
+                    try parts.append(self.parent.allocator, .{ .literal = self.module.canonical_names.recordFieldLabelText(label) });
+                    try parts.append(self.parent.allocator, .{ .literal = ": " });
+                    try parts.append(self.parent.allocator, .{ .field = .{
+                        .source = request.source,
+                        .field_index = field_index,
+                        .rep = child.rep,
+                    } });
+                    field_index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record inspect representation had a non-record child role"),
+            }
+        }
+        try parts.append(self.parent.allocator, .{ .literal = " }" });
+        return try self.pushInspectFrame(frames, .{ .parts = try self.beginInspectParts(request.target, parts.items, request.next) });
+    }
+
+    fn beginTupleInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(request.rep_id)];
+        const children = self.parent.plan.childSlice(rep.children);
+        if (children.len == 0) return try self.assignStringBytesLiteral(request.target, "()", request.next);
+
+        var parts = std.ArrayList(InspectPart).empty;
+        defer parts.deinit(self.parent.allocator);
+        try parts.append(self.parent.allocator, .{ .literal = "(" });
+        for (children, 0..) |child, ordinal| {
+            switch (child.role) {
+                .tuple_elem => |index| {
+                    if (ordinal != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
+                    if (index > std.math.maxInt(u16)) {
+                        boxyLowerInvariant("tuple inspect element index exceeded LIR field index range");
+                    }
+                    try parts.append(self.parent.allocator, .{ .field = .{
+                        .source = request.source,
+                        .field_index = @intCast(index),
+                        .rep = child.rep,
+                    } });
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple inspect representation had a non-tuple child role"),
+            }
+        }
+        try parts.append(self.parent.allocator, .{ .literal = ")" });
+        return try self.pushInspectFrame(frames, .{ .parts = try self.beginInspectParts(request.target, parts.items, request.next) });
+    }
+
+    /// A tag variant's rendering: its name alone, or a parts rendering of
+    /// its name and payloads.
+    fn beginTagInspectVariant(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        variant: Plan.TagVariant,
+        variant_index: u16,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!union(enum) { done: LIR.CFStmtId, parts: InspectPartsState } {
+        const payloads = self.parent.plan.childSlice(variant.payloads);
+        if (payloads.len == 0) {
+            return .{ .done = try self.assignStringBytesLiteral(target, self.tagVariantNameText(variant), next) };
+        }
+
+        var parts = std.ArrayList(InspectPart).empty;
+        defer parts.deinit(self.parent.allocator);
+        try parts.append(self.parent.allocator, .{ .literal = self.tagVariantNameText(variant) });
+        try parts.append(self.parent.allocator, .{ .literal = "(" });
+        for (payloads, 0..) |child, index| {
+            switch (child.role) {
+                .tag_payload => |payload| {
+                    if (payload.tag != variant.name or payload.index != index) {
+                        boxyLowerInvariant("tag inspect payload span did not match its payload child roles");
+                    }
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag inspect variant payload span included a non-payload child"),
+            }
+            if (index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
+            if (index > std.math.maxInt(u16)) {
+                boxyLowerInvariant("tag inspect payload index exceeded LIR payload index range");
+            }
+            try parts.append(self.parent.allocator, .{ .tag_payload = .{
+                .source = source,
+                .variant_index = variant_index,
+                .payload_index = if (payloads.len == 1) null else @as(u16, @intCast(index)),
+                .rep = child.rep,
+            } });
+        }
+        try parts.append(self.parent.allocator, .{ .literal = ")" });
+        return .{ .parts = try self.beginInspectParts(target, parts.items, next) };
+    }
+
+    fn beginTagUnionInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(request.rep_id)];
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        if (variants.len == 0) {
+            return try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
+            } }, self.derivedOrigin());
+        }
+        if (variants.len == 1 and self.isZstLocal(request.source)) {
+            return switch (try self.beginTagInspectVariant(request.target, request.source, variants[0], 0, request.next)) {
+                .done => |stmt| stmt,
+                .parts => |parts| try self.pushInspectFrame(frames, .{ .parts = parts }),
+            };
+        }
+
+        const discriminant = try self.addFrameLocal(.u16);
+        const done = self.freshJoinPointId();
+        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
+        return try self.pushInspectFrame(frames, .{ .tag = .{
+            .request = request,
+            .discriminant = discriminant,
+            .done = done,
+            .branches = branches,
+        } });
+    }
+
+    fn beginPresenceSlotInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(request.rep_id)];
+        const present_discriminant = rep.presence_slot_present_discriminant orelse
+            boxyLowerInvariant("presence-slot inspect lacked its Present discriminant");
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        const present_index: usize = present_discriminant;
+        if (variants.len != 2 or present_index >= variants.len) {
+            boxyLowerInvariant("presence-slot inspect did not have exactly two variants");
+        }
+        const present_payloads = self.parent.plan.childSlice(variants[present_index].payloads);
+        if (present_payloads.len != 1) {
+            boxyLowerInvariant("presence-slot inspect Present arm did not have one payload");
+        }
+        const payload_child = present_payloads[0];
+        switch (payload_child.role) {
+            .tag_payload => |payload| if (payload.tag != variants[present_index].name or payload.index != 0) {
+                boxyLowerInvariant("presence-slot inspect payload did not match its Present variant");
+            },
+            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("presence-slot inspect Present arm had a non-payload child"),
+        }
+
+        const missing_discriminant: u16 = if (present_discriminant == 0) 1 else 0;
+        if (variants[missing_discriminant].payloads.len != 0) {
+            boxyLowerInvariant("presence-slot inspect Missing arm carried a payload");
+        }
+
+        const done = self.freshJoinPointId();
+        const jump = try self.joinJump(done);
+        const value = try self.addFrameLocalForRep(payload_child.rep);
+        return try self.pushInspectFrameFirst(frames, .{ .presence = .{
+            .request = request,
+            .done = done,
+            .present_discriminant = present_discriminant,
+            .missing_discriminant = missing_discriminant,
+            .value = value,
+        } }, .{ .target = request.target, .source = value, .rep_id = payload_child.rep, .next = jump });
+    }
+
+    fn beginListInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
+        const elem_rep = self.repQuery().requiredSingleChild(request.rep_id, .list_elem).rep;
+        const len = try self.addFrameLocal(.u64);
+        const index = try self.addFrameLocal(.u64);
+        const out = try self.addFrameLocal(.str);
+        const zero_index = try self.addFrameLocal(.u64);
+        const initial_out = try self.addFrameLocal(.str);
+        const join_id = self.freshJoinPointId();
+
+        const done = try self.addFrameLocal(.bool);
+        const finish = try self.lowerListInspectFinish(request.target, out, request.next);
+
+        const sep = try self.addFrameLocal(.str);
+        const zero = try self.addFrameLocal(.u64);
+        const is_first = try self.addFrameLocal(.bool);
+        const elem = try self.addFrameLocalForRep(elem_rep);
+        const elem_str = try self.addFrameLocal(.str);
+        const with_sep = try self.addFrameLocal(.str);
+        const next_out = try self.addFrameLocal(.str);
+        const one = try self.addFrameLocal(.u64);
+        const next_index = try self.addFrameLocal(.u64);
+
+        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.derivedOrigin());
+        continuation = try self.setLocalInitializeJoinParam(out, next_out, continuation);
+        continuation = try self.setLocalInitializeJoinParam(index, next_index, continuation);
+        continuation = try self.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
+        continuation = try self.assignIntLiteral(one, 1, continuation);
+        continuation = try self.assignStrConcat(next_out, with_sep, elem_str, continuation);
+        return try self.pushInspectFrameFirst(frames, .{ .list = .{
+            .request = request,
+            .elem = elem,
+            .index = index,
+            .out = out,
+            .len = len,
+            .zero_index = zero_index,
+            .initial_out = initial_out,
+            .join_id = join_id,
+            .done = done,
+            .finish = finish,
+            .sep = sep,
+            .zero = zero,
+            .is_first = is_first,
+            .with_sep = with_sep,
+        } }, .{ .target = elem_str, .source = elem, .rep_id = elem_rep, .next = continuation });
+    }
+
+    fn stepInspectFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), delivered: ?LIR.CFStmtId) Allocator.Error!InspectStep {
+        const frame = &frames.items[frames.items.len - 1];
+        if (frame.first) |first| {
+            frame.first = null;
+            frame.awaiting = true;
+            return .{ .request = first };
+        }
+        const child: ?LIR.CFStmtId = if (frame.awaiting)
+            delivered orelse boxyLowerInvariant("boxy inspect frame resumed without its component rendering")
+        else
+            null;
+        frame.awaiting = false;
+        switch (frame.state) {
+            .nominal => |nominal| {
+                const request = nominal.request;
+                const rendered = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{ .target = request.target, .source = nominal.backing orelse request.source, .rep_id = nominal.backing_rep, .next = request.next } };
+                };
+                const lowered = if (nominal.backing) |backing|
+                    try self.assignRepresentationBoundary(backing, request.source, nominal.backing_rep, request.rep_id, rendered)
+                else
+                    rendered;
+                return self.finishInspectFrame(frames, try self.leaveNominalBackingFormalScope(nominal.scope, lowered));
+            },
+            .parts => |*parts| {
+                if (try self.nextInspectPart(parts, child)) |request| {
+                    frame.awaiting = true;
+                    return .{ .request = request };
+                }
+                return self.finishInspectFrame(frames, parts.continuation);
+            },
+            .tag => |*tag| {
+                const request = tag.request;
+                const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(request.rep_id)].tag_variants);
+                var delivered_part = child;
+                while (true) {
+                    if (tag.variant) |*variant| {
+                        if (try self.nextInspectPart(variant, delivered_part)) |component| {
+                            frame.awaiting = true;
+                            return .{ .request = component };
+                        }
+                        tag.branches[tag.index] = .{ .value = @intCast(tag.index), .body = variant.continuation };
+                        variant.deinit(self.parent.allocator);
+                        tag.variant = null;
+                        tag.index += 1;
+                    }
+                    delivered_part = null;
+                    if (tag.index == variants.len) break;
+                    if (tag.index > std.math.maxInt(u16)) {
+                        boxyLowerInvariant("tag inspect variant index exceeded LIR variant range");
+                    }
+                    switch (try self.beginTagInspectVariant(request.target, request.source, variants[tag.index], @intCast(tag.index), try self.joinJump(tag.done))) {
+                        .done => |stmt| {
+                            tag.branches[tag.index] = .{ .value = @intCast(tag.index), .body = stmt };
+                            tag.index += 1;
+                        },
+                        .parts => |parts| tag.variant = parts,
+                    }
+                }
+                const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin());
+                const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = tag.discriminant,
+                    .branches = try self.parent.result.store.addCFSwitchBranches(tag.branches),
+                    .default_branch = bad_discriminant,
+                    .continuation = null,
+                } }, self.derivedOrigin());
+                const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = tag.discriminant,
+                    .op = .{ .discriminant = .{ .source = request.source } },
+                    .next = switch_stmt,
+                } }, self.derivedOrigin());
+                return self.finishInspectFrame(frames, try self.derivedResultJoin(tag.done, request.target, request.next, read_discriminant));
+            },
+            .presence => |presence| {
+                const request = presence.request;
+                var present_body = child.?;
+                if (!self.isZstLocal(presence.value)) {
+                    present_body = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                        .target = presence.value,
+                        .op = .{ .tag_payload_struct = .{
+                            .source = request.source,
+                            .variant_index = presence.present_discriminant,
+                            .tag_discriminant = presence.present_discriminant,
+                        } },
+                        .next = present_body,
+                    } }, self.derivedOrigin());
+                }
+                const missing_body = try self.assignStringBytesLiteral(request.target, "<missing>", try self.joinJump(presence.done));
+                const branches = [_]LIR.CFSwitchBranch{
+                    .{ .value = presence.missing_discriminant, .body = missing_body },
+                    .{ .value = presence.present_discriminant, .body = present_body },
+                };
+                const discriminant = try self.addFrameLocal(.u16);
+                const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = discriminant,
+                    .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
+                    .default_branch = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin()),
+                    .continuation = null,
+                } }, self.derivedOrigin());
+                const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = discriminant,
+                    .op = .{ .discriminant = .{ .source = request.source } },
+                    .next = switch_stmt,
+                } }, self.derivedOrigin());
+                return self.finishInspectFrame(frames, try self.derivedResultJoin(presence.done, request.target, request.next, read_discriminant));
+            },
+            .box => |box| {
+                const request = box.request;
+                var continuation = try self.assignBoxBoundary(
+                    box.payload,
+                    request.source,
+                    box.payload_rep,
+                    .box_unbox,
+                    child.?,
+                );
+                continuation = try self.assignStringBytesLiteral(box.prefix, "Box(", continuation);
+                return self.finishInspectFrame(frames, continuation);
+            },
+            .list => |list| {
+                const request = list.request;
+                var continuation = child.?;
+                if (!self.isZstLocal(list.elem)) {
+                    continuation = try self.assignBinaryLowLevel(list.elem, .list_get_unsafe, request.source, list.index, continuation);
+                }
+                continuation = try self.assignStrConcat(list.with_sep, list.out, list.sep, continuation);
+
+                const empty_sep = try self.assignStringBytesLiteral(list.sep, "", continuation);
+                const comma_sep = try self.assignStringBytesLiteral(list.sep, ", ", continuation);
+                const sep_switch = try self.boolSwitchNoContinuation(list.is_first, empty_sep, comma_sep);
+                const compare_first = try self.assignBinaryLowLevel(list.is_first, .num_is_eq, list.index, list.zero, sep_switch);
+                const step = try self.assignIntLiteral(list.zero, 0, compare_first);
+
+                const switch_stmt = try self.boolSwitchNoContinuation(list.done, list.finish, step);
+                const body = try self.assignBinaryLowLevel(list.done, .num_is_eq, list.index, list.len, switch_stmt);
+
+                var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = list.join_id } }, self.derivedOrigin());
+                initial_jump = try self.setLocalInitializeJoinParam(list.out, list.initial_out, initial_jump);
+                initial_jump = try self.setLocalInitializeJoinParam(list.index, list.zero_index, initial_jump);
+                initial_jump = try self.assignStringBytesLiteral(list.initial_out, "[", initial_jump);
+                initial_jump = try self.assignIntLiteral(list.zero_index, 0, initial_jump);
+                initial_jump = try self.assignUnaryLowLevel(list.len, .list_len, request.source, initial_jump);
+
+                return self.finishInspectFrame(frames, try self.parent.result.store.addCFStmt(.{ .join = .{
+                    .id = list.join_id,
+                    .params = try self.joinParamSpan(&[_]LIR.LocalId{ list.index, list.out }),
+                    .body = body,
+                    .remainder = initial_jump,
+                } }, self.derivedOrigin()));
+            },
+        }
     }
 
     fn lowerToInspectMethodInto(
@@ -31549,26 +33011,6 @@ const ProcBodyBuilder = struct {
         return false;
     }
 
-    fn lowerNominalBackingInspectLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const scope = try self.enterNominalBackingFormalScope(rep_id);
-        defer self.dropNominalBackingFormalScope(scope);
-        const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-        const lowered = if (self.parent.plan.representations.items[@intFromEnum(rep_id)].declared_fields.len == 0)
-            try self.lowerInspectRepLocalInto(target, source, backing_rep, next)
-        else blk: {
-            const backing = try self.addFrameLocalForRep(backing_rep);
-            const inspect = try self.lowerInspectRepLocalInto(target, backing, backing_rep, next);
-            break :blk try self.assignRepresentationBoundary(backing, source, backing_rep, rep_id, inspect);
-        };
-        return try self.leaveNominalBackingFormalScope(scope, lowered);
-    }
-
     fn lowerPrimitiveInspectLocalsInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -31618,257 +33060,6 @@ const ProcBodyBuilder = struct {
         } }, self.derivedOrigin());
     }
 
-    fn lowerRecordInspectLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const children = self.parent.plan.childSlice(rep.children);
-        const field_count = recordEqualityFieldCount(children);
-        if (field_count == 0) return try self.assignStringBytesLiteral(target, "{}", next);
-
-        var parts = std.ArrayList(InspectPart).empty;
-        defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = "{ " });
-
-        var field_index: u16 = 0;
-        for (children) |child| {
-            switch (child.role) {
-                .record_field => |label| {
-                    if (field_index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-                    try parts.append(self.parent.allocator, .{ .literal = self.module.canonical_names.recordFieldLabelText(label) });
-                    try parts.append(self.parent.allocator, .{ .literal = ": " });
-                    try parts.append(self.parent.allocator, .{ .field = .{
-                        .source = source,
-                        .field_index = field_index,
-                        .rep = child.rep,
-                    } });
-                    field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record inspect representation had a non-record child role"),
-            }
-        }
-        try parts.append(self.parent.allocator, .{ .literal = " }" });
-        return try self.lowerInspectPartsInto(target, parts.items, next);
-    }
-
-    fn lowerTupleInspectLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const children = self.parent.plan.childSlice(rep.children);
-        if (children.len == 0) return try self.assignStringBytesLiteral(target, "()", next);
-
-        var parts = std.ArrayList(InspectPart).empty;
-        defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = "(" });
-        for (children, 0..) |child, ordinal| {
-            switch (child.role) {
-                .tuple_elem => |index| {
-                    if (ordinal != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-                    if (index > std.math.maxInt(u16)) {
-                        boxyLowerInvariant("tuple inspect element index exceeded LIR field index range");
-                    }
-                    try parts.append(self.parent.allocator, .{ .field = .{
-                        .source = source,
-                        .field_index = @intCast(index),
-                        .rep = child.rep,
-                    } });
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple inspect representation had a non-tuple child role"),
-            }
-        }
-        try parts.append(self.parent.allocator, .{ .literal = ")" });
-        return try self.lowerInspectPartsInto(target, parts.items, next);
-    }
-
-    fn lowerTagUnionInspectLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        if (variants.len == 0) {
-            return try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
-            } }, self.derivedOrigin());
-        }
-        if (variants.len == 1 and self.isZstLocal(source)) {
-            return try self.lowerTagInspectVariant(target, source, variants[0], 0, next);
-        }
-
-        const discriminant = try self.addFrameLocal(.u16);
-        const done = self.freshJoinPointId();
-        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
-        defer self.parent.allocator.free(branches);
-        for (variants, branches, 0..) |variant, *branch, index| {
-            if (index > std.math.maxInt(u16)) {
-                boxyLowerInvariant("tag inspect variant index exceeded LIR variant range");
-            }
-            branch.* = .{
-                .value = @intCast(index),
-                .body = try self.lowerTagInspectVariant(target, source, variant, @intCast(index), try self.joinJump(done)),
-            };
-        }
-
-        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin());
-        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = discriminant,
-            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
-            .default_branch = bad_discriminant,
-            .continuation = null,
-        } }, self.derivedOrigin());
-        const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
-            .next = switch_stmt,
-        } }, self.derivedOrigin());
-        return try self.derivedResultJoin(done, target, next, read_discriminant);
-    }
-
-    fn lowerPresenceSlotInspectLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const present_discriminant = rep.presence_slot_present_discriminant orelse
-            boxyLowerInvariant("presence-slot inspect lacked its Present discriminant");
-        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        const present_index: usize = present_discriminant;
-        if (variants.len != 2 or present_index >= variants.len) {
-            boxyLowerInvariant("presence-slot inspect did not have exactly two variants");
-        }
-        const present_payloads = self.parent.plan.childSlice(variants[present_index].payloads);
-        if (present_payloads.len != 1) {
-            boxyLowerInvariant("presence-slot inspect Present arm did not have one payload");
-        }
-        const payload_child = present_payloads[0];
-        switch (payload_child.role) {
-            .tag_payload => |payload| if (payload.tag != variants[present_index].name or payload.index != 0) {
-                boxyLowerInvariant("presence-slot inspect payload did not match its Present variant");
-            },
-            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("presence-slot inspect Present arm had a non-payload child"),
-        }
-
-        const missing_discriminant: u16 = if (present_discriminant == 0) 1 else 0;
-        if (variants[missing_discriminant].payloads.len != 0) {
-            boxyLowerInvariant("presence-slot inspect Missing arm carried a payload");
-        }
-
-        const done = self.freshJoinPointId();
-        const present_body = try self.lowerInspectPartInto(target, .{ .tag_payload = .{
-            .source = source,
-            .variant_index = present_discriminant,
-            .payload_index = null,
-            .rep = payload_child.rep,
-        } }, try self.joinJump(done));
-        const missing_body = try self.assignStringBytesLiteral(target, "<missing>", try self.joinJump(done));
-        const branches = [_]LIR.CFSwitchBranch{
-            .{ .value = missing_discriminant, .body = missing_body },
-            .{ .value = present_discriminant, .body = present_body },
-        };
-        const discriminant = try self.addFrameLocal(.u16);
-        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = discriminant,
-            .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
-            .default_branch = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin()),
-            .continuation = null,
-        } }, self.derivedOrigin());
-        const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
-            .next = switch_stmt,
-        } }, self.derivedOrigin());
-        return try self.derivedResultJoin(done, target, next, read_discriminant);
-    }
-
-    fn lowerBoxInspectLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload_rep = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep;
-        const payload = try self.addFrameLocalForRep(payload_rep);
-        const prefix = try self.addFrameLocal(.str);
-        const rendered = try self.addFrameLocal(.str);
-        const with_value = try self.addFrameLocal(.str);
-        const suffix = try self.addFrameLocal(.str);
-
-        var continuation = try self.assignStrConcat(target, with_value, suffix, next);
-        continuation = try self.assignStringBytesLiteral(suffix, ")", continuation);
-        continuation = try self.assignStrConcat(with_value, prefix, rendered, continuation);
-        continuation = try self.lowerInspectRepLocalInto(rendered, payload, payload_rep, continuation);
-        continuation = try self.assignBoxBoundary(
-            payload,
-            source,
-            payload_rep,
-            .box_unbox,
-            continuation,
-        );
-        return try self.assignStringBytesLiteral(prefix, "Box(", continuation);
-    }
-
-    fn lowerListInspectLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const elem_rep = self.repQuery().requiredSingleChild(rep_id, .list_elem).rep;
-        const len = try self.addFrameLocal(.u64);
-        const index = try self.addFrameLocal(.u64);
-        const out = try self.addFrameLocal(.str);
-        const zero_index = try self.addFrameLocal(.u64);
-        const initial_out = try self.addFrameLocal(.str);
-        const join_id = self.freshJoinPointId();
-
-        const body = try self.lowerListInspectLoopBody(target, source, elem_rep, len, index, out, join_id, next);
-        var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.derivedOrigin());
-        initial_jump = try self.setLocalInitializeJoinParam(out, initial_out, initial_jump);
-        initial_jump = try self.setLocalInitializeJoinParam(index, zero_index, initial_jump);
-        initial_jump = try self.assignStringBytesLiteral(initial_out, "[", initial_jump);
-        initial_jump = try self.assignIntLiteral(zero_index, 0, initial_jump);
-        initial_jump = try self.assignUnaryLowLevel(len, .list_len, source, initial_jump);
-
-        return try self.parent.result.store.addCFStmt(.{ .join = .{
-            .id = join_id,
-            .params = try self.joinParamSpan(&[_]LIR.LocalId{ index, out }),
-            .body = body,
-            .remainder = initial_jump,
-        } }, self.derivedOrigin());
-    }
-
-    fn lowerListInspectLoopBody(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        elem_rep: Plan.TypeRepId,
-        len: LIR.LocalId,
-        index: LIR.LocalId,
-        out: LIR.LocalId,
-        join_id: LIR.JoinPointId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const done = try self.addFrameLocal(.bool);
-        const finish = try self.lowerListInspectFinish(target, out, next);
-        const step = try self.lowerListInspectStep(source, elem_rep, index, out, join_id);
-        const switch_stmt = try self.boolSwitchNoContinuation(done, finish, step);
-        return try self.assignBinaryLowLevel(done, .num_is_eq, index, len, switch_stmt);
-    }
-
     fn lowerListInspectFinish(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -31878,154 +33069,6 @@ const ProcBodyBuilder = struct {
         const close = try self.addFrameLocal(.str);
         const concat = try self.assignStrConcat(target, out, close, next);
         return try self.assignStringBytesLiteral(close, "]", concat);
-    }
-
-    fn lowerListInspectStep(
-        self: *ProcBodyBuilder,
-        source: LIR.LocalId,
-        elem_rep: Plan.TypeRepId,
-        index: LIR.LocalId,
-        out: LIR.LocalId,
-        join_id: LIR.JoinPointId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const sep = try self.addFrameLocal(.str);
-        const zero = try self.addFrameLocal(.u64);
-        const is_first = try self.addFrameLocal(.bool);
-        const elem = try self.addFrameLocalForRep(elem_rep);
-        const elem_str = try self.addFrameLocal(.str);
-        const with_sep = try self.addFrameLocal(.str);
-        const next_out = try self.addFrameLocal(.str);
-        const one = try self.addFrameLocal(.u64);
-        const next_index = try self.addFrameLocal(.u64);
-
-        var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, self.derivedOrigin());
-        continuation = try self.setLocalInitializeJoinParam(out, next_out, continuation);
-        continuation = try self.setLocalInitializeJoinParam(index, next_index, continuation);
-        continuation = try self.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
-        continuation = try self.assignIntLiteral(one, 1, continuation);
-        continuation = try self.assignStrConcat(next_out, with_sep, elem_str, continuation);
-        continuation = try self.lowerInspectRepLocalInto(elem_str, elem, elem_rep, continuation);
-        if (!self.isZstLocal(elem)) {
-            continuation = try self.assignBinaryLowLevel(elem, .list_get_unsafe, source, index, continuation);
-        }
-        continuation = try self.assignStrConcat(with_sep, out, sep, continuation);
-
-        const empty_sep = try self.assignStringBytesLiteral(sep, "", continuation);
-        const comma_sep = try self.assignStringBytesLiteral(sep, ", ", continuation);
-        const sep_switch = try self.boolSwitchNoContinuation(is_first, empty_sep, comma_sep);
-        const compare_first = try self.assignBinaryLowLevel(is_first, .num_is_eq, index, zero, sep_switch);
-        return try self.assignIntLiteral(zero, 0, compare_first);
-    }
-
-    fn lowerTagInspectVariant(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        variant: Plan.TagVariant,
-        variant_index: u16,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        if (payloads.len == 0) {
-            return try self.assignStringBytesLiteral(target, self.tagVariantNameText(variant), next);
-        }
-
-        var parts = std.ArrayList(InspectPart).empty;
-        defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = self.tagVariantNameText(variant) });
-        try parts.append(self.parent.allocator, .{ .literal = "(" });
-        for (payloads, 0..) |child, index| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (payload.tag != variant.name or payload.index != index) {
-                        boxyLowerInvariant("tag inspect payload span did not match its payload child roles");
-                    }
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag inspect variant payload span included a non-payload child"),
-            }
-            if (index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-            if (index > std.math.maxInt(u16)) {
-                boxyLowerInvariant("tag inspect payload index exceeded LIR payload index range");
-            }
-            try parts.append(self.parent.allocator, .{ .tag_payload = .{
-                .source = source,
-                .variant_index = variant_index,
-                .payload_index = if (payloads.len == 1) null else @as(u16, @intCast(index)),
-                .rep = child.rep,
-            } });
-        }
-        try parts.append(self.parent.allocator, .{ .literal = ")" });
-        return try self.lowerInspectPartsInto(target, parts.items, next);
-    }
-
-    fn lowerInspectPartsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        parts: []const InspectPart,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (parts.len == 0) return try self.assignStringBytesLiteral(target, "", next);
-
-        const part_locals = try self.parent.allocator.alloc(LIR.LocalId, parts.len);
-        defer self.parent.allocator.free(part_locals);
-        for (part_locals) |*local| {
-            local.* = try self.addFrameLocal(.str);
-        }
-
-        var continuation = try self.concatStringLocalsInto(target, part_locals, next);
-        var index = parts.len;
-        while (index > 0) {
-            index -= 1;
-            continuation = try self.lowerInspectPartInto(part_locals[index], parts[index], continuation);
-        }
-        return continuation;
-    }
-
-    fn lowerInspectPartInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        part: InspectPart,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return switch (part) {
-            .literal => |text| try self.assignStringBytesLiteral(target, text, next),
-            .field => |field| blk: {
-                const value = try self.addFrameLocalForRep(field.rep);
-                var continuation = try self.lowerInspectRepLocalInto(target, value, field.rep, next);
-                if (!self.isZstLocal(value)) {
-                    continuation = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                        .target = value,
-                        .op = .{ .field = .{
-                            .source = field.source,
-                            .field_idx = field.field_index,
-                        } },
-                        .next = continuation,
-                    } }, self.derivedOrigin());
-                }
-                break :blk continuation;
-            },
-            .tag_payload => |payload| blk: {
-                const value = try self.addFrameLocalForRep(payload.rep);
-                var continuation = try self.lowerInspectRepLocalInto(target, value, payload.rep, next);
-                if (!self.isZstLocal(value)) {
-                    continuation = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                        .target = value,
-                        .op = if (payload.payload_index) |index| .{ .tag_payload = .{
-                            .source = payload.source,
-                            .payload_idx = index,
-                            .variant_index = payload.variant_index,
-                            .tag_discriminant = payload.variant_index,
-                        } } else .{ .tag_payload_struct = .{
-                            .source = payload.source,
-                            .variant_index = payload.variant_index,
-                            .tag_discriminant = payload.variant_index,
-                        } },
-                        .next = continuation,
-                    } }, self.derivedOrigin());
-                }
-                break :blk continuation;
-            },
-        };
     }
 
     fn concatStringLocalsInto(
@@ -32074,6 +33117,83 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
     }
 
+    // Structural equality //
+    //
+    // Equality over a representation compares its components, and components
+    // follow type nesting, so each comparison still waiting on a component's
+    // comparison is a frame on one heap-backed stack. Comparisons are built
+    // from their continuation backward; frames allocate locals, join points,
+    // and statements in the order a direct recursive build would.
+
+    const EqRequest = struct {
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    };
+
+    const EqStep = union(enum) {
+        /// The frame needs this component comparison next.
+        request: EqRequest,
+        /// The frame finished with this statement and was popped.
+        done: LIR.CFStmtId,
+    };
+
+    /// A comparison waiting on its components' comparisons.
+    const EqFrame = struct {
+        /// Whether the frame's last requested comparison is still due.
+        awaiting: bool = false,
+        state: union(enum) {
+            /// Compare at another representation, then convert both
+            /// operands into it.
+            convert: struct { request: EqRequest, lhs_actual: LIR.LocalId, rhs_actual: LIR.LocalId, actual: Plan.TypeRepId },
+            /// Compare the box payloads, then unbox both operands.
+            unbox: struct { request: EqRequest, lhs_payload: LIR.LocalId, rhs_payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
+            nominal: struct {
+                request: EqRequest,
+                scope: NominalBackingFormalScope,
+                backing_rep: Plan.TypeRepId,
+                /// The backing operands, when the nominal's declared fields
+                /// store differently from its backing.
+                backing: ?struct { lhs: LIR.LocalId, rhs: LIR.LocalId } = null,
+            },
+            /// A record's fields or a tuple's elements, last first.
+            fields: struct {
+                request: EqRequest,
+                kind: enum { record, tuple },
+                done: LIR.JoinPointId,
+                current: LIR.CFStmtId,
+                failed: LIR.CFStmtId,
+                remaining: usize,
+                field_index: u16,
+                pending: struct { lhs_field: LIR.LocalId, rhs_field: LIR.LocalId, field_index: u16 } = undefined,
+            },
+            tag: *EqTagState,
+        },
+    };
+
+    /// A tag union comparison: one switch branch per variant, each comparing
+    /// its payloads last first.
+    const EqTagState = struct {
+        request: EqRequest,
+        done: LIR.JoinPointId,
+        success: LIR.CFStmtId,
+        failed: LIR.CFStmtId,
+        lhs_disc: LIR.LocalId,
+        rhs_disc: LIR.LocalId,
+        same_disc: LIR.LocalId,
+        branches: []LIR.CFSwitchBranch,
+        variant: usize = 0,
+        /// The current variant's payloads still to compare.
+        remaining: usize = 0,
+        started: bool = false,
+        current: LIR.CFStmtId = undefined,
+        source_has_payload_desc: bool = false,
+        pending: struct { child: Plan.RepChild, lhs_payload: ExtractedTagPayloadLocal, rhs_payload: ExtractedTagPayloadLocal, index: usize } = undefined,
+    };
+
     fn lowerEqRepLocalsInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -32083,54 +33203,402 @@ const ProcBodyBuilder = struct {
         negated: bool,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        switch (try self.derivedStep(.equality, rep_id)) {
-            .expand => {},
-            .call => |index| return try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next),
-            .scheme_dictionary => |requirement| return try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next),
-            .helper => {
-                if (!negated) return try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next);
-                const raw = try self.addFrameLocal(.bool);
-                return try self.lowerDerivedHelperCallInto(.equality, raw, lhs, rhs, rep_id, try self.negateBoolInto(target, raw, next));
-            },
-            .convert => |actual| {
-                const lhs_actual = try self.addFrameLocalForRep(actual);
-                const rhs_actual = try self.addFrameLocalForRep(actual);
-                var continuation = try self.lowerEqRepLocalsInto(target, lhs_actual, rhs_actual, actual, negated, next);
-                continuation = try self.assignRepresentationBoundary(rhs_actual, rhs, actual, rep_id, continuation);
-                return try self.assignRepresentationBoundary(lhs_actual, lhs, actual, rep_id, continuation);
-            },
-            .unbox => |payload_rep| {
-                const lhs_payload = try self.addFrameLocalForRep(payload_rep);
-                const rhs_payload = try self.addFrameLocalForRep(payload_rep);
-                var continuation = try self.lowerEqRepLocalsInto(target, lhs_payload, rhs_payload, payload_rep, negated, next);
-                continuation = try self.assignBoxBoundary(rhs_payload, rhs, payload_rep, .box_unbox, continuation);
-                return try self.assignBoxBoundary(lhs_payload, lhs, payload_rep, .box_unbox, continuation);
+        const allocator = self.parent.allocator;
+        var frames: std.ArrayList(EqFrame) = .empty;
+        defer {
+            var index = frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                self.releaseEqFrame(&frames.items[index]);
+            }
+            frames.deinit(allocator);
+        }
+        var value = try self.beginEq(&frames, .{ .target = target, .lhs = lhs, .rhs = rhs, .rep_id = rep_id, .negated = negated, .next = next });
+        while (frames.items.len != 0) {
+            switch (try self.stepEqFrame(&frames, value)) {
+                .request => |request| value = try self.beginEq(&frames, request),
+                .done => |stmt| value = stmt,
+            }
+        }
+        return value.?;
+    }
+
+    /// Free what an unfinished frame owns and leave the scope it holds, as
+    /// the direct build's defers would.
+    fn releaseEqFrame(self: *ProcBodyBuilder, frame: *EqFrame) void {
+        switch (frame.state) {
+            .convert, .unbox, .fields => {},
+            .nominal => |nominal| self.dropNominalBackingFormalScope(nominal.scope),
+            .tag => |state| {
+                self.parent.allocator.free(state.branches);
+                self.parent.allocator.destroy(state);
             },
         }
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        return switch (rep.kind) {
-            .in_progress => boxyLowerInvariant("in-progress boxy representation reached structural equality lowering"),
-            .erased_callable => boxyLowerInvariant("erased callable structural equality reached boxy lowering"),
-            .generated_field,
-            .generated_field_names,
-            .generated_tag_union_spec,
-            => boxyLowerInvariant("compiler-owned encoding evidence reached structural equality lowering"),
-            .dynamic,
-            .list,
-            .box,
-            => boxyLowerInvariant("derived equality expanded a component its step dispatches"),
-            .primitive => |primitive| try self.lowerPrimitiveEqLocalsInto(target, lhs, rhs, primitive, negated, next),
-            .bool_tag_union => try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next),
-            .empty_record,
-            .empty_tag_union,
-            => try self.assignBoolLiteral(target, !negated, next),
-            .alias => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, negated, next),
-            .nominal => try self.lowerNominalBackingEqLocalsInto(target, lhs, rhs, rep_id, negated, next),
-            .record,
-            => try self.lowerRecordEqLocalsInto(target, lhs, rhs, rep, negated, next),
-            .tuple => try self.lowerTupleEqLocalsInto(target, lhs, rhs, rep, negated, next),
-            .tag_union => try self.lowerTagUnionEqLocalsInto(target, lhs, rhs, rep_id, negated, next),
+    }
+
+    /// The comparison of `request` when it needs no component comparison;
+    /// otherwise null, with the frame that builds it pushed.
+    fn beginEq(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), root: EqRequest) Allocator.Error!?LIR.CFStmtId {
+        var request = root;
+        while (true) {
+            const target = request.target;
+            const lhs = request.lhs;
+            const rhs = request.rhs;
+            const rep_id = request.rep_id;
+            const negated = request.negated;
+            const next = request.next;
+            switch (try self.derivedStep(.equality, rep_id)) {
+                .expand => {},
+                .call => |index| return try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next),
+                .scheme_dictionary => |requirement| return try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next),
+                .helper => {
+                    if (!negated) return try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next);
+                    const raw = try self.addFrameLocal(.bool);
+                    return try self.lowerDerivedHelperCallInto(.equality, raw, lhs, rhs, rep_id, try self.negateBoolInto(target, raw, next));
+                },
+                .convert => |actual| {
+                    const lhs_actual = try self.addFrameLocalForRep(actual);
+                    const rhs_actual = try self.addFrameLocalForRep(actual);
+                    return try self.pushEqFrame(frames, .{ .convert = .{ .request = request, .lhs_actual = lhs_actual, .rhs_actual = rhs_actual, .actual = actual } });
+                },
+                .unbox => |payload_rep| {
+                    const lhs_payload = try self.addFrameLocalForRep(payload_rep);
+                    const rhs_payload = try self.addFrameLocalForRep(payload_rep);
+                    return try self.pushEqFrame(frames, .{ .unbox = .{ .request = request, .lhs_payload = lhs_payload, .rhs_payload = rhs_payload, .payload_rep = payload_rep } });
+                },
+            }
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            switch (rep.kind) {
+                .in_progress => boxyLowerInvariant("in-progress boxy representation reached structural equality lowering"),
+                .erased_callable => boxyLowerInvariant("erased callable structural equality reached boxy lowering"),
+                .generated_field,
+                .generated_field_names,
+                .generated_tag_union_spec,
+                => boxyLowerInvariant("compiler-owned encoding evidence reached structural equality lowering"),
+                .dynamic,
+                .list,
+                .box,
+                => boxyLowerInvariant("derived equality expanded a component its step dispatches"),
+                .primitive => |primitive| return try self.lowerPrimitiveEqLocalsInto(target, lhs, rhs, primitive, negated, next),
+                .bool_tag_union => return try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next),
+                .empty_record,
+                .empty_tag_union,
+                => return try self.assignBoolLiteral(target, !negated, next),
+                .alias => {
+                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
+                    continue;
+                },
+                .nominal => {
+                    const scope = try self.enterNominalBackingFormalScope(rep_id);
+                    errdefer self.dropNominalBackingFormalScope(scope);
+                    const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
+                    const backing: @FieldType(@FieldType(@FieldType(EqFrame, "state"), "nominal"), "backing") = if (rep.declared_fields.len == 0) null else backing: {
+                        const backing_layout = self.workerRuntimeLayoutForRep(backing_rep).layoutIdx();
+                        const lhs_backing = try self.addFrameLocal(backing_layout);
+                        const rhs_backing = try self.addFrameLocal(backing_layout);
+                        break :backing .{ .lhs = lhs_backing, .rhs = rhs_backing };
+                    };
+                    try frames.append(self.parent.allocator, .{ .state = .{ .nominal = .{
+                        .request = request,
+                        .scope = scope,
+                        .backing_rep = backing_rep,
+                        .backing = backing,
+                    } } });
+                    return null;
+                },
+                .record, .tuple => {
+                    const done = self.freshJoinPointId();
+                    const current = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
+                    const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
+                    const children = self.parent.plan.childSlice(rep.children);
+                    return try self.pushEqFrame(frames, .{ .fields = .{
+                        .request = request,
+                        .kind = if (rep.kind == .record) .record else .tuple,
+                        .done = done,
+                        .current = current,
+                        .failed = failed,
+                        .remaining = children.len,
+                        .field_index = if (rep.kind == .record) recordEqualityFieldCount(children) else 0,
+                    } });
+                },
+                .tag_union => {
+                    if (self.isZstLocal(lhs) and self.isZstLocal(rhs)) {
+                        return try self.assignBoolLiteral(target, !negated, next);
+                    }
+                    const done = self.freshJoinPointId();
+                    const success = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
+                    const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
+                    const lhs_disc = try self.addFrameLocal(.u16);
+                    const rhs_disc = try self.addFrameLocal(.u16);
+                    const same_disc = try self.addFrameLocal(.bool);
+                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+                    const state = try self.parent.allocator.create(EqTagState);
+                    errdefer self.parent.allocator.destroy(state);
+                    const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
+                    state.* = .{
+                        .request = request,
+                        .done = done,
+                        .success = success,
+                        .failed = failed,
+                        .lhs_disc = lhs_disc,
+                        .rhs_disc = rhs_disc,
+                        .same_disc = same_disc,
+                        .branches = branches,
+                    };
+                    return try self.pushEqFrame(frames, .{ .tag = state });
+                },
+            }
+        }
+    }
+
+    fn pushEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), state: @FieldType(EqFrame, "state")) Allocator.Error!?LIR.CFStmtId {
+        var frame: EqFrame = .{ .state = state };
+        frames.append(self.parent.allocator, frame) catch |err| {
+            self.releaseEqFrame(&frame);
+            return err;
         };
+        return null;
+    }
+
+    fn finishEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), stmt: LIR.CFStmtId) EqStep {
+        var frame = frames.pop().?;
+        switch (frame.state) {
+            // A finished nominal comparison has left its scope already.
+            .nominal => {},
+            .convert, .unbox, .fields, .tag => self.releaseEqFrame(&frame),
+        }
+        return .{ .done = stmt };
+    }
+
+    fn stepEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), delivered: ?LIR.CFStmtId) Allocator.Error!EqStep {
+        const frame = &frames.items[frames.items.len - 1];
+        const child: ?LIR.CFStmtId = if (frame.awaiting)
+            delivered orelse boxyLowerInvariant("boxy equality frame resumed without its component comparison")
+        else
+            null;
+        frame.awaiting = false;
+        switch (frame.state) {
+            .convert => |convert| {
+                const request = convert.request;
+                const continuation = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{ .target = request.target, .lhs = convert.lhs_actual, .rhs = convert.rhs_actual, .rep_id = convert.actual, .negated = request.negated, .next = request.next } };
+                };
+                const after_rhs = try self.assignRepresentationBoundary(convert.rhs_actual, request.rhs, convert.actual, request.rep_id, continuation);
+                return self.finishEqFrame(frames, try self.assignRepresentationBoundary(convert.lhs_actual, request.lhs, convert.actual, request.rep_id, after_rhs));
+            },
+            .unbox => |unbox| {
+                const request = unbox.request;
+                const continuation = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{ .target = request.target, .lhs = unbox.lhs_payload, .rhs = unbox.rhs_payload, .rep_id = unbox.payload_rep, .negated = request.negated, .next = request.next } };
+                };
+                const after_rhs = try self.assignBoxBoundary(unbox.rhs_payload, request.rhs, unbox.payload_rep, .box_unbox, continuation);
+                return self.finishEqFrame(frames, try self.assignBoxBoundary(unbox.lhs_payload, request.lhs, unbox.payload_rep, .box_unbox, after_rhs));
+            },
+            .nominal => |nominal| {
+                const request = nominal.request;
+                const lowered_child = child orelse {
+                    frame.awaiting = true;
+                    const operands = nominal.backing orelse return .{ .request = .{ .target = request.target, .lhs = request.lhs, .rhs = request.rhs, .rep_id = nominal.backing_rep, .negated = request.negated, .next = request.next } };
+                    return .{ .request = .{ .target = request.target, .lhs = operands.lhs, .rhs = operands.rhs, .rep_id = nominal.backing_rep, .negated = request.negated, .next = request.next } };
+                };
+                const lowered = if (nominal.backing) |operands| lowered: {
+                    const after_rhs = try self.assignRepresentationBoundary(operands.rhs, request.rhs, nominal.backing_rep, request.rep_id, lowered_child);
+                    break :lowered try self.assignRepresentationBoundary(operands.lhs, request.lhs, nominal.backing_rep, request.rep_id, after_rhs);
+                } else lowered_child;
+                const stmt = try self.leaveNominalBackingFormalScope(nominal.scope, lowered);
+                return self.finishEqFrame(frames, stmt);
+            },
+            .fields => |*fields| {
+                const request = fields.request;
+                if (child) |compare| {
+                    var current = compare;
+                    const pending = fields.pending;
+                    if (!self.isZstLocal(pending.rhs_field)) {
+                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                            .target = pending.rhs_field,
+                            .op = .{ .field = .{
+                                .source = request.rhs,
+                                .field_idx = pending.field_index,
+                            } },
+                            .next = current,
+                        } }, self.derivedOrigin());
+                    }
+                    if (!self.isZstLocal(pending.lhs_field)) {
+                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                            .target = pending.lhs_field,
+                            .op = .{ .field = .{
+                                .source = request.lhs,
+                                .field_idx = pending.field_index,
+                            } },
+                            .next = current,
+                        } }, self.derivedOrigin());
+                    }
+                    fields.current = current;
+                }
+                const children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(request.rep_id)].children);
+                while (fields.remaining > 0) {
+                    fields.remaining -= 1;
+                    const field = children[fields.remaining];
+                    const field_index: u16 = switch (fields.kind) {
+                        .record => switch (field.role) {
+                            .record_field => field_index: {
+                                fields.field_index -= 1;
+                                break :field_index fields.field_index;
+                            },
+                            .record_ext => {
+                                self.requireEmptyRecordExtension(field.rep);
+                                continue;
+                            },
+                            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record equality representation had a non-record child role"),
+                        },
+                        .tuple => switch (field.role) {
+                            .tuple_elem => |index| field_index: {
+                                if (index > std.math.maxInt(u16)) {
+                                    boxyLowerInvariant("tuple equality element index exceeded LIR field index range");
+                                }
+                                break :field_index @intCast(index);
+                            },
+                            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple equality representation had a non-tuple child role"),
+                        },
+                    };
+                    const lhs_field = try self.addFrameLocalForRep(field.rep);
+                    const rhs_field = try self.addFrameLocalForRep(field.rep);
+                    const eq = try self.addFrameLocal(.bool);
+                    const on_compared = try self.boolSwitchNoContinuation(eq, fields.current, fields.failed);
+                    fields.pending = .{ .lhs_field = lhs_field, .rhs_field = rhs_field, .field_index = field_index };
+                    frame.awaiting = true;
+                    return .{ .request = .{ .target = eq, .lhs = lhs_field, .rhs = rhs_field, .rep_id = field.rep, .negated = false, .next = on_compared } };
+                }
+                return self.finishEqFrame(frames, try self.derivedResultJoin(fields.done, request.target, request.next, fields.current));
+            },
+            .tag => |state| {
+                if (child) |compare| try self.finishEqTagPayload(state, compare);
+                if (try self.nextEqTagPayload(state)) |request| {
+                    frame.awaiting = true;
+                    return .{ .request = request };
+                }
+                return self.finishEqFrame(frames, try self.finishEqTag(state));
+            },
+        }
+    }
+
+    /// The next payload comparison of a tag union comparison, or null once
+    /// every variant's branch is built.
+    fn nextEqTagPayload(self: *ProcBodyBuilder, state: *EqTagState) Allocator.Error!?EqRequest {
+        const request = state.request;
+        const rep = self.parent.plan.representations.items[@intFromEnum(request.rep_id)];
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        while (state.variant < variants.len) {
+            const variant = variants[state.variant];
+            const payloads = self.parent.plan.childSlice(variant.payloads);
+            if (!state.started) {
+                if (state.variant > std.math.maxInt(u16)) {
+                    boxyLowerInvariant("tag-union equality variant index exceeded LIR variant range");
+                }
+                state.started = true;
+                state.current = state.success;
+                state.remaining = payloads.len;
+                state.source_has_payload_desc = rep.descriptor != null or
+                    self.parent.result.store.getLocal(request.lhs).boxy_desc != null or
+                    self.parent.result.store.getLocal(request.rhs).boxy_desc != null;
+            }
+            if (state.remaining > 0) {
+                state.remaining -= 1;
+                const i = state.remaining;
+                const payload_child = payloads[i];
+                switch (payload_child.role) {
+                    .tag_payload => |payload| {
+                        if (payload.tag != variant.name or payload.index != @as(u32, @intCast(i))) {
+                            boxyLowerInvariant("tag equality payload span did not match its payload child roles");
+                        }
+                    },
+                    .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag equality variant payload span included a non-payload child"),
+                }
+                const lhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, state.source_has_payload_desc);
+                const rhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, state.source_has_payload_desc);
+                const eq = try self.addFrameLocal(.bool);
+                const on_compared = try self.boolSwitchNoContinuation(eq, state.current, state.failed);
+                state.pending = .{ .child = payload_child, .lhs_payload = lhs_payload, .rhs_payload = rhs_payload, .index = i };
+                return .{ .target = eq, .lhs = lhs_payload.local, .rhs = rhs_payload.local, .rep_id = payload_child.rep, .negated = false, .next = on_compared };
+            }
+            state.branches[state.variant] = .{
+                .value = @intCast(state.variant),
+                .body = state.current,
+            };
+            state.variant += 1;
+            state.started = false;
+        }
+        return null;
+    }
+
+    /// Read one payload pair for its comparison, extending the variant's
+    /// branch backward.
+    fn finishEqTagPayload(self: *ProcBodyBuilder, state: *EqTagState, compare: LIR.CFStmtId) Allocator.Error!void {
+        const request = state.request;
+        const rep = self.parent.plan.representations.items[@intFromEnum(request.rep_id)];
+        const variant = self.parent.plan.tagVariantSlice(rep.tag_variants)[state.variant];
+        const payloads = self.parent.plan.childSlice(variant.payloads);
+        const pending = state.pending;
+        if (pending.index > std.math.maxInt(u16)) {
+            boxyLowerInvariant("tag equality payload index exceeded LIR payload index range");
+        }
+        var current = try self.assignConcreteTagPayloadRead(
+            pending.rhs_payload.local,
+            pending.child.rep,
+            pending.rhs_payload.desc_local,
+            request.rhs,
+            request.rep_id,
+            variant.name,
+            @intCast(state.variant),
+            @intCast(pending.index),
+            payloads.len,
+            compare,
+        );
+        current = try self.assignConcreteTagPayloadRead(
+            pending.lhs_payload.local,
+            pending.child.rep,
+            pending.lhs_payload.desc_local,
+            request.lhs,
+            request.rep_id,
+            variant.name,
+            @intCast(state.variant),
+            @intCast(pending.index),
+            payloads.len,
+            current,
+        );
+        state.current = current;
+    }
+
+    /// The tag union comparison once every variant's branch is built.
+    fn finishEqTag(self: *ProcBodyBuilder, state: *EqTagState) Allocator.Error!LIR.CFStmtId {
+        const request = state.request;
+        const payload_switch = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = state.lhs_disc,
+            .branches = try self.parent.result.store.addCFSwitchBranches(state.branches),
+            .default_branch = state.failed,
+            .continuation = null,
+        } }, self.derivedOrigin());
+        const disc_switch = try self.boolSwitchNoContinuation(state.same_disc, payload_switch, state.failed);
+        const compare_disc = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = state.same_disc,
+            .op = .num_is_eq,
+            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ state.lhs_disc, state.rhs_disc }),
+            .next = disc_switch,
+        } }, self.derivedOrigin());
+        const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = state.rhs_disc,
+            .op = .{ .discriminant = .{ .source = request.rhs } },
+            .next = compare_disc,
+        } }, self.derivedOrigin());
+        const read_lhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = state.lhs_disc,
+            .op = .{ .discriminant = .{ .source = request.lhs } },
+            .next = read_rhs,
+        } }, self.derivedOrigin());
+        return try self.derivedResultJoin(state.done, request.target, request.next, read_lhs);
     }
 
     /// How a derived method handles one component.
@@ -32274,31 +33742,6 @@ const ProcBodyBuilder = struct {
         } }, self.derivedOrigin());
     }
 
-    fn lowerNominalBackingEqLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const scope = try self.enterNominalBackingFormalScope(rep_id);
-        defer self.dropNominalBackingFormalScope(scope);
-        const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-        const lowered = if (self.parent.plan.representations.items[@intFromEnum(rep_id)].declared_fields.len == 0)
-            try self.lowerEqRepLocalsInto(target, lhs, rhs, backing_rep, negated, next)
-        else blk: {
-            const backing_layout = self.workerRuntimeLayoutForRep(backing_rep).layoutIdx();
-            const lhs_backing = try self.addFrameLocal(backing_layout);
-            const rhs_backing = try self.addFrameLocal(backing_layout);
-            var continuation = try self.lowerEqRepLocalsInto(target, lhs_backing, rhs_backing, backing_rep, negated, next);
-            continuation = try self.assignRepresentationBoundary(rhs_backing, rhs, backing_rep, rep_id, continuation);
-            break :blk try self.assignRepresentationBoundary(lhs_backing, lhs, backing_rep, rep_id, continuation);
-        };
-        return try self.leaveNominalBackingFormalScope(scope, lowered);
-    }
-
     fn lowerPrimitiveEqLocalsInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -32324,7 +33767,7 @@ const ProcBodyBuilder = struct {
             => {
                 const lhs_bits = try self.addFrameLocal(.u128);
                 const rhs_bits = try self.addFrameLocal(.u128);
-                const compare = try self.lowerPrimitiveEqLocalsInto(target, lhs_bits, rhs_bits, .u128, negated, next);
+                const compare = try self.lowerScalarEqLocalsInto(target, lhs_bits, rhs_bits, .num_is_eq, negated, next);
                 const lower_rhs = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                     .target = rhs_bits,
                     .op = .simd_to_u128_bits,
@@ -32370,6 +33813,19 @@ const ProcBodyBuilder = struct {
             => unreachable,
             .bool => unreachable,
         };
+        return try self.lowerScalarEqLocalsInto(target, lhs, rhs, eq_op, negated, next);
+    }
+
+    /// Compare two scalars with `eq_op`, negating the result when asked.
+    fn lowerScalarEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        eq_op: LIR.LowLevel,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const args = [_]LIR.LocalId{ lhs, rhs };
         if (!negated) {
             return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
@@ -32408,7 +33864,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const lhs_disc = try self.addFrameLocal(.u16);
         const rhs_disc = try self.addFrameLocal(.u16);
-        const compare = try self.lowerPrimitiveEqLocalsInto(target, lhs_disc, rhs_disc, .u16, negated, next);
+        const compare = try self.lowerScalarEqLocalsInto(target, lhs_disc, rhs_disc, .num_is_eq, negated, next);
         const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = rhs_disc,
             .op = .{ .discriminant = .{ .source = rhs } },
@@ -32419,36 +33875,6 @@ const ProcBodyBuilder = struct {
             .op = .{ .discriminant = .{ .source = lhs } },
             .next = read_rhs,
         } }, self.derivedOrigin());
-    }
-
-    fn lowerRecordEqLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const done = self.freshJoinPointId();
-        var current = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
-        const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-        const children = self.parent.plan.childSlice(rep.children);
-        var field_index = recordEqualityFieldCount(children);
-        var i = children.len;
-        while (i > 0) {
-            i -= 1;
-            const child = children[i];
-            switch (child.role) {
-                .record_field => {
-                    field_index -= 1;
-                    current = try self.lowerFieldEqStep(lhs, rhs, child.rep, field_index, current, failed);
-                },
-                .record_ext => self.requireEmptyRecordExtension(child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record equality representation had a non-record child role"),
-            }
-        }
-        return try self.derivedResultJoin(done, target, next, current);
     }
 
     /// Merge a derived method's branches, each of which wrote `target` and
@@ -32467,200 +33893,6 @@ const ProcBodyBuilder = struct {
             .body = next,
             .remainder = remainder,
         } }, self.derivedOrigin());
-    }
-
-    fn lowerTupleEqLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const done = self.freshJoinPointId();
-        var current = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
-        const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-        const children = self.parent.plan.childSlice(rep.children);
-        var i = children.len;
-        while (i > 0) {
-            i -= 1;
-            const child = children[i];
-            switch (child.role) {
-                .tuple_elem => |index| {
-                    if (index > std.math.maxInt(u16)) {
-                        boxyLowerInvariant("tuple equality element index exceeded LIR field index range");
-                    }
-                    current = try self.lowerFieldEqStep(lhs, rhs, child.rep, @intCast(index), current, failed);
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple equality representation had a non-tuple child role"),
-            }
-        }
-        return try self.derivedResultJoin(done, target, next, current);
-    }
-
-    fn lowerFieldEqStep(
-        self: *ProcBodyBuilder,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        field_rep: Plan.TypeRepId,
-        field_index: u16,
-        on_equal: LIR.CFStmtId,
-        on_not_equal: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const lhs_field = try self.addFrameLocalForRep(field_rep);
-        const rhs_field = try self.addFrameLocalForRep(field_rep);
-        const eq = try self.addFrameLocal(.bool);
-        var current = try self.boolSwitchNoContinuation(eq, on_equal, on_not_equal);
-        current = try self.lowerEqRepLocalsInto(eq, lhs_field, rhs_field, field_rep, false, current);
-        if (!self.isZstLocal(rhs_field)) {
-            current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                .target = rhs_field,
-                .op = .{ .field = .{
-                    .source = rhs,
-                    .field_idx = field_index,
-                } },
-                .next = current,
-            } }, self.derivedOrigin());
-        }
-        if (!self.isZstLocal(lhs_field)) {
-            current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                .target = lhs_field,
-                .op = .{ .field = .{
-                    .source = lhs,
-                    .field_idx = field_index,
-                } },
-                .next = current,
-            } }, self.derivedOrigin());
-        }
-        return current;
-    }
-
-    fn lowerTagUnionEqLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (self.isZstLocal(lhs) and self.isZstLocal(rhs)) {
-            return try self.assignBoolLiteral(target, !negated, next);
-        }
-
-        const done = self.freshJoinPointId();
-        const success = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
-        const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-
-        const lhs_disc = try self.addFrameLocal(.u16);
-        const rhs_disc = try self.addFrameLocal(.u16);
-        const same_disc = try self.addFrameLocal(.bool);
-
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
-        defer self.parent.allocator.free(branches);
-        for (variants, branches, 0..) |variant, *branch, index| {
-            if (index > std.math.maxInt(u16)) {
-                boxyLowerInvariant("tag-union equality variant index exceeded LIR variant range");
-            }
-            branch.* = .{
-                .value = @intCast(index),
-                .body = try self.lowerTagPayloadEqVariant(lhs, rhs, rep_id, variant, @intCast(index), success, failed),
-            };
-        }
-
-        const payload_switch = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = lhs_disc,
-            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
-            .default_branch = failed,
-            .continuation = null,
-        } }, self.derivedOrigin());
-        const disc_switch = try self.boolSwitchNoContinuation(same_disc, payload_switch, failed);
-        const compare_disc = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = same_disc,
-            .op = .num_is_eq,
-            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
-            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs_disc, rhs_disc }),
-            .next = disc_switch,
-        } }, self.derivedOrigin());
-        const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = rhs_disc,
-            .op = .{ .discriminant = .{ .source = rhs } },
-            .next = compare_disc,
-        } }, self.derivedOrigin());
-        const read_lhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = lhs_disc,
-            .op = .{ .discriminant = .{ .source = lhs } },
-            .next = read_rhs,
-        } }, self.derivedOrigin());
-        return try self.derivedResultJoin(done, target, next, read_lhs);
-    }
-
-    fn lowerTagPayloadEqVariant(
-        self: *ProcBodyBuilder,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        tag_rep_id: Plan.TypeRepId,
-        variant: Plan.TagVariant,
-        variant_index: u16,
-        on_equal: LIR.CFStmtId,
-        on_not_equal: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        var current = on_equal;
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-        const source_has_payload_desc = tag_rep.descriptor != null or
-            self.parent.result.store.getLocal(lhs).boxy_desc != null or
-            self.parent.result.store.getLocal(rhs).boxy_desc != null;
-        var i = payloads.len;
-        while (i > 0) {
-            i -= 1;
-            const child = payloads[i];
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (payload.tag != variant.name or payload.index != @as(u32, @intCast(i))) {
-                        boxyLowerInvariant("tag equality payload span did not match its payload child roles");
-                    }
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag equality variant payload span included a non-payload child"),
-            }
-            const lhs_payload = try self.addExtractedTagPayloadLocal(child.rep, source_has_payload_desc);
-            const rhs_payload = try self.addExtractedTagPayloadLocal(child.rep, source_has_payload_desc);
-            const eq = try self.addFrameLocal(.bool);
-            current = try self.boolSwitchNoContinuation(eq, current, on_not_equal);
-            current = try self.lowerEqRepLocalsInto(eq, lhs_payload.local, rhs_payload.local, child.rep, false, current);
-
-            if (i > std.math.maxInt(u16)) {
-                boxyLowerInvariant("tag equality payload index exceeded LIR payload index range");
-            }
-            current = try self.assignConcreteTagPayloadRead(
-                rhs_payload.local,
-                child.rep,
-                rhs_payload.desc_local,
-                rhs,
-                tag_rep_id,
-                variant.name,
-                variant_index,
-                @intCast(i),
-                payloads.len,
-                current,
-            );
-            current = try self.assignConcreteTagPayloadRead(
-                lhs_payload.local,
-                child.rep,
-                lhs_payload.desc_local,
-                lhs,
-                tag_rep_id,
-                variant.name,
-                variant_index,
-                @intCast(i),
-                payloads.len,
-                current,
-            );
-        }
-        return current;
     }
 
     /// Lower `body` as a derived method over `rep_id` whose component
@@ -32851,6 +34083,81 @@ const ProcBodyBuilder = struct {
         } }, self.derivedOrigin());
     }
 
+    // Structural hashing //
+    //
+    // Hashing a representation hashes its components, and components follow
+    // type nesting, so each hash still waiting on a component's hash is a
+    // frame on one heap-backed stack. Hashes are built from their
+    // continuation backward; frames allocate locals, join points, and
+    // statements in the order a direct recursive build would.
+
+    const HashRequest = struct {
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    };
+
+    const HashStep = union(enum) {
+        /// The frame needs this component hash next.
+        request: HashRequest,
+        /// The frame finished with this statement and was popped.
+        done: LIR.CFStmtId,
+    };
+
+    const HashComponent = struct {
+        rep: Plan.TypeRepId,
+        field_index: u16,
+    };
+
+    /// One tag variant's hash: its discriminant, then its payloads last
+    /// first.
+    const HashVariantState = struct {
+        request: HashRequest,
+        variant: Plan.TagVariant,
+        variant_index: u16,
+        after_discriminant: LIR.LocalId,
+        intermediate_hashers: []LIR.LocalId = &.{},
+        source_has_payload_desc: bool = false,
+        remaining: usize,
+        current: LIR.CFStmtId,
+        pending: ExtractedTagPayloadLocal = undefined,
+    };
+
+    const HashFrame = struct {
+        /// Whether the frame's last requested hash is still due.
+        awaiting: bool = false,
+        state: union(enum) {
+            convert: struct { request: HashRequest, converted: LIR.LocalId, actual: Plan.TypeRepId },
+            unbox: struct { request: HashRequest, payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
+            nominal: struct {
+                request: HashRequest,
+                scope: NominalBackingFormalScope,
+                backing_rep: Plan.TypeRepId,
+                backing: ?LIR.LocalId,
+            },
+            /// A record's fields or a tuple's elements, last first.
+            fields: struct {
+                request: HashRequest,
+                components: []HashComponent,
+                intermediate_hashers: []LIR.LocalId,
+                remaining: usize,
+                current: LIR.CFStmtId,
+                pending_field: LIR.LocalId = undefined,
+            },
+            variant: HashVariantState,
+            tag: struct {
+                request: HashRequest,
+                discriminant: LIR.LocalId,
+                done: LIR.JoinPointId,
+                branches: []LIR.CFSwitchBranch,
+                index: usize = 0,
+                variant: ?HashVariantState = null,
+            },
+        },
+    };
+
     fn lowerHashRepLocalsInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -32859,67 +34166,422 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        switch (try self.derivedStep(.hash, rep_id)) {
-            .expand => {},
-            .call => |index| return try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next),
-            .scheme_dictionary => |requirement| return try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next),
-            .helper => return try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next),
-            .convert => |actual| {
-                const converted = try self.addFrameLocalForRep(actual);
-                const hash = try self.lowerHashRepLocalsInto(target, converted, hasher, actual, next);
-                return try self.assignRepresentationBoundary(converted, value, actual, rep_id, hash);
-            },
-            .unbox => |payload_rep| {
-                const payload = try self.addFrameLocalForRep(payload_rep);
-                const hash = try self.lowerHashRepLocalsInto(target, payload, hasher, payload_rep, next);
-                return try self.assignBoxBoundary(payload, value, payload_rep, .box_unbox, hash);
-            },
+        const allocator = self.parent.allocator;
+        var frames: std.ArrayList(HashFrame) = .empty;
+        defer {
+            var index = frames.items.len;
+            while (index > 0) {
+                index -= 1;
+                self.releaseHashFrame(&frames.items[index]);
+            }
+            frames.deinit(allocator);
         }
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        return switch (rep.kind) {
-            .in_progress => boxyLowerInvariant("in-progress boxy representation reached structural hash lowering"),
-            .erased_callable => boxyLowerInvariant("erased callable structural hash reached boxy lowering"),
-            .generated_field,
-            .generated_field_names,
-            .generated_tag_union_spec,
-            => boxyLowerInvariant("compiler-owned encoding evidence reached structural hash lowering"),
-            .dynamic,
-            .list,
-            .box,
-            => boxyLowerInvariant("derived hash expanded a component its step dispatches"),
-            .primitive => |primitive| try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next),
-            .bool_tag_union => try self.lowerPrimitiveHashLocalsInto(target, value, hasher, .bool, next),
-            .empty_record,
-            .empty_tag_union,
-            => try self.assignLocal(target, hasher, next),
-            .alias => try self.lowerHashRepLocalsInto(target, value, hasher, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, next),
-            .nominal => try self.lowerNominalBackingHashLocalsInto(target, value, hasher, rep_id, next),
-            .record,
-            => try self.lowerRecordHashLocalsInto(target, value, hasher, rep, next),
-            .tuple => try self.lowerTupleHashLocalsInto(target, value, hasher, rep, next),
-            .tag_union => try self.lowerTagUnionHashLocalsInto(target, value, hasher, rep_id, next),
-        };
+        var result = try self.beginHash(&frames, .{ .target = target, .value = value, .hasher = hasher, .rep_id = rep_id, .next = next });
+        while (frames.items.len != 0) {
+            switch (try self.stepHashFrame(&frames, result)) {
+                .request => |request| result = try self.beginHash(&frames, request),
+                .done => |stmt| result = stmt,
+            }
+        }
+        return result.?;
     }
 
-    fn lowerNominalBackingHashLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const scope = try self.enterNominalBackingFormalScope(rep_id);
-        defer self.dropNominalBackingFormalScope(scope);
-        const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-        const lowered = if (self.parent.plan.representations.items[@intFromEnum(rep_id)].declared_fields.len == 0)
-            try self.lowerHashRepLocalsInto(target, value, hasher, backing_rep, next)
-        else blk: {
-            const backing = try self.addFrameLocalForRep(backing_rep);
-            const hash = try self.lowerHashRepLocalsInto(target, backing, hasher, backing_rep, next);
-            break :blk try self.assignRepresentationBoundary(backing, value, backing_rep, rep_id, hash);
+    /// Free what an unfinished frame owns and leave the scope it holds, as
+    /// the direct build's defers would.
+    fn releaseHashFrame(self: *ProcBodyBuilder, frame: *HashFrame) void {
+        const allocator = self.parent.allocator;
+        switch (frame.state) {
+            .convert, .unbox => {},
+            .nominal => |nominal| self.dropNominalBackingFormalScope(nominal.scope),
+            .fields => |fields| {
+                allocator.free(fields.components);
+                allocator.free(fields.intermediate_hashers);
+            },
+            .variant => |variant| allocator.free(variant.intermediate_hashers),
+            .tag => |tag| {
+                allocator.free(tag.branches);
+                if (tag.variant) |variant| allocator.free(variant.intermediate_hashers);
+            },
+        }
+    }
+
+    fn pushHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), state: @FieldType(HashFrame, "state")) Allocator.Error!?LIR.CFStmtId {
+        var frame: HashFrame = .{ .state = state };
+        frames.append(self.parent.allocator, frame) catch |err| {
+            self.releaseHashFrame(&frame);
+            return err;
         };
-        return try self.leaveNominalBackingFormalScope(scope, lowered);
+        return null;
+    }
+
+    fn finishHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), stmt: LIR.CFStmtId) HashStep {
+        var frame = frames.pop().?;
+        switch (frame.state) {
+            // A finished nominal hash has left its scope already.
+            .nominal => {},
+            .convert, .unbox, .fields, .variant, .tag => self.releaseHashFrame(&frame),
+        }
+        return .{ .done = stmt };
+    }
+
+    /// The hash of `request` when it needs no component hash; otherwise
+    /// null, with the frame that builds it pushed.
+    fn beginHash(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), root: HashRequest) Allocator.Error!?LIR.CFStmtId {
+        const allocator = self.parent.allocator;
+        var request = root;
+        while (true) {
+            const target = request.target;
+            const value = request.value;
+            const hasher = request.hasher;
+            const rep_id = request.rep_id;
+            const next = request.next;
+            switch (try self.derivedStep(.hash, rep_id)) {
+                .expand => {},
+                .call => |index| return try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next),
+                .scheme_dictionary => |requirement| return try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next),
+                .helper => return try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next),
+                .convert => |actual| {
+                    const converted = try self.addFrameLocalForRep(actual);
+                    return try self.pushHashFrame(frames, .{ .convert = .{ .request = request, .converted = converted, .actual = actual } });
+                },
+                .unbox => |payload_rep| {
+                    const payload = try self.addFrameLocalForRep(payload_rep);
+                    return try self.pushHashFrame(frames, .{ .unbox = .{ .request = request, .payload = payload, .payload_rep = payload_rep } });
+                },
+            }
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            switch (rep.kind) {
+                .in_progress => boxyLowerInvariant("in-progress boxy representation reached structural hash lowering"),
+                .erased_callable => boxyLowerInvariant("erased callable structural hash reached boxy lowering"),
+                .generated_field,
+                .generated_field_names,
+                .generated_tag_union_spec,
+                => boxyLowerInvariant("compiler-owned encoding evidence reached structural hash lowering"),
+                .dynamic,
+                .list,
+                .box,
+                => boxyLowerInvariant("derived hash expanded a component its step dispatches"),
+                .primitive => |primitive| return try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next),
+                .bool_tag_union => return try self.lowerPrimitiveHashLocalsInto(target, value, hasher, .bool, next),
+                .empty_record,
+                .empty_tag_union,
+                => return try self.assignLocal(target, hasher, next),
+                .alias => {
+                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
+                    continue;
+                },
+                .nominal => {
+                    const scope = try self.enterNominalBackingFormalScope(rep_id);
+                    errdefer self.dropNominalBackingFormalScope(scope);
+                    const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
+                    const backing: ?LIR.LocalId = if (rep.declared_fields.len == 0) null else try self.addFrameLocalForRep(backing_rep);
+                    try frames.append(allocator, .{ .state = .{ .nominal = .{
+                        .request = request,
+                        .scope = scope,
+                        .backing_rep = backing_rep,
+                        .backing = backing,
+                    } } });
+                    return null;
+                },
+                .record, .tuple => {
+                    const children = self.parent.plan.childSlice(rep.children);
+                    const components = if (rep.kind == .record)
+                        try self.recordHashComponents(children)
+                    else
+                        try self.tupleHashComponents(children);
+                    errdefer allocator.free(components);
+                    if (components.len == 0) {
+                        allocator.free(components);
+                        return try self.assignLocal(target, hasher, next);
+                    }
+                    const intermediate_hashers = try self.intermediateHashers(hasher, components.len);
+                    return try self.pushHashFrame(frames, .{ .fields = .{
+                        .request = request,
+                        .components = components,
+                        .intermediate_hashers = intermediate_hashers,
+                        .remaining = components.len,
+                        .current = next,
+                    } });
+                },
+                .tag_union => {
+                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+                    if (variants.len == 1 and self.isZstLocal(value)) {
+                        return try self.pushHashFrame(frames, .{ .variant = try self.beginHashVariant(request, variants[0], 0) });
+                    }
+                    const discriminant = try self.addFrameLocal(.u16);
+                    const done = self.freshJoinPointId();
+                    const branches = try allocator.alloc(LIR.CFSwitchBranch, variants.len);
+                    return try self.pushHashFrame(frames, .{ .tag = .{
+                        .request = request,
+                        .discriminant = discriminant,
+                        .done = done,
+                        .branches = branches,
+                    } });
+                },
+            }
+        }
+    }
+
+    /// The hashers a chain of `count` component hashes threads between its
+    /// input and output hashers.
+    fn intermediateHashers(self: *ProcBodyBuilder, hasher: LIR.LocalId, count: usize) Allocator.Error![]LIR.LocalId {
+        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
+        const intermediate_hashers = try self.parent.allocator.alloc(LIR.LocalId, count - 1);
+        errdefer self.parent.allocator.free(intermediate_hashers);
+        for (intermediate_hashers) |*local| {
+            local.* = try self.addFrameLocal(hasher_layout);
+        }
+        return intermediate_hashers;
+    }
+
+    fn recordHashComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]HashComponent {
+        const components = try self.parent.allocator.alloc(HashComponent, recordEqualityFieldCount(children));
+        var field_index: u16 = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => {
+                    components[field_index] = .{
+                        .rep = child.rep,
+                        .field_index = field_index,
+                    };
+                    field_index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record hash representation had a non-record child role"),
+            }
+        }
+        return components;
+    }
+
+    fn tupleHashComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]HashComponent {
+        const components = try self.parent.allocator.alloc(HashComponent, children.len);
+        for (children, components) |child, *component| {
+            switch (child.role) {
+                .tuple_elem => |index| {
+                    if (index > std.math.maxInt(u16)) {
+                        boxyLowerInvariant("tuple hash element index exceeded LIR field index range");
+                    }
+                    component.* = .{
+                        .rep = child.rep,
+                        .field_index = @intCast(index),
+                    };
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple hash representation had a non-tuple child role"),
+            }
+        }
+        return components;
+    }
+
+    fn stepHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), delivered: ?LIR.CFStmtId) Allocator.Error!HashStep {
+        const frame = &frames.items[frames.items.len - 1];
+        const child: ?LIR.CFStmtId = if (frame.awaiting)
+            delivered orelse boxyLowerInvariant("boxy hash frame resumed without its component hash")
+        else
+            null;
+        frame.awaiting = false;
+        switch (frame.state) {
+            .convert => |convert| {
+                const request = convert.request;
+                const hash = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{ .target = request.target, .value = convert.converted, .hasher = request.hasher, .rep_id = convert.actual, .next = request.next } };
+                };
+                return self.finishHashFrame(frames, try self.assignRepresentationBoundary(convert.converted, request.value, convert.actual, request.rep_id, hash));
+            },
+            .unbox => |unbox| {
+                const request = unbox.request;
+                const hash = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{ .target = request.target, .value = unbox.payload, .hasher = request.hasher, .rep_id = unbox.payload_rep, .next = request.next } };
+                };
+                return self.finishHashFrame(frames, try self.assignBoxBoundary(unbox.payload, request.value, unbox.payload_rep, .box_unbox, hash));
+            },
+            .nominal => |nominal| {
+                const request = nominal.request;
+                const hash = child orelse {
+                    frame.awaiting = true;
+                    return .{ .request = .{ .target = request.target, .value = nominal.backing orelse request.value, .hasher = request.hasher, .rep_id = nominal.backing_rep, .next = request.next } };
+                };
+                const lowered = if (nominal.backing) |backing|
+                    try self.assignRepresentationBoundary(backing, request.value, nominal.backing_rep, request.rep_id, hash)
+                else
+                    hash;
+                return self.finishHashFrame(frames, try self.leaveNominalBackingFormalScope(nominal.scope, lowered));
+            },
+            .fields => |*fields| {
+                const request = fields.request;
+                if (child) |hash| {
+                    var current = hash;
+                    const component = fields.components[fields.remaining];
+                    if (!self.isZstLocal(fields.pending_field)) {
+                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                            .target = fields.pending_field,
+                            .op = .{ .field = .{
+                                .source = request.value,
+                                .field_idx = component.field_index,
+                            } },
+                            .next = current,
+                        } }, self.derivedOrigin());
+                    }
+                    fields.current = current;
+                }
+                if (fields.remaining == fields.components.len) {
+                    const hasher_layout = self.parent.result.store.getLocal(request.hasher).layout_idx;
+                    if (self.parent.result.store.getLocal(request.target).layout_idx != hasher_layout) {
+                        boxyLowerInvariant("structural hash target layout differed from input hasher layout");
+                    }
+                }
+                if (fields.remaining == 0) return self.finishHashFrame(frames, fields.current);
+                fields.remaining -= 1;
+                const i = fields.remaining;
+                const input_hasher = if (i == 0) request.hasher else fields.intermediate_hashers[i - 1];
+                const output_hasher = if (i == fields.components.len - 1) request.target else fields.intermediate_hashers[i];
+                const component = fields.components[i];
+                fields.pending_field = try self.addFrameLocalForRep(component.rep);
+                frame.awaiting = true;
+                return .{ .request = .{ .target = output_hasher, .value = fields.pending_field, .hasher = input_hasher, .rep_id = component.rep, .next = fields.current } };
+            },
+            .variant => |*variant| {
+                if (child) |hash| try self.finishHashVariantPayload(variant, hash);
+                if (try self.nextHashVariantPayload(variant)) |request| {
+                    frame.awaiting = true;
+                    return .{ .request = request };
+                }
+                return self.finishHashFrame(frames, try self.finishHashVariant(variant));
+            },
+            .tag => |*tag| {
+                const request = tag.request;
+                const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(request.rep_id)].tag_variants);
+                if (child) |hash| try self.finishHashVariantPayload(&tag.variant.?, hash);
+                while (true) {
+                    if (tag.variant) |*variant| {
+                        if (try self.nextHashVariantPayload(variant)) |component| {
+                            frame.awaiting = true;
+                            return .{ .request = component };
+                        }
+                        tag.branches[tag.index] = .{
+                            .value = @intCast(tag.index),
+                            .body = try self.finishHashVariant(variant),
+                        };
+                        self.parent.allocator.free(variant.intermediate_hashers);
+                        tag.variant = null;
+                        tag.index += 1;
+                    }
+                    if (tag.index == variants.len) break;
+                    if (tag.index > std.math.maxInt(u16)) {
+                        boxyLowerInvariant("tag-union hash variant index exceeded LIR variant range");
+                    }
+                    tag.variant = try self.beginHashVariant(.{
+                        .target = request.target,
+                        .value = request.value,
+                        .hasher = request.hasher,
+                        .rep_id = request.rep_id,
+                        .next = try self.joinJump(tag.done),
+                    }, variants[tag.index], @intCast(tag.index));
+                }
+                const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin());
+                const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = tag.discriminant,
+                    .branches = try self.parent.result.store.addCFSwitchBranches(tag.branches),
+                    .default_branch = bad_discriminant,
+                    .continuation = null,
+                } }, self.derivedOrigin());
+                const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = tag.discriminant,
+                    .op = .{ .discriminant = .{ .source = request.value } },
+                    .next = switch_stmt,
+                } }, self.derivedOrigin());
+                return self.finishHashFrame(frames, try self.derivedResultJoin(tag.done, request.target, request.next, read_discriminant));
+            },
+        }
+    }
+
+    /// Begin one tag variant's hash, which `request.next` follows.
+    fn beginHashVariant(self: *ProcBodyBuilder, request: HashRequest, variant: Plan.TagVariant, variant_index: u16) Allocator.Error!HashVariantState {
+        const payloads = self.parent.plan.childSlice(variant.payloads);
+        const hasher_layout = self.parent.result.store.getLocal(request.hasher).layout_idx;
+        const after_discriminant = if (payloads.len == 0) request.target else try self.addFrameLocal(hasher_layout);
+        for (payloads, 0..) |child, index| {
+            switch (child.role) {
+                .tag_payload => |payload| {
+                    if (payload.tag != variant.name or payload.index != index) {
+                        boxyLowerInvariant("tag hash payload span did not match its payload child roles");
+                    }
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag hash variant payload span included a non-payload child"),
+            }
+        }
+        var state: HashVariantState = .{
+            .request = request,
+            .variant = variant,
+            .variant_index = variant_index,
+            .after_discriminant = after_discriminant,
+            .remaining = payloads.len,
+            .current = request.next,
+        };
+        if (payloads.len != 0) {
+            state.source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(request.rep_id)].descriptor != null or
+                self.parent.result.store.getLocal(request.value).boxy_desc != null;
+            state.intermediate_hashers = try self.intermediateHashers(after_discriminant, payloads.len);
+        }
+        return state;
+    }
+
+    /// The next payload hash of a variant, or null once every payload is
+    /// hashed.
+    fn nextHashVariantPayload(self: *ProcBodyBuilder, state: *HashVariantState) Allocator.Error!?HashRequest {
+        if (state.remaining == 0) return null;
+        const payloads = self.parent.plan.childSlice(state.variant.payloads);
+        state.remaining -= 1;
+        const i = state.remaining;
+        const input_hasher = if (i == 0) state.after_discriminant else state.intermediate_hashers[i - 1];
+        const output_hasher = if (i == payloads.len - 1) state.request.target else state.intermediate_hashers[i];
+        const payload = payloads[i];
+        state.pending = try self.addExtractedTagPayloadLocal(payload.rep, state.source_has_payload_desc);
+        return .{ .target = output_hasher, .value = state.pending.local, .hasher = input_hasher, .rep_id = payload.rep, .next = state.current };
+    }
+
+    /// Read one payload for its hash, extending the variant's hash backward.
+    fn finishHashVariantPayload(self: *ProcBodyBuilder, state: *HashVariantState, hash: LIR.CFStmtId) Allocator.Error!void {
+        const payloads = self.parent.plan.childSlice(state.variant.payloads);
+        const i = state.remaining;
+        const payload = payloads[i];
+        if (i > std.math.maxInt(u16)) {
+            boxyLowerInvariant("tag hash payload index exceeded LIR payload index range");
+        }
+        state.current = try self.assignConcreteTagPayloadRead(
+            state.pending.local,
+            payload.rep,
+            state.pending.desc_local,
+            state.request.value,
+            state.request.rep_id,
+            state.variant.name,
+            state.variant_index,
+            @intCast(i),
+            payloads.len,
+            hash,
+        );
+    }
+
+    /// The variant's hash once its payloads are hashed: the discriminant
+    /// written first.
+    fn finishHashVariant(self: *ProcBodyBuilder, state: *HashVariantState) Allocator.Error!LIR.CFStmtId {
+        const discriminant_value = try self.addFrameLocal(.u64);
+        const current = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = state.after_discriminant,
+            .op = .hasher_write_u64,
+            .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
+            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ state.request.hasher, discriminant_value }),
+            .next = state.current,
+        } }, self.derivedOrigin());
+        return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = discriminant_value,
+            .value = .{ .i128_literal = .{
+                .value = state.variant_index,
+                .layout_idx = .u64,
+            } },
+            .next = current,
+        } }, self.derivedOrigin());
     }
 
     fn lowerPrimitiveHashLocalsInto(
@@ -32938,254 +34600,6 @@ const ProcBodyBuilder = struct {
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, value }),
             .next = next,
         } }, self.derivedOrigin());
-    }
-
-    const HashComponent = struct {
-        rep: Plan.TypeRepId,
-        field_index: u16,
-    };
-
-    fn lowerRecordHashLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const children = self.parent.plan.childSlice(rep.children);
-        const components = try self.parent.allocator.alloc(HashComponent, recordEqualityFieldCount(children));
-        defer self.parent.allocator.free(components);
-        var field_index: u16 = 0;
-        for (children) |child| {
-            switch (child.role) {
-                .record_field => {
-                    components[field_index] = .{
-                        .rep = child.rep,
-                        .field_index = field_index,
-                    };
-                    field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record hash representation had a non-record child role"),
-            }
-        }
-        return try self.lowerFieldHashComponentsInto(target, value, hasher, components, next);
-    }
-
-    fn lowerTupleHashLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep: Plan.TypeRepresentation,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const children = self.parent.plan.childSlice(rep.children);
-        const components = try self.parent.allocator.alloc(HashComponent, children.len);
-        defer self.parent.allocator.free(components);
-        for (children, components) |child, *component| {
-            switch (child.role) {
-                .tuple_elem => |index| {
-                    if (index > std.math.maxInt(u16)) {
-                        boxyLowerInvariant("tuple hash element index exceeded LIR field index range");
-                    }
-                    component.* = .{
-                        .rep = child.rep,
-                        .field_index = @intCast(index),
-                    };
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple hash representation had a non-tuple child role"),
-            }
-        }
-        return try self.lowerFieldHashComponentsInto(target, value, hasher, components, next);
-    }
-
-    fn lowerFieldHashComponentsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        components: []const HashComponent,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (components.len == 0) return try self.assignLocal(target, hasher, next);
-
-        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
-        if (self.parent.result.store.getLocal(target).layout_idx != hasher_layout) {
-            boxyLowerInvariant("structural hash target layout differed from input hasher layout");
-        }
-
-        const intermediate_count = components.len - 1;
-        const intermediate_hashers = try self.parent.allocator.alloc(LIR.LocalId, intermediate_count);
-        defer self.parent.allocator.free(intermediate_hashers);
-        for (intermediate_hashers) |*local| {
-            local.* = try self.addFrameLocal(hasher_layout);
-        }
-
-        var current = next;
-        var i = components.len;
-        while (i > 0) {
-            i -= 1;
-            const input_hasher = if (i == 0) hasher else intermediate_hashers[i - 1];
-            const output_hasher = if (i == components.len - 1) target else intermediate_hashers[i];
-            const component = components[i];
-            const field = try self.addFrameLocalForRep(component.rep);
-            current = try self.lowerHashRepLocalsInto(output_hasher, field, input_hasher, component.rep, current);
-            if (!self.isZstLocal(field)) {
-                current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                    .target = field,
-                    .op = .{ .field = .{
-                        .source = value,
-                        .field_idx = component.field_index,
-                    } },
-                    .next = current,
-                } }, self.derivedOrigin());
-            }
-        }
-        return current;
-    }
-
-    fn lowerTagUnionHashLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        if (variants.len == 1 and self.isZstLocal(value)) {
-            return try self.lowerTagPayloadHashVariant(target, value, hasher, rep_id, variants[0], 0, next);
-        }
-
-        const discriminant = try self.addFrameLocal(.u16);
-        const done = self.freshJoinPointId();
-        const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
-        defer self.parent.allocator.free(branches);
-        for (variants, branches, 0..) |variant, *branch, index| {
-            if (index > std.math.maxInt(u16)) {
-                boxyLowerInvariant("tag-union hash variant index exceeded LIR variant range");
-            }
-            branch.* = .{
-                .value = @intCast(index),
-                .body = try self.lowerTagPayloadHashVariant(target, value, hasher, rep_id, variant, @intCast(index), try self.joinJump(done)),
-            };
-        }
-        const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin());
-        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = discriminant,
-            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
-            .default_branch = bad_discriminant,
-            .continuation = null,
-        } }, self.derivedOrigin());
-        const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = discriminant,
-            .op = .{ .discriminant = .{ .source = value } },
-            .next = switch_stmt,
-        } }, self.derivedOrigin());
-        return try self.derivedResultJoin(done, target, next, read_discriminant);
-    }
-
-    fn lowerTagPayloadHashVariant(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        tag_rep_id: Plan.TypeRepId,
-        variant: Plan.TagVariant,
-        variant_index: u16,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
-        const after_discriminant = if (payloads.len == 0) target else try self.addFrameLocal(hasher_layout);
-
-        const components = try self.parent.allocator.alloc(Plan.RepChild, payloads.len);
-        defer self.parent.allocator.free(components);
-        for (payloads, components, 0..) |child, *component, index| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (payload.tag != variant.name or payload.index != index) {
-                        boxyLowerInvariant("tag hash payload span did not match its payload child roles");
-                    }
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag hash variant payload span included a non-payload child"),
-            }
-            component.* = child;
-        }
-
-        var current = if (payloads.len == 0)
-            next
-        else
-            try self.lowerTagPayloadHashComponentsInto(target, value, after_discriminant, tag_rep_id, variant, components, variant_index, next);
-
-        const discriminant_value = try self.addFrameLocal(.u64);
-        current = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = after_discriminant,
-            .op = .hasher_write_u64,
-            .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
-            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, discriminant_value }),
-            .next = current,
-        } }, self.derivedOrigin());
-        return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
-            .target = discriminant_value,
-            .value = .{ .i128_literal = .{
-                .value = variant_index,
-                .layout_idx = .u64,
-            } },
-            .next = current,
-        } }, self.derivedOrigin());
-    }
-
-    fn lowerTagPayloadHashComponentsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        tag_rep_id: Plan.TypeRepId,
-        variant: Plan.TagVariant,
-        payloads: []const Plan.RepChild,
-        variant_index: u16,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
-        const source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)].descriptor != null or
-            self.parent.result.store.getLocal(value).boxy_desc != null;
-        const intermediate_count = payloads.len - 1;
-        const intermediate_hashers = try self.parent.allocator.alloc(LIR.LocalId, intermediate_count);
-        defer self.parent.allocator.free(intermediate_hashers);
-        for (intermediate_hashers) |*local| {
-            local.* = try self.addFrameLocal(hasher_layout);
-        }
-
-        var current = next;
-        var i = payloads.len;
-        while (i > 0) {
-            i -= 1;
-            const input_hasher = if (i == 0) hasher else intermediate_hashers[i - 1];
-            const output_hasher = if (i == payloads.len - 1) target else intermediate_hashers[i];
-            const payload = payloads[i];
-            const payload_local = try self.addExtractedTagPayloadLocal(payload.rep, source_has_payload_desc);
-            current = try self.lowerHashRepLocalsInto(output_hasher, payload_local.local, input_hasher, payload.rep, current);
-            if (i > std.math.maxInt(u16)) {
-                boxyLowerInvariant("tag hash payload index exceeded LIR payload index range");
-            }
-            current = try self.assignConcreteTagPayloadRead(
-                payload_local.local,
-                payload.rep,
-                payload_local.desc_local,
-                value,
-                tag_rep_id,
-                variant.name,
-                variant_index,
-                @intCast(i),
-                payloads.len,
-                current,
-            );
-        }
-        return current;
     }
 
     fn lowerUnaryLowLevelInto(
@@ -34930,18 +36344,6 @@ const ProcBodyBuilder = struct {
         return try self.prependDescriptorArgMaterializations(initializers.items, next);
     }
 
-    fn collectDescriptorEnvironmentForRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        desc_ref: LIR.BoxyDescRef,
-        bindings: *std.ArrayList(LocalDescriptorEnvironmentBinding),
-        initializers: *std.ArrayList(DescriptorArgLocal),
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!void {
-        const identity_rep = self.descriptorStorageRep(rep_id);
-        return try self.collectDescriptorEnvironmentForIdentityRep(identity_rep, desc_ref, bindings, initializers, seen);
-    }
-
     fn collectShapeDescriptorEnvironmentForRep(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
@@ -34954,88 +36356,108 @@ const ProcBodyBuilder = struct {
         return try self.collectDescriptorEnvironmentForIdentityRep(identity_rep, desc_ref, bindings, initializers, seen);
     }
 
-    fn collectDescriptorEnvironmentForIdentityRep(
+    /// One pending step of a descriptor environment walk.
+    const DescriptorEnvironmentAction = union(enum) {
+        /// Bind the descriptors of an identity representation described by
+        /// `desc_ref`.
+        visit: struct { identity_rep: Plan.TypeRepId, desc_ref: LIR.BoxyDescRef },
+        /// Read one nested descriptor out of `parent_desc`, then walk it.
+        nested: struct { nested_rep: Plan.TypeRepId, parent_desc: LIR.BoxyDescRef, nested_index: u32 },
+    };
+
+    fn collectDescriptorEnvironmentForRep(
         self: *ProcBodyBuilder,
-        identity_rep: Plan.TypeRepId,
+        rep_id: Plan.TypeRepId,
         desc_ref: LIR.BoxyDescRef,
         bindings: *std.ArrayList(LocalDescriptorEnvironmentBinding),
         initializers: *std.ArrayList(DescriptorArgLocal),
         seen: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!void {
-        const seen_entry = try seen.getOrPut(identity_rep);
-        if (seen_entry.found_existing) return;
-
-        if (desc_ref.localOrNull()) |local| {
-            const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
-            if (rep.descriptor) |desc| {
-                try self.appendLocalDescriptorEnvironmentBinding(bindings, desc, identity_rep, local);
-            }
-        }
-
-        if (self.parent.descriptorBackingShapeRep(identity_rep)) |backing_rep| {
-            return try self.collectDescriptorEnvironmentForIdentityRep(
-                self.descriptorStorageRep(backing_rep),
-                desc_ref,
-                bindings,
-                initializers,
-                seen,
-            );
-        }
-
-        var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
-        defer slots.deinit(self.parent.allocator);
-        try self.parent.appendNestedDescriptorSlots(
-            identity_rep,
-            self.parent.descriptorPayloadLayoutForRep(identity_rep),
-            &slots,
-        );
-        for (slots.items, 0..) |slot, position| {
-            // Only a child whose stored value carries a runtime descriptor can
-            // bind descriptor requirements.
-            if (!self.parent.nestedDescriptorSlotCarriesRuntimeDesc(slot)) continue;
-            try self.collectNestedDescriptorEnvironmentForRep(
-                self.parent.nestedDescriptorSlotDescRep(slot),
-                desc_ref,
-                @intCast(position),
-                bindings,
-                initializers,
-                seen,
-            );
-        }
+        return try self.collectDescriptorEnvironmentForIdentityRep(self.descriptorStorageRep(rep_id), desc_ref, bindings, initializers, seen);
     }
 
-    fn collectNestedDescriptorEnvironmentForRep(
+    /// Bind, in pre-order, the descriptor requirements `root` and the nested
+    /// descriptors it carries name, reading each nested descriptor into a
+    /// local of its own.
+    fn collectDescriptorEnvironmentForIdentityRep(
         self: *ProcBodyBuilder,
-        nested_rep: Plan.TypeRepId,
-        parent_desc: LIR.BoxyDescRef,
-        nested_index: u32,
+        root: Plan.TypeRepId,
+        root_desc_ref: LIR.BoxyDescRef,
         bindings: *std.ArrayList(LocalDescriptorEnvironmentBinding),
         initializers: *std.ArrayList(DescriptorArgLocal),
         seen: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!void {
-        const nested_local = try self.addFrameLocal(.opaque_ptr);
-        switch (parent_desc) {
-            .static => {
-                const materialization = try self.descriptorMaterializationForKnownRep(nested_rep);
-                try initializers.append(self.parent.allocator, .{
-                    .local = nested_local,
-                    .materialize = materialization.desc,
-                    .captures = materialization.captures,
-                });
+        const allocator = self.parent.allocator;
+        var actions: std.ArrayList(DescriptorEnvironmentAction) = .empty;
+        defer actions.deinit(allocator);
+        try actions.append(allocator, .{ .visit = .{ .identity_rep = root, .desc_ref = root_desc_ref } });
+        while (actions.pop()) |action| switch (action) {
+            .nested => |nested| {
+                const nested_local = try self.addFrameLocal(.opaque_ptr);
+                switch (nested.parent_desc) {
+                    .static => {
+                        const materialization = try self.descriptorMaterializationForKnownRep(nested.nested_rep);
+                        try initializers.append(allocator, .{
+                            .local = nested_local,
+                            .materialize = materialization.desc,
+                            .captures = materialization.captures,
+                        });
+                    },
+                    .local, .runtime, .dict_method_arg, .dict_method_hidden => try initializers.append(allocator, .{
+                        .local = nested_local,
+                        .materialize = nested.parent_desc,
+                        .nested_index = nested.nested_index,
+                    }),
+                }
+                try actions.append(allocator, .{ .visit = .{
+                    .identity_rep = self.descriptorStorageRep(nested.nested_rep),
+                    .desc_ref = .{ .local = nested_local },
+                } });
             },
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => try initializers.append(self.parent.allocator, .{
-                .local = nested_local,
-                .materialize = parent_desc,
-                .nested_index = nested_index,
-            }),
-        }
-        try self.collectDescriptorEnvironmentForRep(
-            nested_rep,
-            .{ .local = nested_local },
-            bindings,
-            initializers,
-            seen,
-        );
+            .visit => |visit| {
+                var identity_rep = visit.identity_rep;
+                const desc_ref = visit.desc_ref;
+                // A wrapper's backing shape shares its descriptor.
+                while (true) {
+                    const seen_entry = try seen.getOrPut(identity_rep);
+                    if (seen_entry.found_existing) break;
+
+                    if (desc_ref.localOrNull()) |local| {
+                        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+                        if (rep.descriptor) |desc| {
+                            try self.appendLocalDescriptorEnvironmentBinding(bindings, desc, identity_rep, local);
+                        }
+                    }
+
+                    if (self.parent.descriptorBackingShapeRep(identity_rep)) |backing_rep| {
+                        identity_rep = self.descriptorStorageRep(backing_rep);
+                        continue;
+                    }
+
+                    var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
+                    defer slots.deinit(allocator);
+                    try self.parent.appendNestedDescriptorSlots(
+                        identity_rep,
+                        self.parent.descriptorPayloadLayoutForRep(identity_rep),
+                        &slots,
+                    );
+                    var position = slots.items.len;
+                    while (position > 0) {
+                        position -= 1;
+                        const slot = slots.items[position];
+                        // Only a child whose stored value carries a runtime descriptor can
+                        // bind descriptor requirements.
+                        if (!self.parent.nestedDescriptorSlotCarriesRuntimeDesc(slot)) continue;
+                        try actions.append(allocator, .{ .nested = .{
+                            .nested_rep = self.parent.nestedDescriptorSlotDescRep(slot),
+                            .parent_desc = desc_ref,
+                            .nested_index = @intCast(position),
+                        } });
+                    }
+                    break;
+                }
+            },
+        };
     }
 
     fn repSubtreeContainsDescriptor(
@@ -35050,21 +36472,22 @@ const ProcBodyBuilder = struct {
 
     fn repSubtreeContainsDescriptorInner(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        root: Plan.TypeRepId,
         desc: Plan.DescriptorRequirementId,
         seen: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!bool {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return false;
-
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor == desc) return true;
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (try self.repSubtreeContainsDescriptorInner(child.rep, desc, seen)) return true;
-        }
-        for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-            for (self.parent.plan.childSlice(variant.payloads)) |payload| {
-                if (try self.repSubtreeContainsDescriptorInner(payload.rep, desc, seen)) return true;
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |rep_id| {
+            const entry = try seen.getOrPut(rep_id);
+            if (entry.found_existing) continue;
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.descriptor == desc) return true;
+            for (self.parent.plan.childSlice(rep.children)) |child| try pending.append(allocator, child.rep);
+            for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+                for (self.parent.plan.childSlice(variant.payloads)) |payload| try pending.append(allocator, payload.rep);
             }
         }
         return false;
@@ -35231,71 +36654,75 @@ const ProcBodyBuilder = struct {
         return try self.boundaryLayoutsInterchangeableInner(a, b, &seen);
     }
 
+    /// Whether two layouts are interchangeable across a boundary: every
+    /// layout pair they reach agrees. A pair already seen agrees unless some
+    /// other position proves otherwise, which is how recursive layouts
+    /// terminate.
     fn boundaryLayoutsInterchangeableInner(
         self: *ProcBodyBuilder,
-        a: layout.Idx,
-        b: layout.Idx,
+        root_a: layout.Idx,
+        root_b: layout.Idx,
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!bool {
-        if (a == b) return true;
-
+        const allocator = self.parent.allocator;
         const layouts = &self.parent.result.layouts;
-        const a_layout = layouts.getLayout(a);
-        const b_layout = layouts.getLayout(b);
-        if (a_layout.tag != b_layout.tag) return false;
-        if (layouts.layoutSize(a_layout) != layouts.layoutSize(b_layout)) return false;
+        var pending: std.ArrayList([2]layout.Idx) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, .{ root_a, root_b });
+        while (pending.pop()) |pair| {
+            const a = pair[0];
+            const b = pair[1];
+            if (a == b) continue;
 
-        const key = (@as(u64, @intFromEnum(a)) << 32) | @as(u64, @intFromEnum(b));
-        if ((try seen.getOrPut(key)).found_existing) return true;
+            const a_layout = layouts.getLayout(a);
+            const b_layout = layouts.getLayout(b);
+            if (a_layout.tag != b_layout.tag) return false;
+            if (layouts.layoutSize(a_layout) != layouts.layoutSize(b_layout)) return false;
 
-        switch (a_layout.tag) {
-            .scalar => return std.meta.eql(a_layout.getScalar(), b_layout.getScalar()),
-            .zst => return true,
-            .erased_box => return true,
-            .box, .box_of_zst => {
-                return try self.boundaryLayoutsInterchangeableInner(
+            const key = (@as(u64, @intFromEnum(a)) << 32) | @as(u64, @intFromEnum(b));
+            if ((try seen.getOrPut(key)).found_existing) continue;
+
+            switch (a_layout.tag) {
+                .scalar => if (!std.meta.eql(a_layout.getScalar(), b_layout.getScalar())) return false,
+                .zst => {},
+                .erased_box => {},
+                .box, .box_of_zst => try pending.append(allocator, .{
                     layouts.getBoxInfo(a_layout).elem_layout_idx,
                     layouts.getBoxInfo(b_layout).elem_layout_idx,
-                    seen,
-                );
-            },
-            .list, .list_of_zst => {
-                return try self.boundaryLayoutsInterchangeableInner(
+                }),
+                .list, .list_of_zst => try pending.append(allocator, .{
                     layouts.getListInfo(a_layout).elem_layout_idx,
                     layouts.getListInfo(b_layout).elem_layout_idx,
-                    seen,
-                );
-            },
-            .struct_ => {
-                const a_info = layouts.getStructInfo(a_layout);
-                const b_info = layouts.getStructInfo(b_layout);
-                if (a_info.fields.len != b_info.fields.len) return false;
-                var i: u32 = 0;
-                while (i < a_info.fields.len) : (i += 1) {
-                    const a_field = a_info.fields.get(i);
-                    const b_field = b_info.fields.get(i);
-                    if (a_field.is_padding != b_field.is_padding) return false;
-                    if (!try self.boundaryLayoutsInterchangeableInner(a_field.layout, b_field.layout, seen)) return false;
-                }
-                return true;
-            },
-            .tag_union => {
-                const a_info = layouts.getTagUnionInfo(a_layout);
-                const b_info = layouts.getTagUnionInfo(b_layout);
-                if (a_info.variants.len != b_info.variants.len) return false;
-                if (a_info.discriminant_offset != b_info.discriminant_offset) return false;
-                var i: u32 = 0;
-                while (i < a_info.variants.len) : (i += 1) {
-                    if (!try self.boundaryLayoutsInterchangeableInner(
-                        a_info.variants.get(i).payload_layout,
-                        b_info.variants.get(i).payload_layout,
-                        seen,
-                    )) return false;
-                }
-                return true;
-            },
-            .closure, .erased_callable, .ptr => return false,
+                }),
+                .struct_ => {
+                    const a_info = layouts.getStructInfo(a_layout);
+                    const b_info = layouts.getStructInfo(b_layout);
+                    if (a_info.fields.len != b_info.fields.len) return false;
+                    var i: u32 = 0;
+                    while (i < a_info.fields.len) : (i += 1) {
+                        const a_field = a_info.fields.get(i);
+                        const b_field = b_info.fields.get(i);
+                        if (a_field.is_padding != b_field.is_padding) return false;
+                        try pending.append(allocator, .{ a_field.layout, b_field.layout });
+                    }
+                },
+                .tag_union => {
+                    const a_info = layouts.getTagUnionInfo(a_layout);
+                    const b_info = layouts.getTagUnionInfo(b_layout);
+                    if (a_info.variants.len != b_info.variants.len) return false;
+                    if (a_info.discriminant_offset != b_info.discriminant_offset) return false;
+                    var i: u32 = 0;
+                    while (i < a_info.variants.len) : (i += 1) {
+                        try pending.append(allocator, .{
+                            a_info.variants.get(i).payload_layout,
+                            b_info.variants.get(i).payload_layout,
+                        });
+                    }
+                },
+                .closure, .erased_callable, .ptr => return false,
+            }
         }
+        return true;
     }
 
     fn assignRepresentationBoundary(
@@ -36559,11 +37986,7 @@ const ProcBodyBuilder = struct {
     /// union.
     fn checkedTagUnionCountForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?usize {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("tag representation wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -36574,10 +37997,7 @@ const ProcBodyBuilder = struct {
                 .tag_union => {
                     const view = procedureModuleById(self.parent.modules, rep.source_type.module);
                     var ty = rep.source_type.ty;
-                    var type_depth: u16 = 0;
                     while (true) {
-                        if (type_depth == 1024) boxyLowerInvariant("checked type alias chain exceeded boxy lowerer limit");
-                        type_depth += 1;
                         switch (view.checked_types.payload(ty)) {
                             .alias => |alias| ty = alias.backing,
                             .tag_union => |tag_union| return tag_union.tags.len,
@@ -36925,75 +38345,67 @@ const ProcBodyBuilder = struct {
         return try self.repsCanReuseSourceDescriptorInner(source_rep, target_rep, &seen);
     }
 
+    /// Whether a source descriptor can describe the target: every pair the
+    /// two reach agrees. A pair already seen agrees unless some other
+    /// position proves otherwise, which is how recursive types terminate.
     fn repsCanReuseSourceDescriptorInner(
         self: *ProcBodyBuilder,
-        source_rep: Plan.TypeRepId,
-        target_rep: Plan.TypeRepId,
+        root_source: Plan.TypeRepId,
+        root_target: Plan.TypeRepId,
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!bool {
-        const identity_source = self.descriptorStorageRep(source_rep);
-        const identity_target = self.descriptorStorageRep(target_rep);
-        if (identity_source == identity_target) return true;
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList([2]Plan.TypeRepId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, .{ root_source, root_target });
+        while (pending.pop()) |pair| {
+            const identity_source = self.descriptorStorageRep(pair[0]);
+            const identity_target = self.descriptorStorageRep(pair[1]);
+            if (identity_source == identity_target) continue;
 
-        const key = (@as(u64, @intFromEnum(identity_source)) << 32) | @as(u64, @intFromEnum(identity_target));
-        const entry = try seen.getOrPut(key);
-        if (entry.found_existing) return true;
+            const key = (@as(u64, @intFromEnum(identity_source)) << 32) | @as(u64, @intFromEnum(identity_target));
+            const entry = try seen.getOrPut(key);
+            if (entry.found_existing) continue;
 
-        const source = self.parent.plan.representations.items[@intFromEnum(identity_source)];
-        const target = self.parent.plan.representations.items[@intFromEnum(identity_target)];
-        switch (source.kind) {
-            .dynamic => return true,
-            .primitive => |source_primitive| switch (target.kind) {
-                .primitive => |target_primitive| return source_primitive == target_primitive,
-                .in_progress, .dynamic, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
-            },
-            .bool_tag_union => return target.kind == .bool_tag_union,
-            .empty_record => return target.kind == .empty_record,
-            .empty_tag_union => return target.kind == .empty_tag_union,
-            .tag_union => switch (target.kind) {
-                .tag_union => return try self.tagUnionRepsCanReuseSourceDescriptor(identity_source, identity_target, seen),
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return false,
-            },
-            .list => switch (target.kind) {
-                .list => {
-                    const source_elem = self.repQuery().requiredSingleChild(identity_source, .list_elem).rep;
-                    const target_elem = self.repQuery().requiredSingleChild(identity_target, .list_elem).rep;
-                    return try self.repsCanReuseSourceDescriptorInner(source_elem, target_elem, seen);
+            const source = self.parent.plan.representations.items[@intFromEnum(identity_source)];
+            const target = self.parent.plan.representations.items[@intFromEnum(identity_target)];
+            switch (source.kind) {
+                .dynamic => {},
+                .primitive => |source_primitive| switch (target.kind) {
+                    .primitive => |target_primitive| if (source_primitive != target_primitive) return false,
+                    .in_progress, .dynamic, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
-            },
-            .in_progress, .erased_callable, .alias, .record, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec => return false,
-        }
-    }
-
-    fn tagUnionRepsCanReuseSourceDescriptor(
-        self: *ProcBodyBuilder,
-        source_rep: Plan.TypeRepId,
-        target_rep: Plan.TypeRepId,
-        seen: *std.AutoHashMap(u64, void),
-    ) Allocator.Error!bool {
-        const source = self.parent.plan.representations.items[@intFromEnum(source_rep)];
-        const target = self.parent.plan.representations.items[@intFromEnum(target_rep)];
-        const target_variants = self.parent.plan.tagVariantSlice(target.tag_variants);
-        for (self.parent.plan.tagVariantSlice(source.tag_variants)) |source_variant| {
-            const source_name = self.tagVariantNameText(source_variant);
-            const target_variant = blk: {
-                for (target_variants) |candidate| {
-                    if (std.mem.eql(u8, source_name, self.tagVariantNameText(candidate))) {
-                        break :blk candidate;
-                    }
-                }
-                return false;
-            };
-
-            const source_payloads = self.parent.plan.childSlice(source_variant.payloads);
-            const target_payloads = self.parent.plan.childSlice(target_variant.payloads);
-            if (source_payloads.len != target_payloads.len) return false;
-            for (source_payloads, target_payloads) |source_payload, target_payload| {
-                if (!try self.repsCanReuseSourceDescriptorInner(source_payload.rep, target_payload.rep, seen)) return false;
+                .bool_tag_union => if (target.kind != .bool_tag_union) return false,
+                .empty_record => if (target.kind != .empty_record) return false,
+                .empty_tag_union => if (target.kind != .empty_tag_union) return false,
+                .tag_union => switch (target.kind) {
+                    .tag_union => {
+                        const target_variants = self.parent.plan.tagVariantSlice(target.tag_variants);
+                        for (self.parent.plan.tagVariantSlice(source.tag_variants)) |source_variant| {
+                            const source_name = self.tagVariantNameText(source_variant);
+                            const target_variant = for (target_variants) |candidate| {
+                                if (std.mem.eql(u8, source_name, self.tagVariantNameText(candidate))) break candidate;
+                            } else return false;
+                            const source_payloads = self.parent.plan.childSlice(source_variant.payloads);
+                            const target_payloads = self.parent.plan.childSlice(target_variant.payloads);
+                            if (source_payloads.len != target_payloads.len) return false;
+                            for (source_payloads, target_payloads) |source_payload, target_payload| {
+                                try pending.append(allocator, .{ source_payload.rep, target_payload.rep });
+                            }
+                        }
+                    },
+                    .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return false,
+                },
+                .list => switch (target.kind) {
+                    .list => try pending.append(allocator, .{
+                        self.repQuery().requiredSingleChild(identity_source, .list_elem).rep,
+                        self.repQuery().requiredSingleChild(identity_target, .list_elem).rep,
+                    }),
+                    .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
+                },
+                .in_progress, .erased_callable, .alias, .record, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec => return false,
             }
         }
-
         return true;
     }
 
@@ -37037,37 +38449,42 @@ const ProcBodyBuilder = struct {
         return try self.tagDomainDescriptorCanFlowToInner(source_rep, target_rep, &seen);
     }
 
+    /// Whether a source tag domain's descriptor can flow to the target:
+    /// the source row and each of its extensions in turn.
     fn tagDomainDescriptorCanFlowToInner(
         self: *ProcBodyBuilder,
-        source_rep: Plan.TypeRepId,
+        root_source: Plan.TypeRepId,
         target_rep: Plan.TypeRepId,
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!bool {
-        const identity_source = self.descriptorStorageRep(source_rep);
-        const identity_target = self.descriptorStorageRep(target_rep);
-        const key = (@as(u64, @intFromEnum(identity_source)) << 32) | @as(u64, @intFromEnum(identity_target));
-        const entry = try seen.getOrPut(key);
-        if (entry.found_existing) return true;
+        var source_rep = root_source;
+        while (true) {
+            const identity_source = self.descriptorStorageRep(source_rep);
+            const identity_target = self.descriptorStorageRep(target_rep);
+            const key = (@as(u64, @intFromEnum(identity_source)) << 32) | @as(u64, @intFromEnum(identity_target));
+            const entry = try seen.getOrPut(key);
+            if (entry.found_existing) return true;
 
-        const source_tag_rep = self.tagDomainRep(identity_source) orelse
-            return self.targetAcceptsUnconstrainedDynamicTagDescriptor(identity_target);
-        if (self.tagDomainRep(identity_target) == null) {
-            return self.targetAcceptsUnconstrainedDynamicTagDescriptor(identity_target);
-        }
-
-        const source_rep_value = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)];
-        for (self.parent.plan.tagVariantSlice(source_rep_value.tag_variants)) |variant| {
-            const source_payloads = self.parent.plan.childSlice(variant.payloads);
-            if (try self.dynamicTagPayloadsForRepTagNameOrNull(identity_target, source_tag_rep, variant.name)) |target_payloads| {
-                if (!try self.tagPayloadsCanReuseDescriptor(source_payloads, target_payloads, seen)) return false;
-            } else if (!self.targetTagDomainHasUnconstrainedExtension(identity_target)) {
-                return false;
+            const source_tag_rep = self.tagDomainRep(identity_source) orelse
+                return self.targetAcceptsUnconstrainedDynamicTagDescriptor(identity_target);
+            if (self.tagDomainRep(identity_target) == null) {
+                return self.targetAcceptsUnconstrainedDynamicTagDescriptor(identity_target);
             }
-        }
 
-        const source_ext = self.tagDomainExtensionRep(source_tag_rep) orelse return true;
-        if (self.repIsEmptyTagUnion(source_ext)) return true;
-        return try self.tagDomainDescriptorCanFlowToInner(source_ext, identity_target, seen);
+            const source_rep_value = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)];
+            for (self.parent.plan.tagVariantSlice(source_rep_value.tag_variants)) |variant| {
+                const source_payloads = self.parent.plan.childSlice(variant.payloads);
+                if (try self.dynamicTagPayloadsForRepTagNameOrNull(identity_target, source_tag_rep, variant.name)) |target_payloads| {
+                    if (!try self.tagPayloadsCanReuseDescriptor(source_payloads, target_payloads, seen)) return false;
+                } else if (!self.targetTagDomainHasUnconstrainedExtension(identity_target)) {
+                    return false;
+                }
+            }
+
+            const source_ext = self.tagDomainExtensionRep(source_tag_rep) orelse return true;
+            if (self.repIsEmptyTagUnion(source_ext)) return true;
+            source_rep = source_ext;
+        }
     }
 
     fn tagPayloadsCanReuseDescriptor(
@@ -37085,14 +38502,19 @@ const ProcBodyBuilder = struct {
         return true;
     }
 
+    /// Whether the target, or some extension along its row, is an
+    /// unconstrained dynamic tag row.
     fn targetAcceptsUnconstrainedDynamicTagDescriptor(
         self: *const ProcBodyBuilder,
-        target_rep: Plan.TypeRepId,
+        root: Plan.TypeRepId,
     ) bool {
-        const identity_target = self.descriptorStorageRep(target_rep);
-        const target = self.parent.plan.representations.items[@intFromEnum(identity_target)];
-        if (target.kind == .dynamic and target.tag_variants.len == 0 and target.children.len == 0) return true;
-        return self.targetTagDomainHasUnconstrainedExtension(identity_target);
+        var target_rep = root;
+        while (true) {
+            const identity_target = self.descriptorStorageRep(target_rep);
+            const target = self.parent.plan.representations.items[@intFromEnum(identity_target)];
+            if (target.kind == .dynamic and target.tag_variants.len == 0 and target.children.len == 0) return true;
+            target_rep = self.tagDomainExtensionRep(identity_target) orelse return false;
+        }
     }
 
     fn targetTagDomainHasUnconstrainedExtension(
@@ -37161,11 +38583,7 @@ const ProcBodyBuilder = struct {
 
     fn tagDomainRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("tag domain wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -38464,50 +39882,58 @@ const ProcBodyBuilder = struct {
         return source_rep orelse planned_rep;
     }
 
-    fn reservePatternBindings(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
-        try self.ensureBinderLocals();
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => |binder| {
-                try self.reserveBinderLocal(binder, pattern.ty);
-                _ = try self.reserveDescriptorLocalForType(pattern.ty);
-            },
-            .as => |as| {
-                try self.reserveBinderLocal(as.binder, pattern.ty);
-                _ = try self.reserveDescriptorLocalForType(pattern.ty);
-                try self.reservePatternBindings(as.pattern);
-            },
-            .tuple => |items| for (items) |item| try self.reservePatternBindings(item),
-            .record_destructure => |destructs| {
-                for (destructs) |destruct| {
-                    switch (destruct.kind) {
-                        .required,
-                        .sub_pattern,
-                        .rest,
-                        => |child| try self.reservePatternBindings(child),
+    fn reservePatternBindings(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!void {
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |pattern_id| {
+            try self.ensureBinderLocals();
+            const pattern = self.module.checked_bodies.pattern(pattern_id);
+            const children_start = pending.items.len;
+            switch (pattern.data) {
+                .assign => |binder| {
+                    try self.reserveBinderLocal(binder, pattern.ty);
+                    _ = try self.reserveDescriptorLocalForType(pattern.ty);
+                },
+                .as => |as| {
+                    try self.reserveBinderLocal(as.binder, pattern.ty);
+                    _ = try self.reserveDescriptorLocalForType(pattern.ty);
+                    try pending.append(allocator, as.pattern);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .record_destructure => |destructs| {
+                    for (destructs) |destruct| {
+                        switch (destruct.kind) {
+                            .required,
+                            .sub_pattern,
+                            .rest,
+                            => |child| try pending.append(allocator, child),
+                        }
                     }
-                }
-            },
-            .nominal => |nominal| try self.reservePatternBindings(nominal.backing_pattern),
-            .applied_tag => |tag| for (tag.args) |arg| try self.reservePatternBindings(arg),
-            .list => |list| {
-                for (list.patterns) |child| try self.reservePatternBindings(child);
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.reservePatternBindings(rest_pattern);
-                }
-            },
-            .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| try self.reservePatternBindings(capture);
-                }
-            },
-            .underscore,
-            .numeral_literal,
-            .str_literal,
-            => {},
-            .runtime_error,
-            .pending,
-            => boxyLowerInvariant("refutable or pending checked pattern reached boxy irrefutable binder reservation"),
+                },
+                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
+                .applied_tag => |tag| try pending.appendSlice(allocator, tag.args),
+                .list => |list| {
+                    try pending.appendSlice(allocator, list.patterns);
+                    if (list.rest) |rest| {
+                        if (rest.pattern) |rest_pattern| try pending.append(allocator, rest_pattern);
+                    }
+                },
+                .str_interpolation => |str| {
+                    for (str.steps) |step| {
+                        if (step.capture) |capture| try pending.append(allocator, capture);
+                    }
+                },
+                .underscore,
+                .numeral_literal,
+                .str_literal,
+                => {},
+                .runtime_error,
+                .pending,
+                => boxyLowerInvariant("refutable or pending checked pattern reached boxy irrefutable binder reservation"),
+            }
+            std.mem.reverse(checked.CheckedPatternId, pending.items[children_start..]);
         }
     }
 
@@ -38542,187 +39968,179 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn reserveMatchPatternBindings(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
-        try self.ensureBinderLocals();
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => |binder| {
-                try self.reserveMatchBinderLocal(binder, pattern.ty);
-            },
-            .as => |as| {
-                try self.reserveMatchBinderLocal(as.binder, pattern.ty);
-                try self.reserveMatchPatternBindings(as.pattern);
-            },
-            .applied_tag => |tag| for (tag.args) |arg| try self.reserveMatchPatternBindings(arg),
-            .tuple => |items| for (items) |item| try self.reserveMatchPatternBindings(item),
-            .record_destructure => |destructs| {
-                for (destructs) |destruct| {
-                    switch (destruct.kind) {
-                        .required,
-                        .sub_pattern,
-                        .rest,
-                        => |child| try self.reserveMatchPatternBindings(child),
+    fn reserveMatchPatternBindings(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!void {
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |pattern_id| {
+            try self.ensureBinderLocals();
+            const pattern = self.module.checked_bodies.pattern(pattern_id);
+            const children_start = pending.items.len;
+            switch (pattern.data) {
+                .assign => |binder| {
+                    try self.reserveMatchBinderLocal(binder, pattern.ty);
+                },
+                .as => |as| {
+                    try self.reserveMatchBinderLocal(as.binder, pattern.ty);
+                    try pending.append(allocator, as.pattern);
+                },
+                .applied_tag => |tag| try pending.appendSlice(allocator, tag.args),
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .record_destructure => |destructs| {
+                    for (destructs) |destruct| {
+                        switch (destruct.kind) {
+                            .required,
+                            .sub_pattern,
+                            .rest,
+                            => |child| try pending.append(allocator, child),
+                        }
                     }
-                }
-            },
-            .nominal => |nominal| try self.reserveMatchPatternBindings(nominal.backing_pattern),
-            .list => |list| {
-                for (list.patterns) |child| try self.reserveMatchPatternBindings(child);
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.reserveMatchPatternBindings(rest_pattern);
-                }
-            },
-            .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| try self.reserveMatchPatternBindings(capture);
-                }
-            },
-            .underscore,
-            .numeral_literal,
-            .str_literal,
-            => {},
-            .runtime_error,
-            .pending,
-            => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match binder reservation"),
+                },
+                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
+                .list => |list| {
+                    try pending.appendSlice(allocator, list.patterns);
+                    if (list.rest) |rest| {
+                        if (rest.pattern) |rest_pattern| try pending.append(allocator, rest_pattern);
+                    }
+                },
+                .str_interpolation => |str| {
+                    for (str.steps) |step| {
+                        if (step.capture) |capture| try pending.append(allocator, capture);
+                    }
+                },
+                .underscore,
+                .numeral_literal,
+                .str_literal,
+                => {},
+                .runtime_error,
+                .pending,
+                => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match binder reservation"),
+            }
+            std.mem.reverse(checked.CheckedPatternId, pending.items[children_start..]);
         }
     }
 
+    /// Reserve, in pre-order, the binders `root` binds from a source of
+    /// representation `root_source_rep`.
     fn reserveMatchPatternBindingsFromRep(
         self: *ProcBodyBuilder,
-        pattern_id: checked.CheckedPatternId,
-        source_rep: Plan.TypeRepId,
+        root: checked.CheckedPatternId,
+        root_source_rep: Plan.TypeRepId,
     ) Allocator.Error!void {
-        try self.ensureBinderLocals();
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        const pattern_rep = self.repForType(pattern.ty);
-        if (pattern_rep == source_rep or
-            self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx())
-        {
-            return try self.reserveMatchPatternBindings(pattern_id);
-        }
+        const allocator = self.parent.allocator;
+        const Pending = struct { pattern_id: checked.CheckedPatternId, source_rep: Plan.TypeRepId };
+        var pending: std.ArrayList(Pending) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, .{ .pattern_id = root, .source_rep = root_source_rep });
+        while (pending.pop()) |item| {
+            const pattern_id = item.pattern_id;
+            const source_rep = item.source_rep;
+            try self.ensureBinderLocals();
+            const pattern = self.module.checked_bodies.pattern(pattern_id);
+            const pattern_rep = self.repForType(pattern.ty);
+            if (pattern_rep == source_rep or
+                self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx())
+            {
+                try self.reserveMatchPatternBindings(pattern_id);
+                continue;
+            }
 
-        switch (pattern.data) {
-            .assign => |binder| try self.reserveMatchBinderLocalForRep(binder, source_rep),
-            .as => |as| {
-                try self.reserveMatchBinderLocalForRep(as.binder, source_rep);
-                try self.reserveMatchPatternBindingsFromRep(as.pattern, source_rep);
-            },
-            .applied_tag => |tag| {
-                const tag_rep = self.tagVariantRepForBoundary(source_rep) orelse
-                    boxyLowerInvariant("boxy tag pattern binder source had no tag representation");
-                const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep)];
-                const payloads = switch (rep.kind) {
-                    .dynamic => try self.dynamicTagPayloadsForName(tag_rep, tag.name),
-                    .tag_union => self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads),
-                    .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
-                };
-                if (payloads.len != tag.args.len) {
-                    boxyLowerInvariant("boxy tag pattern binder payload count disagreed with its source representation");
-                }
-                for (tag.args, payloads) |arg, payload| {
-                    try self.reserveMatchPatternBindingsFromRep(arg, payload.rep);
-                }
-            },
-            .underscore,
-            .numeral_literal,
-            .str_literal,
-            => {},
-            .pending, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .runtime_error => try self.reserveMatchPatternBindings(pattern_id),
+            const children_start = pending.items.len;
+            switch (pattern.data) {
+                .assign => |binder| try self.reserveMatchBinderLocalForRep(binder, source_rep),
+                .as => |as| {
+                    try self.reserveMatchBinderLocalForRep(as.binder, source_rep);
+                    try pending.append(allocator, .{ .pattern_id = as.pattern, .source_rep = source_rep });
+                },
+                .applied_tag => |tag| {
+                    const tag_rep = self.tagVariantRepForBoundary(source_rep) orelse
+                        boxyLowerInvariant("boxy tag pattern binder source had no tag representation");
+                    const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep)];
+                    const payloads = switch (rep.kind) {
+                        .dynamic => try self.dynamicTagPayloadsForName(tag_rep, tag.name),
+                        .tag_union => self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads),
+                        .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
+                    };
+                    if (payloads.len != tag.args.len) {
+                        boxyLowerInvariant("boxy tag pattern binder payload count disagreed with its source representation");
+                    }
+                    for (tag.args, payloads) |arg, payload| {
+                        try pending.append(allocator, .{ .pattern_id = arg, .source_rep = payload.rep });
+                    }
+                },
+                .underscore,
+                .numeral_literal,
+                .str_literal,
+                => {},
+                .pending, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .runtime_error => try self.reserveMatchPatternBindings(pattern_id),
+            }
+            std.mem.reverse(Pending, pending.items[children_start..]);
         }
     }
 
     fn reserveMatchPatternDescriptors(
         self: *ProcBodyBuilder,
-        pattern_id: checked.CheckedPatternId,
+        root: checked.CheckedPatternId,
         remaps: []const checked.CheckedAlternativeBinderRemap,
     ) Allocator.Error!void {
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => |binder| {
-                const representative = self.matchBinderRepresentative(binder, remaps);
-                _ = try self.bindRuntimeDescriptorLocalForValueType(
-                    self.localForBinder(representative),
-                    self.binderType(representative),
-                );
-            },
-            .as => |as| {
-                const representative = self.matchBinderRepresentative(as.binder, remaps);
-                _ = try self.bindRuntimeDescriptorLocalForValueType(
-                    self.localForBinder(representative),
-                    self.binderType(representative),
-                );
-                try self.reserveMatchPatternDescriptors(as.pattern, remaps);
-            },
-            .applied_tag => |tag| for (tag.args) |arg| try self.reserveMatchPatternDescriptors(arg, remaps),
-            .tuple => |items| for (items) |item| try self.reserveMatchPatternDescriptors(item, remaps),
-            .record_destructure => |destructs| {
-                for (destructs) |destruct| {
-                    switch (destruct.kind) {
-                        .required,
-                        .sub_pattern,
-                        .rest,
-                        => |child| try self.reserveMatchPatternDescriptors(child, remaps),
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |pattern_id| {
+            const pattern = self.module.checked_bodies.pattern(pattern_id);
+            const children_start = pending.items.len;
+            switch (pattern.data) {
+                .assign => |binder| {
+                    const representative = self.matchBinderRepresentative(binder, remaps);
+                    _ = try self.bindRuntimeDescriptorLocalForValueType(
+                        self.localForBinder(representative),
+                        self.binderType(representative),
+                    );
+                },
+                .as => |as| {
+                    const representative = self.matchBinderRepresentative(as.binder, remaps);
+                    _ = try self.bindRuntimeDescriptorLocalForValueType(
+                        self.localForBinder(representative),
+                        self.binderType(representative),
+                    );
+                    try pending.append(allocator, as.pattern);
+                },
+                .applied_tag => |tag| try pending.appendSlice(allocator, tag.args),
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .record_destructure => |destructs| {
+                    for (destructs) |destruct| {
+                        switch (destruct.kind) {
+                            .required,
+                            .sub_pattern,
+                            .rest,
+                            => |child| try pending.append(allocator, child),
+                        }
                     }
-                }
-            },
-            .nominal => |nominal| try self.reserveMatchPatternDescriptors(nominal.backing_pattern, remaps),
-            .list => |list| {
-                for (list.patterns) |child| try self.reserveMatchPatternDescriptors(child, remaps);
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.reserveMatchPatternDescriptors(rest_pattern, remaps);
-                }
-            },
-            .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| try self.reserveMatchPatternDescriptors(capture, remaps);
-                }
-            },
-            .underscore,
-            .numeral_literal,
-            .str_literal,
-            => {},
-            .runtime_error,
-            .pending,
-            => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match descriptor reservation"),
+                },
+                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
+                .list => |list| {
+                    try pending.appendSlice(allocator, list.patterns);
+                    if (list.rest) |rest| {
+                        if (rest.pattern) |rest_pattern| try pending.append(allocator, rest_pattern);
+                    }
+                },
+                .str_interpolation => |str| {
+                    for (str.steps) |step| {
+                        if (step.capture) |capture| try pending.append(allocator, capture);
+                    }
+                },
+                .underscore,
+                .numeral_literal,
+                .str_literal,
+                => {},
+                .runtime_error,
+                .pending,
+                => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match descriptor reservation"),
+            }
+            std.mem.reverse(checked.CheckedPatternId, pending.items[children_start..]);
         }
-    }
-
-    fn patternCanMiss(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        return switch (pattern.data) {
-            .assign,
-            .underscore,
-            => false,
-            .as => |as| try self.patternCanMiss(as.pattern),
-            .tuple => |items| blk: {
-                for (items) |item| {
-                    if (try self.patternCanMiss(item)) break :blk true;
-                }
-                break :blk false;
-            },
-            .record_destructure => |destructs| blk: {
-                for (destructs) |destruct| {
-                    const child = switch (destruct.kind) {
-                        .required,
-                        .sub_pattern,
-                        .rest,
-                        => |child| child,
-                    };
-                    if (try self.patternCanMiss(child)) break :blk true;
-                }
-                break :blk false;
-            },
-            .nominal => |nominal| try self.patternCanMiss(nominal.backing_pattern),
-            .applied_tag => |tag| try self.appliedTagPatternCanMiss(pattern.ty, tag.name, tag.args),
-            .list,
-            .str_interpolation,
-            .numeral_literal,
-            .str_literal,
-            => true,
-            .runtime_error,
-            .pending,
-            => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match miss analysis"),
-        };
     }
 
     fn patternIsIgnored(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) bool {
@@ -38732,119 +40150,150 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn appliedTagPatternCanMiss(
-        self: *ProcBodyBuilder,
-        tag_ty: checked.CheckedTypeId,
-        name: names.TagNameId,
-        args: []const checked.CheckedPatternId,
-    ) Allocator.Error!bool {
-        var payload_can_miss = false;
-        for (args) |arg| {
-            if (try self.patternCanMiss(arg)) {
-                payload_can_miss = true;
-                break;
-            }
-        }
-
-        const rep_id = self.repForType(tag_ty);
-        return self.appliedTagPatternRepCanMiss(tag_ty, rep_id, name, args, payload_can_miss);
-    }
-
-    fn appliedTagPatternRepCanMiss(
-        self: *ProcBodyBuilder,
-        tag_ty: checked.CheckedTypeId,
-        rep_id: Plan.TypeRepId,
-        name: names.TagNameId,
-        args: []const checked.CheckedPatternId,
-        payload_can_miss: bool,
-    ) Allocator.Error!bool {
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        return switch (rep.kind) {
-            .bool_tag_union => blk: {
-                if (args.len != 0) {
-                    boxyLowerInvariant("builtin Bool match pattern carried a payload during miss analysis");
-                }
-                _ = self.boolVariantIndex(name);
-                break :blk true;
-            },
-            .tag_union => blk: {
-                const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                const variant = self.tagVariant(rep, name);
-                const payloads = self.parent.plan.childSlice(variant.payloads);
-                if (payloads.len != args.len) {
-                    boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
-                }
-                break :blk variants.len > 1 or payload_can_miss;
-            },
-            .dynamic => blk: {
-                const payloads = try self.dynamicTagPayloadsForName(rep_id, name);
-                if (payloads.len != args.len) {
-                    boxyLowerInvariant("dynamic tag match pattern payload count disagreed during miss analysis");
-                }
-                break :blk true;
-            },
-            .alias => return try self.appliedTagPatternRepCanMiss(
-                tag_ty,
-                self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
-                name,
-                args,
-                payload_can_miss,
-            ),
-            .nominal => |kind| switch (kind) {
-                .transparent, .builtin_other => {
-                    const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
-                    const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                    return try self.appliedTagPatternRepCanMiss(backing_ty, backing_rep, name, args, payload_can_miss);
-                },
-                .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy miss analysis"),
-            },
-            .empty_tag_union => boxyLowerInvariant("empty tag-union match pattern reached boxy miss analysis"),
-            .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation during miss analysis"),
-        };
-    }
-
-    fn reserveReassignPatternBindings(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
-        try self.ensureBinderLocals();
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        switch (pattern.data) {
-            .assign => |binder| {
-                try self.reserveBinderLocalIfFresh(binder, pattern.ty);
-                _ = try self.reserveDescriptorLocalForType(pattern.ty);
-            },
-            .as => |as| {
-                try self.reserveBinderLocalIfFresh(as.binder, pattern.ty);
-                _ = try self.reserveDescriptorLocalForType(pattern.ty);
-                try self.reserveReassignPatternBindings(as.pattern);
-            },
-            .tuple => |items| for (items) |item| try self.reserveReassignPatternBindings(item),
-            .record_destructure => |destructs| {
-                for (destructs) |destruct| {
-                    switch (destruct.kind) {
+    /// Whether some value fails to match `root`. Which subpatterns are
+    /// reached does not depend on visiting order.
+    fn patternCanMiss(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!bool {
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |pattern_id| {
+            const pattern = self.module.checked_bodies.pattern(pattern_id);
+            switch (pattern.data) {
+                .assign,
+                .underscore,
+                => {},
+                .as => |as| try pending.append(allocator, as.pattern),
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .record_destructure => |destructs| for (destructs) |destruct| {
+                    const child = switch (destruct.kind) {
                         .required,
                         .sub_pattern,
                         .rest,
-                        => |child| try self.reserveReassignPatternBindings(child),
+                        => |child| child,
+                    };
+                    try pending.append(allocator, child);
+                },
+                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
+                .applied_tag => |tag| {
+                    // A tag misses when its union has other variants; a sole
+                    // variant misses only through its payloads.
+                    if (try self.appliedTagPatternRepCanMiss(pattern.ty, self.repForType(pattern.ty), tag.name, tag.args)) return true;
+                    try pending.appendSlice(allocator, tag.args);
+                },
+                .list,
+                .str_interpolation,
+                .numeral_literal,
+                .str_literal,
+                => return true,
+                .runtime_error,
+                .pending,
+                => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match miss analysis"),
+            }
+        }
+        return false;
+    }
+
+    /// Whether a tag pattern misses by its tag alone.
+    fn appliedTagPatternRepCanMiss(
+        self: *ProcBodyBuilder,
+        root_ty: checked.CheckedTypeId,
+        root_rep: Plan.TypeRepId,
+        name: names.TagNameId,
+        args: []const checked.CheckedPatternId,
+    ) Allocator.Error!bool {
+        var tag_ty = root_ty;
+        var rep_id = root_rep;
+        while (true) {
+            const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+            switch (rep.kind) {
+                .bool_tag_union => {
+                    if (args.len != 0) {
+                        boxyLowerInvariant("builtin Bool match pattern carried a payload during miss analysis");
                     }
-                }
-            },
-            .nominal => |nominal| try self.reserveReassignPatternBindings(nominal.backing_pattern),
-            .list => |list| {
-                if (list.patterns.len != 0) {
-                    boxyLowerInvariant("refutable list pattern reached boxy reassign binder reservation");
-                }
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.reserveReassignPatternBindings(rest_pattern);
-                }
-            },
-            .underscore,
-            .numeral_literal,
-            .str_literal,
-            .str_interpolation,
-            => {},
-            .applied_tag,
-            .runtime_error,
-            .pending,
-            => boxyLowerInvariant("refutable or pending checked pattern reached boxy reassign binder reservation"),
+                    _ = self.boolVariantIndex(name);
+                    return true;
+                },
+                .tag_union => {
+                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+                    const variant = self.tagVariant(rep, name);
+                    const payloads = self.parent.plan.childSlice(variant.payloads);
+                    if (payloads.len != args.len) {
+                        boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
+                    }
+                    return variants.len > 1;
+                },
+                .dynamic => {
+                    const payloads = try self.dynamicTagPayloadsForName(rep_id, name);
+                    if (payloads.len != args.len) {
+                        boxyLowerInvariant("dynamic tag match pattern payload count disagreed during miss analysis");
+                    }
+                    return true;
+                },
+                .alias => rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent, .builtin_other => {
+                        tag_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
+                        rep_id = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
+                    },
+                    .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy miss analysis"),
+                },
+                .empty_tag_union => boxyLowerInvariant("empty tag-union match pattern reached boxy miss analysis"),
+                .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation during miss analysis"),
+            }
+        }
+    }
+
+    fn reserveReassignPatternBindings(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!void {
+        const allocator = self.parent.allocator;
+        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |pattern_id| {
+            try self.ensureBinderLocals();
+            const pattern = self.module.checked_bodies.pattern(pattern_id);
+            const children_start = pending.items.len;
+            switch (pattern.data) {
+                .assign => |binder| {
+                    try self.reserveBinderLocalIfFresh(binder, pattern.ty);
+                    _ = try self.reserveDescriptorLocalForType(pattern.ty);
+                },
+                .as => |as| {
+                    try self.reserveBinderLocalIfFresh(as.binder, pattern.ty);
+                    _ = try self.reserveDescriptorLocalForType(pattern.ty);
+                    try pending.append(allocator, as.pattern);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .record_destructure => |destructs| {
+                    for (destructs) |destruct| {
+                        switch (destruct.kind) {
+                            .required,
+                            .sub_pattern,
+                            .rest,
+                            => |child| try pending.append(allocator, child),
+                        }
+                    }
+                },
+                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
+                .list => |list| {
+                    if (list.patterns.len != 0) {
+                        boxyLowerInvariant("refutable list pattern reached boxy reassign binder reservation");
+                    }
+                    if (list.rest) |rest| {
+                        if (rest.pattern) |rest_pattern| try pending.append(allocator, rest_pattern);
+                    }
+                },
+                .underscore,
+                .numeral_literal,
+                .str_literal,
+                .str_interpolation,
+                => {},
+                .applied_tag,
+                .runtime_error,
+                .pending,
+                => boxyLowerInvariant("refutable or pending checked pattern reached boxy reassign binder reservation"),
+            }
+            std.mem.reverse(checked.CheckedPatternId, pending.items[children_start..]);
         }
     }
 
@@ -39046,11 +40495,7 @@ const ProcBodyBuilder = struct {
 
     fn descriptorStorageRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("descriptor representation wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -39084,11 +40529,7 @@ const ProcBodyBuilder = struct {
         // dispatch through, so only aliases are unwrapped; the nominal identity
         // is preserved for method resolution.
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("dictionary representation wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             if (rep.kind != .alias) return current;
             current = self.repQuery().requiredSingleChild(current, .alias_backing).rep;
@@ -39097,11 +40538,7 @@ const ProcBodyBuilder = struct {
 
     fn tagVariantRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("tag representation wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -39120,11 +40557,7 @@ const ProcBodyBuilder = struct {
 
     fn listRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("list representation wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -39140,11 +40573,7 @@ const ProcBodyBuilder = struct {
 
     fn tupleRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("tuple representation wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -39170,11 +40599,7 @@ const ProcBodyBuilder = struct {
 
     fn declaredAggregateRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("declared aggregate wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             if (rep.declared_fields.len != 0) return current;
             switch (rep.kind) {
@@ -39201,11 +40626,7 @@ const ProcBodyBuilder = struct {
 
     fn functionChildrenForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?FunctionChildren {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("function representation alias chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -39328,92 +40749,99 @@ const ProcBodyBuilder = struct {
         return result;
     }
 
+    /// Map, in pre-order, each worker representation carrying dictionaries
+    /// to the value representation at its position.
     fn collectErasedCaptureDictionaryReps(
         self: *ProcBodyBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        value_rep_id: Plan.TypeRepId,
+        root_worker: Plan.TypeRepId,
+        root_value: Plan.TypeRepId,
         mapped: *collections.DenseMap(Plan.TypeRepId, Plan.TypeRepId),
         seen_rep_pairs: *std.AutoHashMap(u64, void),
     ) Allocator.Error!void {
-        const effective_value_rep_id = value_rep_id;
-        const pair_key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) |
-            @as(u64, @intFromEnum(effective_value_rep_id));
-        const entry = try seen_rep_pairs.getOrPut(pair_key);
-        if (entry.found_existing) return;
+        const allocator = self.parent.allocator;
+        var pairs: std.ArrayList([2]Plan.TypeRepId) = .empty;
+        defer pairs.deinit(allocator);
+        try pairs.append(allocator, .{ root_worker, root_value });
+        while (pairs.pop()) |pair| {
+            const worker_rep_id = pair[0];
+            const effective_value_rep_id = pair[1];
+            const pair_key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) |
+                @as(u64, @intFromEnum(effective_value_rep_id));
+            const entry = try seen_rep_pairs.getOrPut(pair_key);
+            if (entry.found_existing) continue;
 
-        const worker_rep = self.parent.plan.representations.items[@intFromEnum(worker_rep_id)];
-        const value_rep = self.parent.plan.representations.items[@intFromEnum(effective_value_rep_id)];
+            const worker_rep = self.parent.plan.representations.items[@intFromEnum(worker_rep_id)];
+            const value_rep = self.parent.plan.representations.items[@intFromEnum(effective_value_rep_id)];
 
-        if (worker_rep.dictionaries.len != 0) {
-            const mapped_rep = self.repQuery().dictionaryArgumentIdentityRep(effective_value_rep_id);
-            const put = try mapped.getOrPut(worker_rep_id);
-            if (put.found_existing and put.value_ptr.* != mapped_rep) {
-                boxyLowerInvariant("boxy erased callable dictionary mapping assigned one worker rep to two reps");
+            if (worker_rep.dictionaries.len != 0) {
+                const mapped_rep = self.repQuery().dictionaryArgumentIdentityRep(effective_value_rep_id);
+                const put = try mapped.getOrPut(worker_rep_id);
+                if (put.found_existing and put.value_ptr.* != mapped_rep) {
+                    boxyLowerInvariant("boxy erased callable dictionary mapping assigned one worker rep to two reps");
+                }
+                put.value_ptr.* = mapped_rep;
             }
-            put.value_ptr.* = mapped_rep;
-        }
 
-        if (worker_rep.children.len == 0) return;
+            if (worker_rep.children.len == 0) continue;
 
-        // Children align with the structure the call's value stands for.
-        var wrapper_bindings: Plan.CallWrapperBindings = .{};
-        defer wrapper_bindings.deinit(self.parent.allocator);
-        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.parent.allocator, worker_rep_id, effective_value_rep_id, &wrapper_bindings);
-        const through_wrapper = structure_call_rep_id != effective_value_rep_id;
-        const structure_rep = self.parent.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+            // Children align with the structure the call's value stands for.
+            var wrapper_bindings: Plan.CallWrapperBindings = .{};
+            defer wrapper_bindings.deinit(self.parent.allocator);
+            const children_start = pairs.items.len;
+            defer std.mem.reverse([2]Plan.TypeRepId, pairs.items[children_start..]);
+            const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.parent.allocator, worker_rep_id, effective_value_rep_id, &wrapper_bindings);
+            const through_wrapper = structure_call_rep_id != effective_value_rep_id;
+            const structure_rep = self.parent.plan.representations.items[@intFromEnum(structure_call_rep_id)];
 
-        if (structure_rep.kind == .empty_tag_union) {
-            for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
+            if (structure_rep.kind == .empty_tag_union) {
+                for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
+                    if (self.parent.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
+                    if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
+                    try pairs.append(allocator, .{ worker_child.rep, effective_value_rep_id });
+                }
+                continue;
+            }
+
+            const worker_children = self.parent.plan.childSlice(worker_rep.children);
+            const value_children = self.parent.plan.childSlice(structure_rep.children);
+            for (worker_children) |worker_child| {
                 if (self.parent.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
                 if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, effective_value_rep_id, mapped, seen_rep_pairs);
-            }
-            return;
-        }
-
-        const worker_children = self.parent.plan.childSlice(worker_rep.children);
-        const value_children = self.parent.plan.childSlice(structure_rep.children);
-        for (worker_children) |worker_child| {
-            if (self.parent.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
-            if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
-            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
-                const row_target = if (structure_row_target == structure_call_rep_id)
-                    effective_value_rep_id
-                else
-                    Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, row_target, mapped, seen_rep_pairs);
-                continue;
-            }
-            if (self.namedQuery().findMatchingChildByRole(value_children, worker_child)) |value_child| {
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, value_child.rep), mapped, seen_rep_pairs);
-                continue;
-            }
-            if (self.repQuery().structuralWrapperBackingRep(effective_value_rep_id)) |value_backing| {
-                const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(value_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |value_child| {
-                    try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs);
+                if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                    const row_target = if (structure_row_target == structure_call_rep_id)
+                        effective_value_rep_id
+                    else
+                        Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
+                    try pairs.append(allocator, .{ worker_child.rep, row_target });
                     continue;
                 }
+                if (self.namedQuery().findMatchingChildByRole(value_children, worker_child)) |value_child| {
+                    try pairs.append(allocator, .{ worker_child.rep, Plan.structureChildCallRep(&wrapper_bindings, through_wrapper, value_child.rep) });
+                    continue;
+                }
+                if (self.repQuery().structuralWrapperBackingRep(effective_value_rep_id)) |value_backing| {
+                    const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(value_backing)].children);
+                    if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |value_child| {
+                        try pairs.append(allocator, .{ worker_child.rep, value_child.rep });
+                        continue;
+                    }
+                }
+                if (try self.repQuery().workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
+                    try pairs.append(allocator, .{ worker_child.rep, effective_value_rep_id });
+                    continue;
+                }
+                if (worker_child.role == .tag_ext and value_children.len == 0 and value_rep.dictionaries.len != 0) {
+                    try pairs.append(allocator, .{ worker_child.rep, effective_value_rep_id });
+                    continue;
+                }
+                boxyLowerInvariant("boxy erased callable dictionary mapping saw mismatched child roles");
             }
-            if (try self.repQuery().workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, effective_value_rep_id, mapped, seen_rep_pairs);
-                continue;
-            }
-            if (worker_child.role == .tag_ext and value_children.len == 0 and value_rep.dictionaries.len != 0) {
-                try self.collectErasedCaptureDictionaryReps(worker_child.rep, effective_value_rep_id, mapped, seen_rep_pairs);
-                continue;
-            }
-            boxyLowerInvariant("boxy erased callable dictionary mapping saw mismatched child roles");
         }
     }
 
     fn functionReturnRepForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("function representation alias chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -39505,11 +40933,7 @@ const ProcBodyBuilder = struct {
 
     fn recordRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
         var current = rep_id;
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("record boundary representation wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .record,
@@ -39585,30 +41009,35 @@ const ProcBodyBuilder = struct {
 
     fn recordFieldAccessInfo(
         self: *const ProcBodyBuilder,
-        record_rep_id: Plan.TypeRepId,
+        receiver_rep_id: Plan.TypeRepId,
         access_view: ProcedureModuleView,
         field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
     ) RecordFieldAccessInfo {
-        const rep = self.parent.plan.representations.items[@intFromEnum(record_rep_id)];
-        switch (rep.kind) {
-            .record,
-            => {},
-            .dynamic => {
-                if (!self.repHasRecordFieldChildren(rep)) {
-                    boxyLowerInvariant("record field access receiver did not have known boxy record fields");
-                }
-            },
-            .alias => return self.recordFieldAccessInfo(self.repQuery().requiredSingleChild(record_rep_id, .alias_backing).rep, access_view, field_name),
-            .nominal => |kind| switch (kind) {
-                .transparent,
-                .builtin_other,
-                => return self.recordFieldAccessInfo(self.repQuery().requiredSingleChild(record_rep_id, .nominal_backing).rep, access_view, field_name),
-                .opaque_nominal => boxyLowerInvariant("opaque nominal record field access reached boxy lowering"),
-            },
-            .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {
-                boxyLowerInvariant("record field access receiver did not have a boxy record representation");
-            },
-        }
+        // Aliases and transparent nominals read their backing's fields.
+        var record_rep_id = receiver_rep_id;
+        const rep = while (true) {
+            const current = self.parent.plan.representations.items[@intFromEnum(record_rep_id)];
+            switch (current.kind) {
+                .record,
+                => break current,
+                .dynamic => {
+                    if (!self.repHasRecordFieldChildren(current)) {
+                        boxyLowerInvariant("record field access receiver did not have known boxy record fields");
+                    }
+                    break current;
+                },
+                .alias => record_rep_id = self.repQuery().requiredSingleChild(record_rep_id, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent,
+                    .builtin_other,
+                    => record_rep_id = self.repQuery().requiredSingleChild(record_rep_id, .nominal_backing).rep,
+                    .opaque_nominal => boxyLowerInvariant("opaque nominal record field access reached boxy lowering"),
+                },
+                .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {
+                    boxyLowerInvariant("record field access receiver did not have a boxy record representation");
+                },
+            }
+        };
 
         var index: u16 = 0;
         const source_view = procedureModuleById(self.parent.modules, rep.source_type.module);
@@ -39718,11 +41147,7 @@ const ProcBodyBuilder = struct {
     ) TagVariantLookup {
         const requested_module = procedureModuleById(self.parent.modules, type_ref.module);
         var current = self.repForTypeRef(type_ref);
-        var depth: u16 = 0;
         while (true) {
-            if (depth == 1024) boxyLowerInvariant("tag-union representation wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -39999,24 +41424,23 @@ fn constRecordFields(allocator: Allocator, module: ProcedureModuleView, checked_
 }
 
 fn constRowExtensionIsClosed(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId, expected: checked.RowDefault) void {
-    if (!constRowExtensionIsClosedInner(module, checked_ty, expected, 0)) {
-        boxyLowerInvariant("ConstStore value restored with an open checked row");
-    }
-}
-
-fn constRowExtensionIsClosedInner(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId, expected: checked.RowDefault, depth: u16) bool {
-    if (depth == 1024) {
-        boxyLowerInvariant("ConstStore row extension chain exceeded boxy lowering limit");
-    }
-    return switch (resolvedTypePayload(module, checked_ty)) {
-        .empty_record => expected == .empty_record,
-        .empty_tag_union => expected == .empty_tag_union,
-        .alias => |alias| constRowExtensionIsClosedInner(module, alias.backing, expected, depth + 1),
-        .flex, .rigid => |variable| variable.row_default == expected,
-        .record => |record| if (expected == .empty_record) constRowExtensionIsClosedInner(module, record.ext, expected, depth + 1) else false,
-        .tag_union => |tag_union| if (expected == .empty_tag_union) constRowExtensionIsClosedInner(module, tag_union.ext, expected, depth + 1) else false,
-        .pending, .err, .tuple, .nominal, .function => boxyLowerInvariant("ConstStore record restored with a non-record checked type"),
+    var current = checked_ty;
+    const closed = while (true) {
+        switch (resolvedTypePayload(module, current)) {
+            .empty_record => break expected == .empty_record,
+            .empty_tag_union => break expected == .empty_tag_union,
+            .alias => |alias| current = alias.backing,
+            .flex, .rigid => |variable| break variable.row_default == expected,
+            .record => |record| if (expected == .empty_record) {
+                current = record.ext;
+            } else break false,
+            .tag_union => |tag_union| if (expected == .empty_tag_union) {
+                current = tag_union.ext;
+            } else break false,
+            .pending, .err, .tuple, .nominal, .function => boxyLowerInvariant("ConstStore record restored with a non-record checked type"),
+        }
     };
+    if (!closed) boxyLowerInvariant("ConstStore value restored with an open checked row");
 }
 
 fn constRecordFieldIndex(fields: []const checked.CheckedRecordField, label: names.RecordFieldLabelId) ?usize {
@@ -40028,11 +41452,7 @@ fn constRecordFieldIndex(fields: []const checked.CheckedRecordField, label: name
 
 fn checkedRecordFieldByName(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId, field_name: []const u8) checked.CheckedRecordField {
     var current = checked_ty;
-    var depth: u16 = 0;
     while (true) {
-        if (depth == 1024) boxyLowerInvariant("generated record field lookup exceeded the checked row limit");
-        depth += 1;
-
         switch (resolvedTypePayload(module, current)) {
             .record => |record| {
                 for (record.fields) |field| {
@@ -40082,12 +41502,7 @@ fn constTagPayloadTypesAllowOpen(
     tag_name: []const u8,
 ) ConstTagPayloadTypes {
     var current = checked_ty;
-    var depth: u16 = 0;
     while (true) {
-        if (depth == 1024) {
-            boxyLowerInvariant("ConstStore row extension chain exceeded boxy lowering limit");
-        }
-        depth += 1;
         const tag_union = switch (resolvedTypePayload(module, current)) {
             .tag_union => |tag_union| tag_union,
             .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag name was missing from checked tag-union row"),
@@ -40164,11 +41579,7 @@ fn generatedEncoderKeyMethodForType(
 
 fn resolvedTypePayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
     var current = checked_ty;
-    var depth: u16 = 0;
     while (true) {
-        if (depth == 1024) boxyLowerInvariant("checked type alias chain exceeded boxy const lowering limit");
-        depth += 1;
-
         const payload = module.checked_types.payload(current);
         switch (payload) {
             .pending => boxyLowerInvariant("pending checked type reached boxy const lowering"),
@@ -40293,49 +41704,151 @@ const ConstPlanBuilder = struct {
         self.* = undefined;
     }
 
-    fn constPlanForRep(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LirProgram.ConstPlanId {
+    // A representation's constant plan is built from its children's plans,
+    // and children follow type nesting, so each plan still waiting on a
+    // child's is a frame on one heap-backed stack. Frames allocate plan ids
+    // and erased callable sets in the order a direct recursive build would.
+
+    /// A constant plan waiting on its children's plans.
+    const ConstPlanFrame = struct {
+        rep_id: Plan.TypeRepId,
+        /// The plan this frame fills; an alias has none of its own.
+        id: LirProgram.ConstPlanId = undefined,
+        /// Whether the frame's last requested child plan is still due.
+        awaiting: bool = false,
+        state: union(enum) {
+            /// An alias shares its backing's plan.
+            alias,
+            dynamic: struct { saved_context: ?u32 = null, site_rep: Plan.TypeRepId = undefined },
+            list,
+            box,
+            named,
+            fields: struct {
+                kind: StructPlanKind,
+                role_tag: std.meta.Tag(Plan.ChildRole),
+                plans: []LirProgram.ConstPlanId,
+                child: usize = 0,
+                cursor: usize = 0,
+            },
+            tag: struct {
+                variants: []LirProgram.ConstTagVariant,
+                initialized: usize = 0,
+                /// The payload plans of `variants[initialized]` once begun.
+                payloads: ?[]LirProgram.ConstPlanId = null,
+                name: []u8 = &.{},
+                payload: usize = 0,
+            },
+            erased: *ErasedFnsBuild,
+        },
+
+        fn deinit(self: *ConstPlanFrame, allocator: Allocator) void {
+            switch (self.state) {
+                .alias, .dynamic, .list, .box, .named => {},
+                .fields => |fields| allocator.free(fields.plans),
+                .tag => |tag| {
+                    for (tag.variants[0..tag.initialized]) |variant| {
+                        allocator.free(variant.name);
+                        allocator.free(variant.payloads);
+                    }
+                    allocator.free(tag.variants);
+                    if (tag.payloads) |payloads| {
+                        allocator.free(tag.name);
+                        allocator.free(payloads);
+                    }
+                },
+                .erased => |build| {
+                    build.deinit(allocator);
+                    allocator.destroy(build);
+                },
+            }
+        }
+    };
+
+    /// An erased callable set's entries, built static function by static
+    /// function.
+    const ErasedFnsBuild = struct {
+        entries: std.ArrayList(LirProgram.ErasedFn) = .empty,
+        static_index: usize = 0,
+        /// The static function whose capture plans are being built.
+        current: ?struct {
+            entry_proc: LIR.LirProcSpecId,
+            static_fn: Plan.StaticFnPlan,
+            fn_value: check.ConstStore.ConstFn,
+            worker_captures: []const Plan.ErasedCapture,
+            slots: []LirProgram.CaptureSlot,
+            slot_count: usize = 0,
+            capture_index: usize = 0,
+        } = null,
+
+        fn deinit(self: *ErasedFnsBuild, allocator: Allocator) void {
+            for (self.entries.items) |entry| {
+                if (entry.captures.len != 0) allocator.free(entry.captures);
+            }
+            self.entries.deinit(allocator);
+            if (self.current) |current| allocator.free(current.slots);
+        }
+    };
+
+    const ConstPlanStep = union(enum) {
+        /// The frame needs this representation's plan next.
+        request: Plan.TypeRepId,
+        /// The frame finished with this plan and was popped.
+        done: LirProgram.ConstPlanId,
+    };
+
+    fn constPlanForRep(self: *ConstPlanBuilder, root: Plan.TypeRepId) Allocator.Error!LirProgram.ConstPlanId {
+        const saved_context = self.active_context;
+        errdefer self.active_context = saved_context;
+        var frames: std.ArrayList(ConstPlanFrame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
+        var value = try self.beginConstPlan(root, &frames);
+        while (frames.items.len != 0) {
+            switch (try self.stepConstPlanFrame(&frames, value)) {
+                .request => |rep_id| value = try self.beginConstPlan(rep_id, &frames),
+                .done => |id| value = id,
+            }
+        }
+        return value.?;
+    }
+
+    fn memoizeConstPlan(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId, id: LirProgram.ConstPlanId) Allocator.Error!void {
+        if (self.active_context) |ctx| {
+            try self.contextual_plans.put(self.allocator, .{ .rep = rep_id, .context = ctx }, id);
+        } else {
+            self.by_rep[@intFromEnum(rep_id)] = id;
+        }
+    }
+
+    /// The plan of `rep_id` when already known or built without children;
+    /// otherwise null, with the frame that builds it pushed.
+    fn beginConstPlan(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId, frames: *std.ArrayList(ConstPlanFrame)) Allocator.Error!?LirProgram.ConstPlanId {
         const index = @intFromEnum(rep_id);
         if (self.active_context) |ctx| {
             if (self.contextual_plans.get(.{ .rep = rep_id, .context = ctx })) |existing| return existing;
         } else if (self.by_rep[index]) |existing| return existing;
 
         const rep = self.plan.representations.items[index];
-        switch (rep.kind) {
-            .alias => {
-                const child = try self.constPlanForChild(rep_id, .alias_backing);
-                if (self.active_context) |ctx| try self.contextual_plans.put(self.allocator, .{ .rep = rep_id, .context = ctx }, child) else self.by_rep[index] = child;
-                return child;
-            },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
+        if (rep.kind == .alias) {
+            try frames.append(self.allocator, .{ .rep_id = rep_id, .state = .alias });
+            return null;
         }
 
         const id: LirProgram.ConstPlanId = @enumFromInt(@as(u32, @intCast(self.result.const_plans.items.len)));
         try self.result.const_plans.append(self.allocator, .pending);
-        if (self.active_context) |ctx| try self.contextual_plans.put(self.allocator, .{ .rep = rep_id, .context = ctx }, id) else self.by_rep[index] = id;
+        try self.memoizeConstPlan(rep_id, id);
 
-        const built = try self.buildConstPlan(rep_id);
-        self.result.const_plans.items[@intFromEnum(id)] = built;
-        return id;
-    }
-
-    fn buildConstPlan(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LirProgram.ConstPlan {
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        return switch (rep.kind) {
+        const leaf: LirProgram.ConstPlan = switch (rep.kind) {
             .in_progress => boxyLowerInvariant("in-progress boxy representation reached const plan output"),
-            .dynamic => blk: {
-                const ctx = self.active_context orelse boxyLowerInvariant("dynamic frozen value lacked its closed worker environment");
-                const evidence = &self.plan.literal_evidence.?;
-                const span = evidence.freeze_contexts.items[ctx].bindings;
-                for (evidence.bindings.items[span.start..][0..span.len]) |binding| {
-                    if (binding.scheme_rep != rep_id) continue;
-                    const saved = self.active_context;
-                    self.active_context = null;
-                    defer self.active_context = saved;
-                    break :blk .{ .boxy_box = .{ .payload = try self.constPlanForRep(binding.site_rep), .layout_idx = self.layout_plan.rep_layouts[@intFromEnum(binding.site_rep)].worker.layoutIdx() } };
-                }
-                boxyLowerInvariant("dynamic frozen value lacked a checked substitution");
+            .alias => unreachable,
+            .dynamic => return try self.pushConstPlanFrame(frames, .{ .rep_id = rep_id, .id = id, .state = .{ .dynamic = .{} } }),
+            .erased_callable => {
+                const build = try self.allocator.create(ErasedFnsBuild);
+                build.* = .{};
+                return try self.pushConstPlanFrame(frames, .{ .rep_id = rep_id, .id = id, .state = .{ .erased = build } });
             },
-            .erased_callable => .{ .erased_fn = try self.erasedFnsForRep(rep_id) },
             .generated_field,
             .generated_field_names,
             .generated_tag_union_spec,
@@ -40354,24 +41867,308 @@ const ConstPlanBuilder = struct {
             .empty_record,
             .empty_tag_union,
             => .zst,
-            .alias => boxyLowerInvariant("alias representation was not redirected before const plan output"),
-            .list => .{ .list = try self.constPlanForChild(rep_id, .list_elem) },
-            .box => .{ .box = try self.constPlanForChild(rep_id, .box_payload) },
-            .record,
-            => try self.structConstPlan(rep, .record_field, .record),
-            .tuple => try self.structConstPlan(rep, .tuple_elem, .tuple),
-            .tag_union => try self.tagUnionConstPlan(rep),
+            .list => return try self.pushConstPlanFrame(frames, .{ .rep_id = rep_id, .id = id, .state = .list }),
+            .box => return try self.pushConstPlanFrame(frames, .{ .rep_id = rep_id, .id = id, .state = .box }),
+            .record => return try self.pushStructConstPlanFrame(frames, rep_id, id, .record_field, .record),
+            .tuple => return try self.pushStructConstPlanFrame(frames, rep_id, id, .tuple_elem, .tuple),
+            .tag_union => {
+                const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, rep.tag_variants.len);
+                errdefer self.allocator.free(variants);
+                return try self.pushConstPlanFrame(frames, .{ .rep_id = rep_id, .id = id, .state = .{ .tag = .{ .variants = variants } } });
+            },
             .nominal => |kind| switch (kind) {
-                .transparent, .builtin_other => .{ .named = .{
-                    .named_type = .{
-                        .module = moduleDigestFromId(rep.source_type.module),
-                        .ty = rep.source_type.ty,
-                    },
-                    .backing = try self.constPlanForChild(rep_id, .nominal_backing),
-                } },
+                .transparent, .builtin_other => return try self.pushConstPlanFrame(frames, .{ .rep_id = rep_id, .id = id, .state = .named }),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal reached const plan output before opaque static-data support"),
             },
         };
+        self.result.const_plans.items[@intFromEnum(id)] = leaf;
+        return id;
+    }
+
+    fn pushConstPlanFrame(self: *ConstPlanBuilder, frames: *std.ArrayList(ConstPlanFrame), frame: ConstPlanFrame) Allocator.Error!?LirProgram.ConstPlanId {
+        var pending = frame;
+        frames.append(self.allocator, pending) catch |err| {
+            pending.deinit(self.allocator);
+            return err;
+        };
+        return null;
+    }
+
+    fn pushStructConstPlanFrame(
+        self: *ConstPlanBuilder,
+        frames: *std.ArrayList(ConstPlanFrame),
+        rep_id: Plan.TypeRepId,
+        id: LirProgram.ConstPlanId,
+        role_tag: std.meta.Tag(Plan.ChildRole),
+        kind: StructPlanKind,
+    ) Allocator.Error!?LirProgram.ConstPlanId {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        var count: usize = 0;
+        for (self.plan.childSlice(rep.children)) |child| {
+            if (std.meta.activeTag(child.role) == role_tag) count += 1;
+        }
+        const plans = try self.allocator.alloc(LirProgram.ConstPlanId, count);
+        errdefer self.allocator.free(plans);
+        return try self.pushConstPlanFrame(frames, .{ .rep_id = rep_id, .id = id, .state = .{ .fields = .{
+            .kind = kind,
+            .role_tag = role_tag,
+            .plans = plans,
+        } } });
+    }
+
+    fn finishConstPlanFrame(self: *ConstPlanBuilder, frames: *std.ArrayList(ConstPlanFrame), plan: LirProgram.ConstPlan) ConstPlanStep {
+        var frame = frames.pop().?;
+        self.result.const_plans.items[@intFromEnum(frame.id)] = plan;
+        frame.deinit(self.allocator);
+        return .{ .done = frame.id };
+    }
+
+    fn stepConstPlanFrame(self: *ConstPlanBuilder, frames: *std.ArrayList(ConstPlanFrame), delivered: ?LirProgram.ConstPlanId) Allocator.Error!ConstPlanStep {
+        const frame = &frames.items[frames.items.len - 1];
+        const child_plan: ?LirProgram.ConstPlanId = if (frame.awaiting)
+            delivered orelse boxyLowerInvariant("boxy const plan frame resumed without its child plan")
+        else
+            null;
+        frame.awaiting = false;
+        const rep_id = frame.rep_id;
+        switch (frame.state) {
+            .alias => {
+                const child = child_plan orelse {
+                    frame.awaiting = true;
+                    return .{ .request = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep };
+                };
+                try self.memoizeConstPlan(rep_id, child);
+                var finished = frames.pop().?;
+                finished.deinit(self.allocator);
+                return .{ .done = child };
+            },
+            .dynamic => |*dynamic| {
+                if (child_plan) |payload| {
+                    self.active_context = dynamic.saved_context;
+                    return self.finishConstPlanFrame(frames, .{ .boxy_box = .{
+                        .payload = payload,
+                        .layout_idx = self.layout_plan.rep_layouts[@intFromEnum(dynamic.site_rep)].worker.layoutIdx(),
+                    } });
+                }
+                const ctx = self.active_context orelse boxyLowerInvariant("dynamic frozen value lacked its closed worker environment");
+                const evidence = &self.plan.literal_evidence.?;
+                const span = evidence.freeze_contexts.items[ctx].bindings;
+                for (evidence.bindings.items[span.start..][0..span.len]) |binding| {
+                    if (binding.scheme_rep != rep_id) continue;
+                    dynamic.saved_context = self.active_context;
+                    dynamic.site_rep = binding.site_rep;
+                    self.active_context = null;
+                    frame.awaiting = true;
+                    return .{ .request = binding.site_rep };
+                }
+                boxyLowerInvariant("dynamic frozen value lacked a checked substitution");
+            },
+            .list, .box, .named => {
+                const role: Plan.ChildRole = switch (frame.state) {
+                    .list => .list_elem,
+                    .box => .box_payload,
+                    .named => .nominal_backing,
+                    .alias, .dynamic, .fields, .tag, .erased => unreachable,
+                };
+                const child = child_plan orelse {
+                    frame.awaiting = true;
+                    return .{ .request = self.repQuery().requiredSingleChild(rep_id, role).rep };
+                };
+                const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+                return self.finishConstPlanFrame(frames, switch (frame.state) {
+                    .list => .{ .list = child },
+                    .box => .{ .box = child },
+                    .named => .{ .named = .{
+                        .named_type = .{
+                            .module = moduleDigestFromId(rep.source_type.module),
+                            .ty = rep.source_type.ty,
+                        },
+                        .backing = child,
+                    } },
+                    .alias, .dynamic, .fields, .tag, .erased => unreachable,
+                });
+            },
+            .fields => |*fields| {
+                if (child_plan) |plan| {
+                    fields.plans[fields.cursor] = plan;
+                    fields.cursor += 1;
+                }
+                const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(rep_id)].children);
+                while (fields.child < children.len) {
+                    const child = children[fields.child];
+                    fields.child += 1;
+                    if (std.meta.activeTag(child.role) != fields.role_tag) continue;
+                    frame.awaiting = true;
+                    return .{ .request = child.rep };
+                }
+                // The finished plan owns the plans.
+                const plans = fields.plans;
+                fields.plans = &.{};
+                return self.finishConstPlanFrame(frames, switch (fields.kind) {
+                    .tuple => .{ .tuple = plans },
+                    .record => .{ .record = plans },
+                });
+            },
+            .tag => |*tag| {
+                const tag_variants = self.plan.tagVariantSlice(self.plan.representations.items[@intFromEnum(rep_id)].tag_variants);
+                if (child_plan) |plan| {
+                    tag.payloads.?[tag.payload] = plan;
+                    tag.payload += 1;
+                }
+                while (tag.initialized < tag_variants.len) {
+                    const variant = tag_variants[tag.initialized];
+                    const payload_children = self.plan.childSlice(variant.payloads);
+                    if (tag.payloads == null) {
+                        const variant_names = procedureModuleById(self.modules, variant.name_module).canonical_names;
+                        tag.name = try self.allocator.dupe(u8, variant_names.tagLabelText(variant.name));
+                        errdefer self.allocator.free(tag.name);
+                        tag.payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_children.len);
+                        tag.payload = 0;
+                    }
+                    if (tag.payload < payload_children.len) {
+                        const child = payload_children[tag.payload];
+                        switch (child.role) {
+                            .tag_payload => |payload| {
+                                if (payload.tag != variant.name or payload.index != tag.payload) {
+                                    boxyLowerInvariant("tag variant payload span did not match its payload child roles");
+                                }
+                            },
+                            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag variant payload span included a non-payload child"),
+                        }
+                        frame.awaiting = true;
+                        return .{ .request = child.rep };
+                    }
+                    tag.variants[tag.initialized] = .{
+                        .name = tag.name,
+                        .checked_name = variant.name,
+                        .discriminant = @intCast(tag.initialized),
+                        .payloads = tag.payloads.?,
+                    };
+                    tag.initialized += 1;
+                    tag.payloads = null;
+                    tag.name = &.{};
+                }
+                // The finished plan owns the variants.
+                const variants = tag.variants;
+                tag.variants = &.{};
+                tag.initialized = 0;
+                return self.finishConstPlanFrame(frames, .{ .tag_union = variants });
+            },
+            .erased => |build| {
+                if (try self.stepErasedFns(rep_id, build, child_plan)) |request| {
+                    frame.awaiting = true;
+                    return .{ .request = request };
+                }
+                return self.finishConstPlanFrame(frames, .{ .erased_fn = try self.finishErasedFns(rep_id, build) });
+            },
+        }
+    }
+
+    /// Advance an erased callable set's build: the next capture
+    /// representation whose plan it needs, or null once every static
+    /// function's entry is built.
+    fn stepErasedFns(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId, build: *ErasedFnsBuild, delivered: ?LirProgram.ConstPlanId) Allocator.Error!?Plan.TypeRepId {
+        if (delivered) |plan| {
+            const current = &build.current.?;
+            current.slots[current.slot_count].plan = plan;
+            current.slot_count += 1;
+        }
+        while (true) {
+            if (build.current) |*current| {
+                while (current.capture_index < current.worker_captures.len) {
+                    const field_index = current.capture_index;
+                    current.capture_index += 1;
+                    const capture = current.worker_captures[field_index];
+                    if (capture.kind != .captured_value) continue;
+                    const capture_id = capture.capture_id orelse
+                        boxyLowerInvariant("static erased callable value capture had no checked capture id");
+                    var stored_capture: ?check.ConstStore.ConstCapture = null;
+                    for (current.fn_value.captures) |candidate| {
+                        if (std.meta.eql(candidate.id, capture_id)) {
+                            stored_capture = candidate;
+                            break;
+                        }
+                    }
+                    const source_capture = stored_capture orelse
+                        boxyLowerInvariant("static erased callable capture was absent from ConstStore function");
+                    current.slots[current.slot_count] = .{
+                        .id = source_capture.id,
+                        .slot = @intCast(field_index),
+                        .ty = source_capture.ty,
+                        .plan = undefined,
+                        .storage = .value,
+                    };
+                    return capture.rep;
+                }
+                try build.entries.append(self.allocator, .{
+                    .entry = current.entry_proc,
+                    .capture_layout = self.layout_plan.workerLayoutFor(current.static_fn.worker).erased_capture_layout,
+                    .template = .{
+                        .fn_def = current.fn_value.fn_def,
+                        .source_fn_ty = current.fn_value.source_fn_ty,
+                        .source_fn_key = current.fn_value.source_fn_key,
+                    },
+                    .captures = current.slots,
+                });
+                build.current = null;
+            }
+            const static_fn = next: while (build.static_index < self.plan.static_fns.items.len) {
+                const candidate = self.plan.static_fns.items[build.static_index];
+                build.static_index += 1;
+                if (candidate.rep != rep_id) {
+                    if (!self.procedure_builder.needsFrozenCallableRecipes() or self.callableKey(candidate.rep) != self.callableKey(rep_id)) continue;
+                }
+                break :next candidate;
+            } else return null;
+            const entry_proc = try self.procedure_builder.emitErasedWorker(static_fn.worker);
+            var duplicate = false;
+            for (build.entries.items) |entry| {
+                if (entry.entry == entry_proc) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+
+            const worker = self.plan.workers.items[@intFromEnum(static_fn.worker)];
+            const worker_captures = self.plan.erasedCaptureSlice(worker.erased_captures);
+            const store_module = procedureModuleById(self.modules, static_fn.store_module);
+            const fn_value = store_module.const_store.getFn(static_fn.fn_id);
+
+            var value_capture_count: usize = 0;
+            for (worker_captures) |capture| {
+                switch (capture.kind) {
+                    .captured_value => value_capture_count += 1,
+                    .hidden_desc, .hidden_dict, .hidden_literal => boxyLowerInvariant("static erased callable required hidden descriptor or dictionary captures"),
+                }
+            }
+            if (value_capture_count != fn_value.captures.len) {
+                boxyLowerInvariant("static erased callable capture plan disagreed with ConstStore captures");
+            }
+            build.current = .{
+                .entry_proc = entry_proc,
+                .static_fn = static_fn,
+                .fn_value = fn_value,
+                .worker_captures = worker_captures,
+                .slots = try self.allocator.alloc(LirProgram.CaptureSlot, value_capture_count),
+            };
+        }
+    }
+
+    /// Record a finished erased callable set, or the runtime set it shares.
+    fn finishErasedFns(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId, build: *ErasedFnsBuild) Allocator.Error!LirProgram.ErasedFnsId {
+        if (self.procedure_builder.needsFrozenCallableRecipes()) {
+            for (self.runtime_sets.items) |existing| if (self.callableKey(rep_id) == existing.key) return existing.set;
+        }
+        try self.result.erased_fns.ensureUnusedCapacity(self.allocator, 1);
+        const owned_entries = try build.entries.toOwnedSlice(self.allocator);
+        const id: LirProgram.ErasedFnsId = @enumFromInt(self.result.erased_fns.items.len);
+        self.result.erased_fns.appendAssumeCapacity(.{
+            .layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx(),
+            .entries = owned_entries,
+        });
+        if (self.procedure_builder.needsFrozenCallableRecipes()) try self.runtime_sets.append(self.allocator, .{ .rep = rep_id, .key = self.callableKey(rep_id), .set = id });
+        return id;
     }
 
     fn appendLeafPlan(self: *ConstPlanBuilder, plan: LirProgram.ConstPlan) Allocator.Error!LirProgram.ConstPlanId {
@@ -40414,102 +42211,6 @@ const ConstPlanBuilder = struct {
             initialized += 1;
         }
         return .{ .tag_union = variants };
-    }
-
-    fn erasedFnsForRep(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LirProgram.ErasedFnsId {
-        var entries = std.ArrayList(LirProgram.ErasedFn).empty;
-        errdefer {
-            for (entries.items) |entry| {
-                if (entry.captures.len != 0) self.allocator.free(entry.captures);
-            }
-            entries.deinit(self.allocator);
-        }
-
-        for (self.plan.static_fns.items) |static_fn| {
-            if (static_fn.rep != rep_id) {
-                if (!self.procedure_builder.needsFrozenCallableRecipes() or self.callableKey(static_fn.rep) != self.callableKey(rep_id)) continue;
-            }
-            const entry_proc = try self.procedure_builder.emitErasedWorker(static_fn.worker);
-            var duplicate = false;
-            for (entries.items) |entry| {
-                if (entry.entry == entry_proc) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (duplicate) continue;
-
-            const worker = self.plan.workers.items[@intFromEnum(static_fn.worker)];
-            const worker_captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-            const store_module = procedureModuleById(self.modules, static_fn.store_module);
-            const fn_value = store_module.const_store.getFn(static_fn.fn_id);
-
-            var value_capture_count: usize = 0;
-            for (worker_captures) |capture| {
-                switch (capture.kind) {
-                    .captured_value => value_capture_count += 1,
-                    .hidden_desc, .hidden_dict, .hidden_literal => boxyLowerInvariant("static erased callable required hidden descriptor or dictionary captures"),
-                }
-            }
-            if (value_capture_count != fn_value.captures.len) {
-                boxyLowerInvariant("static erased callable capture plan disagreed with ConstStore captures");
-            }
-
-            const slots = try self.allocator.alloc(LirProgram.CaptureSlot, value_capture_count);
-            var slots_owned = true;
-            errdefer if (slots_owned) self.allocator.free(slots);
-            var slot_count: usize = 0;
-            for (worker_captures, 0..) |capture, field_index| {
-                if (capture.kind != .captured_value) continue;
-                const capture_id = capture.capture_id orelse
-                    boxyLowerInvariant("static erased callable value capture had no checked capture id");
-                var stored_capture: ?check.ConstStore.ConstCapture = null;
-                for (fn_value.captures) |candidate| {
-                    if (std.meta.eql(candidate.id, capture_id)) {
-                        stored_capture = candidate;
-                        break;
-                    }
-                }
-                const source_capture = stored_capture orelse
-                    boxyLowerInvariant("static erased callable capture was absent from ConstStore function");
-                slots[slot_count] = .{
-                    .id = source_capture.id,
-                    .slot = @intCast(field_index),
-                    .ty = source_capture.ty,
-                    .plan = try self.constPlanForRep(capture.rep),
-                    .storage = .value,
-                };
-                slot_count += 1;
-            }
-
-            try entries.append(self.allocator, .{
-                .entry = entry_proc,
-                .capture_layout = self.layout_plan.workerLayoutFor(static_fn.worker).erased_capture_layout,
-                .template = .{
-                    .fn_def = fn_value.fn_def,
-                    .source_fn_ty = fn_value.source_fn_ty,
-                    .source_fn_key = fn_value.source_fn_key,
-                },
-                .captures = slots,
-            });
-            slots_owned = false;
-        }
-        if (self.procedure_builder.needsFrozenCallableRecipes()) {
-            for (self.runtime_sets.items) |existing| if (self.callableKey(rep_id) == existing.key) {
-                for (entries.items) |entry| self.allocator.free(entry.captures);
-                entries.deinit(self.allocator);
-                return existing.set;
-            };
-        }
-        try self.result.erased_fns.ensureUnusedCapacity(self.allocator, 1);
-        const owned_entries = try entries.toOwnedSlice(self.allocator);
-        const id: LirProgram.ErasedFnsId = @enumFromInt(self.result.erased_fns.items.len);
-        self.result.erased_fns.appendAssumeCapacity(.{
-            .layout = self.layout_plan.rep_layouts[@intFromEnum(rep_id)].worker.layoutIdx(),
-            .entries = owned_entries,
-        });
-        if (self.procedure_builder.needsFrozenCallableRecipes()) try self.runtime_sets.append(self.allocator, .{ .rep = rep_id, .key = self.callableKey(rep_id), .set = id });
-        return id;
     }
 
     fn finishRuntimeCallables(self: *ConstPlanBuilder) Allocator.Error!void {
@@ -40619,94 +42320,10 @@ const ConstPlanBuilder = struct {
         }
     }
 
-    fn constPlanForChild(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Allocator.Error!LirProgram.ConstPlanId {
-        return try self.constPlanForRep(self.repQuery().requiredSingleChild(rep_id, role).rep);
-    }
-
     const StructPlanKind = enum {
         tuple,
         record,
     };
-
-    fn structConstPlan(
-        self: *ConstPlanBuilder,
-        rep: Plan.TypeRepresentation,
-        comptime role_tag: std.meta.Tag(Plan.ChildRole),
-        comptime kind: StructPlanKind,
-    ) Allocator.Error!LirProgram.ConstPlan {
-        var count: usize = 0;
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (std.meta.activeTag(child.role) == role_tag) count += 1;
-        }
-
-        const plans = try self.allocator.alloc(LirProgram.ConstPlanId, count);
-        errdefer self.allocator.free(plans);
-        var cursor: usize = 0;
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (std.meta.activeTag(child.role) == role_tag) {
-                plans[cursor] = try self.constPlanForRep(child.rep);
-                cursor += 1;
-            }
-        }
-
-        return switch (kind) {
-            .tuple => .{ .tuple = plans },
-            .record => .{ .record = plans },
-        };
-    }
-
-    fn tagUnionConstPlan(self: *ConstPlanBuilder, rep: Plan.TypeRepresentation) Allocator.Error!LirProgram.ConstPlan {
-        const tag_variants = self.plan.tagVariantSlice(rep.tag_variants);
-
-        const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, tag_variants.len);
-        var initialized: usize = 0;
-        errdefer {
-            for (variants[0..initialized]) |variant| {
-                self.allocator.free(variant.name);
-                self.allocator.free(variant.payloads);
-            }
-            self.allocator.free(variants);
-        }
-
-        for (tag_variants, variants, 0..) |tag_variant, *variant, discriminant| {
-            variant.* = try self.buildTagVariant(tag_variant, discriminant);
-            initialized += 1;
-        }
-
-        return .{ .tag_union = variants };
-    }
-
-    fn buildTagVariant(
-        self: *ConstPlanBuilder,
-        variant: Plan.TagVariant,
-        discriminant: usize,
-    ) Allocator.Error!LirProgram.ConstTagVariant {
-        const variant_names = procedureModuleById(self.modules, variant.name_module).canonical_names;
-        const name = try self.allocator.dupe(u8, variant_names.tagLabelText(variant.name));
-        errdefer self.allocator.free(name);
-
-        const payload_children = self.plan.childSlice(variant.payloads);
-        const payloads = try self.allocator.alloc(LirProgram.ConstPlanId, payload_children.len);
-        errdefer self.allocator.free(payloads);
-        for (payload_children, payloads, 0..) |child, *payload_plan, index| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (payload.tag != variant.name or payload.index != index) {
-                        boxyLowerInvariant("tag variant payload span did not match its payload child roles");
-                    }
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag variant payload span included a non-payload child"),
-            }
-            payload_plan.* = try self.constPlanForRep(child.rep);
-        }
-
-        return .{
-            .name = name,
-            .checked_name = variant.name,
-            .discriminant = @intCast(discriminant),
-            .payloads = payloads,
-        };
-    }
 };
 
 fn planTypeRefEql(a: Plan.CheckedTypeIdentity, b: Plan.CheckedTypeIdentity) bool {
@@ -40722,13 +42339,13 @@ fn optionalPlanTypeRefEql(a: ?Plan.CheckedTypeIdentity, b: ?Plan.CheckedTypeIden
     return b == null;
 }
 
-fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, rep_id: Plan.TypeRepId) ?[]const u8 {
-    const rep = plan.representations.items[@intFromEnum(rep_id)];
-    return switch (rep.kind) {
-        .alias => generatedParserScalarMethodForRep(
-            plan,
-            requiredPlanChild(plan, rep_id, .alias_backing).rep,
-        ),
+fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.TypeRepId) ?[]const u8 {
+    var rep_id = root;
+    while (true) return switch (plan.representations.items[@intFromEnum(rep_id)].kind) {
+        .alias => {
+            rep_id = requiredPlanChild(plan, rep_id, .alias_backing).rep;
+            continue;
+        },
         .primitive => |primitive| switch (primitive) {
             .str => "parse_str",
             .u8 => "parse_u8",
@@ -40760,13 +42377,13 @@ fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, rep_id: Plan
     };
 }
 
-fn generatedEncoderScalarMethodForRep(plan: *const Plan.ProgramPlan, rep_id: Plan.TypeRepId) ?[]const u8 {
-    const rep = plan.representations.items[@intFromEnum(rep_id)];
-    return switch (rep.kind) {
-        .alias => generatedEncoderScalarMethodForRep(
-            plan,
-            requiredPlanChild(plan, rep_id, .alias_backing).rep,
-        ),
+fn generatedEncoderScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.TypeRepId) ?[]const u8 {
+    var rep_id = root;
+    while (true) return switch (plan.representations.items[@intFromEnum(rep_id)].kind) {
+        .alias => {
+            rep_id = requiredPlanChild(plan, rep_id, .alias_backing).rep;
+            continue;
+        },
         .primitive => |primitive| switch (primitive) {
             .str => "encode_str",
             .u8 => "encode_u8",

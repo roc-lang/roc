@@ -27960,6 +27960,8 @@ const BodyContext = struct {
         expr_inner: struct { expr: checked.CheckedExprId, saved: ?SavedSourceLocation = null },
         /// An expression lowered at a sealed type.
         with_type: WithTypeTask,
+        /// `lowerRecordExpr` at a sealed record type.
+        record_at_type: RecordAtTypeTask,
         /// `lowerDispatchExprAtType`
         dispatch: DispatchLowerTask,
         /// `lowerClosedDirectLowLevelDispatch`
@@ -30367,6 +30369,7 @@ const BodyContext = struct {
             .at_type_cell => |*task| self.restoreSourceLocation(&task.saved),
             .expr_inner => |*task| self.restoreSourceLocation(&task.saved),
             .with_type => |*task| self.restoreSourceLocation(&task.saved),
+            .record_at_type => |*task| task.deinit(self.allocator),
             .dispatch => |*task| {
                 task.pre_lowered.deinit(self.allocator);
                 task.pre_lowered = .empty;
@@ -30432,6 +30435,7 @@ const BodyContext = struct {
             .expr => |*task| self.stepLowerExpr(frame, task, input),
             .expr_inner => |*task| self.stepExprInner(frame, task, input),
             .with_type => |*task| self.stepWithType(frame, task, input),
+            .record_at_type => |*task| self.stepRecordAtType(task, input),
             .dispatch => |*task| self.stepDispatchLower(frame, task, input),
             .closed_low_level => |*task| self.stepClosedLowLevel(frame, task, input),
             .closed_procedure => |*task| self.stepClosedProcedure(frame, task, input),
@@ -31027,8 +31031,8 @@ const BodyContext = struct {
                     .final_expr = try self.addExpr(.{ .ty = ty, .data = .unit }),
                 } }),
                 .run_low_level => |low_level| try self.withTypeData(task, .{ .low_level = .{ .op = low_level.op, .args = child.spanValue() } }),
-                .match_, .if_, .block, .closure, .lambda => self.withTypeDone(task, child.exprValue()),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .call, .record, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable,
+                .match_, .if_, .block, .closure, .lambda, .record => self.withTypeDone(task, child.exprValue()),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable,
             };
         }
         task.saved = try self.saveSourceLocation(expr);
@@ -31072,7 +31076,7 @@ const BodyContext = struct {
             .lookup_required => |resolved| return self.withTypeDone(task, try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
             .list => |items| return requestLowerTask(self, .{ .list_span = .{ .exprs = items, .list_ty = ty } }),
             .tuple => |items| return requestLowerTask(self, try self.spanAtTypesTask(items, self.tupleItemTypes(ty))),
-            .record => |record| return self.withTypeDone(task, try self.lowerRecordExpr(record, ty, &.{})),
+            .record => |record| return try self.beginRecordAtType(record, ty),
             .tag => |tag| {
                 const name = try self.tagName(self.view, tag.name);
                 task.tag_name = name;
@@ -46120,6 +46124,108 @@ const BodyContext = struct {
             } } });
         }
         return result;
+    }
+
+    /// A record literal at a sealed record type. Its children lower as child
+    /// tasks, in the order a direct walk lowers them, and the record is built
+    /// from them once all are lowered.
+    const RecordAtTypeTask = struct {
+        record: @FieldType(checked.CheckedExprData, "record"),
+        ty: Type.TypeId,
+        /// The child expressions to lower, each with its target, in order.
+        requests: []const RecordChildRequest,
+        lowered: []PreLoweredChild,
+        next: usize = 0,
+
+        fn deinit(task: *RecordAtTypeTask, allocator: Allocator) void {
+            allocator.free(task.requests);
+            allocator.free(task.lowered);
+            task.requests = &.{};
+            task.lowered = &.{};
+        }
+    };
+
+    const RecordChildRequest = struct {
+        expr: checked.CheckedExprId,
+        target: union(enum) {
+            /// The record update's base, lowered at its own type.
+            base,
+            at_type: Type.TypeId,
+            /// A proven-uninhabited field: a zero-branch match on the
+            /// uninhabited scrutinee.
+            uninhabited: Type.TypeId,
+        },
+    };
+
+    fn beginRecordAtType(
+        self: *BodyContext,
+        record: @FieldType(checked.CheckedExprData, "record"),
+        ty: Type.TypeId,
+    ) Allocator.Error!LowerStep {
+        var requests = std.ArrayList(RecordChildRequest).empty;
+        errdefer requests.deinit(self.allocator);
+        if (record.ext) |ext| {
+            try requests.append(self.allocator, .{ .expr = ext, .target = .base });
+            for (record.fields) |field| {
+                const name = try self.recordFieldName(self.view, field.label);
+                const target_field = self.recordField(ty, name);
+                const target_ty = if (self.monotypeFieldKindTag(target_field) == .optional)
+                    (try self.optionalSlotInfo(target_field.ty)).payload_ty
+                else
+                    target_field.ty;
+                try requests.append(self.allocator, .{ .expr = field.value, .target = .{ .at_type = target_ty } });
+            }
+        } else {
+            const target_fields = switch (self.shapeContent(ty)) {
+                .record => |fields| fields,
+                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record expression had a non-record monotype"),
+            };
+            const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(target_fields));
+            defer self.allocator.free(target_field_list);
+            for (target_field_list) |field| {
+                const field_value = (try self.recordUpdateFieldValue(record.fields, field.name)) orelse continue;
+                if (self.monotypeFieldKindTag(field) == .optional) {
+                    try requests.append(self.allocator, .{ .expr = field_value, .target = .{ .at_type = (try self.optionalSlotInfo(field.ty)).payload_ty } });
+                } else if (try self.typeIsProvenUninhabited(field.ty)) {
+                    try requests.append(self.allocator, .{ .expr = field_value, .target = .{ .uninhabited = field.ty } });
+                } else {
+                    try requests.append(self.allocator, .{ .expr = field_value, .target = .{ .at_type = field.ty } });
+                }
+            }
+        }
+        const owned = try requests.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned);
+        const lowered = try self.allocator.alloc(PreLoweredChild, owned.len);
+        return requestLowerTask(self, .{ .record_at_type = .{ .record = record, .ty = ty, .requests = owned, .lowered = lowered } });
+    }
+
+    fn stepRecordAtType(self: *BodyContext, task: *RecordAtTypeTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (input) |result| {
+            const request = task.requests[task.next];
+            const child = result.exprValue();
+            task.lowered[task.next] = .{
+                .checked_expr = request.expr,
+                .expr = switch (request.target) {
+                    .base, .at_type => child,
+                    .uninhabited => |ty| try self.zeroBranchMatch(child, ty),
+                },
+            };
+            task.next += 1;
+        }
+        if (task.next < task.requests.len) {
+            const request = task.requests[task.next];
+            return switch (request.target) {
+                .base => requestLowerTask(self, .{ .expr = .{ .expr = request.expr } }),
+                .at_type => |ty| requestLowerTask(self, .{ .at_type_cell = .{
+                    .expr = request.expr,
+                    .cell = .{ .sealed = ty },
+                    .demand = .runtime_value,
+                    .diverges = self.checkedExprDivergesInLoweredRuntime(request.expr),
+                } }),
+                .uninhabited => |ty| uninhabitedScrutineeStep(self, request.expr, .{ .sealed = ty }),
+            };
+        }
+        return loweredExprStep(try self.lowerRecordExpr(task.record, task.ty, task.lowered));
     }
 
     fn lowerRecordExpr(

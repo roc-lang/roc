@@ -39,7 +39,37 @@ fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
 
 /// Deep-nesting eval cases, each run on a small stack under both
 /// specialization strategies.
-pub const tests = cases ++ boxyVariants(&cases);
+pub const tests = cases ++ boxyVariants(&cases) ++ probe_cases;
+
+const probe_depth = 2000;
+fn nestedRecord(comptime n: usize) []const u8 {
+    return repeat("{ a: ", n) ++ "1.U64" ++ repeat(" }", n);
+}
+fn probe(comptime name: []const u8, comptime source: []const u8, comptime expected: []const u8) TestCase {
+    return .{
+        .name = "TEMPDEEP " ++ name,
+        .source_kind = .module,
+        .source = source,
+        .expected = .{ .inspect_str = expected },
+        .stack_bytes = 2 * 1024 * 1024,
+        .specialization_strategy = .boxy,
+        .opt_in = true,
+        .skip = .{ .wasm = true },
+    };
+}
+const probe_cases = [_]TestCase{
+    probe("boxy generic identity", "id = |x| x\nmain = id(" ++ nestedRecord(probe_depth) ++ ")" ++ repeat(".a", probe_depth) ++ "\n", "1"),
+    probe("boxy inspect", "main = Str.inspect(" ++ nestedRecord(probe_depth) ++ ")\n", "\"" ++ repeat("{ a: ", probe_depth) ++ "1" ++ repeat(" }", probe_depth) ++ "\""),
+    probe("boxy equality", "main = " ++ nestedRecord(probe_depth) ++ " == " ++ nestedRecord(probe_depth) ++ "\n", "True"),
+    probe("boxy eq shallow", "main = " ++ nestedRecord(1) ++ " == " ++ nestedRecord(1) ++ "\n", "True"),
+    probe("boxy bool const", "main = Bool.True\n", "True"),
+    probe("boxy generic eq", "eq = |x, y| x == y\nmain = eq(" ++ nestedRecord(probe_depth) ++ ", " ++ nestedRecord(probe_depth) ++ ")\n", "True"),
+    probe("boxy generic inspect", "show = |x| Str.inspect(x)\nmain = show(" ++ nestedRecord(probe_depth) ++ ")\n", "\"" ++ repeat("{ a: ", probe_depth) ++ "1" ++ repeat(" }", probe_depth) ++ "\""),
+    probe("boxy generic list", "wrap = |x| [x, x]\nmain = wrap(" ++ nestedRecord(probe_depth) ++ ").len()\n", "2"),
+    probe("boxy generic tuple", "swap = |p| (p.1, p.0)\nmain = swap((" ++ nestedRecord(probe_depth) ++ ", 7.U64)).0\n", "7"),
+    probe("boxy set", "main = Set.from_list([" ++ nestedRecord(probe_depth) ++ ", " ++ nestedRecord(probe_depth) ++ "]).len()\n", "1"),
+    probe("lss generic identity", "id = |x| x\nmain = id(" ++ nestedRecord(probe_depth) ++ ")" ++ repeat(".a", probe_depth) ++ "\n", "1"),
+};
 
 /// Each case again, lowered without specialization (`--specialize=no`).
 /// The wasm evaluator runs a module without the Boxy runtime object that a

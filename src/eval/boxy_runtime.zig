@@ -1723,7 +1723,7 @@ pub const BoxyRuntime = struct {
             try self.runtime_boxy_tag_variants.appendNTimes(self.scratch, undefined, target_variants.len);
             for (target_variants, 0..) |target_variant, variant_index| {
                 var specialized = target_variant;
-                const source_variant = try self.findAdapterSourceTagVariant(hooks, source, target_variant.name, 0);
+                const source_variant = try self.findAdapterSourceTagVariant(hooks, source, target_variant.name);
                 const target_payloads = try self.scratch.dupe(LirProgram.BoxyTagPayloadDesc, self.requireBoxyTagPayloadDescs(target_variant.payload_descs));
                 defer self.scratch.free(target_payloads);
                 if (target_payloads.len != 0) {
@@ -1793,19 +1793,15 @@ pub const BoxyRuntime = struct {
     fn findAdapterSourceTagVariant(
         self: *const BoxyRuntime,
         hooks: anytype,
-        desc: *const LirProgram.BoxyTypeDesc,
+        root_desc: *const LirProgram.BoxyTypeDesc,
         name: LIR.BoxyNameId,
-        depth: u16,
     ) Error!?LirProgram.BoxyTagVariant {
-        if (depth == 1024) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: boxy adapter source tag extension chain exceeded runtime limit",
-                .{},
-            );
+        var desc = root_desc;
+        while (true) {
+            if (self.findLocalBoxyTagVariant(desc, name)) |variant| return variant;
+            const ext_ref = desc.tag_ext_desc orelse return null;
+            desc = try hooks.resolveDescRef(ext_ref);
         }
-        if (self.findLocalBoxyTagVariant(desc, name)) |variant| return variant;
-        const ext_ref = desc.tag_ext_desc orelse return null;
-        return try self.findAdapterSourceTagVariant(hooks, try hooks.resolveDescRef(ext_ref), name, depth + 1);
     }
 
     fn copyBoxyDescRefToRuntime(
