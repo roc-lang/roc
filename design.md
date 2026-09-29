@@ -4812,9 +4812,9 @@ into erased storage and reconstruct its descriptor afterward. All successful
 branches of a generated worker must therefore produce both the committed value
 and the exact return descriptor required by its callable ABI.
 
-Boxy pattern lowering follows the same order. A container read that writes an
-element's runtime descriptor (a tuple element, a record field) creates the
-element local's descriptor local before its sub-pattern is lowered, and a match
+Boxy pattern lowering follows the same order. A container read that writes a
+component's runtime descriptor (a tuple item, a record field) creates the
+component local's descriptor local before its sub-pattern is lowered, and a match
 binder whose source has no runtime descriptor takes its source
 representation's descriptor, so a binder inside a nominal pattern over boxed
 storage (`(Wrapped.(b), _)` with `Wrapped := Box(Str)`) is described before use
