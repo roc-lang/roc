@@ -247,14 +247,18 @@ pub const Constants = struct {
     ///      function over composed children shares its source key.
     /// 112: `for` nodes carry their `ForKind`, `ForLoopDispatchPlan` records its
     ///      dispatched method names, and common idents include `Builtin.Stream`.
+    /// 113: `Stream` is a checked builtin nominal, so every module interns its
+    ///      unqualified and fully qualified type names as common identifiers.
     /// 114: Combined with the Stream loop format, derived-method markers record
     ///      their owner type declaration, and a type-rooted dispatch call can
     ///      dispatch on an explicit type var. Version 113 is reserved for the
     ///      separate Stream builtin change.
-    /// 115: Checking records each `to_inspect` method's use at result `Str`,
+    /// 115: Reserved for wide-representation-capacity.
+    /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
+    /// 117: Checking records each `to_inspect` method's use at result `Str`,
     ///      and a method registry entry carries that use's instance type and
     ///      evidence.
-    pub const CACHE_VERSION = 115;
+    pub const CACHE_VERSION = 117;
 };
 
 /// Configuration for the Roc cache system.

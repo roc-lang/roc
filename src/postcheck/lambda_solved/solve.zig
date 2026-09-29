@@ -186,6 +186,8 @@ const Solver = struct {
         list_swap,
         list_prepend,
         list_map_prepare_reuse,
+        list_map_can_reuse,
+        list_map_write_unsafe,
         dict_pseudo_seed,
         hasher_finish,
         crypto_sha256_hash_bytes,
@@ -1751,7 +1753,7 @@ const Solver = struct {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(expected, args[0]);
             },
-            .list_set => {
+            .list_set, .list_map_write_unsafe => {
                 expectLowLevelArity(op, args, 3);
                 try self.unify(expected, args[0]);
                 try self.unify(args[2], try self.listElem(expected));
@@ -1775,6 +1777,12 @@ const Solver = struct {
             .list_map_prepare_reuse => {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(expected, args[0]);
+            },
+            .list_map_can_reuse => {
+                expectLowLevelArity(op, args, 2);
+                const transform = try self.functionShape(args[1]);
+                if (transform.args.count() != 1) Common.invariant("list map transform must have one argument");
+                try self.unify(try self.listElem(args[0]), self.program.types.spanItem(transform.args, 0));
             },
             .dict_pseudo_seed => expectLowLevelArity(op, args, 0),
             .hasher_finish => expectLowLevelArity(op, args, 1),
@@ -3717,6 +3725,44 @@ test "generated-private evidence traverses a public inspectable named backing" {
 
 test "lambda solved solve declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "lambda solved list map primitives preserve callable element flow" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const scalar = try program.types.add(.{ .primitive = .u64 });
+    var callables: [5]Type.TypeVarId = undefined;
+    var elements: [5]Type.TypeVarId = undefined;
+    var lists: [5]Type.TypeVarId = undefined;
+    for (&callables, &elements, &lists) |*callable, *element, *list| {
+        callable.* = try program.types.add(.unbound);
+        element.* = try program.types.add(.{ .func = .{
+            .args = .empty(),
+            .callable = callable.*,
+            .ret = scalar,
+        } });
+        list.* = try program.types.add(.{ .list = element.* });
+    }
+    const transform = try program.types.add(.{ .func = .{
+        .args = try program.types.addSpan(&.{elements[1]}),
+        .callable = try program.types.add(.unbound),
+        .ret = elements[3],
+    } });
+    const reuse_result = try program.types.add(.{ .primitive = .u8 });
+    try solver.bindLowLevelTypes(.list_map_can_reuse, reuse_result, &.{ lists[0], transform });
+    try std.testing.expectEqual(program.types.rootCompressed(callables[0]), program.types.rootCompressed(callables[1]));
+
+    // A write preserves the buffer's element representation, including the
+    // lambda set, both in the stored value and in the returned list handle.
+    try solver.bindLowLevelTypes(.list_map_write_unsafe, lists[4], &.{ lists[2], scalar, elements[3] });
+    try std.testing.expectEqual(program.types.rootCompressed(callables[2]), program.types.rootCompressed(callables[3]));
+    try std.testing.expectEqual(program.types.rootCompressed(callables[2]), program.types.rootCompressed(callables[4]));
+    // Reuse does not make the input and output callable sets interchangeable.
+    try std.testing.expect(program.types.rootCompressed(callables[0]) != program.types.rootCompressed(callables[2]));
 }
 
 fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
