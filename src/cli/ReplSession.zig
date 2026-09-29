@@ -3179,6 +3179,8 @@ test "Repl - list operations filters" {
     try expectAllNative("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)", "[1.0, 2.0]");
     try expectAllNative("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
     try expectAllNative("List.keep_if([1, 2, 3], |_| Bool.False)", "[]");
+    try expectAllNative("keep_until([1, 2, 3], |item| item > 2)", "[1, 2]");
+    try expectAllNative("keep_until([1, 2, 3], |_| Bool.True)", "[]");
 }
 
 test "Repl - list operations fold_rev" {
@@ -3790,6 +3792,7 @@ test "Repl - representative all-backends coverage (incl. wasm)" {
     try expectAllBackends("List.len([1, 2, 3])", "3");
     try expectAllBackends("List.append([1, 2], 3)", "[1.0, 2.0, 3.0]");
     try expectAllBackends("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
+    try expectAllBackends("keep_until([1, 2, 3], |item| item > 2)", "[1, 2]");
     try expectAllBackends("|x| x + 1", "<function>");
     try expectAllBackends("Str.to_utf8(\"hello\")", "[104, 101, 108, 108, 111]");
     try expectAllBackends("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
