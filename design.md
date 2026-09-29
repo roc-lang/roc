@@ -16894,6 +16894,11 @@ result into the target slot; the packed function is an adapter that unpacks
 the argument bytes and calls the fast one. Erased callables keep the public
 erased ABI, and hosted procedures keep the C ABI of the host.
 
+On Linux AArch64, evaluation crash exits return to the host after reporting
+the error. Their ignored result is zero-initialized in the active LLVM
+function's declared return type; only void functions emit `ret void`. This
+also applies to fast functions returning scalars or aggregate carriers.
+
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned

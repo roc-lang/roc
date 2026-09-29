@@ -1752,14 +1752,13 @@ pub const MonoLlvmCodeGen = struct {
         }
         func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         try self.proc_registry.put(@intFromEnum(proc_id), func);
-        if (self.fastAbiEligible(proc)) try self.declareFastProcSpec(proc_id, proc);
+        if (fastAbiEligible(proc)) try self.declareFastProcSpec(proc_id, proc);
     }
 
     /// Whether direct calls to this procedure use the register-passing
     /// function. Erased callables keep the public erased ABI, and hosted
     /// procedures have no body of their own.
-    fn fastAbiEligible(self: *const MonoLlvmCodeGen, proc: LirProcSpec) bool {
-        _ = self;
+    fn fastAbiEligible(proc: LirProcSpec) bool {
         return proc.abi != .erased_callable and proc.hosted == null and proc.body != null;
     }
 
@@ -2011,7 +2010,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn compileProcBody(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const fast_func: ?LlvmBuilder.Function.Index = if (self.fastAbiEligible(proc)) self.fast_registry.get(@intFromEnum(proc_id)) else null;
+        const fast_func: ?LlvmBuilder.Function.Index = if (fastAbiEligible(proc)) self.fast_registry.get(@intFromEnum(proc_id)) else null;
         const func = fast_func orelse self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
         var fast_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer fast_arena.deinit();
@@ -3499,7 +3498,6 @@ pub const MonoLlvmCodeGen = struct {
             },
             .expect_err => |expect_err_stmt| {
                 try self.materializeLocalIfDeferred(expect_err_stmt.message);
-                const wip = self.wip orelse return error.CompilationFailed;
                 const builder = self.builder orelse return error.CompilationFailed;
                 const region_start = builder.intValue(.i32, expect_err_stmt.region.start.offset) catch return error.OutOfMemory;
                 const region_end = builder.intValue(.i32, expect_err_stmt.region.end.offset) catch return error.OutOfMemory;
@@ -3513,13 +3511,7 @@ pub const MonoLlvmCodeGen = struct {
                         region_end,
                     },
                 );
-                // Linux AArch64 eval tests handle crashes by returning to the Zig host.
-                // Longjmping through LLVM-generated frames is not reliable on that target.
-                if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
-                    _ = wip.retVoid() catch return error.OutOfMemory;
-                } else {
-                    _ = wip.@"unreachable"() catch return error.OutOfMemory;
-                }
+                try self.emitCrashTerminator();
             },
         }
     }
@@ -8338,22 +8330,35 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = ok_block };
     }
 
-    fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
+    /// Linux AArch64 evaluation reports crashes to the host and returns instead
+    /// of longjmping through LLVM frames. The host discards the failed result,
+    /// but the return must still satisfy the active function's ABI, including
+    /// fastcc scalar and aggregate results. Helpers may have a different return
+    /// type from the enclosing Roc procedure, so consume the function signature.
+    fn emitCrashTerminator(self: *MonoLlvmCodeGen) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
+        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
+            const ret_ty = wip.function.typeOf(builder).functionReturn(builder);
+            if (ret_ty == .void) {
+                _ = wip.retVoid() catch return error.OutOfMemory;
+            } else {
+                _ = wip.ret(builder.zeroInitValue(ret_ty) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            }
+        } else {
+            _ = wip.@"unreachable"() catch return error.OutOfMemory;
+        }
+    }
+
+    fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
         if (!try self.emitDefaultPlatformCrashWithFrames(
             try self.staticBytes(msg),
             builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
         )) {
             try self.emitStaticRocOpsMessageCall(.crashed, msg);
         }
-        // Linux AArch64 eval tests handle crashes by returning to the Zig host.
-        // Longjmping through LLVM-generated frames is not reliable on that target.
-        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
-            _ = wip.retVoid() catch return error.OutOfMemory;
-        } else {
-            _ = wip.@"unreachable"() catch return error.OutOfMemory;
-        }
+        try self.emitCrashTerminator();
     }
 
     fn emitCrashLocal(self: *MonoLlvmCodeGen, message: LocalId) Error!void {
@@ -8366,12 +8371,7 @@ pub const MonoLlvmCodeGen = struct {
                 &.{self.slot(message).ptr},
             );
         }
-        const wip = self.wip orelse return error.CompilationFailed;
-        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
-            _ = wip.retVoid() catch return error.OutOfMemory;
-        } else {
-            _ = wip.@"unreachable"() catch return error.OutOfMemory;
-        }
+        try self.emitCrashTerminator();
     }
 
     /// Call the synthetic default platform's diagnostic-only crash entrypoint
@@ -8457,13 +8457,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const func = self.runtime_error_func orelse return error.CompilationFailed;
         _ = wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), &.{}, "") catch return error.OutOfMemory;
-        // Keep the terminal behavior identical to the previous inline
-        // `emitCrashBytes("hit a runtime error")` lowering at the call site.
-        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
-            _ = wip.retVoid() catch return error.OutOfMemory;
-        } else {
-            _ = wip.@"unreachable"() catch return error.OutOfMemory;
-        }
+        try self.emitCrashTerminator();
     }
 
     fn emitStaticRocOpsMessageCall(self: *MonoLlvmCodeGen, callback: RocOpsCallback, msg: []const u8) Error!void {
@@ -13642,6 +13636,66 @@ test "LLVM erased callable explicit arguments exclude capture and reuse" {
     try std.testing.expectEqual(@as(usize, 3), try MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 5));
     try std.testing.expectEqual(@as(usize, 5), try MonoLlvmCodeGen.explicitProcParamCount(.roc, 5));
     try std.testing.expectError(error.CompilationFailed, MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 1));
+}
+
+test "LLVM crash exits respect fastcc result types" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    inline for (.{ std.Target.Cpu.Arch.aarch64, .x86_64 }) |arch| {
+        const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+        defer codegen.deinit();
+        var builder = try codegen.createBuilder("crash_returns");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+        const result_types = [_]LlvmBuilder.Type{
+            .void,
+            .i32,
+            try builder.structType(.normal, &.{ .i64, .i64 }),
+            try builder.arrayType(2, .i64),
+            try builder.vectorType(.normal, 16, .i8),
+        };
+        for (result_types, 0..) |ret_ty, i| {
+            inline for (.{ false, true }) |runtime_error| {
+                const function = try builder.addFunction(
+                    try builder.fnType(ret_ty, &.{}, .normal),
+                    try builder.strtabStringFmt("crash_{d}_{d}", .{ i, @intFromBool(runtime_error) }),
+                    .default,
+                );
+                function.setCallConv(.fastcc, &builder);
+                var wip = try LlvmBuilder.WipFunction.init(&builder, .{ .function = function, .strip = true });
+                defer wip.deinit();
+                codegen.wip = &wip;
+                defer codegen.wip = null;
+                const entry = try wip.block(0, "entry");
+                wip.cursor = .{ .block = entry };
+                if (runtime_error) {
+                    codegen.runtime_error_func = try builder.addFunction(
+                        try builder.fnType(.void, &.{}, .normal),
+                        try builder.strtabStringFmt("runtime_error_{d}", .{i}),
+                        .default,
+                    );
+                    try codegen.emitRuntimeError();
+                } else {
+                    try codegen.emitCrashBytes("crash result is discarded by the host");
+                }
+                const instructions = entry.ptrConst(&wip).instructions.items;
+                const terminal = wip.instructions.get(@intFromEnum(instructions[instructions.len - 1]));
+                if (arch != .aarch64) {
+                    try std.testing.expectEqual(.@"unreachable", terminal.tag);
+                } else if (ret_ty == .void) {
+                    try std.testing.expectEqual(.@"ret void", terminal.tag);
+                } else {
+                    try std.testing.expectEqual(.ret, terminal.tag);
+                    const value: LlvmBuilder.Value = @enumFromInt(terminal.data);
+                    try std.testing.expectEqual(ret_ty, value.typeOfWip(&wip));
+                }
+                try codegen.finishCurrentWipFunction();
+            }
+        }
+    }
 }
 
 test "LLVM fixed stack slots dominate entry and loop uses" {
