@@ -378,6 +378,8 @@ const StableBase = union(enum) {
 const StableBound = struct {
     base: StableBase,
     c: i128,
+    /// Rounds in a row this bound came back weaker than it was persisted.
+    grew: u8 = 0,
 };
 
 /// A round-stable lower bound on the length of a list-valued loop parameter:
@@ -517,6 +519,8 @@ const StableFact = struct {
     b: StableTerm,
     c: i128,
     assumed: u64 = 0,
+    /// Rounds in a row this fact came back weaker than it was persisted.
+    grew: u8 = 0,
 };
 
 /// Bound on persisted facts per loop join.
@@ -2358,16 +2362,28 @@ const Pass = struct {
         return null;
     }
 
-    /// Whether a bound on `base` persisted last round as `old` makes `c`
-    /// a widening: a bound that only weakens from round to round is being
-    /// pushed along by the loop it describes and would never settle, so it
-    /// is dropped instead of iterated.
-    fn widensBound(old: []const StableBound, base: StableBase, c: i128) bool {
+    /// The form in which a bound on `base` with slack `c` persists, given
+    /// the bounds persisted for the same value last round. A bound that
+    /// comes back weaker round after round is being pushed along by the loop
+    /// it describes and would never settle; after `widen_after` such rounds
+    /// it is widened away rather than iterated. A bound that weakens once
+    /// or twice while its loop's edges are still being discovered settles.
+    fn persistedBound(old: []const StableBound, base: StableBase, c: i128) StableBound {
         for (old) |prev| {
-            if (sameLenBase(prev.base, base)) return prev.c >= widened_slack or c > prev.c;
+            if (!sameLenBase(prev.base, base)) continue;
+            if (prev.c >= widened_slack) return .{ .base = base, .c = widened_slack };
+            if (c > prev.c) {
+                const grew = prev.grew + 1;
+                if (grew >= widen_after) return .{ .base = base, .c = widened_slack };
+                return .{ .base = base, .c = c, .grew = grew };
+            }
+            return .{ .base = base, .c = c };
         }
-        return false;
+        return .{ .base = base, .c = c };
     }
+
+    /// Consecutive weakenings after which a persisted bound is widened away.
+    const widen_after: u8 = 3;
 
     /// A bound persisted with this slack has been widened away: it stays in
     /// the list so the widening is remembered from round to round, and
@@ -2496,12 +2512,17 @@ const Pass = struct {
     fn persistMergeFacts(self: *Pass, head: CFStmtId, state: *const MergeState) ResourceError!void {
         var stable = state.stable;
         if (self.merge_facts.get(head)) |previous| {
-            // A fact whose slack only grew since last round is a widening;
-            // it is dropped rather than iterated.
+            // A fact that comes back weaker round after round is widened
+            // away rather than iterated, like a persisted bound.
             for (stable.items[0..stable.len]) |*fact| {
                 for (previous.items[0..previous.len]) |old| {
                     if (std.meta.eql(old.a, fact.a) and std.meta.eql(old.b, fact.b)) {
-                        if (old.c >= widened_slack or fact.c > old.c) fact.c = widened_slack;
+                        if (old.c >= widened_slack) {
+                            fact.c = widened_slack;
+                        } else if (fact.c > old.c) {
+                            fact.grew = old.grew + 1;
+                            if (fact.grew >= widen_after) fact.c = widened_slack;
+                        }
                         break;
                     }
                 }
@@ -2562,18 +2583,16 @@ const Pass = struct {
             }
             for (meet.bounds.slice()) |bound| {
                 if (self.stableBase(bound.root)) |base| {
-                    const c = if (widensBound(old_bounds, base.base, base.c + bound.c)) widened_slack else base.c + bound.c;
                     if (entry.len < meet_bound_cap) {
-                        entry.bounds[entry.len] = .{ .base = base.base, .c = c };
+                        entry.bounds[entry.len] = persistedBound(old_bounds, base.base, base.c + bound.c);
                         entry.len += 1;
                     }
                 }
             }
             for (meet.lower.slice()) |bound| {
                 if (self.lenStable(bound)) |stable_lower| {
-                    const c = if (widensBound(old_lower, stable_lower.base, stable_lower.c)) widened_slack else stable_lower.c;
                     if (entry.lower_len < meet_bound_cap) {
-                        entry.lower[entry.lower_len] = .{ .base = stable_lower.base, .c = c };
+                        entry.lower[entry.lower_len] = persistedBound(old_lower, stable_lower.base, stable_lower.c);
                         entry.lower_len += 1;
                     }
                 }
@@ -2724,18 +2743,16 @@ const Pass = struct {
                 const old_lower: []const StableBound = if (previous_bounds) |prev| prev.lower_items[0..prev.lower_len] else &.{};
                 for (meet.bounds.slice()) |bound| {
                     if (self.stableBase(bound.root)) |base| {
-                        const c = if (widensBound(old_items, base.base, base.c + bound.c)) widened_slack else base.c + bound.c;
                         if (stable.len < meet_bound_cap) {
-                            stable.items[stable.len] = .{ .base = base.base, .c = c };
+                            stable.items[stable.len] = persistedBound(old_items, base.base, base.c + bound.c);
                             stable.len += 1;
                         }
                     }
                 }
                 for (meet.lower.slice()) |bound| {
                     if (self.lenStable(bound)) |stable_lower| {
-                        const c = if (widensBound(old_lower, stable_lower.base, stable_lower.c)) widened_slack else stable_lower.c;
                         if (stable.lower_len < meet_bound_cap) {
-                            stable.lower_items[stable.lower_len] = .{ .base = stable_lower.base, .c = c };
+                            stable.lower_items[stable.lower_len] = persistedBound(old_lower, stable_lower.base, stable_lower.c);
                             stable.lower_len += 1;
                         }
                     }

@@ -14691,11 +14691,12 @@ rounds to settle). Assumptions are never retried against the proof data they
 already failed under, which is what bounds the round count.
 
 Bounds persisted from round to round are widened rather than iterated: a
-persisted bound whose slack only grew since the previous round is being
-pushed along by the loop it describes (a cursor that advances by a constant
-each iteration bounded against a length, say) and would weaken forever, so
-it is replaced by a tombstone that later rounds skip and that keeps the
-widening from being forgotten. Accumulated slack inside a query is clamped
+persisted bound that comes back weaker three rounds in a row is being pushed
+along by the loop it describes (a cursor that advances by a constant each
+iteration bounded against a length, say) and would weaken forever, so it is
+replaced by a tombstone that later rounds skip and that keeps the widening
+from being forgotten. A bound that weakens once or twice while a loop's
+edges are still being discovered settles and is kept. Accumulated slack inside a query is clamped
 far outside any genuine bound; past that magnitude the facts contradict one
 another, which the clamp preserves without letting the arithmetic overflow.
 
