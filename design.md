@@ -7754,6 +7754,14 @@ the generated callable, without replaying the enclosing derivation. Both local
 and imported methods obey this ordering, pinned by
 `src/check/test/issue_11728_test.zig` and
 `test/cli/JsonGenericCustomParser.roc` (issue #11728).
+That drain validates the generated codec requirements it copies on the spot
+rather than parking them in `final_codec_dispatch_constraints`: a custom parser
+that calls a derived `parser_for` has its errors determined by that derived
+parser, so the derivation cannot wait for the final codec boundary while the
+child row closes. A relation parked before the drain began is not one of the
+selected method's requirements and keeps its single final validation. Pinned by
+`src/check/test/issue_11838_test.zig` and
+`test/cli/JsonCustomParserOverDerived.roc` (issue #11838).
 During checking, `constrainDerivedParserErrorRowIncludes` closes an
 unconstrained extension on the instantiated custom-parser method and requires
 every resulting child error tag to occur with the same payload types in the
