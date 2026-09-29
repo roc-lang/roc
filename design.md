@@ -11518,7 +11518,9 @@ reach one specialization through differently annotated call sites disagree—one
 key naming two procedure identities.
 
 A procedure identity hashes its source specialization, ABI choices, and solved
-argument, result, and capture types. It excludes the outer function's callable
+argument, result, and capture types; the one exception is the plain procedure
+of a layout-keyed Builtin template, which hashes layouts instead (see "Layout-Keyed
+Builtin Procedures"). It excludes the outer function's callable
 set: that set describes the contexts where the function value flows, while the
 selected source and captures already identify the procedure being compiled.
 Passing a closed imported function beside another lambda must not change its
@@ -12783,6 +12785,56 @@ Solved, Lambda Mono, lambda-set, or finite-callable-tag-union syntax as a
 compatibility representation. They may allocate only boxy descriptor,
 dictionary, adapter, worker, layout, and builder-local scratch data needed to
 emit LIR.
+
+### Layout-Keyed Builtin Procedures
+
+Monotype keys every specialization by its closed request type, and that stays
+true for Builtin templates: `List.len` requested at `List(Str)` and at
+`List(Point)` are two Monotype specializations, two lifted functions, and two
+Lambda Solved functions. For most Builtin templates the procedure they lower to
+differs with the type. For a template whose body is one low-level operation over
+its parameters it need not: when that operation's lowering reads only the
+layouts of its operands and result, every request whose types commit the same
+layouts lowers to the same LIR, byte for byte. Such specializations are one
+procedure, and direct LIR lowering names them so.
+
+The property is declared, never inferred. `LowLevel.procedureKeyedByLayout` is
+the explicit allow list of operations whose lowering is layout-only; a new
+operation is not on it until someone adds it after checking its lowering. An
+operation stays off the list when its lowering reads anything but operand and
+result layouts: `list_map_can_reuse` reads its transform's solved function type,
+`dict_pseudo_seed` reads the program's seed mode, and operations over fixed
+types gain nothing from the key and are not listed. A template carries its
+operation explicitly: the Builtin low-level transform records the operation
+of every annotation-only definition it replaces, and checking outputs it as
+`CheckedProcedureTemplate.provided_low_level`. A template body is never scanned
+to find it.
+
+Monotype marks a specialization `procedure_keyed_by_layout` when its template's
+provided operation is on the allow list and its closed request type mentions no
+function, the same condition under which the specialization receives an
+object-cache key. The Monotype specialization identity, the specialization
+store, the lambda-set solver, and the checked-to-Monotype relation are
+unchanged: every requester still relates its own types to its own
+specialization, and only the procedure identity changes.
+
+Direct LIR lowering renders the identity of the plain procedure of a marked
+specialization (finite ABI, no captures, no erased return reuse, not a
+SpecConstr clone) from the template's source identity without its Monotype
+type (`Lifted.Program.fnLayoutKeyedSourceDigest`), followed by the content
+digests (`layout.Digests`) of its argument layouts and its result layout.
+Every other ABI of the same specialization keeps its type-keyed identity. The
+existing interning of procedures by identity then gives specializations whose
+layouts agree one procedure: the first one reached owns the body, the rest call
+it. A caller passes arguments whose layouts are the procedure's parameter
+layouts, which is all LIR, ARC, and the backends consult; none of them reads a
+`List` argument's item type, only its layout.
+
+Layout digests are target-independent content digests, so the identity names
+the same code in every program, as the object cache requires. Every
+specialization key that shares a procedure is recorded against it, so the
+object cache can serve the shared procedure to a later program under any of
+those keys.
 
 ### Boxy Checked-To-LIR Lowering
 

@@ -21611,6 +21611,11 @@ pub const CheckedProcedureTemplate = struct {
     nested_proc_sites: NestedProcSiteTableRef,
     target: ProcTarget,
     hosted_try_adapter: ?HostedTryAdapterCapability = null,
+    /// The low-level operation this template's body runs over its parameters,
+    /// for a Builtin definition the Builtin low-level transform produced.
+    /// Post-check stages read the operation from here; they never recognize a
+    /// low-level wrapper from its body.
+    provided_low_level: ?base.LowLevel = null,
     /// The scheme's dispatch obligations in canonical order (a range into
     /// `CheckedProcedureTemplateTable.evidence_params_pool`). Every
     /// specialization of this template receives one evidence entry per param.
@@ -22021,6 +22026,7 @@ pub const CheckedProcedureTemplateTable = struct {
                     .hosted
                 else
                     .roc,
+                .provided_low_level = module.moduleEnvConst().providedLowLevelForDef(def_idx),
                 // The `Try` capability is published for every template whose
                 // published result row is closed, not only hosted ones: a Roc
                 // implementation reached at a row that includes its own is
@@ -40448,8 +40454,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x90, 0x52, 0x2A, 0x66, 0x9C, 0xB7, 0x45, 0x8C, 0x26, 0xF9, 0xB4, 0xEB, 0x08, 0xFA, 0x3E, 0xAF,
-        0x98, 0x1D, 0x64, 0x3F, 0xF3, 0xFE, 0x14, 0x80, 0x56, 0x71, 0x5C, 0x69, 0xF3, 0x9D, 0x44, 0xC4,
+        0xE1, 0x66, 0x77, 0xF0, 0x1C, 0x19, 0x61, 0xF9, 0x2C, 0xDC, 0x4C, 0xDA, 0x87, 0x2E, 0x98, 0x51,
+        0x15, 0x27, 0xD1, 0xB4, 0xAE, 0x51, 0x4C, 0xD3, 0x16, 0xA5, 0x92, 0x1E, 0xF7, 0xB1, 0x2C, 0xD9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

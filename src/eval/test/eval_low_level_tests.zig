@@ -1248,6 +1248,43 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"  hello\"" },
     },
     .{
+        // `{ a : Str }` and `{ b : Str }` commit one layout, so each
+        // allow-listed low-level wrapper below lowers to one procedure shared
+        // by both item types (design.md "Layout-Keyed Builtin
+        // Procedures"). Refcounted items make every backend run ARC on
+        // the shared procedures from both callers.
+        .name = "low_level - layout-keyed wrappers shared across item types",
+        .source =
+        \\{
+        \\xs : List({ a : Str })
+        \\xs = List.append(List.prepend([{ a: "two" }], { a: "one" }), { a: "three" })
+        \\ys : List({ b : Str })
+        \\ys = List.concat(List.append(List.with_capacity(4), { b: "four" }), [{ b: "five" }, { b: "six" }])
+        \\xs2 = match List.set(xs, 0, { a: "uno" }) {
+        \\    Ok(list) => list
+        \\    Err(_) => xs
+        \\}
+        \\ys2 = match List.swap(ys, 0, 2) {
+        \\    Ok(list) => List.drop_at(list, 1)
+        \\    Err(_) => ys
+        \\}
+        \\bx = Box.unbox(Box.box({ a: "boxed" }))
+        \\by = Box.unbox(Box.box({ b: "boxed too" }))
+        \\x_text = match List.get(xs2, 0) {
+        \\    Ok(r) => r.a
+        \\    Err(_) => "none"
+        \\}
+        \\y_text = match List.get(List.sublist(ys2, { start: 0, len: 1 }), 0) {
+        \\    Ok(r) => r.b
+        \\    Err(_) => "none"
+        \\}
+        \\count = List.len(xs) + List.len(xs2) + List.len(ys) + List.len(ys2)
+        \\"${x_text} ${y_text} ${bx.a} ${by.b} ${count.to_str()}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"uno six boxed boxed too 11\"" },
+    },
+    .{
         .name = "low_level - List.concat with two non-empty lists",
         .source =
         \\{

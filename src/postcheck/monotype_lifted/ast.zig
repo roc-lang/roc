@@ -1304,6 +1304,24 @@ pub const Program = struct {
         return hasher.finalResult();
     }
 
+    /// Checked source identity of a function whose template is keyed by
+    /// layout (`Mono.FnTemplate.procedure_keyed_by_layout`): the template and
+    /// its evidence, without the Monotype type, whose place in the procedure
+    /// identity Direct LIR fills with the procedure's argument and result
+    /// layouts. Null for every other function, including a SpecConstr clone
+    /// of a layout-keyed template, whose body is no longer the template's.
+    pub fn fnLayoutKeyedSourceDigest(self: *Program, fn_id: FnId) ?[TypeDigestHasher.digest_length]u8 {
+        const fn_ = self.getFn(fn_id);
+        const template = fn_.source orelse return null;
+        if (!template.procedure_keyed_by_layout or fn_.spec_constr_pattern != null) return null;
+        var hasher = TypeDigestHasher.init();
+        writeIdentityBytes(&hasher, "roc.lifted.fn-layout-keyed-source.v1");
+        writeFnDefDigest(&hasher, &self.names, template.fn_def);
+        hasher.update(&template.evidence_digest.bytes);
+        writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
+        return hasher.finalResult();
+    }
+
     pub fn getFnAt(self: *const Program, index: usize) Fn {
         return self.getFn(@enumFromInt(index));
     }
