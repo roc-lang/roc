@@ -4785,6 +4785,10 @@ row. When two requirement type variables of a dictionary method are
 instantiated at one actual, their call descriptors are the same descriptor, so
 a worker descriptor may take either (`test/cli/JsonGenericCustomParser.roc`
 under `--specialize=no`).
+A static dictionary slot whose method target is a compiler-derived `is_eq` or
+`to_hash` has no worker: the slot carries structural equality or hash evidence
+over the owner's type (`test/cli/JsonParseErrorComposition.roc` under
+`--specialize=no`).
 
 A generated parser or encoder runtime walks its contract's body shape: for a
 declaration-backed nominal that is the checker's own snapshot of the backing,

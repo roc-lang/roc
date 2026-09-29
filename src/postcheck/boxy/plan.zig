@@ -13088,6 +13088,19 @@ const Builder = struct {
             self.defaultedDictionaryOwner(source_rep_id);
         if (owner) |method_owner| {
             if (self.lookupMethodTarget(source_view, method_owner, requirement_view, requirement.fn_name)) |lookup| {
+                // A compiler-derived equality or hash has no worker: the slot
+                // runs the structural method over the owner's type.
+                if (lookup.target.kind == .structural) switch (lookup.target.kind.structural) {
+                    .equality, .hash => |kind| {
+                        _ = try self.analyzeType(requirement_view, requirement.fn_ty.ty);
+                        return .{
+                            .requirement_type = requirement.fn_ty,
+                            .callable_type = requirement.fn_ty,
+                            .resolution = .{ .structural = kind },
+                        };
+                    },
+                    .parser, .encoder, .map, .map_effectful => {},
+                };
                 const source = self.workerSourceForMethodTarget(lookup, source_rep.source_type, null);
                 const callable_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
                 _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
