@@ -1350,3 +1350,55 @@ test "an equality edge carries the other side's bound to the compared value" {
     try std.testing.expectEqual(@as(usize, 1), marked_shape.get_unsafe);
     try std.testing.expectEqual(@as(usize, 0), marked_shape.is_lt);
 }
+
+// The table's length invariant is established at the outer loop, and the
+// read that needs it sits after an inner loop that never touches the table.
+// The merge after the inner loop only keeps what both of its edges bind, so
+// the inner loop's body has to carry the table's entry binding for the read
+// to prove.
+test "a length invariant survives an inner loop that never touches the table" {
+    marked_op = "num_int_add_wrap";
+    try harness.expectLirInspectionWithOptions(
+        \\fill : List(U32), U64, List(U32) -> List(U32)
+        \\fill = |costs_0, block_length, lens| {
+        \\    var $costs = costs_0
+        \\    if List.len($costs) < 258 {
+        \\        return $costs
+        \\    } else {
+        \\    }
+        \\    var $cur = block_length
+        \\    while $cur != 0 {
+        \\        $cur = $cur.minus_wrap(1)
+        \\        var $best = 0.U32
+        \\        var $k = 0.U64
+        \\        while $k < 8 {
+        \\            $best = $best.plus_wrap(List.get(lens, $k) ?? 0)
+        \\            $k = $k.plus_wrap(1)
+        \\        }
+        \\        prev = List.get($costs, List.len($costs).minus_wrap(1)) ?? 0
+        \\        $costs = List.append($costs, $best.plus_wrap(prev))
+        \\    }
+        \\    $costs
+        \\}
+        \\
+        \\tail : List(U32), U32 -> List(U32)
+        \\tail = |xs, x| List.append(xs, x)
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    lens = List.repeat(3.U32, 300)
+        \\    costs = fill(List.repeat(0.U32, 300), args.len(), lens)
+        \\    echo!(Str.inspect(List.len(tail(costs, 1))))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.get_unsafe);
+    // Three `<` tests remain: the entry guard, the inner loop's head, and
+    // the `lens` read's bounds test. The read one back from the end of the
+    // table proved.
+    try std.testing.expectEqual(@as(usize, 3), marked_shape.is_lt);
+}
