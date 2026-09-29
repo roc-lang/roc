@@ -3968,7 +3968,7 @@ test "monotype iterator relation uses complete minted producer identity" {
     try std.testing.expectEqual(IteratorRelation.ordinary, iteratorRelation(list, list));
 
     var other = list;
-    other.def.iterator_kind = .range;
+    other.def.iterator_kind = .numeric_to;
     try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(list, other));
     try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(other, list));
     other = list;

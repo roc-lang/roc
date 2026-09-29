@@ -52,12 +52,9 @@
 //!   real in-edges disagree about, so every group is witnessed by at least one real jump
 //!   and a group-walk finding always corresponds to a real entry state. In
 //!   the worst case this degenerates to one group per distinct summary—
-//!   the pre-fixpoint exact behavior—which is exponential in the number of
-//!   relevant names, so it is capped: past `max_join_groups` a join stops
-//!   splitting on lifetime provenance and absorbs into a group whose
-//!   provenance drops to what both members prove. Provenance is proof, so
-//!   dropping it only makes later checks demand more; the cap can report a
-//!   finding exactness would not, never hide one. Nothing is skipped.
+//!   the pre-fixpoint exact behavior. Different lifetime proofs remain
+//!   separate regardless of the number of groups: discarding a borrowed
+//!   value's lender would manufacture an invalid state no edge supplied.
 //!
 //! Why one walk under the group's meet partition covers every member
 //! (soundness of the join): a member's entry state is the group state with
@@ -1580,26 +1577,6 @@ const SummaryProvenance = struct {
     payload_projection: u64 = arc_dismantle.no_projection,
 };
 
-/// Cap on the number of entry-state groups kept for one join.
-///
-/// Below the cap the abstraction is exact: a summary no group accepts starts
-/// its own group. That is unbounded on its own (mode vectors are finite but
-/// exponential in the number of relevant names), and a derived codec for a
-/// wide record reaches thousands of groups, which is a build that does not
-/// finish rather than one that reports something.
-///
-/// At the cap, summaries that differ only in lifetime provenance stop
-/// splitting: they are absorbed into an existing group whose provenance is
-/// weakened to what both agree on. Every provenance component is a *proof*
-/// that a value stays live (a lender conjunction, a live holder, a deferred
-/// field take), so dropping one only makes later checks demand more. Widening
-/// can therefore report a finding that exactness would not, but it can never
-/// hide one.
-///
-/// Real procedures stay far below this: the busiest join in a 117k-statement
-/// module keeps two groups.
-const max_join_groups: usize = 8;
-
 fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
     if (a == b) return true;
     if (a == null or b == null) return a == b;
@@ -3031,40 +3008,6 @@ const Certifier = struct {
         return .{ .provenance = provenance, .uncarried_live_lender = uncarried_live_lender };
     }
 
-    /// The provenance both states prove, for widening a group at the cap.
-    ///
-    /// Each component is an independent proof, so a component survives only
-    /// when the two agree on it exactly; a conjunction that differs proves
-    /// nothing in common and is dropped whole. Losing every component leaves
-    /// no provenance, which is the strictest state and always safe.
-    fn meetProvenance(
-        a: ?*const SummaryProvenance,
-        b: ?*const SummaryProvenance,
-    ) ?*const SummaryProvenance {
-        // Names that agree keep what they prove. A name the two disagree
-        // about drops to no provenance at all rather than to the components
-        // they happen to share: dropping everything is a fixed point, so a
-        // later summary that disagrees again finds the group already at the
-        // bottom and is simply covered, which is what stops widening from
-        // re-walking the body once per arriving edge.
-        return if (summaryProvenanceEql(a, b)) a else null;
-    }
-
-    /// Weakens a group's provenance to what it and `summary` both prove.
-    /// Reports whether anything moved, so a group whose state is unchanged is
-    /// not re-walked.
-    fn widenGroupProvenance(group: *JoinGroup, summary: []const LocalSummary) bool {
-        var changed = false;
-        for (group.summary, summary) |*ge, se| {
-            const met = meetProvenance(ge.provenance, se.provenance);
-            if (met != ge.provenance) {
-                ge.provenance = met;
-                changed = true;
-            }
-        }
-        return changed;
-    }
-
     fn summaryDigest(cursor: LIR.CFStmtId, summary: []const LocalSummary) u64 {
         var hasher = std.hash.Wyhash.init(0x6172635f63657274);
         hasher.update(std.mem.asBytes(&cursor));
@@ -3261,20 +3204,6 @@ const Certifier = struct {
                 },
             }
         }
-        // At the cap, stop splitting on provenance: absorb into a group that
-        // agrees on every other mode component and weaken its provenance to
-        // what both prove. See `max_join_groups`.
-        if (record.groups.items.len >= max_join_groups) {
-            for (record.groups.items, 0..) |*group, group_index| {
-                if (!modesCompatibleWith(group.summary, summary, .ignore_provenance)) continue;
-                const widened = widenGroupProvenance(group, summary);
-                return switch (try self.meetGroupSummary(group, summary)) {
-                    .unchanged => if (widened) .{ .walk = group_index } else .covered,
-                    .refined, .conflict => .{ .walk = group_index },
-                };
-            }
-        }
-
         const copy = try self.allocator.dupe(LocalSummary, summary);
         errdefer self.allocator.free(copy);
         try record.groups.append(self.allocator, .{ .summary = copy, .queued = false });
@@ -3286,17 +3215,6 @@ const Certifier = struct {
     /// and the same sparse provenance. Partition (`repr`) and balances are the
     /// joinable components and are deliberately not compared here.
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
-        return modesCompatibleWith(a, b, .compare_provenance);
-    }
-
-    /// Whether provenance participates in mode compatibility. Ignoring it is
-    /// what lets a join at `max_join_groups` absorb instead of split; the
-    /// group's provenance is then weakened to the meet, so the walk assumes
-    /// only what both members prove.
-    const ProvenanceMatch = enum { compare_provenance, ignore_provenance };
-
-    fn modesCompatibleWith(a: []const LocalSummary, b: []const LocalSummary, provenance: ProvenanceMatch) bool {
-        const compare = provenance == .compare_provenance;
         for (a, b) |ga, sb| {
             if (ga.class != sb.class) return false;
             if (ga.abi_live != sb.abi_live) return false;
@@ -3306,11 +3224,11 @@ const Certifier = struct {
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
                 .owned => if (!ga.claims.eql(sb.claims) or
-                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
+                    !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
                 .conditional_owned => if (ga.condition != sb.condition or
                     ga.condition_mask != sb.condition_mask or
-                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
-                .borrowed => if (compare and !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                    !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                .borrowed => if (!summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
                 .representation => {},
             }
         }
@@ -7644,6 +7562,73 @@ test "certify flags branches that disagree at a join" {
     // re-certifying the body flags the release of the unbound name.
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "unbound") != null);
+}
+
+fn certifyDistinctBorrowLenders(release_last_lender: bool) (CertifyError || error{ TestUnexpectedResult, TestExpectedError, TestUnexpectedError, NoSpaceLeft })!void {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    var owners: [12]LIR.LocalId = undefined;
+    for (&owners) |*owner| owner.* = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.u64);
+    const join_id = f.freshJoinPointId();
+
+    var body = try f.ret(result);
+    for (owners) |owner| body = try f.decrefStmt(owner, f.pair_str, body);
+    body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .str_count_utf8_bytes,
+        .rc_effect = LIR.LowLevel.str_count_utf8_bytes.rcEffect(),
+        .args = try f.store.addLocalSpan(&.{field}),
+        .next = body,
+    } }, .test_fixture);
+
+    var branches: [owners.len]LIR.CFSwitchBranch = undefined;
+    for (owners, &branches, 0..) |owner, *branch, index| {
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+        const read = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = field,
+            .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+            .next = if (release_last_lender and index == owners.len - 1)
+                try f.decrefStmt(owner, f.pair_str, jump)
+            else
+                jump,
+        } }, .test_fixture);
+        branch.* = .{ .value = @intCast(index), .body = read };
+    }
+    const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try f.store.addCFSwitchBranches(&branches),
+        .default_branch = branches[0].body,
+    } }, .test_fixture);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = body,
+        .remainder = choose,
+    } }, .test_fixture);
+    _ = try f.addProc(&owners, try f.assignI64(cond, join), .u64);
+    if (release_last_lender) {
+        try testing.expectError(error.Certification, f.certify());
+        errdefer std.debug.print("{s}\n", .{f.diag.message()});
+        var buffer: [96]u8 = undefined;
+        const expected = try std.fmt.bufPrint(&buffer, "use of unbound refcounted local {d}", .{@intFromEnum(field)});
+        try testing.expect(std.mem.find(u8, f.diag.message(), expected) != null);
+    } else {
+        f.certify() catch |err| {
+            std.debug.print("{s}\n", .{f.diag.message()});
+            return err;
+        };
+    }
+}
+
+test "certify preserves distinct borrow lenders beyond eight join arrivals" {
+    try certifyDistinctBorrowLenders(false);
+}
+
+test "certify rejects a dead lender among distinct borrow lenders" {
+    try certifyDistinctBorrowLenders(true);
 }
 
 test "certify accepts agreeing jumps through a join" {
