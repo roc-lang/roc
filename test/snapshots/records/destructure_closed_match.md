@@ -18,7 +18,7 @@ TYPE MISMATCH - destructure_closed_match.md:2:18:2:18
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 2 18) (end 4 2))
+		(region (start 3 5) (end 3 13))
 		(headline
 			(reflow "The first pattern in this")
 			(reflow " ")

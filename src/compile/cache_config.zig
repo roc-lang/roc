@@ -240,7 +240,14 @@ pub const Constants = struct {
     /// 109: Every source node replaced by a runtime error, patterns included,
     ///      stays readable through the node store's `replaced_source_nodes`,
     ///      named by the `.malformed` payload.
-    pub const CACHE_VERSION = 109;
+    /// 110: Expect roots reaching checked errors are ineligible for execution,
+    ///      including errors in referenced procedures and constants.
+    /// 111: Checked type keys refer to each context-free subtree by its own
+    ///      key, use one-byte tags and varint integers, and a synthetic
+    ///      function over composed children shares its source key.
+    /// 112: `for` nodes carry their `ForKind`, `ForLoopDispatchPlan` records its
+    ///      dispatched method names, and common idents include `Builtin.Stream`.
+    pub const CACHE_VERSION = 112;
 };
 
 /// Configuration for the Roc cache system.

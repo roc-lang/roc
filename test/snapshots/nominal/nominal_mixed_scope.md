@@ -158,7 +158,6 @@ LocalStatus := [Pending, Complete]
 
 processColor : _ -> LocalStatus
 processColor = |color| {
-
 	# bring RGB into scope
 		Color.RGB
 

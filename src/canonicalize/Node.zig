@@ -499,7 +499,7 @@ pub const Payload = extern union {
         patt: u32,
         expr: u32,
         body: u32,
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        kind: u32,
     };
 
     /// statement_while: cond + body
@@ -852,7 +852,7 @@ pub const Payload = extern union {
         patt: u32,
         expr: u32,
         body: u32,
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        kind: u32,
     };
 
     pub const ExprExpect = extern struct {

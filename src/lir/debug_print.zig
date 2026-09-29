@@ -270,16 +270,6 @@ const Printer = struct {
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
                     current = s.next;
                 },
-                .assign_boxy_eq => |s| {
-                    try self.writeTarget(s.target, indent, writer);
-                    try writer.print("boxy_eq lhs=l{d} rhs=l{d} desc=", .{
-                        @intFromEnum(s.lhs),
-                        @intFromEnum(s.rhs),
-                    });
-                    try writeBoxyDescRef(s.source_desc, writer);
-                    try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
-                    current = s.next;
-                },
                 .assign_boxy_tag => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.writeAll("boxy_tag desc=");
@@ -770,14 +760,6 @@ test "debug print includes boxy statement surface" {
         .source_mode = .borrow,
         .next = call,
     } }, .test_fixture);
-    const eq = try store.addCFStmt(.{ .assign_boxy_eq = .{
-        .target = result,
-        .lhs = adapted,
-        .rhs = boxed,
-        .source_desc = .{ .local = desc },
-        .source_mode = .borrow,
-        .next = inspect,
-    } }, .test_fixture);
     const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
         .source = unboxed,
@@ -785,7 +767,7 @@ test "debug print includes boxy statement surface" {
         .source_desc = .{ .local = desc },
         .target_desc = .{ .local = desc },
         .source_mode = .move,
-        .next = eq,
+        .next = inspect,
     } }, .test_fixture);
     const unbox = try store.addCFStmt(.{ .assign_boxy_unbox = .{
         .target = unboxed,
@@ -838,7 +820,6 @@ test "debug print includes boxy statement surface" {
     try std.testing.expect(std.mem.find(u8, printed, "l4:opaque_ptr = boxy_reuse_box source=l3 desc=desc=l1\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l5:str = boxy_unbox source=l4 desc=desc=l1 target_layout=str mode=borrow\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 source_desc=desc=l1 target_desc=desc=l1 mode=move\n") != null);
-    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_eq lhs=l6 rhs=l3 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = call_dict dict=l2 method=0 slot=2 args=[l6] arg_descs=[] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
 }

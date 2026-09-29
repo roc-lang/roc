@@ -799,7 +799,7 @@ const CheckTypeCheckerPatternsStep = struct {
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
-        .{ .file = "report.zig", .start = 583, .end = 583 },
+        .{ .file = "report.zig", .start = 615, .end = 615 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {

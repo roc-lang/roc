@@ -130,7 +130,26 @@ it gives you `rest`, which you use to continue the iteration.
 `Iter` is for pure computations, so its functions (like the one passed to `map`) can't be
 [effectful](functions#effectful-functions). For sequences that involve effects, there's a separate
 [`Stream`](../Stream) type, whose functions can be effectful. [`Iter.stream`](../Iter#stream) turns an
-iterator into a stream.
+iterator into a stream, and [`Stream.custom`](../Stream#custom) builds one from a source whose items
+come from effects.
+
+Like iterators, streams are lazy. [`map`](../Stream#map), [`keep_if`](../Stream#keep_if),
+[`drop_if`](../Stream#drop_if), [`with_index`](../Stream#with_index),
+[`take_first`](../Stream#take_first), and [`drop_first`](../Stream#drop_first) each return a new stream
+without pulling any items, and the functions passed to them can be effectful.
+
+A stream's items are pulled when something consumes it: a [`for!` loop](loops#looping-over-streams-with-for),
+[`fold!`](../Stream#fold!), [`for_each!`](../Stream#for_each!), or [`collect!`](../Stream#collect!).
+Pulling runs effects, so all of these can only be used in effectful functions:
+
+```roc
+print_long_lines! : Stream(Str) => {}
+print_long_lines! = |lines| {
+    for! line in lines.keep_if(|line| line.count_utf8_bytes() > 80) {
+        Stdout.line!(line)
+    }
+}
+```
 
 Loops that perform effects on each item don't need a `Stream`, though; a `for` loop can call effectful
 functions on each item of an ordinary iterator.

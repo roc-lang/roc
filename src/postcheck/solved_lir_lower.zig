@@ -4494,8 +4494,8 @@ const Lowerer = struct {
         errdefer {
             for (entries[0..initialized]) |entry| {
                 if (entry.captures.len > 0) self.allocator.free(entry.captures);
-                if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
-                if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
+                if (entry.template.?.evidence.len > 0) self.allocator.free(entry.template.?.evidence);
+                if (entry.template.?.evidence_frames.len > 0) self.allocator.free(entry.template.?.evidence_frames);
             }
             self.allocator.free(entries);
         }
@@ -4956,7 +4956,15 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const root = self.solved.lifted.getComptimeValueRoot(value.root);
-        const layout_idx = self.result.store.getLocal(target).layout_idx;
+        const layout_idx = try self.layoutOfType(ty);
+        // A root's value has its type's own layout; storage that boxes it,
+        // such as a recursive payload, boxes the value read.
+        if (self.result.store.getLocal(target).layout_idx != layout_idx) {
+            const value_local = try self.addLocalForLayout(layout_idx);
+            try self.local_types.put(value_local, ty);
+            const store_value = try self.assignBoxBoundary(where, target, value_local, layout_idx, next);
+            return try self.lowerComptimeValueInto(where, value_local, value, ty, store_value);
+        }
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
         const is_static_initializer = self.result.store.getProcSpec(proc_id).is_static_initializer;
         const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
