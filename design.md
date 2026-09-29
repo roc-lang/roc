@@ -3277,7 +3277,8 @@ types as well as procedure signatures and roots. One substitution memo preserves
 shared type identities across these columns. The pairing cache retains the changed
 body columns so cache hits use the same types. Calls to requirement declarations
 receive their direct-call classification from the bound app procedure kind using
-the checked output rule; callable-evaluation bindings remain indirect.
+the checked output rule; callable-evaluation bindings remain indirect unless they
+are exact procedure aliases, which forward (see "Procedure Aliases").
 This classification is session-owned and persisted with the paired body columns.
 Exact procedure aliases
 whose required bindings are now known use the existing checked forwarding rule
@@ -5761,7 +5762,12 @@ exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
 absolute step with another value of `num`; it does not compose or multiply
 steps. `Range.size_hint` returns the stored exact count when that count fits in
 `U64`, otherwise `Unknown`. `Range.iter` delegates to `num.range_iter` and
-propagates that hint into the resulting iterator.
+propagates that hint into the resulting iterator. `Range.iter` and the numeric
+`range_iter` implementations are iterator producers that mint no
+representation of their own: the result is exactly the `Iter.custom` chain the
+numeric implementation builds, so a range iterator and each of its successors
+share one representation, while SpecConstr still admits both producers for
+iterator fusion.
 
 Reverse iteration is an explicit numeric capability. `Range.iter_rev`
 reconstructs the opposite direction through `num.range_exclusive_from` or
@@ -5792,7 +5798,6 @@ const IteratorKind = enum(u8) {
     list_rev,
     str,
     single,
-    range,
     numeric_until,
     numeric_to,
     map,
@@ -6010,6 +6015,16 @@ result is validated against the declared interface and carried to sealing.
 Representation selection never reconstructs branch evidence from finished
 output IR or reopens a durable Monotype.
 
+A callee's completed result representation is immutable producer output even
+while the callee is still a live specialization in the caller's draft graph:
+every request with the same identity must seal to the same type. A caller
+therefore consumes a witness of a completed callee's function type: each class
+carrying generated-private evidence is copied into fresh graph nodes, and every
+other class is shared. Joining a call's result with the caller's other
+producers selects the caller's representation without rewriting the callee's.
+A callee still being lowered is shared instead, because its recursive edges
+must join its own live representation.
+
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:
 its checked result variable remains unconstrained, no result relation is
@@ -6173,7 +6188,9 @@ root or first-class escape, and therefore no reachable code growth. Second, a
 one-use forwarding join sinks its consumer only when reachable incoming-edge
 counts prove exclusivity, the outer join is nonrecursive, and the forwarded
 layout contains no reference-counted storage; moving owning continuations needs
-explicit path-ownership data and is not admitted. These two passes visit only
+explicit path-ownership data and is not admitted. Only the consumer's exclusive
+prefix moves; a suffix another reachable edge also enters stays in place, and
+the moved prefix links to it. These two passes visit only
 stamped procedures, so ordinary dev code pays neither their analysis cost nor
 their structural changes.
 
@@ -6186,9 +6203,14 @@ as does the iterator-fusion clone of `.none`. A producer edge may release
 values it has finished with between building the tag and jumping; those
 releases are carried onto the redirected edge. An arm may release the union
 itself; the fused arm releases that variant's payload instead, or nothing when
-the variant owns nothing. Complete fusion moves all arms; partial fusion
-retains the original path for opaque producers and clones the arms, with
-definitions inside a cloned arm renamed. Join scalarization then removes
+the variant owns nothing. A fused arm copies exactly the statements its
+variant rewrite changes, together with what copying them forces: their
+predecessors, readers of locals they define, and jumps to joins they declare,
+where a jump reads its target's parameters. Copied definitions are renamed.
+Every other arm statement is shared with the original arm, which partial
+fusion retains for opaque producers; copying unchanged statements would
+duplicate every later candidate they contain, growing a procedure
+exponentially in its number of sequential matches. Join scalarization then removes
 aggregate fixed points when every initializer, field read, and tag payload
 read is explicit. Every mutation plan requires disjoint statement roles before
 it changes the graph.
@@ -11701,6 +11723,35 @@ const MonoProgramView = struct {
 ```
 
 
+### Procedure Aliases
+
+A binding whose value is a lookup of a procedure (`f = g`, local or top level)
+is an exact procedure alias. It owns an instantiation scope, the alias's own
+scheme and requirements, but no function body. A top-level alias's scope is the
+entry wrapper of its callable-eval root; a local alias's is its generalized
+dispatch scope. Checking records the forward explicitly: a local alias carries
+its final `alias_target`, and a callable-eval template carries its
+`forwarded_lookup` when the lookup reaches a directly callable procedure (an
+ordinary template, a hosted procedure, or another forwarding alias, to a fixed
+point). An alias of a function-valued constant is not a forward; calling it
+calls the evaluated value.
+
+A call through a forwarding alias is a direct call. Monotype enters the
+alias's scope with the call's use-site evidence and requests the lookup's own
+callee there, so the call reaches the aliased procedure's specialization with
+the evidence the alias's scope composes and keeps that procedure's
+representation; no alias function exists at runtime. The callee's compiler-owned
+roles (call-site intrinsics, iterator procedures, `Str.inspect`, hosted `Try`
+adapters) follow the forward to the final procedure. Boxy lowers the same calls
+through the alias's materialized callable value.
+
+A method bound to an exact alias dispatches to the procedure the alias chain
+reaches, and the method target records that it was reached through an alias.
+The dispatch edge instantiates the alias's scheme, whose requirements are not
+the target's, so the target's evidence follows from its instantiated callable
+(`from_callable`) and Monotype instantiates the target's own scheme at the
+dispatch's callable for its substitution.
+
 ### Static Dispatch In Monotype
 
 Static dispatch is DECIDED during checking and CONSUMED during Monotype
@@ -16943,6 +16994,28 @@ and restore their enclosing emitter's reservations when finished. AArch64 entryp
 stack-argument copies emitted after frame finalization instead explicitly use
 X9-X11, which are volatile and carry no incoming C-ABI arguments. They preserve
 all argument registers and introduce no new callee-save or frame requirements.
+
+## Internal Calling Convention
+
+The LLVM backend gives every procedure two functions. The packed function,
+`void f(ret_ptr, args_ptr)` (plus a descriptor output pointer when the
+procedure produces one), is the uniform shape that entrypoints, dictionary
+thunks, erased-callable adapters, and function references need, because those
+callers do not know the callee's signature. The fast function carries the
+procedure's arguments as parameters classified the way the target's C ABI
+classifies them: scalars and small aggregates as register pieces, large
+aggregates by pointer, and a small result returned by value. It is internal
+and `fastcc`, so the classification only decides how a value splits into
+scalars while LLVM assigns the registers. A direct Roc call targets the fast
+function, loading each argument's pieces from its slot and storing a by-value
+result into the target slot; the packed function is an adapter that unpacks
+the argument bytes and calls the fast one. Erased callables keep the public
+erased ABI, and hosted procedures keep the C ABI of the host.
+
+On Linux AArch64, evaluation crash exits return to the host after reporting
+the error. Their ignored result is zero-initialized in the active LLVM
+function's declared return type; only void functions emit `ret void`. This
+also applies to fast functions returning scalars or aggregate carriers.
 
 ## Dev Backend Register Lifetimes
 

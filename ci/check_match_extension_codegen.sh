@@ -86,9 +86,14 @@ cd "$repo_root"
 # no adapter address is materialized and no allocator callback is loaded. The
 # compare, byte-tail, and fill loops keep their load, load, compare, advance
 # shape.
+# Emitting unchecked list append directly in LLVM exposes the List.repeat
+# stores without the builtin call boundary. ARM64 now needs 94 instructions;
+# it still fills 32 bytes per iteration with paired vector stores, compares
+# eight bytes per iteration, and finishes with the byte tail. The explicit
+# releases of both lists remain. x64musl stays at 97.
 expectations=(
     "x64musl:97"
-    "arm64musl:100"
+    "arm64musl:94"
 )
 
 failed=0

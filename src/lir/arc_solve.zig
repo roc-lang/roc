@@ -6683,6 +6683,7 @@ test "solve declarations are referenced" {
 /// Small ownership-neutral fixtures for exercising the solver without emission.
 const UniquenessTest = struct {
     store: LirStore,
+    static_data_values: std.ArrayList(@import("lir_core").Program.StaticDataValue) = .empty,
     layouts: layout_mod.Store,
     list: layout_mod.Idx,
     pair: layout_mod.Idx,
@@ -6699,8 +6700,15 @@ const UniquenessTest = struct {
     }
 
     fn deinit(self: *@This()) void {
+        self.static_data_values.deinit(std.testing.allocator);
         self.store.deinit();
         self.layouts.deinit();
+    }
+
+    fn staticData(self: *@This(), initializer: LIR.LirProcSpecId, layout: layout_mod.Idx) SolveError!LIR.StaticDataId {
+        const id: LIR.StaticDataId = @enumFromInt(self.static_data_values.items.len);
+        try self.static_data_values.append(std.testing.allocator, .{ .initializer = initializer, .layout_idx = layout });
+        return id;
     }
 
     fn local(self: *@This(), layout: layout_mod.Idx) SolveError!LIR.LocalId {
@@ -7477,6 +7485,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const callee_body = try f.store.addCFStmt(.{ .assign_list = .{ .target = other, .elems = try f.store.addLocalSpan(&.{}), .next = make_pair } }, .test_fixture);
     const callee = try f.proc(&.{param}, callee_body, f.list);
     const fresh_form = try f.proc(&.{}, null, f.list);
+    const static_list = try f.staticData(fresh_form, f.list);
 
     // Caller: read the candidate, pass it through the callee, take the
     // field back, and check it.
@@ -7498,15 +7507,12 @@ test "uniqueness carries a candidate read's origin through a returned record fie
         .next = check,
     } }, .test_fixture);
     const call = try f.call(got, callee, &.{candidate}, take);
-    const read = try f.store.addCFStmt(.{
-        .assign_literal = .{
-            .target = candidate,
-            // ARC reads only the literal kind, never the slot it names.
-            .value = .{ .static_data = undefined },
-            .fresh_alternative = fresh_form,
-            .next = call,
-        },
-    }, .test_fixture);
+    const read = try f.store.addCFStmt(.{ .assign_literal = .{
+        .target = candidate,
+        .value = .{ .static_data = static_list },
+        .fresh_alternative = fresh_form,
+        .next = call,
+    } }, .test_fixture);
     _ = try f.proc(&.{}, read, f.list);
 
     // A second read whose value only rides along in a field and is read
@@ -7521,15 +7527,12 @@ test "uniqueness carries a candidate read's origin through a returned record fie
         .next = try f.ret(idle_first),
     } }, .test_fixture);
     const idle_call = try f.call(idle_got, callee, &.{idle}, idle_take);
-    const idle_read = try f.store.addCFStmt(.{
-        .assign_literal = .{
-            .target = idle,
-            // ARC reads only the literal kind, never the slot it names.
-            .value = .{ .static_data = undefined },
-            .fresh_alternative = fresh_form,
-            .next = idle_call,
-        },
-    }, .test_fixture);
+    const idle_read = try f.store.addCFStmt(.{ .assign_literal = .{
+        .target = idle,
+        .value = .{ .static_data = static_list },
+        .fresh_alternative = fresh_form,
+        .next = idle_call,
+    } }, .test_fixture);
     _ = try f.proc(&.{}, idle_read, f.list);
 
     const rc = try allocator.alloc(bool, f.store.localCount());
