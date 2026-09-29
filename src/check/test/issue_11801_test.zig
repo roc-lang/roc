@@ -18,7 +18,7 @@ const use_count: usize = 5;
 /// `prelude`, then `big`, which applies `call` `chain_len` times in a chain
 /// starting from its argument, then `use_count` uses of `big` whose argument
 /// is `arg` applied to the use's index.
-fn genSource(gpa: std.mem.Allocator, prelude: []const u8, call: []const u8, arg: []const u8) ![]u8 {
+fn genSource(gpa: std.mem.Allocator, prelude: []const u8, call: []const u8, arg: []const u8) std.mem.Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
 
@@ -40,7 +40,7 @@ fn genSource(gpa: std.mem.Allocator, prelude: []const u8, call: []const u8, arg:
         defer gpa.free(line);
         try out.appendSlice(gpa, line);
         var rest = arg;
-        while (std.mem.indexOfScalar(u8, rest, '#')) |hole| {
+        while (std.mem.findScalar(u8, rest, '#')) |hole| {
             try out.appendSlice(gpa, rest[0..hole]);
             const index = try std.fmt.allocPrint(gpa, "{d}", .{j});
             defer gpa.free(index);
@@ -53,7 +53,7 @@ fn genSource(gpa: std.mem.Allocator, prelude: []const u8, call: []const u8, arg:
     return out.toOwnedSlice(gpa);
 }
 
-fn expectNoDigestedEdges(env: *const TestEnv) !void {
+fn expectNoDigestedEdges(env: *const TestEnv) error{TestUnexpectedResult}!void {
     const edges = env.checker.dispatch_target_instantiations.items;
     try std.testing.expect(edges.len >= chain_len * use_count);
     for (edges) |edge| {
