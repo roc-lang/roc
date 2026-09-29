@@ -2011,7 +2011,10 @@ const Pass = struct {
                 // Facts every entry edge captured this round carries about
                 // values the loop never assigns hold throughout the body.
                 if (state) |st| {
-                    if (self.entryEdgesComplete(join_id, &st)) try self.seedStableFacts(&st.entry_stable);
+                    if (self.entryEdgesComplete(join_id, &st)) {
+                        try self.seedEnvFromMeet(&st, join_id);
+                        try self.seedStableFacts(&st.entry_stable);
+                    }
                 }
                 return;
             }
@@ -2033,51 +2036,63 @@ const Pass = struct {
         // from other regions agree on. Values bind first so the stable facts
         // materialize against the nodes the region reads.
         try self.facts.appendSlice(self.allocator, state.facts.items);
-        defer_stable: {
-            for (state.env.items) |meet| {
-                if (meet.valid) {
-                    const node = (try self.addNode(.{
-                        .root = meet.root,
-                        .off_lo = meet.off_lo,
-                        .off_hi = meet.off_hi,
-                        .lo = 0,
-                        .hi = 0,
-                    })) orelse continue;
-                    try self.bind(meet.local, .{ .node = node });
-                    continue;
-                }
-                if (meet.len_bounds.len > 0) {
-                    // A list bound to different values per edge whose length
-                    // lower bounds all edges prove: a fresh value with a fresh
-                    // length term carrying them preserves the lengths.
-                    const list_node = (try self.unknownFor(self.localLayout(meet.local))) orelse continue;
-                    const len_term = (try self.freshRoot(0, std.math.maxInt(i64))) orelse continue;
-                    for (meet.len_bounds.slice()) |bound| {
-                        try self.addFact(.{ .a = bound.root, .b = len_term, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
-                    }
-                    try self.len_terms.put(list_node, len_term);
-                    try self.bind(meet.local, .{ .node = list_node });
-                    continue;
-                }
-                if (meet.bounds.len == 0) continue;
-                // The edges bind different values, but each proves the same upper
-                // bounds; a fresh value carrying those bounds preserves them.
-                var hi = trackedIntMax(self.localLayout(meet.local)) orelse std.math.maxInt(u64);
-                for (meet.bounds.slice()) |bound| {
-                    const root = self.nodes.items[bound.root];
-                    if (root.lo == root.hi) hi = @min(hi, root.lo + bound.c);
-                }
-                const node = (try self.freshRoot(0, hi)) orelse continue;
-                for (meet.bounds.slice()) |bound| {
-                    const root = self.nodes.items[bound.root];
-                    if (root.lo == root.hi) continue;
-                    try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
-                }
-                try self.bind(meet.local, .{ .node = node });
-            }
-            break :defer_stable;
-        }
+        try self.seedEnvFromMeet(state, null);
         try self.seedStableFacts(&state.stable);
+    }
+
+    /// Bind the merged values of a completed meet in the region about to
+    /// walk: a local every edge bound to one root keeps that root; a list
+    /// whose edges agree on length lower bounds gets a fresh value whose
+    /// length term carries them; a local whose edges agree on upper bounds
+    /// gets a fresh value carrying those. With `loop_join`, only locals no
+    /// path around that loop assigns are bound: the meet is over the loop's
+    /// entry edges, so it describes their values throughout the loop.
+    fn seedEnvFromMeet(self: *Pass, state: *const MergeState, loop_join: ?JoinPointId) ResourceError!void {
+        for (state.env.items) |meet| {
+            if (loop_join) |join_id| {
+                if (self.join_assigned.contains(joinAssignedKey(join_id, meet.local))) continue;
+            }
+            if (meet.valid) {
+                const node = (try self.addNode(.{
+                    .root = meet.root,
+                    .off_lo = meet.off_lo,
+                    .off_hi = meet.off_hi,
+                    .lo = 0,
+                    .hi = 0,
+                })) orelse continue;
+                try self.bind(meet.local, .{ .node = node });
+                continue;
+            }
+            if (meet.len_bounds.len > 0) {
+                // A list bound to different values per edge whose length
+                // lower bounds all edges prove: a fresh value with a fresh
+                // length term carrying them preserves the lengths.
+                const list_node = (try self.unknownFor(self.localLayout(meet.local))) orelse continue;
+                const len_term = (try self.freshRoot(0, std.math.maxInt(i64))) orelse continue;
+                for (meet.len_bounds.slice()) |bound| {
+                    try self.addFact(.{ .a = bound.root, .b = len_term, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
+                }
+                try self.len_terms.put(list_node, len_term);
+                try self.path_len_roots.put(len_term, meet.local);
+                try self.bind(meet.local, .{ .node = list_node });
+                continue;
+            }
+            if (meet.bounds.len == 0) continue;
+            // The edges bind different values, but each proves the same upper
+            // bounds; a fresh value carrying those bounds preserves them.
+            var hi = trackedIntMax(self.localLayout(meet.local)) orelse std.math.maxInt(u64);
+            for (meet.bounds.slice()) |bound| {
+                const root = self.nodes.items[bound.root];
+                if (root.lo == root.hi) hi = @min(hi, root.lo + bound.c);
+            }
+            const node = (try self.freshRoot(0, hi)) orelse continue;
+            for (meet.bounds.slice()) |bound| {
+                const root = self.nodes.items[bound.root];
+                if (root.lo == root.hi) continue;
+                try self.addFact(.{ .a = node, .b = bound.root, .c = bound.c, .origin = .meet, .assumed = bound.assumed });
+            }
+            try self.bind(meet.local, .{ .node = node });
+        }
     }
 
     /// Key for one loop parameter's cross-round bounds.
