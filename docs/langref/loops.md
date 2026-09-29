@@ -90,6 +90,31 @@ If you can't write an exhaustive pattern-match, you can name the entire iterator
 
 (Note: the dedicated exhaustiveness error is not implemented yet for `for` patterns, even though it is for [assignments](statements#assignment). Currently, a non-exhaustive tag pattern like this one is reported as a type mismatch instead, and non-exhaustive patterns that the type checker can't rule out—such as a number literal pattern—are not caught at compile time and crash at runtime.)
 
+## Looping over Streams with `for!`
+
+A `for!` loop goes through a [`Stream`](iterators#effectful-iteration): a sequence whose items
+come from running effects, like reading lines from a file. It works like a `for` loop,
+except that it gets each item by calling the stream's effectful `next!` method:
+
+```roc
+print_lines! : Stream(Str) => {}
+print_lines! = |lines| {
+    for! line in lines {
+        Stdout.line!(line)
+    }
+}
+```
+
+Getting each item runs an effect, so a `for!` loop can only be used in an
+[effectful function](functions#effectful-functions), just like calling a function whose name ends in `!`.
+
+`for!` calls the `stream` method on the value it loops over, so it works on any `Stream`, and also
+on any `Iter` (through `Iter.stream`). Everything else about it is the same as a `for` loop:
+the pattern between `for!` and `in` must be exhaustive, and `break` and `return` work the same way.
+
+A plain `for` loop can't go through a `Stream`, because a `for` loop only gets its items
+from pure iterators. (A plain `for` loop can still call effectful functions in its body, though.)
+
 ## `while` Loops
 
 A `while` loop repeatedly executes its body while a condition is true:

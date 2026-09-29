@@ -82,6 +82,10 @@ pub const EvidenceParam = struct {
     /// Resolved root of the constrained scheme var.
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
+    /// Independent relations sharing this target, in constraint order.
+    callable_contracts: []const StaticDispatchConstraint = &.{},
+    contract_start: u32 = 0,
+    contract_len: u32 = 0,
     /// Producer-authored origin from which a specialization must obtain the
     /// dispatcher's concrete type. `path` is relative to this source.
     source: Source,
@@ -142,7 +146,10 @@ pub const Scratch = struct {
     /// instantiation of that target's callable scheme. Independent same-name
     /// calls therefore share this receiver-local slot while retaining their
     /// own callable relations in the checked plans.
-    emitted_methods: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
+    emitted_methods: std.AutoHashMapUnmanaged(Ident.Idx, u32) = .{},
+    contract_classes: std.AutoHashMapUnmanaged(struct { param: u32, callable: Var }, void) = .{},
+    contract_entries: std.ArrayListUnmanaged(struct { param: u32, constraint: StaticDispatchConstraint }) = .empty,
+    contract_pool: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty,
     /// Flat pool backing every stack entry's (and emitted param's) path.
     path_pool: std.ArrayListUnmanaged(PathStep) = .empty,
     /// Child collection buffer for one node's children, in declared order.
@@ -160,6 +167,9 @@ pub const Scratch = struct {
         self.stack.deinit(gpa);
         self.fn_var_queue.deinit(gpa);
         self.emitted_methods.deinit(gpa);
+        self.contract_classes.deinit(gpa);
+        self.contract_entries.deinit(gpa);
+        self.contract_pool.deinit(gpa);
         self.path_pool.deinit(gpa);
         self.children.deinit(gpa);
         self.* = .{};
@@ -170,6 +180,9 @@ pub const Scratch = struct {
         self.stack.clearRetainingCapacity();
         self.fn_var_queue.clearRetainingCapacity();
         self.emitted_methods.clearRetainingCapacity();
+        self.contract_classes.clearRetainingCapacity();
+        self.contract_entries.clearRetainingCapacity();
+        self.contract_pool.clearRetainingCapacity();
         self.path_pool.clearRetainingCapacity();
         self.children.clearRetainingCapacity();
     }
@@ -240,8 +253,21 @@ pub fn enumerateEvidenceParamsWithRequirements(
     }
     // The pool has stopped growing: materialize each param's path slice (the
     // walk records offsets because interim appends may reallocate the pool).
+    var contract_start: u32 = 0;
     for (out.items[out_base..]) |*param| {
         param.path = scratch.pathSlice(param.path_start, param.path_len);
+        param.contract_start = contract_start;
+        contract_start += param.contract_len;
+        param.contract_len = 0;
+    }
+    try scratch.contract_pool.resize(gpa, contract_start);
+    for (scratch.contract_entries.items) |contract| {
+        const param = &out.items[contract.param];
+        scratch.contract_pool.items[param.contract_start + param.contract_len] = contract.constraint;
+        param.contract_len += 1;
+    }
+    for (out.items[out_base..]) |*param| {
+        param.callable_contracts = scratch.contract_pool.items[param.contract_start..][0..param.contract_len];
     }
 }
 
@@ -507,6 +533,7 @@ fn emitConstraints(
     for (store.sliceStaticDispatchConstraints(constraints)) |constraint| {
         const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name);
         if (!emitted.found_existing) {
+            emitted.value_ptr.* = @intCast(out.items.len);
             try out.append(gpa, .{
                 .dispatcher_var = dispatcher_root,
                 .constraint = constraint,
@@ -517,6 +544,17 @@ fn emitConstraints(
                 .path_start = entry.path_start,
                 .path_len = entry.path_len,
             });
+        } else {
+            const param_index = emitted.value_ptr.*;
+            const param = &out.items[param_index];
+            const callable = store.resolveVar(constraint.fn_var).var_;
+            if (callable != store.resolveVar(param.constraint.fn_var).var_) {
+                const distinct = try scratch.contract_classes.getOrPut(gpa, .{ .param = param_index, .callable = callable });
+                if (!distinct.found_existing) {
+                    try scratch.contract_entries.append(gpa, .{ .param = param_index, .constraint = constraint });
+                    param.contract_len += 1;
+                }
+            }
         }
         // A shared target does not make the callables interchangeable: each
         // one can expose further independently constrained variables.

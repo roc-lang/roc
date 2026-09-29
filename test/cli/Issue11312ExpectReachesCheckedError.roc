@@ -1,5 +1,5 @@
 # The first expect calls a function whose crash message does not type check.
-# The expect still runs; the crash that checking put in its place fails it.
+# The expect is blocked by that checked error; the independent expect runs.
 
 poly = || {
     crash YYYYY

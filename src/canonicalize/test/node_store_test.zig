@@ -118,6 +118,15 @@ test "NodeStore round trip - Statements" {
 
     try statements.append(gpa, CIR.Statement{
         .s_for = .{
+            .kind = .iter,
+            .patt = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try statements.append(gpa, CIR.Statement{
+        .s_for = .{
+            .kind = .stream,
             .patt = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
             .body = rand_idx(CIR.Expr.Idx),
@@ -587,6 +596,15 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_for = .{
+            .kind = .iter,
+            .patt = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_for = .{
+            .kind = .stream,
             .patt = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
             .body = rand_idx(CIR.Expr.Idx),

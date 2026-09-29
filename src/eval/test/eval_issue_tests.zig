@@ -266,6 +266,54 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11737: independent calls select different nested method targets",
+        .source_kind = .module,
+        .source =
+        \\Runner :: {}.{
+        \\    run = |_, body| body({}).repeat(3)
+        \\}
+        \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
+        \\main = demo(Runner.{})
+        ,
+        .expected = .{ .inspect_str = "(\"aaa\", [[1], [1], [1]])" },
+    },
+    .{
+        .name = "issue 11737: independent nominal calls preserve nested evidence and distinct results",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        repeated = fetch({}).repeat(3)
+        \\        (repeated, body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| 42.U64))
+        \\forward = |db| demo(db)
+        \\main = forward(Db.{ deps: { fetch: |{}| "x" } })
+        ,
+        .expected = .{ .inspect_str = "((\"xxx\", \"a\"), (\"xxx\", 42))" },
+    },
+    .{
+        .name = "issue 11737: stored generic function retains independent callable contracts",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        (fetch({}).concat("y"), body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| "b"))
+        \\saved = { invoke: demo }
+        \\main = {
+        \\    invoke = saved.invoke
+        \\    invoke(Db.{ deps: { fetch: |{}| "x" } })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "((\"xy\", \"a\"), (\"xy\", \"b\"))" },
+    },
+    .{
         .name = "issue 11661: closure relaxation preserves previous loop list",
         .source_kind = .module,
         .source =
@@ -3963,5 +4011,94 @@ pub const tests = [_]TestCase{
         \\main = run(|_| Err(WrongArity)) == Err(WrongArity)
         ,
         .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11770
+        // A method annotated `_` whose body is erroneous has no declared
+        // callable type, so its declaration is rejected like an unannotated
+        // one instead of publishing a lambda whose checked type is not a
+        // function.
+        .name = "issue 11770: erroneous method annotated with a hole dispatched through a where clause",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: erroneous method annotated with a hole called on a value",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\show_it = |value| value.show()
+        \\
+        \\main = show_it(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: erroneous method annotated with a hole called through a type parameter",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| {
+        \\    A : a
+        \\    A.show(value)
+        \\}
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: method annotated with a hole calling a declaration with no value",
+        .source_kind = .module,
+        .source =
+        \\missing : T -> Str
+        \\
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| missing(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: method annotated with a hole and a valid body dispatches through a where clause",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |_t| "shown"
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .inspect_str = "\"shown\"" },
     },
 };

@@ -116,7 +116,6 @@ fn expectCallBuiltRecordListSetHasNoRetain(
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,

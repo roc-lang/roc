@@ -1336,6 +1336,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
         .statement_for => {
             const p = payload.statement_for;
             return CIR.Statement{ .s_for = .{
+                .kind = @enumFromInt(p.kind),
                 .patt = @enumFromInt(p.patt),
                 .expr = @enumFromInt(p.expr),
                 .body = @enumFromInt(p.body),
@@ -1899,6 +1900,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .expr_for => {
             const p = payload.expr_for;
             return CIR.Expr{ .e_for = .{
+                .kind = @enumFromInt(p.kind),
                 .patt = @enumFromInt(p.patt),
                 .expr = @enumFromInt(p.expr),
                 .body = @enumFromInt(p.body),
@@ -3258,6 +3260,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .patt = @intFromEnum(s.patt),
                 .expr = @intFromEnum(s.expr),
                 .body = @intFromEnum(s.body),
+                .kind = @intFromEnum(s.kind),
             } });
         },
         .s_while => |s| {
@@ -3891,6 +3894,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .patt = @intFromEnum(e.patt),
                 .expr = @intFromEnum(e.expr),
                 .body = @intFromEnum(e.body),
+                .kind = @intFromEnum(e.kind),
             } });
         },
     }

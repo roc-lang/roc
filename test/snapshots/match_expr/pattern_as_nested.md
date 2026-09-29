@@ -18,7 +18,7 @@ TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 1 1) (end 4 2))
+		(region (start 3 5) (end 3 16))
 		(headline
 			(reflow "The")
 			(reflow " ")

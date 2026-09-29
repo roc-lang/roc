@@ -264,7 +264,6 @@ pub fn appendSuccessorsWithAllocator(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -440,11 +439,6 @@ pub fn forEachStmtRead(
             note(ctx, s.source);
             emitDesc(ctx, note, s.source_desc);
         },
-        .assign_boxy_eq => |s| {
-            note(ctx, s.lhs);
-            note(ctx, s.rhs);
-            emitDesc(ctx, note, s.source_desc);
-        },
         .assign_boxy_tag => |s| {
             emitDesc(ctx, note, s.target_desc);
             if (s.payload) |payload| note(ctx, payload);
@@ -581,7 +575,6 @@ pub fn forEachStmtDef(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_call_dict,
         .assign_low_level,
@@ -807,7 +800,6 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_call_dict,
         .assign_low_level,
@@ -1266,14 +1258,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_boxy_inspect => |s| try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
-                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
-                    .source_mode = s.source_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }, origin),
-                .assign_boxy_eq => |s| try self.store.addCFStmt(.{ .assign_boxy_eq = .{
-                    .target = try self.mapLocal(s.target),
-                    .lhs = try self.mapLocal(s.lhs),
-                    .rhs = try self.mapLocal(s.rhs),
                     .source_desc = try self.mapBoxyDescRef(s.source_desc),
                     .source_mode = s.source_mode,
                     .next = try self.cloneStmt(s.next),

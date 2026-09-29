@@ -13,6 +13,10 @@ const harness = @import("lower_to_lir_harness.zig");
 /// to prove. The 16-byte margin makes the read's bounds test, the `?? 0`
 /// fallback, and the advance's underflow check all provably dead.
 fn fastloopApp(comptime margin: []const u8) []const u8 {
+    return fastloopAppWithResult(margin, "n");
+}
+
+fn fastloopAppWithResult(comptime margin: []const u8, comptime result: []const u8) []const u8 {
     return "decode : List(U8), U64 -> U64\n" ++
         "decode = |input, start| {\n" ++
         "    in_len = List.len(input)\n" ++
@@ -29,7 +33,7 @@ fn fastloopApp(comptime margin: []const u8) []const u8 {
         "main! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
         "main! = |args| {\n" ++
         "    n = decode(Str.to_utf8(Str.join_with(args, \",\")), 0)\n" ++
-        "    echo!(Str.inspect(n))\n" ++
+        "    echo!(Str.inspect(" ++ result ++ "))\n" ++
         "    Ok({})\n" ++
         "}\n";
 }
@@ -71,8 +75,10 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
 }
 
 test "LIR pass workers deterministically prove runtime range guards" {
+    // Keep checked arithmetic in main! as well as decode so release builds
+    // admit two procedures instead of running a single range task serially.
     try harness.expectLirPassParallelismDeterministicLir(
-        .{ .app_body = fastloopApp("16") },
+        .{ .app_body = fastloopAppWithResult("16", "n + args.len()") },
         .{ .inline_mode = .wrappers, .prove_ranges = true },
         &.{.range},
     );

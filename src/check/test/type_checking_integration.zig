@@ -5528,6 +5528,22 @@ test "check type - match guard depending on pattern binder does not warn" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool -> Str");
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/11731
+// The if condition calls a closure that captures `hay`, a runtime parameter.
+// The condition therefore depends on runtime input and must NOT produce an
+// "Unconditional Condition" warning.
+test "check type - issue 11731 - if condition calling closure capturing runtime value does not warn" {
+    const source =
+        \\choose : Str -> Str
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    if contains("99") { hay } else { "free" }
+        \\}
+    ;
+
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Str");
+}
+
 // dbg //
 
 test "check type - dbg" {
@@ -8814,6 +8830,41 @@ test "check type - annotated self recursive function - polymorphic recursion all
         \\}
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
+}
+
+test "check type - issue 11740 custom literal requirements in polymorphic recursion" {
+    // An annotated recursive edge may instantiate a at Poly(a). The literal
+    // therefore requires conversions at Poly(U8), Poly(Poly(U8)), and so on;
+    // the recursion depth is a runtime argument. A literal planner cannot
+    // assume that structural requirement deduplication makes this finite.
+    const source =
+        \\Poly(a) := [Val(a), Quoted(Str)].{
+        \\    from_quote : Str -> Try(Poly(a), [BadQuotedBytes(Str)])
+        \\    from_quote = |text| {
+        \\        dbg text
+        \\        Ok(Quoted(text))
+        \\    }
+        \\    is_eq : Poly(a), Poly(a) -> Bool
+        \\    is_eq = |left, right| match (left, right) {
+        \\        (Quoted(x), Quoted(y)) => x == y
+        \\        _ => Bool.False
+        \\    }
+        \\}
+        \\walk : U64, a -> U64 where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), a.is_eq : a, a -> Bool]
+        \\walk = |remaining, value| {
+        \\    if remaining == 0 {
+        \\        0
+        \\    } else {
+        \\        matched = match value {
+        \\            "low" => 1
+        \\            _ => 0
+        \\        }
+        \\        matched + walk(remaining - 1, Poly.Val(value))
+        \\    }
+        \\}
+        \\entry = |remaining| walk(remaining, Poly.Val(0.U8))
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "entry" } }, "U64 -> U64");
 }
 
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
@@ -13257,4 +13308,106 @@ test "check type - a deeply nested record annotation reports its mismatch" {
     var test_env = try TestEnv.init("Test", source.items);
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - repeated tag conflict found while generalizing is reported at the value" {
+    // The conflict is found while keying `use`'s generalized scheme, before
+    // the settled row walk runs, and is still located at `use`.
+    const source =
+        \\step : U64 -> Try(U64, [StepFailed])
+        \\step = |n| if n > 3 { Err(StepFailed) } else { Ok(n) }
+        \\
+        \\describe : U64 -> Try(U64, [StepFailed(Str)])
+        \\describe = |n| if n > 3 { Err(StepFailed("too big")) } else { Ok(n) }
+        \\
+        \\apply = |f, n| {
+        \\    _ = step(n)?
+        \\    f(n + 1)
+        \\}
+        \\
+        \\use = |n| apply(describe, n)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+        .line = 12,
+        .start_column = 1,
+        .end_column = 4,
+    });
+}
+
+test "check type - repeated tag conflict found while generalizing a local binding is reported at it" {
+    const source =
+        \\step : U64 -> Try(U64, [StepFailed])
+        \\step = |n| if n > 3 { Err(StepFailed) } else { Ok(n) }
+        \\
+        \\describe : U64 -> Try(U64, [StepFailed(Str)])
+        \\describe = |n| if n > 3 { Err(StepFailed("too big")) } else { Ok(n) }
+        \\
+        \\apply = |f, n| {
+        \\    _ = step(n)?
+        \\    f(n + 1)
+        \\}
+        \\
+        \\use = |n| {
+        \\    run = |m| apply(describe, m)
+        \\    run(n)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+        .line = 13,
+        .start_column = 5,
+        .end_column = 8,
+    });
+}
+
+test "check type - repeated tag conflict found while generalizing a recursive group is reported at its member" {
+    const source =
+        \\step : U64 -> Try(U64, [StepFailed])
+        \\step = |n| if n > 3 { Err(StepFailed) } else { Ok(n) }
+        \\
+        \\describe : U64 -> Try(U64, [StepFailed(Str)])
+        \\describe = |n| if n > 3 { Err(StepFailed("too big")) } else { Ok(n) }
+        \\
+        \\apply = |f, n| {
+        \\    _ = step(n)?
+        \\    f(n + 1)
+        \\}
+        \\
+        \\use = |n| if n == 0 { apply(describe, n) } else { again(n - 1) }
+        \\again = |n| use(n)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+        .line = 12,
+        .start_column = 1,
+        .end_column = 4,
+    });
+}
+
+test "check type - repeated tag conflict found while resolving a method dispatch is reported at the dispatch" {
+    const source =
+        \\step : U64 -> Try(U64, [StepFailed])
+        \\step = |n| if n > 3 { Err(StepFailed) } else { Ok(n) }
+        \\
+        \\describe : U64 -> Try(U64, [StepFailed(Str)])
+        \\describe = |n| if n > 3 { Err(StepFailed("too big")) } else { Ok(n) }
+        \\
+        \\apply = |f, n| {
+        \\    _ = step(n)?
+        \\    f(n + 1)
+        \\}
+        \\
+        \\use = |n| apply(describe, n).map_err(|e| e)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorHighlightsWithin("Conflicting Tag", .{
+        .line = 12,
+        .start_column = 11,
+        .end_column = 44,
+    });
 }
