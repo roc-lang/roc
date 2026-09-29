@@ -48,16 +48,17 @@ fn tryParseDigits(comptime T: type, stream: *FloatStream, x: *T, comptime base: 
     }
 }
 
-fn min_n_digit_int(comptime T: type, digit_count: usize) T {
+/// Smallest integer with `digit_count` significant digits in `base`.
+fn min_n_digit_int(comptime T: type, comptime base: u8, digit_count: usize) T {
     var n: T = 1;
     var i: usize = 1;
-    while (i < digit_count) : (i += 1) n *= 10;
+    while (i < digit_count) : (i += 1) n *= base;
     return n;
 }
 
 /// Parse up to N digits
 fn tryParseNDigits(comptime T: type, stream: *FloatStream, x: *T, comptime base: u8, comptime n: usize) void {
-    while (x.* < min_n_digit_int(T, n)) {
+    while (x.* < min_n_digit_int(T, base, n)) {
         if (stream.scanDigit(base)) |digit| {
             x.* *%= base;
             x.* +%= digit;
@@ -65,6 +66,15 @@ fn tryParseNDigits(comptime T: type, stream: *FloatStream, x: *T, comptime base:
             break;
         }
     }
+}
+
+/// Consume digits until a non-digit character is found, returning whether any was nonzero.
+fn skipDigitsFindNonzero(stream: *FloatStream, comptime base: u8) bool {
+    var found_nonzero = false;
+    while (stream.scanDigit(base)) |digit| {
+        if (digit != 0) found_nonzero = true;
+    }
+    return found_nonzero;
 }
 
 /// Parse the scientific notation component of a float.
@@ -152,13 +162,13 @@ fn parsePartialNumberBase(comptime T: type, stream: *FloatStream, negative: bool
             .exponent = exponent,
             .mantissa = mantissa,
             .negative = negative,
-            .many_digits = false,
+            .truncated_nonzero = false,
             .hex = info.base == 16,
         };
     }
 
     n_digits -= info.max_mantissa_digits;
-    var many_digits = false;
+    var truncated_nonzero = false;
     stream.reset(); // re-parse from beginning
     while (stream.firstIs("0._")) {
         // '0' = '.' + 2
@@ -172,13 +182,12 @@ fn parsePartialNumberBase(comptime T: type, stream: *FloatStream, negative: bool
     }
     if (n_digits > 0) {
         // at this point we have more than max_mantissa_digits significant digits, let's try again
-        many_digits = true;
         mantissa = 0;
         stream.reset();
         tryParseNDigits(MantissaT, stream, &mantissa, info.base, info.max_mantissa_digits);
 
         exponent = blk: {
-            if (mantissa >= min_n_digit_int(MantissaT, info.max_mantissa_digits)) {
+            if (mantissa >= min_n_digit_int(MantissaT, info.base, info.max_mantissa_digits)) {
                 // big int
                 break :blk @as(i64, @intCast(int_end)) - @as(i64, @intCast(stream.offsetTrue()));
             } else {
@@ -194,6 +203,13 @@ fn parsePartialNumberBase(comptime T: type, stream: *FloatStream, negative: bool
                 break :blk @as(i64, @intCast(marker)) - @as(i64, @intCast(stream.offsetTrue()));
             }
         };
+        // The digits that did not fit in the mantissa only matter through
+        // whether any of them is nonzero; if all are zero, the mantissa is exact.
+        truncated_nonzero = skipDigitsFindNonzero(stream, info.base);
+        if (stream.firstIs(".")) {
+            stream.advance(1);
+            if (skipDigitsFindNonzero(stream, info.base)) truncated_nonzero = true;
+        }
         if (info.base == 16) {
             exponent *= 4;
         }
@@ -205,7 +221,7 @@ fn parsePartialNumberBase(comptime T: type, stream: *FloatStream, negative: bool
         .exponent = exponent,
         .mantissa = mantissa,
         .negative = negative,
-        .many_digits = many_digits,
+        .truncated_nonzero = truncated_nonzero,
         .hex = info.base == 16,
     };
 }
