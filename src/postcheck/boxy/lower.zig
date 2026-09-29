@@ -6398,7 +6398,7 @@ const ProcedureBuilder = struct {
 
     fn recordFrozenCallable(self: *ProcedureBuilder, worker: Plan.WorkerPlanId, source_rep: Plan.TypeRepId, target_rep: Plan.TypeRepId, entry: LIR.LirProcSpecId, capture_layout: layout.Idx, on_drop: LIR.ErasedCallableOnDrop, result_rep: Plan.TypeRepId, fields: []const FrozenCaptureRecipe) Allocator.Error!void {
         if (!self.needsFrozenCallableRecipes()) return;
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        var hash = base.Sha256.init(.{});
         const identities = [_]u32{ @intFromEnum(worker), @intFromEnum(source_rep), @intFromEnum(target_rep) };
         hash.update(std.mem.asBytes(&identities));
         for (fields) |field| {
@@ -39886,7 +39886,7 @@ const ConstPlanBuilder = struct {
                         fields[recipe.fields.len] = .{ .slot = @intCast(recipe.fields.len), .value = .{ .contents_descriptor = desc } };
                     }
                     var key = recipe.key;
-                    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+                    var hash = base.Sha256.init(.{});
                     hash.update(&key);
                     const identity: u32 = @intCast(context_index);
                     hash.update(std.mem.asBytes(&identity));

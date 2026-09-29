@@ -18,6 +18,7 @@
 //! as compiling it directly.
 
 const std = @import("std");
+const Sha256 = @import("base").Sha256;
 const lir = @import("lir");
 const layout = @import("layout");
 const RelocationMod = @import("Relocation.zig");
@@ -372,7 +373,7 @@ pub const ContentNames = struct {
         for (set.artifacts) |artifact| {
             for (artifact.data) |item| {
                 if (!item.program_local_name or self.names.contains(item.name)) continue;
-                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                var hasher = Sha256.init(.{});
                 _ = try self.write(&hasher, item);
                 const digest = self.digests.get(item.name) orelse unreachable;
                 const name = try std.fmt.allocPrint(self.arena.allocator(), content_data_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
@@ -402,7 +403,7 @@ pub const ContentNames = struct {
 
     /// Writes the digest of `item`'s rendering and returns the shallowest
     /// stack depth that rendering referred back to.
-    fn write(self: *ContentNames, hasher: *std.crypto.hash.sha2.Sha256, item: DataItem) Allocator.Error!u32 {
+    fn write(self: *ContentNames, hasher: *Sha256, item: DataItem) Allocator.Error!u32 {
         if (self.active.get(item.name)) |depth| {
             hasher.update("cycle");
             writeWord(hasher, self.depth - depth);
@@ -421,7 +422,7 @@ pub const ContentNames = struct {
             self.depth -= 1;
         }
 
-        var sub = std.crypto.hash.sha2.Sha256.init(.{});
+        var sub = Sha256.init(.{});
         sub.update(domain);
         writeWord(&sub, @intCast(item.bytes.len));
         sub.update(item.bytes);
@@ -459,13 +460,13 @@ pub const ContentNames = struct {
         return a.offset < b.offset;
     }
 
-    fn writeWord(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    fn writeWord(hasher: *Sha256, value: u32) void {
         var buffer: [4]u8 = undefined;
         std.mem.writeInt(u32, &buffer, value, .little);
         hasher.update(&buffer);
     }
 
-    fn writeWide(hasher: *std.crypto.hash.sha2.Sha256, value: u64) void {
+    fn writeWide(hasher: *Sha256, value: u64) void {
         var buffer: [8]u8 = undefined;
         std.mem.writeInt(u64, &buffer, value, .little);
         hasher.update(&buffer);

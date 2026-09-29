@@ -6,6 +6,7 @@
 //! gives them explicit package identities independent of that directory.
 
 const std = @import("std");
+const Sha256 = @import("base").Sha256;
 const CoreCtx = @import("ctx").CoreCtx;
 const cache_config = @import("cache_config.zig");
 const compiler_platform_sources = @import("compiler_platform_sources");
@@ -127,7 +128,7 @@ pub fn materialize(
         try fs.writeFile(dest, file.bytes);
         content_bytes += file.bytes.len;
         if (std.mem.eql(u8, file.path, "main.roc")) {
-            var sha = std.crypto.hash.sha2.Sha256.init(.{});
+            var sha = Sha256.init(.{});
             sha.update(file.bytes);
             root_source_hash = sha.finalResult();
         }

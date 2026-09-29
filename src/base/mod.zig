@@ -33,6 +33,8 @@ pub const SerialStringInterner = @import("SerialStringInterner.zig");
 pub const InternedBytes = @import("InternedBytes.zig");
 pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
 pub const TypeDigestHasher = @import("TypeDigestHasher.zig");
+/// SHA-256 on the CPU's SHA-256 instructions, interchangeable with `std.crypto.hash.sha2.Sha256`.
+pub const Sha256 = @import("Sha256.zig");
 pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
@@ -90,6 +92,7 @@ test {
     std.testing.refAllDecls(LargeBlockAllocator);
     std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(TypeDigestHasher);
+    std.testing.refAllDecls(Sha256);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }
