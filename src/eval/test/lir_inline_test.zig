@@ -7124,6 +7124,55 @@ const SharedIteratorOperationCase = struct {
 /// operation cannot become shared without both types' pipelines being held to
 /// the same fused, allocation-free lowering.
 const shared_iterator_operation_cases = [_]SharedIteratorOperationCase{
+    .{ .operation = .identity, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().iter().map(|x| x + 1))
+    },
+    .{ .operation = .identity, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().stream().map(|x| x + 1))
+    },
+    .{ .operation = .keep_if, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().keep_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .keep_if, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().keep_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_if, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().drop_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_if, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().drop_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .take_first, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().take_first(2).map(|x| x + 1))
+    },
+    .{ .operation = .take_first, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().take_first(2).map(|x| x + 1))
+    },
+    .{ .operation = .drop_first, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().drop_first(1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_first, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().drop_first(1).map(|x| x + 1))
+    },
+    .{ .operation = .with_index, .owner = .iter, .source =
+    \\main : List(U64) => List((U64, U64))
+    \\main = |items| List.from_iter(items.iter().map(|x| x + 1).with_index())
+    },
+    .{ .operation = .with_index, .owner = .stream, .source =
+    \\main : List(U64) => List((U64, U64))
+    \\main = |items| Stream.collect!(items.iter().stream().map(|x| x + 1).with_index())
+    },
+
     .{ .operation = .next, .owner = .iter, .source =
     \\main : () => U64
     \\main = || {
@@ -7260,7 +7309,7 @@ test "stream from iterator collect keeps finite step callables" {
         \\            .iter()
         \\            .append(3)
         \\            .stream()
-        \\            .map!(|n| n + 1)
+        \\            .map(|n| n + 1)
         \\
         \\    Stream.collect!(stream)
         \\}
@@ -8094,7 +8143,7 @@ test "iterdiff: coarse custom is_eq set dedup keeps same representative across i
 test "iterdiff: stream per-element effects agree across inline modes" {
     // Design invariant 5: a Stream pipeline's observable effect trace is the
     // per-element, innermost-first pull order, and every lowering must
-    // reproduce it exactly. The effectful `map!` step `dbg`s each element as it
+    // reproduce it exactly. The `map` step `dbg`s each element as it
     // is pulled, so the ordered trace pins effect order across inline modes.
     try expectSameObservationsAcrossInlineModes(
         \\main : () => List(I64)
@@ -8103,7 +8152,7 @@ test "iterdiff: stream per-element effects agree across inline modes" {
         \\        [1.I64, 2, 3]
         \\            .iter()
         \\            .stream()
-        \\            .map!(|n| {
+        \\            .map(|n| {
         \\                dbg n
         \\                n * 2
         \\            })

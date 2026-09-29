@@ -775,6 +775,14 @@ pub const IntValue = struct {
     }
 };
 
+/// Which iteration protocol a source `for` loop uses.
+pub const ForKind = enum(u32) {
+    /// `for`: calls `iter` on the operand and pulls items with the pure `next`.
+    iter,
+    /// `for!`: calls `stream` on the operand and pulls items with the effectful `next!`.
+    stream,
+};
+
 /// Canonical information about a number
 pub const NumKind = enum {
     // If this number has no restrictions

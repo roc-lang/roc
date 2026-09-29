@@ -245,9 +245,12 @@ pub const Constants = struct {
     /// 111: Checked type keys refer to each context-free subtree by its own
     ///      key, use one-byte tags and varint integers, and a synthetic
     ///      function over composed children shares its source key.
+    /// 112: `for` nodes carry their `ForKind`, `ForLoopDispatchPlan` records its
+    ///      dispatched method names, and common idents include `Builtin.Stream`.
     /// 113: `Stream` is a checked builtin nominal, so every module interns its
     ///      unqualified and fully qualified type names as common identifiers.
-    pub const CACHE_VERSION = 113;
+    /// 115: Combine the Stream builtin identity and effectful for-loop metadata.
+    pub const CACHE_VERSION = 115;
 };
 
 /// Configuration for the Roc cache system.

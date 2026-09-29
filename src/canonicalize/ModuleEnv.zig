@@ -652,6 +652,10 @@ pub const ForLoopDispatchPlan = extern struct {
     step_var: u32,
     iter_fn_var: u32,
     next_fn_var: u32,
+    /// The method dispatched on the loop operand: `iter` for `for`, `stream` for `for!`.
+    iter_method_ident: u32,
+    /// The method that pulls each step: `next` for `for`, `next!` for `for!`.
+    next_method_ident: u32,
     step_topology: IteratorStepTopology,
 
     pub const SafeList = collections.SafeList(@This());
@@ -4824,6 +4828,8 @@ pub fn recordForLoopDispatchPlan(
     step_var: TypeVar,
     iter_fn_var: TypeVar,
     next_fn_var: TypeVar,
+    iter_method: Ident.Idx,
+    next_method: Ident.Idx,
     step_topology: IteratorStepTopology,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
@@ -4839,6 +4845,8 @@ pub fn recordForLoopDispatchPlan(
             .step_var = @intFromEnum(step_var),
             .iter_fn_var = @intFromEnum(iter_fn_var),
             .next_fn_var = @intFromEnum(next_fn_var),
+            .iter_method_ident = @bitCast(iter_method),
+            .next_method_ident = @bitCast(next_method),
             .step_topology = step_topology,
         };
         return;
@@ -4851,6 +4859,8 @@ pub fn recordForLoopDispatchPlan(
         .step_var = @intFromEnum(step_var),
         .iter_fn_var = @intFromEnum(iter_fn_var),
         .next_fn_var = @intFromEnum(next_fn_var),
+        .iter_method_ident = @bitCast(iter_method),
+        .next_method_ident = @bitCast(next_method),
         .step_topology = step_topology,
     });
 }

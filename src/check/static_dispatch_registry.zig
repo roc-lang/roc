@@ -372,7 +372,7 @@ pub const IteratorProcedureId = enum(u8) {
     /// provides it; the stamp table is generated from this alone.
     pub fn builtinNames(self: IteratorProcedureId) IteratorProcedureNames {
         return switch (self) {
-            .identity => .{ .iter = &.{"Builtin.Iter.iter"}, .stream = &.{} },
+            .identity => .{ .iter = &.{"Builtin.Iter.iter"}, .stream = &.{"Builtin.Stream.stream"} },
             .next => .{ .iter = &.{"Builtin.Iter.next"}, .stream = &.{"Builtin.Stream.next!"} },
             .custom => .{ .iter = &.{"Builtin.Iter.custom"}, .stream = &.{"Builtin.Stream.custom"} },
             .single => .{ .iter = &.{"Builtin.Iter.single"}, .stream = &.{} },
@@ -380,13 +380,13 @@ pub const IteratorProcedureId = enum(u8) {
             .list_iter_rev => .{ .iter = &.{"Builtin.List.iter_rev"}, .stream = &.{} },
             .str_iter_utf8 => .{ .iter = &.{"Builtin.Str.iter_utf8"}, .stream = &.{} },
             .map => .{ .iter = &.{"Builtin.Iter.map"}, .stream = &.{ "Builtin.Stream.map", "Builtin.Stream.map!" } },
-            .keep_if => .{ .iter = &.{"Builtin.Iter.keep_if"}, .stream = &.{} },
-            .drop_if => .{ .iter = &.{"Builtin.Iter.drop_if"}, .stream = &.{} },
-            .take_first => .{ .iter = &.{"Builtin.Iter.take_first"}, .stream = &.{} },
-            .drop_first => .{ .iter = &.{"Builtin.Iter.drop_first"}, .stream = &.{} },
+            .keep_if => .{ .iter = &.{"Builtin.Iter.keep_if"}, .stream = &.{"Builtin.Stream.keep_if"} },
+            .drop_if => .{ .iter = &.{"Builtin.Iter.drop_if"}, .stream = &.{"Builtin.Stream.drop_if"} },
+            .take_first => .{ .iter = &.{"Builtin.Iter.take_first"}, .stream = &.{"Builtin.Stream.take_first"} },
+            .drop_first => .{ .iter = &.{"Builtin.Iter.drop_first"}, .stream = &.{"Builtin.Stream.drop_first"} },
             .concat => .{ .iter = &.{"Builtin.Iter.concat"}, .stream = &.{} },
             .append => .{ .iter = &.{"Builtin.Iter.append"}, .stream = &.{} },
-            .with_index => .{ .iter = &.{ "iter_with_index", "Builtin.iter_with_index" }, .stream = &.{} },
+            .with_index => .{ .iter = &.{ "iter_with_index", "Builtin.iter_with_index" }, .stream = &.{ "stream_with_index", "Builtin.stream_with_index" } },
             .step_by => .{ .iter = &.{ "iter_step_by", "Builtin.iter_step_by" }, .stream = &.{} },
             .from_iter => .{ .iter = &.{"Builtin.Iter.stream"}, .stream = &.{"Builtin.Stream.from_iter"} },
             .range_iter => .{ .iter = &.{"Builtin.Num.Range.iter"}, .stream = &.{} },
@@ -470,7 +470,7 @@ pub fn iteratorProcedureForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?
 /// through any other name would silently lose its receiver's hoistability.
 /// The comptime block below keeps this in step with the two tables that
 /// decide the answer.
-pub const hoist_preserving_method_names = [_][]const u8{ "iter", "iter_rev" };
+pub const hoist_preserving_method_names = [_][]const u8{ "iter", "iter_rev", "stream" };
 
 /// Builtin nominals whose iterator conversions delegate to a registered
 /// producer (`Dict.iter` calls `List.iter` on its backing entries, and so on).
@@ -2453,14 +2453,14 @@ pub const StaticDispatchPlanTable = struct {
                 const next_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &next_args);
 
                 const iter_call = IteratorDispatchCall{
-                    .method = try names.internMethodName("iter"),
+                    .method = try names.internMethodIdent(module.identStoreConst(), @bitCast(for_plan.iter_method_ident)),
                     .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
                     .callable_ty = iter_callable_ty,
                     .dispatcher_arg_index = 0,
                     .args = iter_ar,
                 };
                 const next_call = IteratorDispatchCall{
-                    .method = try names.internMethodName("next"),
+                    .method = try names.internMethodIdent(module.identStoreConst(), @bitCast(for_plan.next_method_ident)),
                     .dispatcher_ty = iterator_ty,
                     .callable_ty = next_callable_ty,
                     .dispatcher_arg_index = 0,

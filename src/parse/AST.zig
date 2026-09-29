@@ -370,6 +370,7 @@ fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Alloca
         token_tag == .KwExposes or
         token_tag == .KwExposing or
         token_tag == .KwFor or
+        token_tag == .KwForBang or
         token_tag == .KwGenerates or
         token_tag == .KwHas or
         token_tag == .KwHosted or
@@ -1002,6 +1003,14 @@ pub const TypeDeclKind = enum {
     where_alias,
 };
 
+/// Which iteration protocol a `for` loop uses.
+pub const ForKind = enum(u8) {
+    /// `for`: calls `iter` on the operand and pulls items with the pure `next`.
+    iter,
+    /// `for!`: calls `stream` on the operand and pulls items with the effectful `next!`.
+    stream,
+};
+
 /// Represents a statement.  Not all statements are valid in all positions.
 pub const Statement = union(enum) {
     decl: Decl,
@@ -1028,6 +1037,7 @@ pub const Statement = union(enum) {
         region: TokenizedRegion,
     },
     @"for": struct {
+        kind: ForKind,
         patt: Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
@@ -1276,7 +1286,10 @@ pub const Statement = union(enum) {
             },
             .@"for" => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-for");
+                try tree.pushStaticAtom(switch (a.kind) {
+                    .iter => "s-for",
+                    .stream => "s-for-bang",
+                });
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
@@ -3078,6 +3091,7 @@ pub const Expr = union(enum) {
     },
     block: Block,
     for_expr: struct {
+        kind: ForKind,
         patt: Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
@@ -3656,7 +3670,10 @@ pub const Expr = union(enum) {
             },
             .for_expr => |f| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-for");
+                try tree.pushStaticAtom(switch (f.kind) {
+                    .iter => "e-for",
+                    .stream => "e-for-bang",
+                });
                 try ast.appendRegionInfoToSexprTree(env, tree, f.region);
                 const attrs = tree.beginNode();
 

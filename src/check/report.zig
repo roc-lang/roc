@@ -2627,6 +2627,19 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Whether this failed dispatch is the `iter` call of a plain `for` loop
+    /// whose operand is a `Stream`, which only `for!` can consume.
+    fn isPlainForLoopOverStream(self: *Self, data: DispatcherDoesNotImplMethod) bool {
+        const types_store = &self.module_env.types;
+        const failed_fn = types_store.resolveVar(data.fn_var).var_;
+        for (self.module_env.for_loop_dispatch_plans.items.items) |plan| {
+            if (types_store.resolveVar(@enumFromInt(plan.iter_fn_var)).var_ != failed_fn) continue;
+            const nominal = types_store.resolveVar(data.dispatcher_var).desc.content.unwrapNominalType() orelse return false;
+            return nominal.ident.ident_idx.eql(self.module_env.idents.builtin_stream);
+        }
+        return false;
+    }
+
     /// Build a report for when a type doesn't have the expected static dispatch
     /// method
     fn buildStaticDispatchDispatcherDoesNotImplMethod(
@@ -2726,6 +2739,19 @@ pub const ReportBuilder = struct {
                             D.bytes("associated with it in the type's declaration."),
                         }, self, &report);
                     }
+                } else if (self.isPlainForLoopOverStream(data)) {
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("A"),
+                        D.bytes("for").withAnnotation(.inline_code),
+                        D.bytes("loop can only go through pure iterators. To loop over a"),
+                        D.bytes("Stream").withAnnotation(.inline_code),
+                        D.bytes(", use").withNoPrecedingSpace(),
+                        D.bytes("for!").withAnnotation(.inline_code),
+                        D.bytes("instead, which pulls each item with the effectful"),
+                        D.bytes("next!").withAnnotation(.inline_code),
+                        D.bytes("and so can only be used in an effectful function."),
+                    }, self, &report);
                 } else {
                     try D.renderSlice(&.{
                         D.bytes("Hint:").withAnnotation(.emphasized),
