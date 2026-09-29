@@ -581,6 +581,10 @@ const Pass = struct {
     /// values shares one root for the round.
     sum_roots: std.AutoHashMap(u64, NodeId),
     sums: std.ArrayList(SumRoot),
+    /// A fact was added or rewound since the sums' operand facts were last
+    /// derived, so a query first re-derives them from the current path.
+    sums_dirty: bool = false,
+    refreshing_sums: bool = false,
     /// Reassignable locals bound to a root (their value, or their list's
     /// length term) this round. A loop whose body never assigns such a
     /// local may treat entry facts about it as invariants; the binding is
@@ -870,6 +874,33 @@ const Pass = struct {
     fn addFact(self: *Pass, fact: Fact) ResourceError!void {
         if (self.facts.items.len >= max_facts) return;
         try self.facts.append(self.allocator, fact);
+        if (self.sums.items.len > 0 and !self.refreshing_sums) self.sums_dirty = true;
+    }
+
+    /// Relate every sum root to its operands under the current path's facts:
+    /// each operand sits below the sum by the other operand's proven floor
+    /// and above it by the other's proven ceiling. A guard `pos + span <=
+    /// len` followed by `span >= 5` thereby puts `pos` five below the length.
+    fn refreshSumOperandFacts(self: *Pass) ResourceError!void {
+        self.sums_dirty = false;
+        self.refreshing_sums = true;
+        defer self.refreshing_sums = false;
+        var i: usize = 0;
+        while (i < self.sums.items.len) : (i += 1) {
+            const sum = self.sums.items[i];
+            self.query_used = 0;
+            const lo_b = try self.loConstOfRoot(sum.b);
+            try self.addFactOnce(.{ .a = sum.a, .b = sum.root, .c = -lo_b, .origin = .meet, .assumed = self.query_used });
+            self.query_used = 0;
+            const lo_a = try self.loConstOfRoot(sum.a);
+            try self.addFactOnce(.{ .a = sum.b, .b = sum.root, .c = -lo_a, .origin = .meet, .assumed = self.query_used });
+            self.query_used = 0;
+            const hi_b = try self.hiConstOfRoot(sum.b);
+            try self.addFactOnce(.{ .a = sum.root, .b = sum.a, .c = hi_b, .origin = .meet, .assumed = self.query_used });
+            self.query_used = 0;
+            const hi_a = try self.hiConstOfRoot(sum.a);
+            try self.addFactOnce(.{ .a = sum.root, .b = sum.b, .c = hi_a, .origin = .meet, .assumed = self.query_used });
+        }
     }
 
     /// Fact form of `value(a) <= value(b) + k`, normalized to roots. The
@@ -942,6 +973,7 @@ const Pass = struct {
     /// The narrowest offsets make the root-level goal imply the node-level
     /// one for any value in either node's window.
     fn proveLe(self: *Pass, a: NodeId, b: NodeId, k: i128) ResourceError!bool {
+        if (self.sums_dirty) try self.refreshSumOperandFacts();
         self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
@@ -989,6 +1021,7 @@ const Pass = struct {
     /// Least `c` with `value(a) <= value(b) + c` provable through fact
     /// edges, or null when no fact path relates the two roots.
     fn slackLe(self: *Pass, a: NodeId, b: NodeId) ResourceError!?i128 {
+        if (self.sums_dirty) try self.refreshSumOperandFacts();
         self.query_used = 0;
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
@@ -1035,10 +1068,7 @@ const Pass = struct {
             try self.sums.append(self.allocator, .{ .root = root, .a = ra, .b = rb });
             break :blk root;
         };
-        try self.addFactOnce(.{ .a = ra, .b = root, .c = -nb.lo, .origin = .meet });
-        try self.addFactOnce(.{ .a = rb, .b = root, .c = -na.lo, .origin = .meet });
-        try self.addFactOnce(.{ .a = root, .b = ra, .c = nb.hi, .origin = .meet });
-        try self.addFactOnce(.{ .a = root, .b = rb, .c = na.hi, .origin = .meet });
+        try self.refreshSumOperandFacts();
         for (self.sums.items) |other| {
             if (other.root == root) continue;
             const pair: [2]NodeId = if (other.a == ra)
@@ -1160,6 +1190,7 @@ const Pass = struct {
     }
 
     fn rewindTo(self: *Pass, facts_len: usize, no_overflow_facts_len: usize, undo_len: usize) ResourceError!void {
+        if (self.sums.items.len > 0) self.sums_dirty = true;
         self.facts.shrinkRetainingCapacity(facts_len);
         self.no_overflow_facts.shrinkRetainingCapacity(no_overflow_facts_len);
         while (self.undo.items.len > undo_len) {

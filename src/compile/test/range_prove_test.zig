@@ -1402,3 +1402,39 @@ test "a length invariant survives an inner loop that never touches the table" {
     // table proved.
     try std.testing.expectEqual(@as(usize, 3), marked_shape.is_lt);
 }
+
+// A guard on `pos + span` against the length, with `span` known to be at
+// least five, bounds `pos` itself five below the length: the sum's operand
+// facts take the path's bounds on the other operand into account, so the
+// four-byte reads at `pos` and `pos + 1` need no bounds test.
+test "a guarded sum bounds its operand by the other operand's proven floor" {
+    marked_op = "num_from_le_bytes_unchecked";
+    try harness.expectLirInspectionWithOptions(
+        \\hash_pair : List(U8), U64, U64 -> U32
+        \\hash_pair = |input, pos, span| {
+        \\    if pos + span > List.len(input) or span < 5 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    a = U32.from_le_bytes(input, pos) ?? 0
+        \\    b = U32.from_le_bytes(input, pos.plus_wrap(1)) ?? 0
+        \\    a.bitwise_xor(b)
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    echo!(Str.inspect(hash_pair(bytes, 1, args.len())))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.unchecked_reads);
+    // Both reads' length tests and bound tests folded; the guard's `>` and
+    // `<` remain.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_lt);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gt);
+}
