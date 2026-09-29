@@ -14677,14 +14677,14 @@ An integer loop parameter's lower bound follows the same induction as a list
 parameter's length: a bound every entry edge proves is seeded as an
 assumption and verifies once the back edges re-derive it under it, so a
 counter that starts at three and only grows is known to stay at least three.
-Each fact carries the assumptions its derivation touched. At round end the
+Each derived bound carries the assumptions its derivation touched. At round end the
 assumptions re-derived on every edge stand together: one resting on an
 assumption that fell (not re-derived, or shed in turn) is shed and retries
 next round, and the rest verify at once, so assumptions that support one
 another promote together. An assumption that fails is not refuted, only
-unprovable under that round's facts; a later round that rewrites a
-statement or persists a new bound seeds it again, since the stronger fact
-base may carry its verification (a counter's floor that needs the bound on
+unprovable under that round's proof data; a later round that rewrites a
+statement or persists a new bound seeds it again, since the updated proof
+data may carry its verification (a counter's floor that needs the bound on
 its increment, which itself takes rounds to settle).
 
 A loop parameter that a back edge carries back as the very value its body
