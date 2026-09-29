@@ -20,7 +20,7 @@ test "interface summaries replay independent generic inputs with fresh-expansion
     , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
     try std.testing.expect(diagnostics.specialization.interface_summary_hits > 0);
     try std.testing.expect(diagnostics.specialization.interface_summary_unchanged_hits > 0);
-    try std.testing.expect(diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
 }
 
 test "interface summaries share one expansion across parametric instantiations" {
@@ -36,7 +36,7 @@ test "interface summaries share one expansion across parametric instantiations" 
     , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
     try std.testing.expect(diagnostics.specialization.interface_parametric_requests >= 2);
     try std.testing.expect(diagnostics.specialization.interface_summary_hits > 0);
-    try std.testing.expect(diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
 }
 
 test "interface summaries finish mutually recursive components before reuse" {
@@ -102,5 +102,5 @@ test "interface summaries include codec constraints discovered after a recursive
         \\    second(body, 3)
         \\}
     , .{ .monotype_only = true, .monotype_diagnostics_out = &diagnostics });
-    try std.testing.expect(diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
 }

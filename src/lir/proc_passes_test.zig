@@ -662,7 +662,8 @@ test "LIR proc pass no-op workers do not append duplicate source bodies" {
     var metrics: passes.ParallelMetrics = .{};
     // Constructor and field projection have no arithmetic facts to prove.
     try passes.run(testing.allocator, &fixture.store, &fixture.layouts, .range, mock.interface(), &metrics);
-    try testing.expectEqual(@as(u64, 8), metrics.tasks_submitted);
+    // Excluded bodies are checked by verification workers only in Debug.
+    try testing.expectEqual(@as(u64, if (@import("builtin").mode == .Debug) 8 else 0), metrics.tasks_submitted);
     try testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
     try testing.expectEqual(@as(u64, 0), metrics.changed_by_phase[@intFromEnum(passes.Phase.range)]);
     try testing.expectEqual(@as(u64, 0), metrics.appended_statements);

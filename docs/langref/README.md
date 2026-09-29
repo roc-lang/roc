@@ -125,6 +125,7 @@ If you're looking for a beginner tutorial, check out [roc-lang.org/tutorial](htt
   - [Nominal Tag Unions](tag-unions#nominal-tag-unions)
 - [Loops](loops)
   - [`for` Loops](loops#for-loops)
+  - [Looping over Streams with `for!`](loops#looping-over-streams-with-for)
   - [`while` Loop](loops#while-loops)
   - [Infinite Loops](loops#infinite-loops)
 - [Iterators](iterators)

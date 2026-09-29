@@ -2198,7 +2198,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 64 2) (end 94 3))
+		(region (start 70 22) (end 70 43))
 		(headline
 			(reflow "The")
 			(reflow " ")

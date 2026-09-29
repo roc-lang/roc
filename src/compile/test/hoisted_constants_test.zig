@@ -2502,7 +2502,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
-            .assign_boxy_eq,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,

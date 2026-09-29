@@ -110,6 +110,7 @@ pub const Statement = union(enum) {
     /// }
     /// ```
     s_for: struct {
+        kind: CIR.ForKind,
         patt: Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
@@ -339,7 +340,10 @@ pub const Statement = union(enum) {
             },
             .s_for => |s| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-for");
+                try tree.pushStaticAtom(switch (s.kind) {
+                    .iter => "s-for",
+                    .stream => "s-for-bang",
+                });
                 const region = env.store.getStatementRegion(stmt_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

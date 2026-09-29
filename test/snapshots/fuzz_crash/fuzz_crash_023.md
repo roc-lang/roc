@@ -1145,7 +1145,7 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 84 2) (end 138 3))
+		(region (start 102 3) (end 102 24))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -1249,7 +1249,7 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 167 3) (end 170 4))
+		(region (start 168 4) (end 169 11))
 		(headline
 			(reflow "The")
 			(reflow " ")

@@ -1238,20 +1238,9 @@ pub fn lowerCheckedModulesToLir(
     if (target.specialization_strategy == .lss) {
         return lowerPreparedMonotypeToLir(try prepareCheckedModulesMonotype(allocator, modules, roots, target));
     }
-    try verifyCheckedBoundary(modules, target);
-    try requireHostedProceduresBound(modules, target);
-
-    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
-    defer allocator.free(layout_requests);
-    const static_data_requests = try collectStaticDataRequests(
-        allocator,
-        modules.root.module,
-        roots.static_data_requests,
-        roots.include_provided_data_exports,
-    );
-    defer allocator.free(static_data_requests);
-
-    return lowerBoxyCheckedModulesToLir(allocator, modules, roots, target, layout_requests, static_data_requests);
+    var prepared = try prepareBoxyCheckedModules(allocator, modules, roots, target);
+    defer prepared.deinit();
+    return prepared.lower(target);
 }
 
 /// Lower the complete explicit root set once, retaining ownership at the
@@ -1723,6 +1712,20 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
+    // ARC settled every read that named a fresh form, so a fresh-form
+    // procedure no read chose is now unreferenced.
+    if (target.keep_specialization_procs) {
+        if (frozen.*) |*data| {
+            try ReachableProcs.runKeepingSpecializationsWithFrozen(&lowered.lir_result, data);
+        } else {
+            try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+        }
+    } else if (frozen.*) |*data| {
+        try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
+    } else {
+        try ReachableProcs.run(&lowered.lir_result);
+    }
+
     // After the certifier has checked ARC's ledger, so that what it verified
     // is the placement ARC produced.
     _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
@@ -1756,50 +1759,83 @@ fn finishLoweredOutput(
     };
 }
 
-fn lowerBoxyCheckedModulesToLir(
+/// Boxy's target-independent plan is shared by host literal evaluation and
+/// target lowering. This ownership boundary is used only by Boxy consumers.
+pub const PreparedBoxy = struct {
+    allocator: Allocator,
+    modules: CheckedModuleSet,
+    roots: RootRequestSet,
+    layout_requests: []const checked.CheckedTypeId,
+    static_data_requests: []const postcheck.Common.StaticDataRequest,
+    plan: postcheck.Boxy.Plan.ProgramPlan,
+
+    pub fn deinit(self: *PreparedBoxy) void {
+        self.plan.deinit();
+        self.allocator.free(self.layout_requests);
+        self.allocator.free(self.static_data_requests);
+        self.* = undefined;
+    }
+
+    pub fn hasLiteralRoots(self: *const PreparedBoxy) bool {
+        return if (self.plan.literal_evidence) |*evidence| evidence.initializers.items.len != 0 else false;
+    }
+
+    pub fn lower(self: *const PreparedBoxy, target: TargetConfig) LowerResourceError!LoweredProgram {
+        std.debug.assert(target.specialization_strategy == .boxy);
+        var scope = PipelineTimingScope.begin(target.timing, .boxy_lower);
+        defer scope.end();
+        var lowered = try postcheck.Boxy.Lower.run(
+            self.allocator,
+            checkedModules(self.modules),
+            rootRequests(self.roots, self.layout_requests, self.static_data_requests),
+            &self.plan,
+            .{
+                .target_usize = target.target_usize,
+                .list_in_place_map = target.list_in_place_map,
+                .proc_debug_names = target.proc_debug_names,
+                .observe_expects = self.roots.test_plan_metadata.len != 0,
+            },
+        );
+        errdefer lowered.deinit();
+        scope.end();
+        var frozen: ?LirProgram.FrozenStaticData = null;
+        return finishLoweredOutput(self.allocator, self.roots.requests.len, target, &lowered, &frozen);
+    }
+};
+
+/// Validate the checked boundary for a Boxy build and plan the Boxy program
+/// for these roots, before any lowering.
+pub fn prepareBoxyCheckedModules(
     allocator: Allocator,
     modules: CheckedModuleSet,
     roots: RootRequestSet,
     target: TargetConfig,
-    layout_requests: []const checked.CheckedTypeId,
-    static_data_requests: []const postcheck.Common.StaticDataRequest,
-) LowerResourceError!LoweredProgram {
-    var boxy_plan_timing_scope = PipelineTimingScope.begin(target.timing, .boxy_plan);
-    defer boxy_plan_timing_scope.end();
-    var boxy_layout_requests = std.ArrayList(checked.CheckedTypeId).empty;
-    defer boxy_layout_requests.deinit(allocator);
-    try boxy_layout_requests.appendSlice(allocator, layout_requests);
-
-    var plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
+) LowerResourceError!PreparedBoxy {
+    std.debug.assert(target.specialization_strategy == .boxy);
+    try verifyCheckedBoundary(modules, target);
+    try requireHostedProceduresBound(modules, target);
+    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
+    errdefer allocator.free(layout_requests);
+    const static_data_requests = try collectStaticDataRequests(allocator, modules.root.module, roots.static_data_requests, roots.include_provided_data_exports);
+    errdefer allocator.free(static_data_requests);
+    var scope = PipelineTimingScope.begin(target.timing, .boxy_plan);
+    defer scope.end();
+    const plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
         .root_module = modules.root,
         .imports = modules.imports,
         .roots = roots.requests,
         .source_modules = roots.source_modules,
-        .layout_requests = boxy_layout_requests.items,
+        .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
     }, .{});
-    defer plan.deinit();
-    boxy_plan_timing_scope.end();
-
-    var boxy_lower_timing_scope = PipelineTimingScope.begin(target.timing, .boxy_lower);
-    defer boxy_lower_timing_scope.end();
-    var lowered = try postcheck.Boxy.Lower.run(
-        allocator,
-        checkedModules(modules),
-        rootRequests(roots, layout_requests, static_data_requests),
-        &plan,
-        .{
-            .target_usize = target.target_usize,
-            .list_in_place_map = target.list_in_place_map,
-            .proc_debug_names = target.proc_debug_names,
-            .observe_expects = roots.test_plan_metadata.len != 0,
-        },
-    );
-    errdefer lowered.deinit();
-    boxy_lower_timing_scope.end();
-
-    var frozen: ?LirProgram.FrozenStaticData = null;
-    return finishLoweredOutput(allocator, roots.requests.len, target, &lowered, &frozen);
+    return .{
+        .allocator = allocator,
+        .modules = modules,
+        .roots = roots,
+        .layout_requests = layout_requests,
+        .static_data_requests = static_data_requests,
+        .plan = plan,
+    };
 }
 
 fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
