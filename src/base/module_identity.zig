@@ -27,7 +27,7 @@
 //! cross-artifact identity resolution mechanism—no name matching.
 
 const std = @import("std");
-const Sha256 = @import("Sha256.zig");
+const Sha256 = @import("sha256.zig").Sha256;
 
 /// The deep content hash of a module: SHA-256 of the module name, source
 /// bytes, and the sorted, deduplicated identity hashes of its resolved

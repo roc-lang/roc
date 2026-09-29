@@ -588,6 +588,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
             .use_module_target_triple = true,
             .optimization = llvm_compile.bindings.IrOptimizationLevel.O3,
             .target_ptr_width_bits = @intCast(target_usize.size() * 8),
+            .sha256_rounds = builtins.sha256.Rounds.forCpu(resolved_target.cpu),
             .cpu = cpu,
             .features = features,
         },

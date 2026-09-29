@@ -72,6 +72,7 @@ const x86_64_default_level_features = [_]X86Feature{
 /// multiply lowers to, which Linux reports separately.
 const hwcap_aes = 1 << 3;
 const hwcap_pmull = 1 << 4;
+const hwcap_sha2 = 1 << 6;
 const hwcap_asimddp = 1 << 20;
 
 fn detectedX86Features() std.Target.Cpu.Feature.Set {
@@ -86,6 +87,7 @@ fn detectedX86Features() std.Target.Cpu.Feature.Set {
 fn detectedAarch64Features() std.Target.Cpu.Feature.Set {
     var detected = std.Target.Cpu.Feature.Set.empty;
     detected.addFeature(@intFromEnum(std.Target.aarch64.Feature.aes));
+    detected.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2));
     detected.addFeature(@intFromEnum(std.Target.aarch64.Feature.dotprod));
     detected.populateDependencies(std.Target.Cpu.Arch.aarch64.allFeaturesList());
     return detected;
@@ -276,12 +278,13 @@ fn detectX86_64() CpuLevel {
 fn detectAarch64() CpuLevel {
     switch (comptime target_mod.classifyOs(builtin.os.tag)) {
         .linux => {
-            const required = hwcap_aes | hwcap_pmull | hwcap_asimddp;
+            const required = hwcap_aes | hwcap_pmull | hwcap_sha2 | hwcap_asimddp;
             const hwcap = getauxval(std.elf.AT_HWCAP);
             return if (hwcap & required == required) .default else .v1;
         },
         .windows => {
             const windows = std.os.windows;
+            // The Armv8 Cryptographic Extension: AES, PMULL, SHA-1, and SHA-256.
             if (!windows.IsProcessorFeaturePresent(.ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE)) return .v1;
             if (!windows.IsProcessorFeaturePresent(.ARM_V82_DP_INSTRUCTIONS_AVAILABLE)) return .v1;
             return .default;
