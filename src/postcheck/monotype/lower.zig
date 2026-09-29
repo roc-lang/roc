@@ -9200,7 +9200,7 @@ const Builder = struct {
         const target = found.requireTarget("Monotype inspect lowering");
         if (!allow_local_proc and target.kind == .local_proc) return null;
         const override = view.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-        return .{ .target = .{ .view = view, .target = override } };
+        return .{ .target = .{ .view = view, .target = override.target } };
     }
 
     fn findMethodTargetByName(
@@ -39056,6 +39056,10 @@ const BodyContext = struct {
                 self.draft.setReservedExprSpanItem(reserved, index, pre);
                 continue;
             }
+            switch (operand) {
+                .generated_interpolation_iter => |expr| try self.relateInterpolationItemToParts(expr, node),
+                .checked_expr, .generated_numeral, .generated_quote => {},
+            }
             const lowered = switch (operand) {
                 .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
                 .generated_interpolation_iter,
@@ -39084,6 +39088,24 @@ const BodyContext = struct {
             .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
             .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
         };
+    }
+
+    /// Every part of an interpolation fills the generated iterator's item
+    /// slot, so the item type is the parts' type. The selected
+    /// `from_interpolation` determines the item only when its own signature
+    /// fixes it.
+    fn relateInterpolationItemToParts(self: *BodyContext, expr_id: checked.CheckedExprId, iter_node: NodeId) Allocator.Error!void {
+        const interpolation = switch (self.view.bodies.expr(expr_id).data) {
+            .interpolation => |interpolation| interpolation,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("generated interpolation iterator operand pointed at non-interpolation expression"),
+        };
+        const iter_args = self.graph.namedNodes(self.graph.rootNode(iter_node)).args;
+        if (iter_args.len != 1) Common.invariant("generated interpolation iterator did not have one item argument");
+        const pair = try self.graph.tupleItemNodes(iter_args[0]);
+        if (pair.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
+        for (interpolation.parts) |part| {
+            try relateRequestComponent(self.graph, pair[0], try self.lowerExprTypeNode(part.value));
+        }
     }
 
     fn lowerDispatchOperandAtNode(

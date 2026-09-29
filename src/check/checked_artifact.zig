@@ -18285,7 +18285,7 @@ const EvidencePass = struct {
     /// Only actual rejected sites request diagnostic propagation. This flag
     /// gates recovery work; it never suppresses independent compile-time roots.
     rejected_dispatches: bool = false,
-    local_method_registry: *const static_dispatch.MethodRegistry,
+    local_method_registry: *static_dispatch.MethodRegistry,
     import_views: CheckedImportViews,
     plan_table: *static_dispatch.StaticDispatchPlanTable,
     templates: *CheckedProcedureTemplateTable,
@@ -18385,7 +18385,7 @@ const EvidencePass = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: *const CheckedTypePublication,
         checked_bodies: *CheckedBodyStore,
-        local_method_registry: *const static_dispatch.MethodRegistry,
+        local_method_registry: *static_dispatch.MethodRegistry,
         import_views: CheckedImportViews,
         plan_table: *static_dispatch.StaticDispatchPlanTable,
         templates: *CheckedProcedureTemplateTable,
@@ -18611,6 +18611,8 @@ const EvidencePass = struct {
                 try self.emitScopeConstructionEvidence(site, &.{});
             }
         }
+
+        try self.publishInspectOverrideEvidence();
 
         if (self.template_root_evidence.len != self.templates.templates.items.len) {
             checkedArtifactInvariant("template root evidence output and procedure template tables had different lengths", .{});
@@ -19895,6 +19897,27 @@ const EvidencePass = struct {
         }
     }
 
+    /// Inspection's use of each override is a dispatch-target edge whose
+    /// instantiation checking recorded (design.md "Inspect Overrides"). The
+    /// edge's evidence supplies the method's requirements at `T -> Str`.
+    fn publishInspectOverrideEvidence(self: *EvidencePass) Allocator.Error!void {
+        const module_env = self.module.moduleEnvConst();
+        self.current_chain = &.{};
+        for (self.local_method_registry.entries) |*entry| {
+            const callable_ty = entry.inspect_override orelse continue;
+            const target = entry.target orelse
+                checkedArtifactInvariant("inspect override entry had no method target", .{});
+            const use_var = module_env.inspectOverrideInstance(target.def_idx) orelse
+                checkedArtifactInvariant("inspect override entry had no checked use", .{});
+            const function = switch (self.checked_types.store.payload(callable_ty)) {
+                .function => |function| function,
+                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("inspect override instance was not a function", .{}),
+            };
+            if (function.args.len != 1) checkedArtifactInvariant("inspect override instance did not take one argument", .{});
+            entry.inspect_evidence = try self.evidenceNodeForTarget(target, function.args[0], use_var, null, .dispatch_edge);
+        }
+    }
+
     /// Preserve the checked registry's semantic resolution. Compiler-derived
     /// structural declarations are evidence themselves and must never enter a
     /// callable target's evidence-node graph.
@@ -20745,7 +20768,7 @@ fn resolveTotalDispatchPlans(
     names: *canonical.CanonicalNameStore,
     checked_types: *const CheckedTypePublication,
     checked_bodies: *CheckedBodyStore,
-    local_method_registry: *const static_dispatch.MethodRegistry,
+    local_method_registry: *static_dispatch.MethodRegistry,
     import_views: CheckedImportViews,
     plan_table: *static_dispatch.StaticDispatchPlanTable,
     templates: *CheckedProcedureTemplateTable,
@@ -40448,8 +40471,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x90, 0x52, 0x2A, 0x66, 0x9C, 0xB7, 0x45, 0x8C, 0x26, 0xF9, 0xB4, 0xEB, 0x08, 0xFA, 0x3E, 0xAF,
-        0x98, 0x1D, 0x64, 0x3F, 0xF3, 0xFE, 0x14, 0x80, 0x56, 0x71, 0x5C, 0x69, 0xF3, 0x9D, 0x44, 0xC4,
+        0x37, 0x46, 0xCA, 0x40, 0xA9, 0xB8, 0x0B, 0x3A, 0x62, 0x1C, 0xFF, 0x46, 0xF6, 0x50, 0xD6, 0x27,
+        0x18, 0xC6, 0x76, 0xE1, 0xDE, 0xC5, 0xE4, 0x10, 0xC3, 0x90, 0x0B, 0x1D, 0x91, 0x88, 0x07, 0x12,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

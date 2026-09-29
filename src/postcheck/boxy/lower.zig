@@ -2036,7 +2036,18 @@ const ProcedureBuilder = struct {
 
         var nested_dict_refs = std.ArrayList(LIR.BoxyDictRef).empty;
         defer nested_dict_refs.deinit(self.allocator);
-        try self.collectStaticHiddenDictRefsForWorker(inspect.worker, &nested_dict_refs);
+        for (self.plan.directCallHiddenDictionaryArgSlice(inspect.hidden_dict_args)) |arg| {
+            try nested_dict_refs.append(self.allocator, switch (arg.source) {
+                .static_rep => |source_rep| try self.staticDictRefForRepWithEvidence(
+                    source_rep,
+                    arg.worker_dictionaries,
+                    arg.method_evidence,
+                    arg.env,
+                ),
+                .bound_dictionaries => boxyLowerInvariant("boxy inspect slot received a caller-bound dictionary source"),
+                .literal => boxyLowerInvariant("boxy inspect slot received a literal dictionary source"),
+            });
+        }
 
         // The inspected descriptor supplies the argument descriptor and the
         // worker's hidden descriptors (`inspect_arg_descs`,
@@ -4816,7 +4827,10 @@ const ProcedureBuilder = struct {
         const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
         _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect lowering");
         const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-        return .{ .target = .{ .module = candidate, .target = override } };
+        // Inspection calls the method at its checked `T -> Str` instance.
+        var target = override.target;
+        target.callable_ty = override.callable_ty;
+        return .{ .target = .{ .module = candidate, .target = target } };
     }
 
     fn lookupMethodTargetInModule(
@@ -7563,6 +7577,11 @@ const ProcedureBuilder = struct {
         planned: Plan.GeneratedInterpolationPlan,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        // The iterator's fields live in `Iter`'s shared backing, whose item
+        // formal names this interpolation's item type only inside the
+        // wrapper's formal scope.
+        const scope = try proc.enterNominalWrapperFormalScopes(iter_rep);
+        defer proc.dropNominalBackingFormalScope(scope);
         const len_child = proc.generatedRecordFieldChild(iter_rep, "len_if_known");
         const step_child = proc.generatedRecordFieldChild(iter_rep, "step");
         const len = try proc.addFrameLocalForRep(len_child.rep);
@@ -7638,7 +7657,8 @@ const ProcedureBuilder = struct {
         }
         try proc.recordAggregateLocalDescriptorEnvironment(target, iter_rep, &.{ len, step });
         continuation = try proc.assignGeneratedIteratorLength(len, len_child.rep, .all, remaining, continuation);
-        return try proc.assignIntLiteral(remaining, @intCast(interpolation.parts.len - index), continuation);
+        continuation = try proc.assignIntLiteral(remaining, @intCast(interpolation.parts.len - index), continuation);
+        return try proc.leaveNominalBackingFormalScope(scope, continuation);
     }
 
     fn packGeneratedInterpolationStep(
@@ -20230,11 +20250,17 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
-        // A quote conversion's argument is concrete Str. Its remaining type
-        // parameters (including the conversion error) belong to the selected
-        // dictionary method, rather than to an explicit argument at this call.
-        if (self.module.checked_bodies.expr(planned.call.expr).data == .str_from_quote) {
-            try self.bindQuoteDictionaryDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
+        // A quote or interpolation conversion's leading argument is concrete
+        // Str. An interpolation's item type is its parts' type, which the
+        // parts describe. The remaining type parameters (the conversion's
+        // result and error) belong to the selected dictionary method, rather
+        // than to an explicit argument at this call.
+        const call_data = self.module.checked_bodies.expr(planned.call.expr).data;
+        if (call_data == .interpolation) {
+            try self.bindInterpolationItemDescriptorArgs(hidden_desc_args, call_data.interpolation, &pre_arg_descriptor_initializers);
+        }
+        if (call_data == .str_from_quote or call_data == .interpolation) {
+            try self.bindConversionResultDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
         }
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, lowered, arg_reps, arg_reps);
         defer self.parent.allocator.free(hidden_desc_locals);
@@ -20314,8 +20340,7 @@ const ProcBodyBuilder = struct {
         }
         continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(call_arg_descriptor_initializers.items, continuation);
-        continuation = try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
-        return try self.prependLoweredCallOperandsExpected(
+        continuation = try self.prependLoweredCallOperandsExpected(
             operands,
             operand_types,
             arg_types,
@@ -20323,9 +20348,37 @@ const ProcBodyBuilder = struct {
             lowered,
             continuation,
         );
+        // The conversion's leaf descriptors read only the bound dictionary and
+        // the enclosing scope, and a generated interpolation iterator operand
+        // is built from them.
+        return try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
     }
 
-    fn bindQuoteDictionaryDescriptorArgs(
+    /// Every part of an interpolation fills the generated iterator's item
+    /// slot, so the item type is the parts' type and the first part's type
+    /// describes it.
+    fn bindInterpolationItemDescriptorArgs(
+        self: *ProcBodyBuilder,
+        args: []const Plan.DirectCallHiddenDescriptorArg,
+        interpolation: checked.CheckedInterpolation,
+        initializers: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!void {
+        if (interpolation.parts.len == 0) boxyLowerInvariant("checked interpolation had no interpolated parts");
+        const part_rep = self.repForType(self.module.checked_bodies.expr(interpolation.parts[0].value).ty);
+        for (args) |arg| {
+            if (arg.source_arg_index == null or !self.repIsBareDynamic(arg.rep)) continue;
+            const materialization = try self.descriptorMaterializationForKnownRep(part_rep);
+            const local = try self.addFrameLocal(.opaque_ptr);
+            try initializers.append(self.parent.allocator, .{
+                .local = local,
+                .materialize = materialization.desc,
+                .captures = materialization.captures,
+            });
+            try self.bindDescriptorIdentityLocalForRep(arg.rep, local, false);
+        }
+    }
+
+    fn bindConversionResultDescriptorArgs(
         self: *ProcBodyBuilder,
         args: []const Plan.DirectCallHiddenDescriptorArg,
         dict: LIR.LocalId,
@@ -20336,7 +20389,7 @@ const ProcBodyBuilder = struct {
         for (args, 0..) |arg, index| {
             // Constructor descriptors are built by ordinary call lowering from
             // these exact leaf descriptors supplied by conversion evidence.
-            if (!self.repIsBareDynamic(arg.rep)) continue;
+            if (arg.source_arg_index != null or !self.repIsBareDynamic(arg.rep)) continue;
             const local = try self.addFrameLocal(.opaque_ptr);
             try initializers.append(self.parent.allocator, .{
                 .local = local,

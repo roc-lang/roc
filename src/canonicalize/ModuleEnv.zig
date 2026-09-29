@@ -845,6 +845,27 @@ pub const RejectedStaticDispatch = extern struct {
     }
 };
 
+/// The use inspection makes of a `to_inspect` method: an instance of its type
+/// whose result is `Str`, recorded by checking for each such method its module
+/// declares (design.md "Inspect Overrides"). A method with no such instance
+/// has no entry.
+pub const InspectOverrideInstance = extern struct {
+    def_idx: u32,
+    /// Unified with the instance's callable type, and the raw identity of the
+    /// use's dispatch-target scheme-use record.
+    callable_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub fn def(self: InspectOverrideInstance) CIR.Def.Idx {
+        return @enumFromInt(self.def_idx);
+    }
+
+    pub fn callableVar(self: InspectOverrideInstance) TypeVar {
+        return @enumFromInt(self.callable_var);
+    }
+};
+
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
@@ -1116,6 +1137,8 @@ generated_codec_calls: GeneratedCodecCall.SafeList,
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
 /// Exact default identities selected at record-literal omission sites.
 record_omitted_defaults: RecordOmittedDefault.SafeList,
+/// Checked `to_inspect` instances at result `Str`, one per method that has one.
+inspect_override_instances: InspectOverrideInstance.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1454,6 +1477,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
+    self.inspect_override_instances.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1560,6 +1584,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
+        .inspect_override_instances = try InspectOverrideInstance.SafeList.initCapacity(gpa, 0),
     };
 }
 
@@ -1594,6 +1619,7 @@ pub fn deinit(self: *Self) void {
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.inspect_override_instances.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1698,6 +1724,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.inspect_override_instances.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -4349,6 +4376,7 @@ pub const Serialized = extern struct {
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
+    inspect_override_instances: InspectOverrideInstance.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -4467,6 +4495,7 @@ pub const Serialized = extern struct {
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
+        try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -4540,6 +4569,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4615,6 +4645,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4693,6 +4724,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -4783,6 +4815,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -5232,6 +5265,23 @@ pub fn recordRejectedStaticDispatch(self: *Self, constraint_fn_var: TypeVar) std
 /// Checker-rejected static-dispatch obligations in production order.
 pub fn rejectedStaticDispatches(self: *const Self) []const RejectedStaticDispatch {
     return self.rejected_static_dispatches.items.items;
+}
+
+/// Persist the use inspection makes of one `to_inspect` method.
+pub fn recordInspectOverrideInstance(self: *Self, def_idx: CIR.Def.Idx, callable_var: TypeVar) std.mem.Allocator.Error!void {
+    _ = try self.inspect_override_instances.append(self.gpa, .{
+        .def_idx = @intFromEnum(def_idx),
+        .callable_var = @intFromEnum(callable_var),
+    });
+}
+
+/// The use inspection makes of the `to_inspect` method `def_idx`, or null
+/// when its type has no instance whose result is `Str`.
+pub fn inspectOverrideInstance(self: *const Self, def_idx: CIR.Def.Idx) ?TypeVar {
+    for (self.inspect_override_instances.items.items) |instance| {
+        if (instance.def() == def_idx) return instance.callableVar();
+    }
+    return null;
 }
 
 /// Return the checked `from_quote` function for a string literal node.

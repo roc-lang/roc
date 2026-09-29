@@ -990,6 +990,13 @@ pub const InspectMethodPlan = struct {
     /// The worker's hidden descriptors for the call `to_inspect(value)` at
     /// `source_rep`, in worker parameter order.
     hidden_desc_args: Span = .{},
+    /// The worker's hidden dictionaries for that call, such as the `Str`
+    /// result's requirements when the method's declared result is a type
+    /// variable.
+    hidden_dict_args: Span = .{},
+    /// The checked evidence of inspection's use of the method, which supplies
+    /// the call's scheme substitution and nested requirements.
+    evidence: DictionaryMethodEvidence.EvidenceEdge,
 };
 
 /// A derived method: compiler-derived `is_eq` or `to_hash`.
@@ -8754,6 +8761,22 @@ const Builder = struct {
         scheme_vars: []const checked.CheckedTypeId,
         site_view: ModuleView,
         site_types: []const checked.CheckedTypeId,
+        /// Site representations the call itself supplies. Inspection's use of
+        /// an override leaves the owner's type variables free; each inspected
+        /// value supplies them.
+        site_rep_bindings: []const SiteRepBinding = &.{},
+
+        fn siteRep(self: SchemeCallSubstitution, site_rep: TypeRepId) TypeRepId {
+            for (self.site_rep_bindings) |binding| {
+                if (binding.site == site_rep) return binding.actual;
+            }
+            return site_rep;
+        }
+    };
+
+    const SiteRepBinding = struct {
+        site: TypeRepId,
+        actual: TypeRepId,
     };
 
     const WorkerSchemeVars = struct {
@@ -9700,6 +9723,7 @@ const Builder = struct {
             try self.materializeDirectCallHiddenDictionaryArgs();
             try self.materializeConstEvalCallHiddenDictionaryArgs();
             try self.materializeIteratorCallHiddenDictionaryArgs();
+            try self.materializeInspectMethodHiddenDictionaryArgs();
             try self.materializeGeneratedCodecCallHiddenDictionaryArgs();
             try self.planNestedCallableUseDictionaries();
             try self.materializeDerivedComponentPlans();
@@ -10223,12 +10247,22 @@ const Builder = struct {
                     if (source_function.arg_count != 1) {
                         boxyPlanInvariant("planned boxy inspect override callable had unexpected receiver arity");
                     }
+                    const evidence: DictionaryMethodEvidence.EvidenceEdge = .{
+                        .module = lookup.view.key,
+                        .node = lookup.inspect_evidence orelse
+                            boxyPlanInvariant("planned boxy inspect target had no checked use evidence"),
+                    };
+                    try self.analyzeEvidenceEdgeSchemeSubstitution(evidence);
+                    const nested = inspectUseNestedEvidence(lookup.view, evidence.node);
+                    try self.observeNumeralEvidence(lookup.view, nested, self.workerEvidenceParams(source));
+                    for (nested) |entry| _ = try self.analyzeType(lookup.view, entry.dispatcher_ty);
                     try self.plan.inspect_methods.append(self.allocator, .{
                         .source_rep = rep_id,
                         .worker = worker,
                         .method_module = lookup.view.key,
                         .method = lookup.method orelse
                             boxyPlanInvariant("planned boxy inspect target had no checked method identity"),
+                        .evidence = evidence,
                     });
                 }
             }
@@ -10316,6 +10350,9 @@ const Builder = struct {
             if (function.arg_count != 1) boxyPlanInvariant("boxy inspect worker did not take exactly one argument");
             const source_type = self.plan.representations.items[@intFromEnum(method.source_rep)].source_type;
             const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
+            const evidence_view = self.moduleForId(method.evidence.module);
+            var bindings = std.ArrayList(SiteRepBinding).empty;
+            defer bindings.deinit(self.allocator);
             const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(
                 method.worker,
                 &.{method.source_rep},
@@ -10323,9 +10360,9 @@ const Builder = struct {
                 function.ret,
                 &.{source_type},
                 ret_type,
-                null,
-                null,
-                null,
+                evidence_view,
+                inspectUseNestedEvidence(evidence_view, method.evidence.node),
+                try self.inspectUseSchemeSubstitution(method, &bindings),
             );
             self.plan.inspect_methods.items[index].hidden_desc_args = hidden_desc_args;
         }
@@ -10593,6 +10630,63 @@ const Builder = struct {
         };
     }
 
+    /// An inspect slot invokes its worker at the method's checked `T -> Str`
+    /// instance; the checked evidence of that use supplies the worker's
+    /// dictionaries.
+    fn materializeInspectMethodHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
+        var index: usize = 0;
+        while (index < self.plan.inspect_methods.items.len) : (index += 1) {
+            const method = self.plan.inspect_methods.items[index];
+            const worker = self.plan.workers.items[@intFromEnum(method.worker)];
+            if (worker.hidden_dicts.len == 0) continue;
+            const function = (self.repQuery().functionChildren(worker.rep)) orelse
+                boxyPlanInvariant("boxy inspect worker was not callable");
+            if (function.arg_count != 1) boxyPlanInvariant("boxy inspect worker did not take exactly one argument");
+            const source_type = self.plan.representations.items[@intFromEnum(method.source_rep)].source_type;
+            const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
+            const evidence_view = self.moduleForId(method.evidence.module);
+            var bindings = std.ArrayList(SiteRepBinding).empty;
+            defer bindings.deinit(self.allocator);
+            self.plan.inspect_methods.items[index].hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
+                method.worker,
+                null,
+                &.{source_type},
+                ret_type,
+                evidence_view,
+                inspectUseNestedEvidence(evidence_view, method.evidence.node),
+                try self.inspectUseSchemeSubstitution(method, &bindings),
+                0,
+            );
+        }
+    }
+
+    fn inspectUseNestedEvidence(view: ModuleView, node: static_dispatch.EvidenceNodeId) []const static_dispatch.CheckedEvidence {
+        return view.static_dispatch_plans.nestedEvidence(view.static_dispatch_plans.evidenceNode(node));
+    }
+
+    /// The checked substitution of inspection's use of an override. The use
+    /// leaves the owner's type variables free, so each is bound to the
+    /// inspected value's corresponding type argument.
+    fn inspectUseSchemeSubstitution(
+        self: *Builder,
+        method: InspectMethodPlan,
+        bindings: *std.ArrayList(SiteRepBinding),
+    ) Allocator.Error!?SchemeCallSubstitution {
+        var substitution = self.evidenceEdgeSchemeSubstitution(method.worker, method.evidence) orelse return null;
+        const worker = self.plan.workers.items[@intFromEnum(method.worker)];
+        const function = (self.repQuery().functionChildren(worker.rep)) orelse
+            boxyPlanInvariant("boxy inspect worker was not callable");
+        const worker_arg_rep = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children)[function.args_start].rep;
+        var owner_args = self.plan.nominalBackingSubstitutions(self.plan.representations.items[@intFromEnum(worker_arg_rep)].nominal_backing_arg_substitutions);
+        while (owner_args.next()) |owner_arg| {
+            const actual = self.nominalBackingArgActualRep(method.source_rep, owner_arg.arg_index) orelse
+                boxyPlanInvariant("inspected value had no type argument for an override's owner variable");
+            try bindings.append(self.allocator, .{ .site = owner_arg.actual_rep, .actual = actual });
+        }
+        substitution.site_rep_bindings = bindings.items;
+        return substitution;
+    }
+
     fn materializeIteratorCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
         for (self.plan.iterator_calls.items, 0..) |call, call_index| {
             const arg_types = try self.callSubstitutionTypes(call.arg_substitutions, .operand);
@@ -10759,8 +10853,10 @@ const Builder = struct {
             for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
                 if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
                 const worker_var_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
-                const call_rep = self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
-                    boxyPlanInvariant("checked call-site substitution type was not analyzed");
+                const call_rep = substitution.siteRep(self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
+                    boxyPlanInvariant("checked call-site substitution type was not analyzed"));
+                // A bound site can be the scheme variable itself.
+                if (call_rep == worker_var_rep) continue;
                 try substitutions.put(self.allocator, worker_var_rep, call_rep);
             }
         }
@@ -12740,9 +12836,20 @@ const Builder = struct {
         try self.plan.direct_call_hidden_desc_args.appendSlice(self.allocator, pending.items);
         const sources_start: u32 = @intCast(self.plan.dictionary_method_desc_sources.items.len);
         for (pending.items, 0..) |source, source_index| {
+            // An argument supplies its own descriptor only. A descriptor for a
+            // position nested inside an argument is the method's own storage
+            // there, or supplied by the invocation.
+            const whole_argument: ?u32 = if (source.source_arg_index) |arg_index|
+                if (self.repQuery().descriptorArgumentIdentityRep(source.worker_rep) ==
+                    self.repQuery().descriptorArgumentIdentityRep(requirement_args[arg_index].rep))
+                    arg_index
+                else
+                    null
+            else
+                null;
             try self.plan.dictionary_method_desc_sources.append(self.allocator, .{
                 .rep = source.rep,
-                .source = if (source.source_arg_index) |arg_index|
+                .source = if (whole_argument) |arg_index|
                     .{ .argument = arg_index }
                 else if (try self.repQuery().repSubtreeHasDescriptor(source.rep))
                     .{ .call = @intCast(source_index) }
@@ -12816,8 +12923,10 @@ const Builder = struct {
         for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
             if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
             const scheme_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
-            const site_rep = self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
-                boxyPlanInvariant("checked call-site substitution type was not analyzed");
+            const site_rep = substitution.siteRep(self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
+                boxyPlanInvariant("checked call-site substitution type was not analyzed"));
+            // A bound site can be the scheme variable itself.
+            if (site_rep == scheme_rep) continue;
             try self.plan.scheme_rep_substitutions.append(self.allocator, .{
                 .scheme_rep = scheme_rep,
                 .site_rep = site_rep,
@@ -13307,6 +13416,8 @@ const Builder = struct {
         view: ModuleView,
         method: ?MethodNameId = null,
         target: static_dispatch.MethodTarget,
+        /// For an inspect override, the checked evidence of inspection's use.
+        inspect_evidence: ?static_dispatch.EvidenceNodeId = null,
     };
 
     fn lookupMethodTarget(
@@ -13379,7 +13490,15 @@ const Builder = struct {
         const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
         _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect planning");
         const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-        return .{ .target = .{ .view = candidate, .method = candidate_method, .target = override } };
+        // Inspection calls the method at its checked `T -> Str` instance.
+        var target = override.target;
+        target.callable_ty = override.callable_ty;
+        return .{ .target = .{
+            .view = candidate,
+            .method = candidate_method,
+            .target = target,
+            .inspect_evidence = override.evidence,
+        } };
     }
 
     fn lookupMethodTargetInView(
