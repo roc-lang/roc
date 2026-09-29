@@ -289,6 +289,14 @@ pub const MonoLlvmCodeGen = struct {
     current_source_stmt: ?CFStmtId = null,
 
     proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
+    /// Per procedure, the function direct Roc calls target: parameters and
+    /// small results classified into registers under `fastcc`. The packed
+    /// `(ret_ptr, args_ptr)` function in `proc_registry` adapts to it for
+    /// every caller that needs the uniform shape.
+    fast_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
+    /// Register placement of the current fast body's result, when it
+    /// returns by value rather than through a result pointer.
+    fast_ret_registers: ?layout.abi.RegisterPlacement = null,
     builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
     /// Per-function scratch slot RC-helper calls copy their argument into,
     /// so the argument local's own slot address never escapes into the call.
@@ -550,6 +558,7 @@ pub const MonoLlvmCodeGen = struct {
             .erased_arg_desc_params = erased_arg_desc_params,
             .boxy_worker_procs = boxy_worker_procs,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .fast_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .cold_shims = std.StringHashMap(ColdShim).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
@@ -616,6 +625,7 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_inline_callsites.deinit();
         self.debug_inline_subprograms.deinit();
         self.proc_registry.deinit();
+        self.fast_registry.deinit();
         self.builtin_functions.deinit();
         self.cold_shims.deinit();
         self.clearStaticBytes();
@@ -639,6 +649,7 @@ pub const MonoLlvmCodeGen = struct {
     /// Clears per-module caches while retaining allocated capacity.
     pub fn reset(self: *MonoLlvmCodeGen) void {
         self.proc_registry.clearRetainingCapacity();
+        self.fast_registry.clearRetainingCapacity();
         self.builtin_functions.clearRetainingCapacity();
         self.cold_shims.clearRetainingCapacity();
         self.cold_depth = 0;
@@ -1741,6 +1752,215 @@ pub const MonoLlvmCodeGen = struct {
         }
         func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         try self.proc_registry.put(@intFromEnum(proc_id), func);
+        if (self.fastAbiEligible(proc)) try self.declareFastProcSpec(proc_id, proc);
+    }
+
+    /// Whether direct calls to this procedure use the register-passing
+    /// function. Erased callables keep the public erased ABI, and hosted
+    /// procedures have no body of their own.
+    fn fastAbiEligible(self: *const MonoLlvmCodeGen, proc: LirProcSpec) bool {
+        _ = self;
+        return proc.abi != .erased_callable and proc.hosted == null and proc.body != null;
+    }
+
+    /// The signature of a procedure's register-passing function: its C-ABI
+    /// classification of arguments and result, with an optional trailing
+    /// descriptor output pointer. The classification only decides how a
+    /// value splits into scalars; `fastcc` leaves register assignment to
+    /// LLVM.
+    const FastSignature = struct {
+        lowered: layout.abi.LoweredCall,
+        arg_layouts: []const layout.Idx,
+        /// Parameter index of the first argument piece.
+        args_start: u32,
+        /// Parameter index of the descriptor output pointer, if any.
+        desc_index: ?u32,
+    };
+
+    fn fastSignature(self: *MonoLlvmCodeGen, arena: std.mem.Allocator, proc: LirProcSpec) Error!FastSignature {
+        const arg_layouts = try self.procArgLayouts(proc, .explicit);
+        const owned = try arena.dupe(layout.Idx, arg_layouts);
+        self.allocator.free(arg_layouts);
+        const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), owned, proc.ret_layout, false) catch return error.OutOfMemory;
+        var cursor: u32 = if (lowered.ret == .indirect) 1 else 0;
+        const args_start = cursor;
+        for (lowered.args) |placement| cursor += fastPlacementParamCount(placement);
+        const desc_index: ?u32 = if (proc.runtime_ret_desc != null) cursor else null;
+        return .{ .lowered = lowered, .arg_layouts = owned, .args_start = args_start, .desc_index = desc_index };
+    }
+
+    fn fastPlacementParamCount(placement: layout.abi.Placement) u32 {
+        return switch (placement) {
+            .none => 0,
+            .indirect => 1,
+            .registers => |registers| switch (registers.carrier) {
+                .piecewise => @intCast(registers.pieces.len),
+                .structure, .integer, .array => 1,
+            },
+        };
+    }
+
+    fn fastProcFunctionName(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, proc_id: LirProcSpecId, proc: LirProcSpec) Error!LlvmBuilder.StrtabString {
+        return switch (self.proc_symbol_mode) {
+            .local_index => builder.strtabStringFmt("roc_proc_{d}.fast", .{@intFromEnum(proc_id)}) catch return error.OutOfMemory,
+            .lir_symbol => blk: {
+                const name = std.fmt.allocPrint(self.allocator, "{s}{s}{s}.fast", .{ self.static_symbol_prefix, lir.ProcIdentity.symbol_name_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory;
+                defer self.allocator.free(name);
+                break :blk try self.exportedFunctionName(builder, name);
+            },
+        };
+    }
+
+    fn declareFastProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const sig = try self.fastSignature(arena_state.allocator(), proc);
+
+        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
+        defer param_types.deinit(self.allocator);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+
+        var ret_ty: LlvmBuilder.Type = .void;
+        switch (sig.lowered.ret) {
+            .none => {},
+            .indirect => {
+                const r_ty = try self.memoryLlvmTypeForLayout(builder, proc.ret_layout);
+                try attrs_wip.addParamAttr(param_types.items.len, .{ .sret = r_ty }, builder);
+                try attrs_wip.addParamAttr(param_types.items.len, .@"noalias", builder);
+                try param_types.append(self.allocator, ptr_ty);
+            },
+            .registers => |registers| ret_ty = try self.cAbiRegisterCarrierType(builder, registers),
+        }
+        for (sig.lowered.args) |placement| {
+            switch (placement) {
+                .none => {},
+                .indirect => {
+                    // The callee copies the argument into its own frame and
+                    // never writes through or retains the pointer.
+                    try attrs_wip.addParamAttr(param_types.items.len, .readonly, builder);
+                    try attrs_wip.addParamAttr(param_types.items.len, .nocapture, builder);
+                    try param_types.append(self.allocator, ptr_ty);
+                },
+                .registers => |registers| try self.appendCAbiRegisterParamTypes(builder, &attrs_wip, &param_types, registers),
+            }
+        }
+        if (sig.desc_index != null) try param_types.append(self.allocator, ptr_ty);
+
+        const fn_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
+        const func = builder.addFunction(fn_ty, try self.fastProcFunctionName(builder, proc_id, proc), .default) catch return error.OutOfMemory;
+        func.setLinkage(.internal, builder);
+        func.setCallConv(.fastcc, builder);
+        try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
+        if (self.enable_default_platform_diagnostics) {
+            try attrs_wip.addFnAttr(.@"noinline", builder);
+        } else {
+            const inline_everywhere = self.inline_everywhere.items.len > @intFromEnum(proc_id) and self.inline_everywhere.items[@intFromEnum(proc_id)];
+            if (inline_everywhere) {
+                try attrs_wip.addFnAttr(.alwaysinline, builder);
+            } else {
+                try attrs_wip.addFnAttr(.inlinehint, builder);
+            }
+        }
+        if (self.enable_default_platform_runtime) {
+            try attrs_wip.addFnAttr(.{ .string = .{
+                .kind = builder.string("frame-pointer") catch return error.OutOfMemory,
+                .value = builder.string("all") catch return error.OutOfMemory,
+            } }, builder);
+        }
+        if (self.enable_default_platform_diagnostics) {
+            try attrs_wip.addFnAttr(.{ .string = .{
+                .kind = builder.string("disable-tail-calls") catch return error.OutOfMemory,
+                .value = builder.string("true") catch return error.OutOfMemory,
+            } }, builder);
+        }
+        func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
+        try self.fast_registry.put(@intFromEnum(proc_id), func);
+    }
+
+    /// Bind the fast function's parameters to the procedure's parameter
+    /// slots: register pieces store into the slot, indirect arguments copy
+    /// out of the caller's memory.
+    fn unpackFastProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec, sig: FastSignature) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const params = self.store.getLocalSpan(proc.args);
+        var cursor: u32 = sig.args_start;
+        for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
+            const param = GuardedList.at(params, i);
+            const param_slot = self.slot(param);
+            switch (placement) {
+                .none => {},
+                .indirect => {
+                    const src = wip.arg(cursor);
+                    cursor += 1;
+                    if (param_slot.size != 0) {
+                        try self.copyBytes(param_slot.ptr, src, self.layoutDataSize(arg_layout), param_slot.alignment);
+                    }
+                },
+                .registers => |registers| try self.storeCAbiRegisterParam(builder, registers, &cursor, param_slot.ptr, arg_layout),
+            }
+        }
+    }
+
+    /// The packed `(ret_ptr, args_ptr)` function of a procedure whose body
+    /// lives in its fast function: unpack the argument bytes into register
+    /// pieces, call, and store a by-value result through the result pointer.
+    fn emitPackedAdapter(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const packed_fn = self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
+        const fast = self.fast_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
+
+        const outer_wip = self.wip;
+        defer self.wip = outer_wip;
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = packed_fn, .strip = builder.strip }) catch return error.OutOfMemory;
+        defer wip.deinit();
+        self.wip = &wip;
+        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = entry };
+
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const offsets = try self.computeArgOffsets(sig.arg_layouts, true);
+        defer self.allocator.free(offsets);
+
+        const ret_ptr = wip.arg(0);
+        const args_ptr = wip.arg(1);
+        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
+        defer param_types.deinit(self.allocator);
+        var call_args = std.ArrayList(LlvmBuilder.Value).empty;
+        defer call_args.deinit(self.allocator);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+        const ptr_ty = try self.ptrType();
+
+        if (sig.lowered.ret == .indirect) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, ret_ptr);
+        }
+        for (sig.lowered.args, sig.arg_layouts, offsets) |placement, arg_layout, offset| {
+            switch (placement) {
+                .none => {},
+                .indirect => {
+                    try param_types.append(self.allocator, ptr_ty);
+                    try call_args.append(self.allocator, try self.offsetPtr(args_ptr, offset));
+                },
+                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, try self.offsetPtr(args_ptr, offset), arg_layout),
+            }
+        }
+        if (sig.desc_index != null) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, wip.arg(2));
+        }
+        const result = wip.call(.normal, .fastcc, attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        if (sig.lowered.ret == .registers) {
+            try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, ret_ptr, proc.ret_layout);
+        }
+        _ = wip.retVoid() catch return error.OutOfMemory;
+        try self.finishCurrentWipFunction();
     }
 
     fn addGeneratedFunctionStackProbeAttrs(
@@ -1791,7 +2011,11 @@ pub const MonoLlvmCodeGen = struct {
 
     fn compileProcBody(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const func = self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
+        const fast_func: ?LlvmBuilder.Function.Index = if (self.fastAbiEligible(proc)) self.fast_registry.get(@intFromEnum(proc_id)) else null;
+        const func = fast_func orelse self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
+        var fast_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer fast_arena.deinit();
+        const fast_sig: ?FastSignature = if (fast_func != null) try self.fastSignature(fast_arena.allocator(), proc) else null;
 
         const outer_wip = self.wip;
         const outer_rc_scratch = self.rc_arg_scratch;
@@ -1804,6 +2028,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         const outer_deferred_str_captures = self.deferred_str_captures;
+        const outer_fast_ret_registers = self.fast_ret_registers;
         // Procedure bodies are emitted serially by compileAllProcSpecs. Helper
         // emission saves/restores the active views without owning this storage.
         std.debug.assert(self.deferred_str_capture_count == 0);
@@ -1815,6 +2040,7 @@ pub const MonoLlvmCodeGen = struct {
             self.args_ptr_arg = outer_args;
             self.capture_ptr_arg = outer_capture;
             self.reuse_ptr_arg = outer_reuse;
+            self.fast_ret_registers = outer_fast_ret_registers;
             self.ret_desc_ptr_arg = outer_ret_desc_ptr;
             self.current_runtime_ret_desc = outer_runtime_ret_desc;
             self.current_ret_layout = outer_ret_layout;
@@ -1886,7 +2112,25 @@ pub const MonoLlvmCodeGen = struct {
             self.capture_ptr_arg = wip.arg(3);
             self.reuse_ptr_arg = wip.arg(4);
             self.ret_desc_ptr_arg = wip.arg(5);
+        } else if (fast_sig) |sig| {
+            // The fast function returns small results by value: the body
+            // writes its result into a frame slot that the return loads
+            // from. A larger result arrives through the leading pointer.
+            self.fast_ret_registers = null;
+            self.ret_ptr_arg = switch (sig.lowered.ret) {
+                .indirect => wip.arg(0),
+                .registers => |registers| blk: {
+                    self.fast_ret_registers = registers;
+                    break :blk try self.allocArgBuffer(&.{proc.ret_layout}, false);
+                },
+                .none => try self.allocArgBuffer(&.{proc.ret_layout}, false),
+            };
+            self.args_ptr_arg = null;
+            self.capture_ptr_arg = null;
+            self.reuse_ptr_arg = null;
+            self.ret_desc_ptr_arg = if (sig.desc_index) |index| wip.arg(index) else null;
         } else {
+            self.fast_ret_registers = null;
             self.ret_ptr_arg = wip.arg(0);
             self.args_ptr_arg = wip.arg(1);
             self.capture_ptr_arg = null;
@@ -1903,7 +2147,11 @@ pub const MonoLlvmCodeGen = struct {
         defer self.clearProcLocalSlots(proc);
         defer self.clearDeferredStrCaptures();
         try self.allocProcLocalSlots(proc);
-        try self.unpackProcArgs(proc);
+        if (fast_sig) |sig| {
+            try self.unpackFastProcArgs(proc, sig);
+        } else {
+            try self.unpackProcArgs(proc);
+        }
         if (proc.boxy_runtime_entry) try self.emitBoxyRuntimeInit();
         if (!builder.strip and self.emit_local_debug_info) {
             try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
@@ -1934,11 +2182,16 @@ pub const MonoLlvmCodeGen = struct {
                 try self.compileStmt(body);
             }
             if (!self.currentBlockHasTerminator()) {
-                _ = wip.retVoid() catch return error.OutOfMemory;
+                if (self.fast_ret_registers != null) {
+                    _ = wip.@"unreachable"() catch return error.OutOfMemory;
+                } else {
+                    _ = wip.retVoid() catch return error.OutOfMemory;
+                }
             }
         }
 
         try self.finishCurrentWipFunction();
+        if (fast_func != null) try self.emitPackedAdapter(proc_id, proc);
     }
 
     /// Symbol-ABI entrypoint wrapper: exported under the platform's provides
@@ -3854,6 +4107,11 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
 
+        if (self.fast_registry.get(@intFromEnum(proc_id))) |fast| {
+            try self.emitFastDirectCall(target, proc, fast, arg_locals, out_desc, is_cold);
+            return;
+        }
+
         const arg_layouts = try self.allocator.alloc(layout.Idx, arg_locals.len);
         defer self.allocator.free(arg_layouts);
         for (0..param_locals.len) |i| {
@@ -3868,6 +4126,68 @@ pub const MonoLlvmCodeGen = struct {
         else
             null;
         try self.callProcFunctionIndex(func, proc, self.slot(target).ptr, args_buf, out_desc_ptr, is_cold);
+        if (out_desc) |desc_local| {
+            try self.prepareLocalWrite(desc_local);
+            try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
+        }
+    }
+
+    /// A direct call through the callee's register-passing function: each
+    /// argument's pieces load straight from its slot, an indirect argument
+    /// passes its slot's address for the callee to copy, and a by-value
+    /// result stores into the target slot.
+    fn emitFastDirectCall(
+        self: *MonoLlvmCodeGen,
+        target: LocalId,
+        proc: LirProcSpec,
+        fast: LlvmBuilder.Function.Index,
+        arg_locals: anytype,
+        out_desc: ?LocalId,
+        is_cold: bool,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
+
+        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
+        defer param_types.deinit(self.allocator);
+        var call_args = std.ArrayList(LlvmBuilder.Value).empty;
+        defer call_args.deinit(self.allocator);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+        const ptr_ty = try self.ptrType();
+
+        if (sig.lowered.ret == .indirect) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, self.slot(target).ptr);
+        }
+        for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
+            const arg_local = GuardedList.at(arg_locals, i);
+            switch (placement) {
+                .none => {},
+                .indirect => {
+                    try param_types.append(self.allocator, ptr_ty);
+                    try call_args.append(self.allocator, self.slot(arg_local).ptr);
+                },
+                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, self.slot(arg_local).ptr, arg_layout),
+            }
+        }
+        const out_desc_ptr = if (sig.desc_index != null) try self.boxyOutDescPtr("direct_call_desc") else null;
+        if (out_desc_ptr) |desc_ptr| {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, desc_ptr);
+        }
+        if (is_cold) {
+            try attrs_wip.addFnAttr(.cold, builder);
+            try attrs_wip.addFnAttr(.@"noinline", builder);
+        }
+        const result = wip.call(.normal, .fastcc, attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        if (sig.lowered.ret == .registers) {
+            try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, self.slot(target).ptr, proc.ret_layout);
+        }
         if (out_desc) |desc_local| {
             try self.prepareLocalWrite(desc_local);
             try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
@@ -7964,6 +8284,11 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
         const wip = self.wip orelse return error.CompilationFailed;
+        if (self.fast_ret_registers) |registers| {
+            const builder = self.builder orelse return error.CompilationFailed;
+            _ = wip.ret(try self.loadCAbiRegisterResult(builder, registers, ret_ptr, self.current_ret_layout)) catch return error.OutOfMemory;
+            return;
+        }
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
 
