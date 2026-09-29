@@ -14642,7 +14642,7 @@ something plain `+` provides, and doing so has measurably cost throughput.
 
 ### Sums, lengths, and equalities in the prover
 
-The prover's facts are difference constraints between roots: `a <= b + c`. A
+The prover records difference constraints between roots: `a <= b + c`. A
 sum of two dynamic values gets a root of its own, identified by the operand
 pair for the round, and every use of that sum relates the root to both
 operands and to every other sum sharing an operand, since `a + y` and `a + z`
@@ -14650,7 +14650,7 @@ order exactly as `y` and `z` do. A guard on `base + limit` established once
 therefore bounds every later `base + offset` whose `offset` a loop head keeps
 below `limit`, which is the shape of a word-at-a-time compare over two cursors
 into one buffer. The sum root stands for the exact sum; a wrapping addition
-takes it only when the facts bound the sum within the type, and a surviving
+takes it only when those constraints bound the sum within the type, and a surviving
 checked addition takes it unconditionally.
 
 A list's length term follows the list through `list_append_unsafe` (plus one),
