@@ -207,7 +207,7 @@ const K = [64]u32{
 /// `dispatches_at_runtime`, when `x86HasShaExtension` reports them.
 pub fn compressHardware(state: *State, blocks: []const Block) void {
     switch (arch_class) {
-        .aarch64 => for (blocks) |*block| roundAarch64Sha2(state, block),
+        .aarch64 => compressAarch64Sha2(state, blocks),
         .x86_64 => compressX86Sha(state, blocks),
         .other => @compileError("SHA-256 hardware compression is only implemented for aarch64 and x86_64"),
     }
@@ -224,43 +224,57 @@ fn loadSchedule(block: *const Block, s: *[64]u32) void {
     }
 }
 
-fn roundAarch64Sha2(state: *State, block: *const Block) void {
+/// The ARMv8 SHA-256 rounds over consecutive blocks. As in
+/// `compressX86Sha`, the state stays in the two vectors `sha256h` works on
+/// from the first block to the last, and each block's message words load with
+/// one byte swap per four words.
+fn compressAarch64Sha2(state: *State, blocks: []const Block) void {
     const V4u32 = @Vector(4, u32);
-    var s: [64]u32 align(16) = undefined;
-    loadSchedule(block, &s);
     var x: V4u32 = state[0..4].*;
     var y: V4u32 = state[4..8].*;
-    const s_v = @as(*[16]V4u32, @ptrCast(&s));
 
-    comptime var k: u8 = 0;
-    inline while (k < 16) : (k += 1) {
-        if (k > 3) {
-            s_v[k] = asm (
-                \\sha256su0.4s %[w0_3], %[w4_7]
-                \\sha256su1.4s %[w0_3], %[w8_11], %[w12_15]
-                : [w0_3] "=&w" (-> V4u32),
-                : [_] "0" (s_v[k - 4]),
-                  [w4_7] "w" (s_v[k - 3]),
-                  [w8_11] "w" (s_v[k - 2]),
-                  [w12_15] "w" (s_v[k - 1]),
-            );
+    for (blocks) |*block| {
+        const x_in = x;
+        const y_in = y;
+        var s_v: [16]V4u32 = undefined;
+        inline for (0..4) |i| {
+            const words: *align(1) const V4u32 = @ptrCast(block[16 * i ..][0..16]);
+            s_v[i] = @byteSwap(words.*);
         }
 
-        const w: V4u32 = s_v[k] +% @as(V4u32, K[4 * k ..][0..4].*);
-        asm volatile (
-            \\mov.4s v0, %[x]
-            \\sha256h.4s %[x], %[y], %[w]
-            \\sha256h2.4s %[y], v0, %[w]
-            : [x] "=w" (x),
-              [y] "=w" (y),
-            : [_] "0" (x),
-              [_] "1" (y),
-              [w] "w" (w),
-            : .{ .v0 = true });
+        comptime var k: u8 = 0;
+        inline while (k < 16) : (k += 1) {
+            if (k > 3) {
+                s_v[k] = asm (
+                    \\sha256su0.4s %[w0_3], %[w4_7]
+                    \\sha256su1.4s %[w0_3], %[w8_11], %[w12_15]
+                    : [w0_3] "=&w" (-> V4u32),
+                    : [_] "0" (s_v[k - 4]),
+                      [w4_7] "w" (s_v[k - 3]),
+                      [w8_11] "w" (s_v[k - 2]),
+                      [w12_15] "w" (s_v[k - 1]),
+                );
+            }
+
+            const w: V4u32 = s_v[k] +% @as(V4u32, K[4 * k ..][0..4].*);
+            asm volatile (
+                \\mov.4s v0, %[x]
+                \\sha256h.4s %[x], %[y], %[w]
+                \\sha256h2.4s %[y], v0, %[w]
+                : [x] "=w" (x),
+                  [y] "=w" (y),
+                : [_] "0" (x),
+                  [_] "1" (y),
+                  [w] "w" (w),
+                : .{ .v0 = true });
+        }
+
+        x +%= x_in;
+        y +%= y_in;
     }
 
-    state[0..4].* = x +% @as(V4u32, state[0..4].*);
-    state[4..8].* = y +% @as(V4u32, state[4..8].*);
+    state[0..4].* = x;
+    state[4..8].* = y;
 }
 
 /// The x86 SHA rounds over consecutive blocks. The state stays in the two
