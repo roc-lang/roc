@@ -13,6 +13,8 @@ const literal_defaulting = types_mod.literal_defaulting;
 const exact_numeral = types_mod.numeral;
 const can = @import("can");
 
+const canonical_names = @import("canonical_names.zig");
+const MethodNameId = canonical_names.MethodNameId;
 const canonical_type_keys = @import("canonical_type_keys.zig");
 const copy_import = @import("copy_import.zig");
 const requirement_solution = @import("requirement_solution.zig");
@@ -876,10 +878,10 @@ dispatch_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty
 /// Per method name, the constraint names that instantiating any binding of
 /// that name can mint as child dispatch relations. A name is summarized once
 /// every binding's scheme is final, which it then stays. Keys and names are
-/// interned in `method_mint_name_pool`.
-method_name_mints: std.StringHashMapUnmanaged([]const []const u8) = .empty,
-/// Owned method-name text for `method_name_mints`.
-method_mint_name_pool: std.StringHashMapUnmanaged(void) = .empty,
+/// interned across module identifier stores in `method_mint_names`.
+method_name_mints: collections.DenseMap(MethodNameId, []const MethodNameId),
+/// Shared method-name identity domain for the reachability walk.
+method_mint_names: canonical_names.CanonicalNameStore,
 /// Every other module whose method bindings a dispatch lookup can select,
 /// collected on first use.
 method_binding_envs: ?[]const *const ModuleEnv = null,
@@ -2961,6 +2963,8 @@ fn initAssumePrepared(
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
         .var_map = collections.DenseMap(Var, Var).init(gpa),
+        .method_name_mints = collections.DenseMap(MethodNameId, []const MethodNameId).init(gpa),
+        .method_mint_names = canonical_names.CanonicalNameStore.init(gpa),
         .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .return_constraints = .empty,
         .return_value_exprs = .empty,
@@ -3288,10 +3292,8 @@ pub fn deinit(self: *Self) void {
     {
         var mint_names = self.method_name_mints.valueIterator();
         while (mint_names.next()) |names| self.gpa.free(names.*);
-        self.method_name_mints.deinit(self.gpa);
-        var pooled_names = self.method_mint_name_pool.keyIterator();
-        while (pooled_names.next()) |name| self.gpa.free(name.*);
-        self.method_mint_name_pool.deinit(self.gpa);
+        self.method_name_mints.deinit();
+        self.method_mint_names.deinit();
     }
     if (self.method_binding_envs) |envs| self.gpa.free(envs);
     self.scratch_method_mint_evidence.deinit(self.gpa);
@@ -34933,16 +34935,16 @@ fn dispatchEdgeCanBeSameTargetAncestor(
     else
         try self.importedMethodScheme(method_lookup);
 
-    var pending: std.ArrayListUnmanaged([]const u8) = .empty;
+    var pending: std.ArrayListUnmanaged(MethodNameId) = .empty;
     defer pending.deinit(self.gpa);
-    var visited: std.StringHashMapUnmanaged(void) = .empty;
-    defer visited.deinit(self.gpa);
+    var visited = collections.DenseMap(MethodNameId, void).init(self.gpa);
+    defer visited.deinit();
 
     try self.appendLocalSchemeMintNames(instantiated_scheme, &pending);
-    const target_name = self.cir.getIdent(constraint.fn_name);
+    const target_name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), constraint.fn_name);
     while (pending.pop()) |name| {
-        if (std.mem.eql(u8, name, target_name)) return true;
-        const seen = try visited.getOrPut(self.gpa, name);
+        if (name == target_name) return true;
+        const seen = try visited.getOrPut(name);
         if (seen.found_existing) continue;
         const mints = (try self.methodNameMints(name)) orelse return true;
         try pending.appendSlice(self.gpa, mints);
@@ -34956,34 +34958,31 @@ fn dispatchEdgeCanBeSameTargetAncestor(
 /// of a still-open recursive group), since that scheme can still gain
 /// constraints. Bindings in other modules are final, and a final local scheme
 /// only retires requirements, so a complete summary is kept for the name.
-fn methodNameMints(self: *Self, name: []const u8) Allocator.Error!?[]const []const u8 {
+fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const MethodNameId {
     if (self.method_name_mints.get(name)) |names| return names;
 
-    var names: std.ArrayListUnmanaged([]const u8) = .empty;
+    var names: std.ArrayListUnmanaged(MethodNameId) = .empty;
     defer names.deinit(self.gpa);
-    var binding_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    var binding_names: std.ArrayListUnmanaged(MethodNameId) = .empty;
     defer binding_names.deinit(self.gpa);
-    var seen: std.StringHashMapUnmanaged(void) = .empty;
-    defer seen.deinit(self.gpa);
+    var seen = collections.DenseMap(MethodNameId, void).init(self.gpa);
+    defer seen.deinit();
 
-    if (self.cir.common.findIdent(name)) |ident| {
-        const ident_bits: u32 = @bitCast(ident);
-        for (self.cir.method_defs.entries.items) |entry| {
-            if (entry.key.method_ident_bits != ident_bits) continue;
-            const binding = entry.value;
-            const def = self.cir.store.getDef(binding.def_idx);
-            if (self.topLevelPattern(def.pattern)) |processing_def| {
-                if (processing_def.status != .processed or self.defInOnStackGroup(binding.def_idx)) return null;
-            }
-            try self.appendLocalSchemeMintNames(ModuleEnv.varFrom(binding.type_node_idx), &binding_names);
+    for (self.cir.method_defs.entries.items) |entry| {
+        const method_name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), entry.key.methodIdent());
+        if (method_name != name) continue;
+        const binding = entry.value;
+        const def = self.cir.store.getDef(binding.def_idx);
+        if (self.topLevelPattern(def.pattern)) |processing_def| {
+            if (processing_def.status != .processed or self.defInOnStackGroup(binding.def_idx)) return null;
         }
+        try self.appendLocalSchemeMintNames(ModuleEnv.varFrom(binding.type_node_idx), &binding_names);
     }
 
     for (try self.methodBindingEnvs()) |env| {
-        const ident = env.common.findIdent(name) orelse continue;
-        const ident_bits: u32 = @bitCast(ident);
         for (env.method_defs.entries.items) |entry| {
-            if (entry.key.method_ident_bits != ident_bits) continue;
+            const method_name = try self.method_mint_names.internMethodIdent(env.getIdentStoreConst(), entry.key.methodIdent());
+            if (method_name != name) continue;
             const binding = entry.value;
             self.scratch_method_mint_requirements.clearRetainingCapacity();
             for (env.bindingSchemeCodecRequirementsForNode(binding.type_node_idx)) |requirement| {
@@ -35004,14 +35003,12 @@ fn methodNameMints(self: *Self, name: []const u8) Allocator.Error!?[]const []con
     }
 
     for (binding_names.items) |binding_name| {
-        const interned = try self.internMethodMintName(binding_name);
-        const entry_seen = try seen.getOrPut(self.gpa, interned);
-        if (!entry_seen.found_existing) try names.append(self.gpa, interned);
+        const entry_seen = try seen.getOrPut(binding_name);
+        if (!entry_seen.found_existing) try names.append(self.gpa, binding_name);
     }
-    const key = try self.internMethodMintName(name);
     const owned = try names.toOwnedSlice(self.gpa);
     errdefer self.gpa.free(owned);
-    try self.method_name_mints.put(self.gpa, key, owned);
+    try self.method_name_mints.put(name, owned);
     return owned;
 }
 
@@ -35021,7 +35018,7 @@ fn methodNameMints(self: *Self, name: []const u8) Allocator.Error!?[]const []con
 fn appendLocalSchemeMintNames(
     self: *Self,
     root: Var,
-    out: *std.ArrayListUnmanaged([]const u8),
+    out: *std.ArrayListUnmanaged(MethodNameId),
 ) Allocator.Error!void {
     self.scratch_method_mint_requirements.clearRetainingCapacity();
     if (self.typeSchemeIndexForRoot(root)) |scheme_idx| {
@@ -35040,14 +35037,14 @@ fn appendLocalSchemeMintNames(
 /// at `root` can copy onto a fresh variable, and so record as a child
 /// dispatch relation: every constraint the scheme's evidence walk reaches,
 /// every requirement, and every constraint reachable from a requirement's
-/// receiver. Names are `env`'s identifier text.
+/// receiver. Names are interned in the shared reachability identity domain.
 fn appendSchemeMintNames(
     self: *Self,
     env: *const ModuleEnv,
     store: *const types_mod.Store,
     root: Var,
     requirements: []const dispatch_evidence.SchemeRequirement,
-    out: *std.ArrayListUnmanaged([]const u8),
+    out: *std.ArrayListUnmanaged(MethodNameId),
 ) Allocator.Error!void {
     self.scratch_method_mint_params.clearRetainingCapacity();
     try dispatch_evidence.enumerateEvidenceParamsWithRequirements(
@@ -35068,19 +35065,8 @@ fn appendSchemeMintNames(
         );
     }
     for (self.scratch_method_mint_params.items) |param| {
-        try out.append(self.gpa, env.getIdent(param.constraint.fn_name));
+        try out.append(self.gpa, try self.method_mint_names.internMethodIdent(env.getIdentStoreConst(), param.constraint.fn_name));
     }
-}
-
-fn internMethodMintName(self: *Self, name: []const u8) Allocator.Error![]const u8 {
-    const entry = try self.method_mint_name_pool.getOrPut(self.gpa, name);
-    if (!entry.found_existing) {
-        entry.key_ptr.* = self.gpa.dupe(u8, name) catch |err| {
-            self.method_mint_name_pool.removeByPtr(entry.key_ptr);
-            return err;
-        };
-    }
-    return entry.key_ptr.*;
 }
 
 /// The modules other than this one whose method bindings a dispatch lookup

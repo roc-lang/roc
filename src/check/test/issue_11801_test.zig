@@ -118,3 +118,70 @@ test "issue 11801: a target that can recur beneath itself keeps its state digest
     }
     try std.testing.expect(digested > 0);
 }
+
+test "issue 11801: imported method mint names share identity with local constraints" {
+    const library =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(a) where [a.bump : a -> a]
+        \\    step = |Wrap.W(x)| Wrap.W(x.bump())
+        \\}
+    ;
+    var library_env = try TestEnv.init("Wrap", library);
+    defer library_env.deinit();
+    try library_env.assertNoErrors();
+
+    const prelude =
+        \\import Wrap
+        \\
+        \\Cnt := [Cnt(I64)].{
+        \\    bump : Cnt -> Cnt
+        \\    bump = |Cnt.Cnt(n)| Cnt.Cnt(n + 1)
+        \\}
+        \\
+        \\
+    ;
+    const source = try genSource(std.testing.allocator, prelude, "step()", "Wrap.W(Cnt.Cnt(#.I64))");
+    defer std.testing.allocator.free(source);
+    var env = try TestEnv.initWithImport("Main", source, "Wrap", &library_env);
+    defer env.deinit();
+    try env.assertNoErrors();
+
+    // `step` mints the imported `bump` requirement. That name must match
+    // the local binding even though each module has its own ident store.
+    try expectNoDigestedEdges(&env);
+}
+
+test "issue 11801: imported transitive mint names retain ancestor digests" {
+    const library =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(a) where [a.bump : a -> a]
+        \\    step = |Wrap.W(x)| Wrap.W(x.bump())
+        \\    bump : Wrap(a) -> Wrap(a) where [a.step : a -> a]
+        \\    bump = |Wrap.W(x)| Wrap.W(x.step())
+        \\}
+    ;
+    var library_env = try TestEnv.init("Wrap", library);
+    defer library_env.deinit();
+    try library_env.assertNoErrors();
+
+    const source =
+        \\import Wrap
+        \\
+        \\Cnt := [Cnt(I64)].{
+        \\    bump : Cnt -> Cnt
+        \\    bump = |Cnt.Cnt(n)| Cnt.Cnt(n + 1)
+        \\}
+        \\x = Wrap.W(Wrap.W(Wrap.W(Cnt.Cnt(0.I64)))).step()
+    ;
+    var env = try TestEnv.initWithImport("Main", source, "Wrap", &library_env);
+    defer env.deinit();
+    try env.assertNoErrors();
+
+    // The imported `bump` binding mints `step`, which can select the outer
+    // edge's target again. Missing that cross-module name match loses its key.
+    var digested: usize = 0;
+    for (env.checker.dispatch_target_instantiations.items) |edge| {
+        if (edge.state_type_key != null) digested += 1;
+    }
+    try std.testing.expect(digested > 0);
+}
