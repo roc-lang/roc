@@ -4884,22 +4884,37 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, []))
     ;
 
-    var lowered = try lowerModule(allocator, source, .wrappers);
-    defer lowered.deinit(allocator);
+    for ([_]bool{ false, true }) |promote_loop_appends| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .promote_loop_appends = promote_loop_appends,
+        });
+        defer lowered.deinit(allocator);
 
-    const store = &lowered.lowered.lir_result.store;
-    const root_body = store.getProcSpec(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
-    const loop_join = try findSingleLoopJoin(store, root_body);
-    const loop_params = store.getLocalSpan(loop_join.params);
-    try std.testing.expect(loop_params.len >= 2);
+        const store = &lowered.lowered.lir_result.store;
+        const root_body = store.getProcSpec(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
+        var walk = try lir.BodyClone.ReachableStmts.init(store, root_body);
+        defer walk.deinit();
 
-    // Scalarized record fields preserve source order, so the second loop param
-    // is `state.b`. It must be released once on the entry path and never from
-    // the self-looping body. Counting this exact local remains valid when
-    // inlining introduces additional exit paths for the other owned lists.
-    const invariant_b = GuardedList.at(loop_params, 1);
-    try std.testing.expectEqual(@as(usize, 1), try countLocalDecrefs(store, root_body, invariant_b));
-    try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, invariant_b));
+        var loop_count: usize = 0;
+        while (try walk.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .join) continue;
+            const loop_join = stmt.join;
+            if (!try containsJumpTo(store, loop_join.body, loop_join.id)) continue;
+            loop_count += 1;
+            const loop_params = store.getLocalSpan(loop_join.params);
+            try std.testing.expect(loop_params.len >= 2);
+
+            // Scalarized record fields preserve source order, so the second
+            // loop param is `state.b`. Slack versioning adds a self-looping
+            // unchecked copy with the same params. In both versions, this
+            // field must be released once on entry and never in the body.
+            const invariant_b = GuardedList.at(loop_params, 1);
+            try std.testing.expectEqual(@as(usize, 1), try countLocalDecrefs(store, root_body, invariant_b));
+            try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, invariant_b));
+        }
+        try std.testing.expectEqual(@as(usize, if (promote_loop_appends) 2 else 1), loop_count);
+    }
 }
 
 // A producer-authored concrete iterator representation must survive ordinary
