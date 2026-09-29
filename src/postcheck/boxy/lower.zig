@@ -29644,6 +29644,16 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.BoxyDescRef {
         const exact_rep = self.descriptorTemplateExactRep(rep_id, context);
         if (exact_rep != rep_id) {
+            // A constructed value forces the descriptor of the position it
+            // fills, which a nominal backing names by its formal. The value's
+            // own descriptor describes its storage there, whatever descriptor
+            // the formal's actual type carries.
+            if (context.forced_refs[@intFromEnum(self.parent.descriptorIdentityRep(rep_id))]) |local| {
+                if (context.excluded_local != local) {
+                    try appendUniqueLocal(self.parent.allocator, captures, local);
+                    return .{ .local = local };
+                }
+            }
             return try self.descriptorTemplateRefForRep(exact_rep, parent_desc, captures, context);
         }
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);

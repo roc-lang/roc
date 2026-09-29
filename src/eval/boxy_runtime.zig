@@ -1735,20 +1735,19 @@ pub const BoxyRuntime = struct {
                     const payload_start = self.runtime_boxy_tag_payload_descs.items.len;
                     try self.runtime_boxy_tag_payload_descs.appendNTimes(self.scratch, undefined, target_payloads.len);
                     for (target_payloads, 0..) |target_payload, payload_index| {
+                        // An inline source value supplies a target presence
+                        // slot's Present payload. The payload keeps the target's
+                        // storage; the source only completes its erased children.
                         const wraps_presence_payload = source.presence_slot_present_discriminant == null and
                             target.presence_slot_present_discriminant == target_variant.discriminant and
                             target_payload.payload_index == 0;
-                        var target_child = if (wraps_presence_payload)
-                            source
-                        else
-                            try hooks.resolveDescRef(target_payload.desc);
+                        var target_child = try hooks.resolveDescRef(target_payload.desc);
                         var source_child: ?*const LirProgram.BoxyTypeDesc = if (wraps_presence_payload) source else null;
                         for (source_payloads) |source_payload| {
                             if (source_payload.payload_index != target_payload.payload_index) continue;
                             source_child = try hooks.resolveDescRef(source_payload.desc);
                             break;
                         }
-                        if (wraps_presence_payload) changed.* = true;
                         if (source_child == null and source_variant != null) {
                             return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: source tag variant was missing payload descriptor {d}",
@@ -3778,6 +3777,41 @@ pub const BoxyRuntime = struct {
             return;
         }
 
+        // Materialization adapts exactly one presence-slot side to its Present
+        // payload, so the payload is what corresponds to the other side.
+        const source_presence_desc: ?*const LirProgram.BoxyTypeDesc = if (source_desc) |desc|
+            if (desc.presence_slot_present_discriminant != null) desc else null
+        else
+            null;
+        const target_presence_desc: ?*const LirProgram.BoxyTypeDesc = if (target_desc) |desc|
+            if (desc.presence_slot_present_discriminant != null) desc else null
+        else
+            null;
+        if (source_presence_desc != null and target_presence_desc == null) {
+            const present = try self.presentSlotPayload(hooks, source, source_layout, source_presence_desc.?);
+            return try self.retainBorrowedMaterializedValue(
+                hooks,
+                present.value,
+                present.layout,
+                present.desc,
+                target,
+                target_layout,
+                target_desc,
+            );
+        }
+        if (target_presence_desc != null and source_presence_desc == null) {
+            const present = try self.presentSlotPayload(hooks, target, target_layout, target_presence_desc.?);
+            return try self.retainBorrowedMaterializedValue(
+                hooks,
+                source,
+                source_layout,
+                source_desc,
+                present.value,
+                present.layout,
+                present.desc,
+            );
+        }
+
         if ((source_layout_val.tag == .list or source_layout_val.tag == .list_of_zst) and
             (target_layout_val.tag == .list or target_layout_val.tag == .list_of_zst))
         {
@@ -3866,6 +3900,48 @@ pub const BoxyRuntime = struct {
         }
 
         try self.performBoxyLayoutDrop(hooks, target, target_layout, target_desc, .incref, 1, .atomic);
+    }
+
+    const PresentSlotPayload = struct {
+        value: Value,
+        layout: layout_mod.Idx,
+        desc: ?*const LirProgram.BoxyTypeDesc,
+    };
+
+    /// The Present payload of a presence slot whose value materialization
+    /// adapted to or from an inline required value; that adaptation only
+    /// exists for a present slot.
+    fn presentSlotPayload(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        slot: Value,
+        slot_layout: layout_mod.Idx,
+        slot_desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!PresentSlotPayload {
+        const present_discriminant = slot_desc.presence_slot_present_discriminant.?;
+        const slot_base = self.resolveBoxyTagBaseValue(slot, slot_layout, slot_desc);
+        const discriminant: u16 = if (self.helper.sizeOf(slot_base.layout) == 0)
+            0
+        else
+            @intCast(self.helper.readTagDiscriminant(slot_base.value, slot_base.layout));
+        if (discriminant != present_discriminant) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: a missing optional slot corresponded to an inline required value",
+                .{},
+            );
+        }
+        const variant = self.requireBoxyTagVariantByDiscriminant(slot_desc, present_discriminant);
+        if (variant.payload_count != 1) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot Present variant had {d} payloads instead of one",
+                .{variant.payload_count},
+            );
+        }
+        return .{
+            .value = slot_base.value,
+            .layout = self.requireBoxyTagPayloadLayout(slot_base.layout, present_discriminant),
+            .desc = try self.wholeTagPayloadDesc(hooks, variant),
+        };
     }
 
     fn retainBorrowedTagMaterialization(
