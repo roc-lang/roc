@@ -1388,11 +1388,14 @@ const DispatchTargetInstantiation = struct {
     receiver_var: Var,
     parent_constraint_fn_var: ?Var,
     /// Canonical receiver+callable digest for this edge, computed at record
-    /// time for every edge. Any edge can later serve as an ancestor on a
-    /// descendant's lineage walk (a chain root has no parent yet still
-    /// anchors the chain), and record time is the one point that does not
-    /// depend on which descendant or fixpoint pass reads the key first.
-    state_type_key: [32]u8,
+    /// time exactly when something can read it: when the edge has a
+    /// same-target ancestor to compare against, or when selecting its target
+    /// minted child relations, so the edge can anchor a descendant's lineage
+    /// walk (a chain root has no parent yet still anchors the chain). Record
+    /// time is the one point that does not depend on which descendant or
+    /// fixpoint pass reads the key first. An edge with neither is a leaf no
+    /// comparison ever reaches, and it carries no key.
+    state_type_key: ?[32]u8,
     /// Whether this edge's dispatch state (receiver and required callable)
     /// strictly embeds a same-binding ancestor's state on its own lineage. A
     /// single embedding step is legal (an argument-supplied state may simply
@@ -34639,6 +34642,12 @@ fn recordDispatchDerivations(
             constraint.fn_var,
             parent_fn_var,
         ) orelse continue;
+        // A parent edge decides whether to keep its state key from the
+        // children its own target selection mints, so a child can only be
+        // attached to an already recorded edge that kept one.
+        if (self.dispatch_target_instantiation_by_fn_var.get(derived_parent)) |parent_idx| {
+            std.debug.assert(self.dispatch_target_instantiations.items[parent_idx].state_type_key != null);
+        }
         const entry = try self.dispatch_derivation_by_child_fn_var.getOrPut(self.gpa, constraint.fn_var);
         if (entry.found_existing) continue;
         errdefer _ = self.dispatch_derivation_by_child_fn_var.remove(constraint.fn_var);
@@ -34731,6 +34740,28 @@ fn shrinkDispatchDerivationsTo(self: *Self, new_len: usize) void {
     }
 }
 
+/// Normalize every row that repeats a label in a new dispatch edge's receiver
+/// and callable, reporting a conflict at `value`, the dispatch's expression,
+/// whose type holds both. Constraints attached to identities inside them are
+/// other dispatch relations, which normalize their own states when they are
+/// selected, so the walk does not follow them.
+fn normalizeDispatchStateRows(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint_fn_var: Var,
+    value: ?Var,
+    env: *Env,
+) Allocator.Error!void {
+    self.canonical_key_writer.setReportDuplicateRows(true);
+    defer self.canonical_key_writer.setReportDuplicateRows(false);
+    for ([_]Var{ dispatcher_var, constraint_fn_var }) |root| {
+        while (true) {
+            try self.canonical_key_writer.visitIgnoringConstraints(root);
+            if (!try self.normalizeReportedDuplicateRow(value, env)) break;
+        }
+    }
+}
+
 /// Canonical receiver+callable digest for one dispatch edge. Fresh
 /// instantiated vars are deliberately ignored as identities: the canonical
 /// type digest alpha-normalizes them, while concrete structural progress
@@ -34786,11 +34817,42 @@ fn repeatedDispatchStateAncestor(
             std.meta.eql(ancestor.target_binding, method_lookup.binding) and
             ancestor.method_name.eql(constraint.fn_name))
         {
-            if (std.meta.eql(state_type_key, ancestor.state_type_key)) return ancestor_idx;
+            // Only a parent edge whose target minted children is an ancestor,
+            // and such an edge is always keyed (`recordDispatchDerivations`).
+            if (std.meta.eql(state_type_key, ancestor.state_type_key.?)) return ancestor_idx;
         }
         ancestor_fn = ancestor.parent_constraint_fn_var;
     }
     return null;
+}
+
+/// Whether some ancestor on this obligation's derivation lineage selected the
+/// same exact target (environment, method binding, and method name). Both
+/// the repeated-state and the growth rule compare only against such an
+/// ancestor, so without one neither rule can fire and this edge's own state
+/// digest has nothing to be compared with.
+fn hasSameTargetDispatchAncestor(
+    self: *const Self,
+    constraint: StaticDispatchConstraint,
+    parent_constraint_fn_var: ?Var,
+    method_lookup: StaticDispatchMethodBinding,
+) bool {
+    var steps: usize = 0;
+    var ancestor_fn = parent_constraint_fn_var;
+    while (ancestor_fn) |fn_var| {
+        const ancestor_idx = self.dispatch_target_instantiation_by_fn_var.get(fn_var) orelse return false;
+        steps += 1;
+        std.debug.assert(steps <= self.dispatch_target_instantiations.items.len);
+        const ancestor = self.dispatch_target_instantiations.items[ancestor_idx];
+        if (ancestor.target_env == method_lookup.env and
+            std.meta.eql(ancestor.target_binding, method_lookup.binding) and
+            ancestor.method_name.eql(constraint.fn_name))
+        {
+            return true;
+        }
+        ancestor_fn = ancestor.parent_constraint_fn_var;
+    }
+    return false;
 }
 
 /// Whether selecting `method_lookup` re-enters an ancestor edge's exact
@@ -35515,16 +35577,25 @@ fn rejectRecursiveStaticDispatch(
 /// Copy the selected method target for a new raw dispatch edge and record its
 /// nested evidence plus canonical state. The cache-aware resolver guarantees
 /// this is called exactly once per edge.
+///
+/// `state_type_key` is present when the edge has a same-target ancestor, whose
+/// comparison needed the key before selection. Otherwise the key is computed
+/// here only if this instantiation minted child relations under the edge,
+/// since only then can a descendant's lineage walk reach it. Instantiation
+/// copies the target's scheme into fresh variables and records side-table
+/// entries; it never changes the receiver or callable graph, so the key
+/// computed after it is the key the edge had at selection.
 fn instantiateDispatchTargetMethodVar(
     self: *Self,
     dispatcher_var: Var,
     parent_constraint_fn_var: ?Var,
-    state_type_key: [32]u8,
+    state_type_key: ?[32]u8,
     grew_from_ancestor: bool,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
     cycle_method_expr_var: ?Var,
     predeclared_scheme_for_method: ?Var,
+    dispatch_value: ?Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
@@ -35547,6 +35618,7 @@ fn instantiateDispatchTargetMethodVar(
 
     const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
     const records_before = self.cir.scheme_uses.items.items.len;
+    const derivations_before = self.dispatch_derivations.items.len;
     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
         break :blk expr_var_for_method;
     } else if (method_lookup.is_this_module) blk: {
@@ -35591,13 +35663,19 @@ fn instantiateDispatchTargetMethodVar(
         );
     }
 
+    const recorded_state_type_key = state_type_key orelse
+        if (self.dispatchDerivationsNameParent(derivations_before, constraint.fn_var))
+            try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var, dispatch_value, env)
+        else
+            null;
+
     const raw_index: u32 = @intCast(self.dispatch_target_instantiations.items.len);
     self.dispatch_target_instantiations.appendAssumeCapacity(.{
         .constraint_fn_var = constraint.fn_var,
         .is_literal_conversion = constraint.origin.literalKind() != null,
         .receiver_var = dispatcher_var,
         .parent_constraint_fn_var = parent_constraint_fn_var,
-        .state_type_key = state_type_key,
+        .state_type_key = recorded_state_type_key,
         .grew_from_ancestor = grew_from_ancestor,
         .target_env = method_lookup.env,
         .target_binding = method_lookup.binding,
@@ -35609,8 +35687,9 @@ fn instantiateDispatchTargetMethodVar(
 }
 
 /// Resolve one selected dispatch target. Revisiting an edge is the common
-/// fixpoint case, so cache lookup comes first. Only a genuinely new edge pays
-/// for canonical state construction and ancestor-cycle comparison.
+/// fixpoint case, so cache lookup comes first. Only a genuinely new edge that
+/// can take part in an ancestor comparison pays for canonical state
+/// construction.
 fn resolveDispatchTargetMethodVar(
     self: *Self,
     dispatcher_var: Var,
@@ -35630,10 +35709,32 @@ fn resolveDispatchTargetMethodVar(
     }
 
     const dispatch_expr = failure_expr orelse constraintIntroExpr(constraint);
+    const dispatch_value: ?Var = if (dispatch_expr) |expr_idx| ModuleEnv.varFrom(expr_idx) else null;
+
+    // Without a same-target ancestor neither the repeated-state rule nor the
+    // growth rule has anything to compare against, so selection proceeds
+    // directly and the edge's key is decided by what selection mints.
+    if (!self.hasSameTargetDispatchAncestor(constraint, parent_constraint_fn_var, method_lookup)) {
+        try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
+        return try self.instantiateDispatchTargetMethodVar(
+            dispatcher_var,
+            parent_constraint_fn_var,
+            null,
+            false,
+            constraint,
+            method_lookup,
+            cycle_method_expr_var,
+            predeclared_scheme_for_method,
+            dispatch_value,
+            env,
+            region,
+        );
+    }
+
     const state_type_key = try self.dispatchStateTypeKey(
         dispatcher_var,
         constraint.fn_var,
-        if (dispatch_expr) |expr_idx| ModuleEnv.varFrom(expr_idx) else null,
+        dispatch_value,
         env,
     );
     if (self.repeatedDispatchStateAncestor(
@@ -35676,9 +35777,19 @@ fn resolveDispatchTargetMethodVar(
         method_lookup,
         cycle_method_expr_var,
         predeclared_scheme_for_method,
+        dispatch_value,
         env,
         region,
     );
+}
+
+/// Whether any derivation recorded since `derivations_start` names
+/// `parent_fn_var` as its parent edge.
+fn dispatchDerivationsNameParent(self: *const Self, derivations_start: usize, parent_fn_var: Var) bool {
+    for (self.dispatch_derivations.items[derivations_start..]) |derivation| {
+        if (derivation.parent_fn_var == parent_fn_var) return true;
+    }
+    return false;
 }
 
 /// POLICY: concrete recursive dispatch (design.md). An exact repeated state

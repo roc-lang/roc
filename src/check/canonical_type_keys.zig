@@ -342,6 +342,15 @@ pub const TypeWriter = struct {
         return self.identityVarsFromVar(var_);
     }
 
+    /// Traverse ordinary structure without following identity constraints,
+    /// only to surface a row that repeats a label (see `takeDuplicateRow`).
+    pub fn visitIgnoringConstraints(self: *TypeWriter, var_: Var) Allocator.Error!void {
+        self.inspector.walk_identity_constraints = false;
+        defer self.inspector.walk_identity_constraints = true;
+        self.inspector.resetDigest();
+        try self.inspector.writeVar(var_);
+    }
+
     /// Append one fresh traversal's identities to caller-owned storage.
     pub fn appendIdentityVarsFromVar(self: *TypeWriter, var_: Var, out: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
         self.inspector.resetDigest();
