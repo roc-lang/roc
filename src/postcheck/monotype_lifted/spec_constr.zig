@@ -73,6 +73,7 @@
 //! starting_plants! : () => List(Plant)
 //! starting_plants! = || {
 //!     (0.I64..=15)
+//!         .iter()
 //!         .stream()
 //!         .map(|i| random_plant!(i * 12))
 //!         .collect!()
@@ -86,7 +87,7 @@
 //!
 //! ```roc
 //! starting_plants! = || {
-//!     range_iter = 0.I64..=15
+//!     range_iter = (0.I64..=15).iter()
 //!
 //!     source_stream = {
 //!         len_if_known: Known(16),
@@ -3402,7 +3403,7 @@ const Pass = struct {
     /// representation for its result, so the return type is not its checked
     /// procedure identity.
     fn callIsSuffixAppend(self: *Pass, call: DirectCall) bool {
-        if (call.iterator_procedure != .iter_append) return false;
+        if (call.iterator_procedure != .append) return false;
         const raw = @intFromEnum(call.fn_id);
         if (raw >= self.program.fnCount()) return false;
         return self.program.typedLocalSpan(self.program.getFnAt(raw).args).len == 2;
@@ -15602,7 +15603,7 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
         const expensive_arg = try program.addExpr(.{ .ty = tag_ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = producer },
             .args = .empty(),
-            .iterator_procedure = .iter_single,
+            .iterator_procedure = .single,
         } } });
         const duplicate = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = consumers[0] },
