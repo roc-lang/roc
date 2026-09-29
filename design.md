@@ -14640,6 +14640,30 @@ consume that exact result range. A wrapping operation offers no such assumption,
 because no crash justifies it. Hand-writing `_wrap` in hot code therefore forfeits
 something plain `+` provides, and doing so has measurably cost throughput.
 
+### Sums, lengths, and equalities in the prover
+
+The prover's facts are difference constraints between roots: `a <= b + c`. A
+sum of two dynamic values gets a root of its own, identified by the operand
+pair for the round, and every use of that sum relates the root to both
+operands and to every other sum sharing an operand, since `a + y` and `a + z`
+order exactly as `y` and `z` do. A guard on `base + limit` established once
+therefore bounds every later `base + offset` whose `offset` a loop head keeps
+below `limit`, which is the shape of a word-at-a-time compare over two cursors
+into one buffer. The sum root stands for the exact sum; a wrapping addition
+takes it only when the facts bound the sum within the type, and a surviving
+checked addition takes it unconditionally.
+
+A list's length term follows the list through `list_append_unsafe` (plus one),
+`list_reserve` (unchanged), `list_with_capacity` and `list_clear` (zero), so a
+table that grows by one per iteration keeps a provable length lower bound
+across the loop.
+
+Equality comparisons participate alongside orderings. A holding `==` edge
+asserts both orderings; a holding `!=` edge makes an ordering the path already
+proves non-strict strict, so a counter tested against its limit with `!=` is
+known to lie strictly inside it. `bool_not` of a modeled comparison carries the
+complementary comparison, which is how `!=` reaches the prover.
+
 ### Dec
 
 `Dec` is fixed-point over an `i128`. Its addition and subtraction are plain
