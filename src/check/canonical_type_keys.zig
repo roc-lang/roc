@@ -1626,7 +1626,7 @@ test "scheme identity enumeration reuses scratch and recovers from every allocat
 /// First-encounter identity order for the test graphs below (tuples,
 /// functions, records whose tails are identities), traversed directly on the
 /// store in the key encoding's child order.
-fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const ModuleEnv, roots: []const Var) ![]Var {
+fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const ModuleEnv, roots: []const Var) Allocator.Error![]Var {
     var visited = std.AutoHashMap(Var, void).init(gpa);
     defer visited.deinit();
     var order = std.ArrayList(Var).empty;
@@ -2118,7 +2118,7 @@ test "key encodings decode back into their tag sequence" {
     }
 }
 
-fn testTagUnion(store: *TypeStore, tags: []const types.Tag) !types.Content {
+fn testTagUnion(store: *TypeStore, tags: []const types.Tag) Allocator.Error!types.Content {
     return .{ .structure = .{ .tag_union = .{
         .tags = try store.appendTags(tags),
         .ext = try store.freshFromContent(.{ .structure = .empty_tag_union }),
@@ -2227,7 +2227,7 @@ test "keys follow variable sharing across referenced children" {
     var store = try TypeStore.initCapacity(gpa, 64, 32);
     defer store.deinit();
     const tuple = struct {
-        fn of(s: *TypeStore, elems: []const Var) !Var {
+        fn of(s: *TypeStore, elems: []const Var) Allocator.Error!Var {
             return try s.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try s.appendVars(elems) } } });
         }
     }.of;
@@ -2292,7 +2292,7 @@ const EqualityOracle = struct {
         self.pending.deinit(self.gpa);
     }
 
-    fn equal(self: *EqualityOracle, left: Var, right: Var) !bool {
+    fn equal(self: *EqualityOracle, left: Var, right: Var) Allocator.Error!bool {
         try self.pending.append(self.gpa, .{ left, right });
         while (self.pending.pop()) |pair| {
             if (!try self.step(pair[0], pair[1])) return false;
@@ -2300,7 +2300,7 @@ const EqualityOracle = struct {
         return true;
     }
 
-    fn step(self: *EqualityOracle, left_var: Var, right_var: Var) !bool {
+    fn step(self: *EqualityOracle, left_var: Var, right_var: Var) Allocator.Error!bool {
         const left = self.store.resolveVar(left_var);
         const right = self.store.resolveVar(right_var);
         if ((try self.assumed.getOrPut(.{ left.var_, right.var_ })).found_existing) return true;
@@ -2357,7 +2357,7 @@ const EqualityOracle = struct {
         }
     }
 
-    fn pairAll(self: *EqualityOracle, left: []const Var, right: []const Var) !bool {
+    fn pairAll(self: *EqualityOracle, left: []const Var, right: []const Var) Allocator.Error!bool {
         if (left.len != right.len) return false;
         for (left, right) |l, r| try self.pending.append(self.gpa, .{ l, r });
         return true;

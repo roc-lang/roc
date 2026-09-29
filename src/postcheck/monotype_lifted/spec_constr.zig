@@ -73,6 +73,7 @@
 //! starting_plants! : () => List(Plant)
 //! starting_plants! = || {
 //!     (0.I64..=15)
+//!         .iter()
 //!         .stream()
 //!         .map(|i| random_plant!(i * 12))
 //!         .collect!()
@@ -86,7 +87,7 @@
 //!
 //! ```roc
 //! starting_plants! = || {
-//!     range_iter = 0.I64..=15
+//!     range_iter = (0.I64..=15).iter()
 //!
 //!     source_stream = {
 //!         len_if_known: Known(16),
@@ -3402,7 +3403,7 @@ const Pass = struct {
     /// representation for its result, so the return type is not its checked
     /// procedure identity.
     fn callIsSuffixAppend(self: *Pass, call: DirectCall) bool {
-        if (call.iterator_procedure != .iter_append) return false;
+        if (call.iterator_procedure != .append) return false;
         const raw = @intFromEnum(call.fn_id);
         if (raw >= self.program.fnCount()) return false;
         return self.program.typedLocalSpan(self.program.getFnAt(raw).args).len == 2;
@@ -7430,6 +7431,11 @@ const Cloner = struct {
     ///   only the small dispatching match, which folds against an arm's
     ///   known constructor into a direct jump. Only the dispatch is ever
     ///   copied; continuation code is stored once.
+    /// - A single shared continuation whose arms supply different outermost
+    ///   constructors gains nothing either: its one parameter would be the
+    ///   whole opaque value. The rewrite declines and the let binds the
+    ///   branch-built value as an ordinary value, keeping the continuation's
+    ///   own result structure visible to the enclosing clone.
     /// - A join's parameters are the decomposed leaves of the values its
     ///   jump sites supply, whenever those values agree on one structure
     ///   skeleton. The join body re-binds the structured value over the
@@ -7586,6 +7592,21 @@ const Cloner = struct {
             .typed_boundary,
             => unreachable,
         };
+
+        // One shared continuation whose several arms supply different
+        // outermost constructors gains no structure: its single parameter
+        // would be the whole opaque value, and the join would hide the
+        // continuation's own result. The let then binds as an ordinary value.
+        if (joins.len == 1 and joins[0].binding == .pattern and joins[0].sites.items.len > 1) {
+            const sites = joins[0].sites.items;
+            const outer_values = try self.pass.allocator.alloc(Value, sites.len);
+            defer self.pass.allocator.free(outer_values);
+            for (sites, outer_values) |site, *value| {
+                if (site.values.len != 1) Common.invariant("let-of-case pattern join site did not supply one value");
+                value.* = site.values[0];
+            }
+            if (!self.valuesShareOuterSkeleton(outer_values)) return null;
+        }
 
         // Wrap the rewritten case in its live join points, innermost last so
         // every jump site in the case sits inside each join's remainder.
@@ -8333,6 +8354,54 @@ const Cloner = struct {
     const let_case_join_leaf_budget: u32 = 1024;
     const let_case_join_param_cap: usize = 64;
 
+    /// Whether every value has the same outermost constructor: the same tag,
+    /// record fields, tuple arity, nominal type, or callable target and
+    /// capture identities. Only such values decompose into shared leaves.
+    fn valuesShareOuterSkeleton(self: *Cloner, values: []const Value) bool {
+        const first = values[0];
+        for (values[1..]) |other| {
+            if (std.meta.activeTag(other) != std.meta.activeTag(first)) return false;
+            switch (first) {
+                .expr, .runtime_anchor, .static_data_candidate => return false,
+                .tag => |first_tag| {
+                    const other_tag = other.tag;
+                    if (other_tag.ty != first_tag.ty) return false;
+                    if (!self.pass.program.names.tagLabelTextEql(other_tag.name, first_tag.name)) return false;
+                    if (other_tag.payloads.len != first_tag.payloads.len) return false;
+                },
+                .record => |first_record| {
+                    const other_record = other.record;
+                    if (other_record.ty != first_record.ty) return false;
+                    if (other_record.fields.len != first_record.fields.len) return false;
+                    for (other_record.fields, first_record.fields) |other_field, first_field| {
+                        if (!self.pass.program.names.recordFieldLabelTextEql(other_field.name, first_field.name)) return false;
+                    }
+                },
+                .tuple => |first_tuple| {
+                    const other_tuple = other.tuple;
+                    if (other_tuple.ty != first_tuple.ty) return false;
+                    if (other_tuple.items.len != first_tuple.items.len) return false;
+                },
+                .nominal => |first_nominal| {
+                    if (other.nominal.ty != first_nominal.ty) return false;
+                },
+                .callable => |first_callable| {
+                    const other_callable = other.callable;
+                    if (other_callable.ty != first_callable.ty) return false;
+                    if (other_callable.fn_id != first_callable.fn_id) return false;
+                    if (other_callable.captures.len != first_callable.captures.len) return false;
+                    for (other_callable.captures, first_callable.captures) |other_capture, first_capture| {
+                        if (other_capture.id != first_capture.id) return false;
+                    }
+                },
+            }
+        }
+        return switch (first) {
+            .expr, .runtime_anchor, .static_data_candidate => false,
+            .tag, .record, .tuple, .nominal, .callable => true,
+        };
+    }
+
     /// Structure-decompose the values every site supplies for one binder
     /// slot. Where all sites agree on the same constructor skeleton, the
     /// skeleton is rebuilt over fresh parameter locals minted for its opaque
@@ -8351,16 +8420,10 @@ const Cloner = struct {
         structured: {
             if (params.items.len >= let_case_join_param_cap) break :structured;
             if (budget.admit(1) != .admitted) break :structured;
+            if (!self.valuesShareOuterSkeleton(values)) break :structured;
             switch (values[0]) {
-                .expr, .runtime_anchor, .static_data_candidate => break :structured,
+                .expr, .runtime_anchor, .static_data_candidate => unreachable,
                 .tag => |first| {
-                    for (values[1..]) |other| {
-                        if (other != .tag) break :structured;
-                        const other_tag = other.tag;
-                        if (other_tag.ty != first.ty) break :structured;
-                        if (!self.pass.program.names.tagLabelTextEql(other_tag.name, first.name)) break :structured;
-                        if (other_tag.payloads.len != first.payloads.len) break :structured;
-                    }
                     const payloads = try arena.alloc(Value, first.payloads.len);
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
@@ -8371,15 +8434,6 @@ const Cloner = struct {
                     return .{ .tag = .{ .ty = first.ty, .name = first.name, .payloads = payloads } };
                 },
                 .record => |first| {
-                    for (values[1..]) |other| {
-                        if (other != .record) break :structured;
-                        const other_record = other.record;
-                        if (other_record.ty != first.ty) break :structured;
-                        if (other_record.fields.len != first.fields.len) break :structured;
-                        for (other_record.fields, first.fields) |other_field, first_field| {
-                            if (!self.pass.program.names.recordFieldLabelTextEql(other_field.name, first_field.name)) break :structured;
-                        }
-                    }
                     const fields = try arena.alloc(FieldValue, first.fields.len);
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
@@ -8393,12 +8447,6 @@ const Cloner = struct {
                     return .{ .record = .{ .ty = first.ty, .fields = fields } };
                 },
                 .tuple => |first| {
-                    for (values[1..]) |other| {
-                        if (other != .tuple) break :structured;
-                        const other_tuple = other.tuple;
-                        if (other_tuple.ty != first.ty) break :structured;
-                        if (other_tuple.items.len != first.items.len) break :structured;
-                    }
                     const items = try arena.alloc(Value, first.items.len);
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
@@ -8409,11 +8457,6 @@ const Cloner = struct {
                     return .{ .tuple = .{ .ty = first.ty, .items = items } };
                 },
                 .nominal => |first| {
-                    for (values[1..]) |other| {
-                        if (other != .nominal) break :structured;
-                        const other_nominal = other.nominal;
-                        if (other_nominal.ty != first.ty) break :structured;
-                    }
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
                     for (values, children) |value, *child| child.* = value.nominal.backing.*;
@@ -8423,17 +8466,7 @@ const Cloner = struct {
                 },
                 .callable => |first| {
                     var iterator_step = first.iterator_step;
-                    for (values[1..]) |other| {
-                        if (other != .callable) break :structured;
-                        const other_callable = other.callable;
-                        if (other_callable.ty != first.ty) break :structured;
-                        if (other_callable.fn_id != first.fn_id) break :structured;
-                        if (other_callable.captures.len != first.captures.len) break :structured;
-                        iterator_step = iterator_step and other_callable.iterator_step;
-                        for (other_callable.captures, first.captures) |other_capture, first_capture| {
-                            if (other_capture.id != first_capture.id) break :structured;
-                        }
-                    }
+                    for (values[1..]) |other| iterator_step = iterator_step and other.callable.iterator_step;
                     const captures = try arena.alloc(CaptureValue, first.captures.len);
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
@@ -8781,6 +8814,11 @@ const Cloner = struct {
                             try self.cloneLetWithValue(continuation, cloned, &block_bindings)
                         else
                             try self.cloneLetValue(continuation, &block_bindings);
+                        // A let that bound as an ordinary value leaves the
+                        // continuation's own result structure intact.
+                        if (value != .expr) {
+                            return try self.finishBlockValue(ty, terminated, &statements, block_bindings, value, bindings);
+                        }
                         // The continuation's value is branch-built. The block
                         // keeps it as its recorded tail so a case over this
                         // block reads the arms' structure instead of one
@@ -10628,6 +10666,7 @@ const Cloner = struct {
                     },
                     .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {},
                 }
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const record = recordFromValue(value) orelse switch (value) {
                     .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
                     .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
@@ -10671,6 +10710,7 @@ const Cloner = struct {
                     },
                     .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {},
                 }
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const tuple = tupleFromValue(value) orelse switch (value) {
                     .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
                     .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
@@ -10690,7 +10730,7 @@ const Cloner = struct {
                 return verdict;
             },
             .tag => |tag_pat| {
-                if (value == .expr) return .unknown;
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const tag = tagFromValue(value) orelse switch (value) {
                     .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
                     .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
@@ -10722,7 +10762,12 @@ const Cloner = struct {
                     .runtime_anchor => |anchor| try self.bindPatToValue(pat_id, anchor.structure.*),
                     .static_data_candidate => |candidate| try self.bindPatToValue(pat_id, candidate.structure.*),
                     .nominal => |nominal| try self.bindPatToValue(backing_pat, nominal.backing.*),
-                    .expr => .unknown,
+                    // A runtime nominal value's record or tuple backing is
+                    // bound by field or tuple-item reads of that same value.
+                    .expr => if (self.patternProjectsNominalBacking(backing_pat))
+                        try self.bindPatToValue(backing_pat, value)
+                    else
+                        .unknown,
                     .tag, .record, .tuple, .callable => Common.invariant("nominal pattern matched an unwrapped constructor value"),
                 };
             },
@@ -10737,6 +10782,16 @@ const Cloner = struct {
             .str_pattern,
             => return .unknown,
         }
+    }
+
+    /// Whether a nominal pattern's backing pattern binds its value only
+    /// through record-field or tuple-item reads, which apply to the nominal
+    /// value itself.
+    fn patternProjectsNominalBacking(self: *const Cloner, backing_pat: Ast.PatId) bool {
+        return switch (self.pass.program.getPat(backing_pat).data) {
+            .record, .tuple => true,
+            .bind, .wildcard, .as, .tag, .nominal, .list, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => false,
+        };
     }
 
     fn bindPatToReusableValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
@@ -10836,7 +10891,12 @@ const Cloner = struct {
                     .runtime_anchor => |anchor| try self.bindPatToFlowValue(pat_id, anchor.structure.*),
                     .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.structure.*),
                     .nominal => |nominal| try self.bindPatToFlowValue(backing_pat, nominal.backing.*),
-                    .expr, .tag, .record, .tuple, .callable => false,
+                    // A runtime nominal value's record or tuple backing is
+                    // bound by field or tuple-item reads of that same value.
+                    .expr => |receiver| canReadFieldsFromExpr(self.pass.program, receiver) and
+                        self.patternProjectsNominalBacking(backing_pat) and
+                        try self.bindPatToFlowValue(backing_pat, value),
+                    .tag, .record, .tuple, .callable => false,
                 };
             },
             .list,
@@ -14519,6 +14579,24 @@ fn itemFromValueStripping(value: Value, index: u32, strip_depth: usize) ?Value {
     };
 }
 
+/// Whether stripping every value wrapper, including nominal backings, leaves only
+/// an opaque runtime expression. A nominal such as `Bool` can wrap a runtime
+/// local, so its constructor is unknown even though the wrapper is structured.
+fn isOpaqueBehindWrappers(value: Value) bool {
+    return isOpaqueBehindWrappersStripping(value, 0);
+}
+
+fn isOpaqueBehindWrappersStripping(value: Value, strip_depth: usize) bool {
+    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("isOpaqueBehindWrappers followed a value wrapper chain past the strip cap");
+    return switch (value) {
+        .runtime_anchor => |anchor| isOpaqueBehindWrappersStripping(anchor.structure.*, strip_depth + 1),
+        .static_data_candidate => |candidate| isOpaqueBehindWrappersStripping(candidate.structure.*, strip_depth + 1),
+        .nominal => |nominal| isOpaqueBehindWrappersStripping(nominal.backing.*, strip_depth + 1),
+        .expr => true,
+        .tag, .record, .tuple, .callable => false,
+    };
+}
+
 fn tagFromValue(value: Value) ?TagValue {
     return tagFromValueStripping(value, 0);
 }
@@ -15545,7 +15623,7 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
         const expensive_arg = try program.addExpr(.{ .ty = tag_ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = producer },
             .args = .empty(),
-            .iterator_procedure = .iter_single,
+            .iterator_procedure = .single,
         } } });
         const duplicate = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = consumers[0] },
