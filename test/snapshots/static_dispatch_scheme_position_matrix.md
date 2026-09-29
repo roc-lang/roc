@@ -443,20 +443,7 @@ roundtrip = parse_show("hi")
 			(e-empty_record)))
 	(d-let
 		(p-assign (ident "parse_show"))
-		(e-lambda
-			(args
-				(p-assign (ident "s")))
-			(e-block
-				(s-type-var-alias (alias "A") (type-var "a")
-					(ty-rigid-var (name "a")))
-				(s-let
-					(p-assign (ident "v"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-dispatch-call (method "show") (constraint-fn-var 427)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "v"))))
-					(args))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))

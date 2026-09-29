@@ -4236,4 +4236,64 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"shown\"" },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11846
+        .name = "issue 11846: unused local annotated with a recursive alias",
+        .source_kind = .module,
+        .source =
+        \\T : T
+        \\
+        \\main = {
+        \\    x : T
+        \\    x = 1
+        \\
+        \\    {}
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11846: unused local annotated with an undeclared type",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    x : Nope
+        \\    x = 1
+        \\
+        \\    {}
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11844
+        .name = "issue 11844: top-level record destructure missing a field",
+        .source_kind = .module,
+        .source =
+        \\{ host, port } = { host: "localhost" }
+        \\
+        \\main = host
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11844: top-level record destructure using the missing field",
+        .source_kind = .module,
+        .source =
+        \\{ host, port } = { host: "localhost" }
+        \\
+        \\main = port
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11844: top-level tuple destructure with the wrong arity",
+        .source_kind = .module,
+        .source =
+        \\(a, b) = (1, 2, 3)
+        \\
+        \\main = a
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
 };

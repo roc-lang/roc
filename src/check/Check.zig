@@ -11754,26 +11754,7 @@ fn poisonLiteralFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
         return;
     }
     if (tag == .def) {
-        const def = self.cir.store.getDef(@enumFromInt(@intFromEnum(owner)));
-        try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
-        try self.retirePatternMetadata(def.pattern, diagnostic);
-        try self.replaceExprWithRuntimeError(def.expr, diagnostic);
-        try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
-        // Extraction/validation roots synthesize a match over this RHS.
-        // A rejected destructure has no pattern evaluation to select.
-        try self.hoist_invalidated_exprs.put(self.gpa, def.expr, {});
-        var bindings = std.ArrayList(PatternBinding).empty;
-        defer bindings.deinit(self.gpa);
-        try self.collectPatternBindings(def.pattern, &bindings);
-        for (bindings.items) |binding| {
-            try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
-            const root_index = try self.ensureHoistedPatternExtractionRoot(binding.pattern_idx, .{
-                .base_expr = def.expr,
-                .scrutinee_pattern = def.pattern,
-                .result_pattern = binding.pattern_idx,
-            });
-            self.selected_hoisted_roots.items[root_index].body = .{ .pattern_error = def.pattern };
-        }
+        try self.rejectTopLevelDestructure(self.cir.store.getDef(@enumFromInt(@intFromEnum(owner))), diagnostic);
         return;
     }
 
@@ -11789,6 +11770,32 @@ fn poisonLiteralFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
     };
     try self.poisonPatternBindings(pattern);
     try self.replaceRejectedPatternStatement(stmt_idx, diagnostic);
+}
+
+/// Retire a top-level definition whose pattern was rejected. The binders keep
+/// their identities but are all erroneous, and each one gets a `pattern_error`
+/// root that outputs a typed runtime-error constant, so no stage evaluates the
+/// rejected pattern against its RHS.
+fn rejectTopLevelDestructure(self: *Self, def: CIR.Def, diagnostic: CIR.Diagnostic.Idx) Allocator.Error!void {
+    try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    try self.retirePatternMetadata(def.pattern, diagnostic);
+    try self.replaceExprWithRuntimeError(def.expr, diagnostic);
+    try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
+    // Extraction/validation roots synthesize a match over this RHS.
+    // A rejected destructure has no pattern evaluation to select.
+    try self.hoist_invalidated_exprs.put(self.gpa, def.expr, {});
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(def.pattern, &bindings);
+    for (bindings.items) |binding| {
+        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+        const root_index = try self.ensureHoistedPatternExtractionRoot(binding.pattern_idx, .{
+            .base_expr = def.expr,
+            .scrutinee_pattern = def.pattern,
+            .result_pattern = binding.pattern_idx,
+        });
+        self.selected_hoisted_roots.items[root_index].body = .{ .pattern_error = def.pattern };
+    }
 }
 
 /// Replace a binding statement whose pattern was rejected with an explicit
@@ -14794,6 +14801,12 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Unify the ptrn and the expr
     const ptrn_result = try self.unify(ptrn_var, expr_var, env);
+    if (ptrn_result.isProblem() and self.cir.store.getExpr(def.expr) != .e_runtime_error) {
+        const diagnostic = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(def.expr),
+        } });
+        try self.rejectTopLevelDestructure(def, diagnostic);
+    }
 
     // Unify the def and ptrn
     _ = try self.unify(def_var, ptrn_var, env);
@@ -21360,7 +21373,15 @@ const ExprCheckFrame = struct {
                 // raw expr var against the annotation
                 _ = try checker.unify(self.expr_var_raw, anno_vars.anno_var_backup, env);
             } else {
-                // Otherwise, make the explicit annotation the checked root for
+                // The expression is error-free, so a suppressed relation means
+                // the annotation itself is erroneous (for example, it names a
+                // recursive alias or an undeclared type). The annotation gives
+                // the expression no instantiable type, so the expression must
+                // itself become the runtime error.
+                if (annotation_result == .suppressed_by_error) {
+                    try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                }
+                // Make the explicit annotation the checked root for
                 // this expression. The body has already constrained the
                 // annotation's backing and any underscore variables above.
                 _ = try checker.unify(self.expr_var_raw, anno_vars.anno_var, env);
