@@ -10666,6 +10666,7 @@ const Cloner = struct {
                     },
                     .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {},
                 }
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const record = recordFromValue(value) orelse switch (value) {
                     .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
                     .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
@@ -10709,6 +10710,7 @@ const Cloner = struct {
                     },
                     .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {},
                 }
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const tuple = tupleFromValue(value) orelse switch (value) {
                     .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
                     .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
@@ -10728,7 +10730,7 @@ const Cloner = struct {
                 return verdict;
             },
             .tag => |tag_pat| {
-                if (value == .expr) return .unknown;
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const tag = tagFromValue(value) orelse switch (value) {
                     .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
                     .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
@@ -14574,6 +14576,24 @@ fn itemFromValueStripping(value: Value, index: u32, strip_depth: usize) ?Value {
         .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
         .nominal => |nominal| itemFromValueStripping(nominal.backing.*, index, strip_depth + 1),
         .expr, .tag, .record, .callable => null,
+    };
+}
+
+/// Whether stripping every value wrapper, including nominal backings, leaves only
+/// an opaque runtime expression. A nominal such as `Bool` can wrap a runtime
+/// local, so its constructor is unknown even though the wrapper is structured.
+fn isOpaqueBehindWrappers(value: Value) bool {
+    return isOpaqueBehindWrappersStripping(value, 0);
+}
+
+fn isOpaqueBehindWrappersStripping(value: Value, strip_depth: usize) bool {
+    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("isOpaqueBehindWrappers followed a value wrapper chain past the strip cap");
+    return switch (value) {
+        .runtime_anchor => |anchor| isOpaqueBehindWrappersStripping(anchor.structure.*, strip_depth + 1),
+        .static_data_candidate => |candidate| isOpaqueBehindWrappersStripping(candidate.structure.*, strip_depth + 1),
+        .nominal => |nominal| isOpaqueBehindWrappersStripping(nominal.backing.*, strip_depth + 1),
+        .expr => true,
+        .tag, .record, .tuple, .callable => false,
     };
 }
 
