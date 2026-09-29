@@ -22917,13 +22917,14 @@ const BodyContext = struct {
             .builtin_owner = builtinOwner(nominal.builtin),
             .args = args,
             .backing = backing,
-            .declared_order = try self.instDeclaredOrderForNominal(nominal),
+            .declared_order = try self.instDeclaredOrderForNominal(nominal, args),
         }));
     }
 
     fn instDeclaredOrderForNominal(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
+        args: []NodeId,
     ) Allocator.Error![]const InstDeclaredField {
         const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse {
             if (!nominalHasDeclarationBacking(nominal)) return &.{};
@@ -22932,23 +22933,69 @@ const BodyContext = struct {
         const fields = lookup.declaration.declaredRecordFields(lookup.view.types);
         if (fields.len == 0) return &.{};
 
+        const padding_nodes = try self.instDeclarationPaddingNodes(lookup, args);
         const entries = try self.graph.arena().alloc(InstDeclaredField, fields.len);
-        const padding_types = lookup.padding_field_tys;
         var padding_cursor: usize = 0;
         for (fields, 0..) |field, index| {
             switch (field) {
                 .named => |label| entries[index] = .{ .named = try self.recordFieldName(lookup.view, label) },
                 .padding => {
-                    if (padding_cursor >= padding_types.len) {
+                    if (padding_cursor >= padding_nodes.len) {
                         Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
                     }
-                    const checked_ty = padding_types[padding_cursor];
+                    entries[index] = .{ .padding = padding_nodes[padding_cursor] };
                     padding_cursor += 1;
-                    entries[index] = .{ .padding = try self.instNode(self.checkedTypeInCurrentView(lookup.view, checked_ty)) };
                 },
             }
         }
         return entries;
+    }
+
+    /// Instantiate a nominal instance's padding types in the declaring view,
+    /// with the declaration's formals bound to this instance's argument
+    /// nodes, exactly as its backing instantiates.
+    fn instDeclarationPaddingNodes(
+        self: *BodyContext,
+        lookup: Builder.NominalDeclLookup,
+        args: []NodeId,
+    ) Allocator.Error![]NodeId {
+        if (lookup.padding_field_tys.len == 0) return &.{};
+        if (moduleBytesEqual(lookup.view.key.bytes, self.view.key.bytes)) {
+            return try self.instDeclarationPaddingNodesInCurrentView(lookup, args);
+        }
+        const previous_view = self.view;
+        const previous_instantiation = self.instantiation;
+        self.view = lookup.view;
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), lookup.view.key.bytes);
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.view = previous_view;
+        }
+        return try self.instDeclarationPaddingNodesInCurrentView(lookup, args);
+    }
+
+    fn instDeclarationPaddingNodesInCurrentView(
+        self: *BodyContext,
+        lookup: Builder.NominalDeclLookup,
+        args: []NodeId,
+    ) Allocator.Error![]NodeId {
+        const formal_args = lookup.declaration.formalArgs(self.view.types);
+        if (formal_args.len != args.len) {
+            Common.invariant("checked nominal declaration arity differed from nominal type use");
+        }
+        var scope = InstantiatingNodeMap.init(self.allocator);
+        defer scope.deinit();
+        var field_kind_scope = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
+        defer field_kind_scope.deinit();
+        for (formal_args, args) |formal, arg| {
+            try scope.put(self.scopedCheckedType(formal), .{ .node = arg });
+        }
+        try self.instantiation.decl_scopes.append(self.allocator, &scope);
+        defer _ = self.instantiation.decl_scopes.pop();
+        try self.instantiation.field_kind_decl_scopes.append(self.allocator, &field_kind_scope);
+        defer _ = self.instantiation.field_kind_decl_scopes.pop();
+        return try self.instNodeSlice(lookup.padding_field_tys);
     }
 
     /// Instantiate a nominal instance's backing. A declaration-backed nominal's
@@ -23080,16 +23127,6 @@ const BodyContext = struct {
             },
             .opaque_without_backing => null,
         };
-    }
-
-    fn checkedTypeInCurrentView(
-        self: *BodyContext,
-        source_view: ModuleView,
-        source_ty: checked.CheckedTypeId,
-    ) checked.CheckedTypeId {
-        if (moduleBytesEqual(source_view.key.bytes, self.view.key.bytes)) return source_ty;
-        return self.view.types.rootForKey(source_view.types.rootKey(source_ty)) orelse
-            Common.invariant("imported nominal declaration formal was not projected into the current checked type store");
     }
 
     fn lowerTemplateBodyAtNode(

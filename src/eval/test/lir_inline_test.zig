@@ -847,6 +847,40 @@ test "generic nominal record instantiates unnamed padding to the argument's size
     try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructSize(struct_idx));
 }
 
+test "imported generic nominal record instantiates unnamed padding to the argument's size" {
+    const allocator = std.testing.allocator;
+    const foo_module =
+        \\Foo(a) := { x : a, _ : a }
+    ;
+    // The importing module has its own unrelated `a`: the padding field must
+    // still take this instance's argument, not any other variable of the
+    // same shape.
+    const source =
+        \\import Foos exposing [Foo]
+        \\
+        \\keep : a -> a
+        \\keep = |value| value
+        \\
+        \\main : Foo(U64) -> Foo(U64)
+        \\main = |foo| keep(foo)
+    ;
+
+    var lowered_source = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .imports = &.{.{ .name = "Foos", .source = foo_module }},
+    });
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
+    try std.testing.expectEqual(@as(u16, 2), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
+    try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructSize(struct_idx));
+}
+
 test "nominal record with a parenthesized backing still honors declared order and padding" {
     const allocator = std.testing.allocator;
     // The backing record is wrapped in parentheses. Parens are transparent here:
