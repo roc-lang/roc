@@ -266,6 +266,54 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11737: independent calls select different nested method targets",
+        .source_kind = .module,
+        .source =
+        \\Runner :: {}.{
+        \\    run = |_, body| body({}).repeat(3)
+        \\}
+        \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
+        \\main = demo(Runner.{})
+        ,
+        .expected = .{ .inspect_str = "(\"aaa\", [[1], [1], [1]])" },
+    },
+    .{
+        .name = "issue 11737: independent nominal calls preserve nested evidence and distinct results",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        repeated = fetch({}).repeat(3)
+        \\        (repeated, body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| 42.U64))
+        \\forward = |db| demo(db)
+        \\main = forward(Db.{ deps: { fetch: |{}| "x" } })
+        ,
+        .expected = .{ .inspect_str = "((\"xxx\", \"a\"), (\"xxx\", 42))" },
+    },
+    .{
+        .name = "issue 11737: stored generic function retains independent callable contracts",
+        .source_kind = .module,
+        .source =
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        (fetch({}).concat("y"), body({}))
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| "b"))
+        \\saved = { invoke: demo }
+        \\main = {
+        \\    invoke = saved.invoke
+        \\    invoke(Db.{ deps: { fetch: |{}| "x" } })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "((\"xy\", \"a\"), (\"xy\", \"b\"))" },
+    },
+    .{
         .name = "issue 11661: closure relaxation preserves previous loop list",
         .source_kind = .module,
         .source =
@@ -622,6 +670,33 @@ pub const tests = [_]TestCase{
         \\main = xs
         ,
         .expected = .{ .inspect_str = "[{ a: 3, b: 287454020, c: (-7, 2.5) }, { a: 3, b: 287454020, c: (-7, 2.5) }]" },
+    },
+    .{
+        // A compile-time list of copies that an in-place write consumes is
+        // built fresh by a seed append and a range fill; every copy and the
+        // length must match the static table it replaces.
+        .name = "consumed compile-time list of copies is filled, not looped",
+        .source_kind = .module,
+        .source =
+        \\table : List(U16)
+        \\table = List.repeat(513, 100)
+        \\main = {
+        \\    written = table.set(99, 7) ?? []
+        \\    (written.len(), written.get(0), written.get(50), written.get(98), written.get(99), written.count_if(|x| x == 513))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(100, Ok(513), Ok(513), Ok(513), Ok(7), 99)" },
+    },
+    .{
+        // A single copy is the seed alone.
+        .name = "consumed compile-time list of one copy is the seed append alone",
+        .source_kind = .module,
+        .source =
+        \\table : List(U64)
+        \\table = List.repeat(9, 1)
+        \\main = table.set(0, 4) ?? []
+        ,
+        .expected = .{ .inspect_str = "[4]" },
     },
     .{
         .name = "issue 11376: packed nominal constants preserve copy-on-write sharing",
@@ -3936,5 +4011,229 @@ pub const tests = [_]TestCase{
         \\main = run(|_| Err(WrongArity)) == Err(WrongArity)
         ,
         .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A custom encoder_for calls another type's derived `encoder_for : _`
+        // by name, so both values encode through Flag's derived encoder.
+        .name = "issue 11769: custom encoder_for calls a derived encoder_for by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\Wrap := [W(Flag)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_flag = Flag.encoder_for(encoding)
+        \\        |W(flag), state| encode_flag(flag, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = "${Json.to_str(Flag.On)} ${Json.to_str(Wrap.W(Flag.Off))}"
+        ,
+        .expected = .{ .inspect_str = "\"\\\"On\\\" \\\"Off\\\"\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A builtin type's derived encoder_for, called by name.
+        .name = "issue 11769: custom encoder_for calls a builtin derived encoder_for by name",
+        .source_kind = .module,
+        .source =
+        \\Wrap := [W(Bool)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_bool = Bool.encoder_for(encoding)
+        \\        |W(b), state| encode_bool(b, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Bool.True))
+        ,
+        .expected = .{ .inspect_str = "\"true\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A record-backed derived encoder_for reached through a type alias.
+        .name = "issue 11769: derived encoder_for of a record backing called through a type alias",
+        .source_kind = .module,
+        .source =
+        \\Point := { x : I64, y : I64 }.{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\P : Point
+        \\
+        \\Wrap := [W(Point)].{
+        \\    encoder_for = |encoding| {
+        \\        encode_point = P.encoder_for(encoding)
+        \\        |W(point), state| encode_point(point, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Point.({ x: 1, y: 2 })))
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"x\\\":1,\\\"y\\\":2}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A parameterized owner's derived encoder_for, called by name.
+        .name = "issue 11769: derived encoder_for of a parameterized nominal called by name",
+        .source_kind = .module,
+        .source =
+        \\Pair(a) := [Pair(a, a)].{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\Wrap := [W(Pair(Str))].{
+        \\    encoder_for = |encoding| {
+        \\        encode_pair = Pair.encoder_for(encoding)
+        \\        |W(pair), state| encode_pair(pair, state)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(Wrap.W(Pair.Pair("a", "b")))
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"Pair\\\":[\\\"a\\\",\\\"b\\\"]}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // A custom parser_for calls another type's derived parser_for by name.
+        .name = "issue 11769: custom parser_for calls a derived parser_for by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    parser_for : _
+        \\}
+        \\
+        \\Wrap := [W(Flag)].{
+        \\    parser_for = |format| {
+        \\        parse_flag = Flag.parser_for(format)
+        \\        |state| {
+        \\            parsed = parse_flag(state)?
+        \\            Ok({ value: W(parsed.value), rest: parsed.rest })
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(Wrap, [InvalidJson(Str)])
+        \\    decoded = Json.parse("\"Off\"")
+        \\    match decoded {
+        \\        Ok(W(Off)) => "off"
+        \\        Ok(W(On)) => "on"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"off\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11769
+        // Derived is_eq and to_hash called by name.
+        .name = "issue 11769: derived is_eq called by name",
+        .source_kind = .module,
+        .source =
+        \\Flag := [On, Off].{
+        \\    is_eq : _
+        \\}
+        \\
+        \\main : Bool
+        \\main = Flag.is_eq(Flag.On, Flag.On) and !Flag.is_eq(Flag.On, Flag.Off)
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11770
+        // A method annotated `_` whose body is erroneous has no declared
+        // callable type, so its declaration is rejected like an unannotated
+        // one instead of publishing a lambda whose checked type is not a
+        // function.
+        .name = "issue 11770: erroneous method annotated with a hole dispatched through a where clause",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: erroneous method annotated with a hole called on a value",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\show_it = |value| value.show()
+        \\
+        \\main = show_it(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: erroneous method annotated with a hole called through a type parameter",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| nope(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| {
+        \\    A : a
+        \\    A.show(value)
+        \\}
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: method annotated with a hole calling a declaration with no value",
+        .source_kind = .module,
+        .source =
+        \\missing : T -> Str
+        \\
+        \\T := [T].{
+        \\    show : _
+        \\    show = |t| missing(t)
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11770: method annotated with a hole and a valid body dispatches through a where clause",
+        .source_kind = .module,
+        .source =
+        \\T := [T].{
+        \\    show : _
+        \\    show = |_t| "shown"
+        \\}
+        \\
+        \\render : a -> Str where [a.show : a -> Str]
+        \\render = |value| value.show()
+        \\
+        \\main = render(T.T)
+        ,
+        .expected = .{ .inspect_str = "\"shown\"" },
     },
 };

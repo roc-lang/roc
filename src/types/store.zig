@@ -169,13 +169,10 @@ pub const Store = struct {
     /// Sorted (origin module identity, statement) -> declaration index. Kept
     /// sorted on insert; lookups binary-search.
     nominal_decl_index: NominalDeclIndexEntry.SafeList,
-
-    /// Whether any descriptor written to this store has held `.err`. Rollback
-    /// never clears it, so while it is false no variable reaches error content.
-    may_contain_err_content: bool = false,
-    /// Whether any nominal declaration in this store has been invalid.
-    /// Applications of invalid declarations are erroneous.
-    may_contain_invalid_nominal: bool = false,
+    /// False only while no entry of `nominal_decls` has ever been invalid.
+    /// Stores whose history is unknown (zero-copy views of serialized data)
+    /// keep the default.
+    invalid_nominal_decl_written: bool = true,
 
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
@@ -241,6 +238,7 @@ pub const Store = struct {
             // nominal declaration table (modules typically declare few types)
             .nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16),
             .nominal_decl_index = try NominalDeclIndexEntry.SafeList.initCapacity(gpa, 16),
+            .invalid_nominal_decl_written = false,
         };
     }
 
@@ -294,7 +292,7 @@ pub const Store = struct {
         return .{
             .gpa = gpa,
             .slots = .{ .backing = try self.slots.backing.clone(gpa) },
-            .descs = .{ .backing = try self.descs.backing.clone(gpa) },
+            .descs = .{ .backing = try self.descs.backing.clone(gpa), .err_written = self.descs.err_written },
             .root_metas = try self.root_metas.clone(gpa),
             .union_ranks = try self.union_ranks.clone(gpa),
             .vars = try self.vars.clone(gpa),
@@ -304,43 +302,15 @@ pub const Store = struct {
             .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
             .nominal_decls = try self.nominal_decls.clone(gpa),
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
-            .may_contain_err_content = self.may_contain_err_content,
-            .may_contain_invalid_nominal = self.may_contain_invalid_nominal,
+            .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
         };
     }
 
-    /// Whether some variable in this store might reach error content or an
-    /// application of an invalid nominal declaration. False proves that none
-    /// does, without walking any type.
-    pub fn mayContainErrors(self: *const Self) bool {
-        return self.may_contain_err_content or self.may_contain_invalid_nominal;
-    }
-
-    fn noteDescWrite(self: *Self, desc: Desc) void {
-        if (desc.content == .err) self.may_contain_err_content = true;
-    }
-
-    fn noteNominalDeclWrite(self: *Self, decl: NominalDecl) void {
-        if (!decl.isValid()) self.may_contain_invalid_nominal = true;
-    }
-
-    /// Recompute the error flags from a store's contents, for stores built
-    /// from serialized data.
-    fn recomputeErrorFlags(self: *Self) void {
-        self.may_contain_err_content = false;
-        for (self.descs.backing.items.items(.content)) |content| {
-            if (content == .err) {
-                self.may_contain_err_content = true;
-                break;
-            }
-        }
-        self.may_contain_invalid_nominal = false;
-        for (self.nominal_decls.items.items) |decl| {
-            if (!decl.isValid()) {
-                self.may_contain_invalid_nominal = true;
-                break;
-            }
-        }
+    /// False only when no variable in this store can reach the error state:
+    /// no descriptor has ever held `.err` and no nominal declaration has ever
+    /// been invalid (applications of invalid declarations are erroneous).
+    pub fn mayContainErrorState(self: *const Self) bool {
+        return self.descs.err_written or self.invalid_nominal_decl_written;
     }
 
     /// Return the number of type variables in the store.
@@ -611,7 +581,6 @@ pub const Store = struct {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_descs) {
             try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
         }
-        self.noteDescWrite(val);
         self.descs.set(idx, val);
     }
 
@@ -643,7 +612,6 @@ pub const Store = struct {
         try self.descs.backing.ensureTotalCapacity(self.gpa, next_len);
         try self.root_metas.ensureTotalCapacity(self.gpa, next_len);
 
-        self.noteDescWrite(desc);
         const desc_idx = self.descs.appendAssumeCapacity(desc);
         const meta_idx = self.root_metas.appendAssumeCapacity(.{
             .checked_var = checked_var,
@@ -722,7 +690,6 @@ pub const Store = struct {
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         const slot_idx: SlotStore.Idx = @enumFromInt(@as(u32, @intCast(self.slots.backing.len())));
         const checked_var = Self.slotIdxToVar(slot_idx);
-        if (content == .err) self.may_contain_err_content = true;
         const desc_idx = self.descs.appendAssumeCapacity(.{
             .content = content,
             .rank = rank,
@@ -1398,13 +1365,17 @@ pub const Store = struct {
         self.nominal_decls.set(idx, decl);
     }
 
+    fn noteNominalDeclWrite(self: *Self, decl: NominalDecl) void {
+        if (!decl.isValid()) self.invalid_nominal_decl_written = true;
+    }
+
     /// Mark a nominal declaration invalid (malformed backing or invalid
     /// recursion). Applications of invalid declarations poison to err.
     pub fn markNominalDeclInvalid(self: *Self, idx: NominalDecl.Idx) void {
         std.debug.assert(!self.savepoint_active);
         var decl = self.nominal_decls.get(idx).*;
         decl.flags.valid = false;
-        self.may_contain_invalid_nominal = true;
+        self.invalid_nominal_decl_written = true;
         self.nominal_decls.set(idx, decl);
     }
 
@@ -1825,7 +1796,7 @@ pub const Store = struct {
         /// WARNING: The returned Store points into the cache buffer and CANNOT be mutated.
         /// Use deserializeWithCopy() if the store needs to be mutable.
         pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) Store {
-            var store = Store{
+            return Store{
                 .gpa = gpa,
                 .slots = self.slots.deserializeInto(base_addr),
                 .descs = self.descs.deserializeInto(base_addr),
@@ -1839,8 +1810,6 @@ pub const Store = struct {
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
             };
-            store.recomputeErrorFlags();
-            return store;
         }
 
         /// Deserialize into a Store value with fresh memory allocation.
@@ -1860,7 +1829,8 @@ pub const Store = struct {
                 .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
                 .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
             };
-            store.recomputeErrorFlags();
+            store.invalid_nominal_decl_written = false;
+            for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
             return store;
         }
     };
@@ -1878,7 +1848,7 @@ pub const Store = struct {
         offset_self.* = .{
             .gpa = allocator,
             .slots = (try self.slots.serialize(allocator, writer)).*,
-            .descs = (try self.descs.serialize(allocator, writer)).*,
+            .descs = try self.descs.serialize(allocator, writer),
             .root_metas = (try self.root_metas.serialize(allocator, writer)).*,
             .union_ranks = (try self.union_ranks.serialize(allocator, writer)).*,
             .vars = (try self.vars.serialize(allocator, writer)).*,
@@ -1888,8 +1858,7 @@ pub const Store = struct {
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
             .nominal_decls = (try self.nominal_decls.serialize(allocator, writer)).*,
             .nominal_decl_index = (try self.nominal_decl_index.serialize(allocator, writer)).*,
-            .may_contain_err_content = self.may_contain_err_content,
-            .may_contain_invalid_nominal = self.may_contain_invalid_nominal,
+            .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
         };
 
         return @constCast(offset_self);
@@ -2023,10 +1992,22 @@ const DescStore = struct {
     const DescSafeMultiList = collections.SafeMultiList(Desc);
 
     backing: DescSafeMultiList,
+    /// False only while no descriptor in `backing` has ever held `.err`.
+    /// Stores whose history is unknown (zero-copy views of serialized data)
+    /// keep the default.
+    err_written: bool = true,
 
     /// Init & allocated memory
     fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
-        return .{ .backing = try DescSafeMultiList.initCapacity(gpa, capacity) };
+        return .{ .backing = try DescSafeMultiList.initCapacity(gpa, capacity), .err_written = false };
+    }
+
+    fn fromContents(backing: DescSafeMultiList) Self {
+        var err_written = false;
+        for (backing.items.items(.content)) |content| {
+            if (content == .err) err_written = true;
+        }
+        return .{ .backing = backing, .err_written = err_written };
     }
 
     /// Deinit & free allocated memory
@@ -2060,26 +2041,27 @@ const DescStore = struct {
         /// Deserialize into a DescStore value with fresh memory allocation.
         /// The returned DescStore owns its memory and can be safely grown/mutated.
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!DescStore {
-            return DescStore{
-                .backing = try self.backing.deserializeWithCopy(base_addr, gpa),
-            };
+            return DescStore.fromContents(try self.backing.deserializeWithCopy(base_addr, gpa));
         }
     };
 
     /// Insert a value into the store
     fn insert(self: *Self, gpa: Allocator, typ: Desc) std.mem.Allocator.Error!Idx {
+        if (typ.content == .err) self.err_written = true;
         const safe_idx = try self.backing.append(gpa, typ);
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
     /// Appends a value to the store assuming there is capacity
     fn appendAssumeCapacity(self: *Self, typ: Desc) Idx {
+        if (typ.content == .err) self.err_written = true;
         const safe_idx = self.backing.appendAssumeCapacity(typ);
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
     /// Set a value in the store
     fn set(self: *Self, idx: Idx, val: Desc) void {
+        if (val.content == .err) self.err_written = true;
         self.backing.set(@enumFromInt(@intFromEnum(idx)), val);
     }
 
@@ -2093,11 +2075,11 @@ const DescStore = struct {
         self: *const Self,
         allocator: Allocator,
         writer: *collections.CompactWriter,
-    ) std.mem.Allocator.Error!*const Self {
-        // Since DescStore is just a wrapper around SafeMultiList, serialize the backing directly
-        const serialized_backing = try self.backing.serialize(allocator, writer);
-        // Cast the serialized SafeMultiList pointer to a DescStore pointer
-        return @ptrCast(serialized_backing);
+    ) std.mem.Allocator.Error!Self {
+        return .{
+            .backing = (try self.backing.serialize(allocator, writer)).*,
+            .err_written = self.err_written,
+        };
     }
 
     /// Add the given offset to the memory addresses of all pointers in `self`.
@@ -2112,8 +2094,7 @@ const DescStore = struct {
 
     /// Deserialize a DescStore from the provided buffer
     pub fn deserializeFrom(buffer: []align(@alignOf(Desc)) const u8, allocator: Allocator) Allocator.Error!Self {
-        const backing = try DescSafeMultiList.deserializeFrom(buffer, allocator);
-        return Self{ .backing = backing };
+        return fromContents(try DescSafeMultiList.deserializeFrom(buffer, allocator));
     }
 
     /// A type-safe index into the store
@@ -3148,4 +3129,30 @@ test "Store annotation tag provenance follows flex equivalence classes" {
         try store.union_(inferred_ext, empty, .{ .content = .{ .structure = .empty_tag_union }, .rank = .outermost });
         try std.testing.expect(!store.resolveVar(annotation_ext).desc.flags.annotation_tag_ext);
     }
+}
+
+test "mayContainErrorState tracks error descriptors and invalid nominal declarations" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const backing = try store.fresh();
+    const decl_idx = try store.registerNominalDecl(try testNominalDecl(@enumFromInt(1), 3, backing));
+    try std.testing.expect(!store.mayContainErrorState());
+
+    store.markNominalDeclInvalid(decl_idx);
+    try std.testing.expect(store.mayContainErrorState());
+
+    var errs = try Store.init(gpa);
+    defer errs.deinit();
+    const b = try errs.fresh();
+    try std.testing.expect(!errs.mayContainErrorState());
+    try errs.setVarContent(b, .err);
+    try std.testing.expect(errs.mayContainErrorState());
+    try errs.setVarContent(b, .{ .flex = Flex.init() });
+    try std.testing.expect(errs.mayContainErrorState());
+
+    var copy = try errs.clone(gpa);
+    defer copy.deinit();
+    try std.testing.expect(copy.mayContainErrorState());
 }

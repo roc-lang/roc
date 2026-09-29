@@ -237,7 +237,7 @@ const Pass = struct {
         self.remapStaticDataInitializers();
         try self.remapFrozenExports();
         try self.remapErasedFns();
-        self.remapBoxyTableProcs();
+        try self.remapBoxyTableProcs();
         self.remapComptimeSites();
         self.remapProcDebugNames();
         self.compactProcSpecs();
@@ -287,6 +287,8 @@ const Pass = struct {
                     } else if (s.value == .static_data) {
                         try self.markStaticData(s.value.static_data);
                     }
+                    // The fresh form stays available until ARC chooses.
+                    if (s.fresh_alternative) |fresh| try self.markProc(fresh);
                     try self.pushStmt(s.next);
                 },
                 .assign_call => |s| {
@@ -298,7 +300,7 @@ const Pass = struct {
                     try self.markProc(s.proc);
                     try self.pushStmt(s.next);
                 },
-                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
+                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
                 .boxy_tag_match => |s| {
                     try self.pushStmt(s.on_match);
                     try self.pushStmt(s.on_miss);
@@ -364,7 +366,7 @@ const Pass = struct {
 
     fn markBoxyTableProcs(self: *Pass) Allocator.Error!void {
         for (self.result.boxy_method_slots.items) |slot| {
-            if (!slot.present or slot.structural_eq) continue;
+            if (!slot.present) continue;
             try self.markProc(slot.proc);
         }
     }
@@ -388,6 +390,7 @@ const Pass = struct {
                 => {},
                 .list => |elem| try self.plan_stack.append(self.allocator, elem),
                 .box => |boxed| try self.plan_stack.append(self.allocator, boxed),
+                .boxy_box => |boxed| try self.plan_stack.append(self.allocator, boxed.payload),
                 .tuple => |items| try self.plan_stack.appendSlice(self.allocator, items),
                 .record => |fields| try self.plan_stack.appendSlice(self.allocator, fields),
                 .tag_union => |variants| {
@@ -405,6 +408,11 @@ const Pass = struct {
                     for (set.entries) |entry| {
                         try self.markProc(entry.entry);
                         for (entry.captures) |capture| try self.plan_stack.append(self.allocator, capture.plan);
+                        if (entry.boxy) |boxy| for (boxy.captures) |capture| switch (capture.value) {
+                            .value => |plan| try self.plan_stack.append(self.allocator, plan),
+                            .descriptor, .contents_descriptor => {},
+                            .dictionary => {},
+                        };
                     }
                 },
             }
@@ -515,6 +523,7 @@ const Pass = struct {
                     } else if (s.value == .static_data) {
                         s.value.static_data = self.remapStaticData(s.value.static_data);
                     }
+                    if (s.fresh_alternative) |proc| s.fresh_alternative = self.remapProc(proc);
                     const next = s.next;
                     s.next = self.remapStmt(next);
                     try self.pushStmt(next);
@@ -593,7 +602,6 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -827,8 +835,11 @@ const Pass = struct {
             if (kept_count == 0) {
                 for (old_entries) |entry| {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
-                    if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
-                    if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
+                    if (entry.template) |template| {
+                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
+                    }
+                    if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
                 }
                 if (old_entries.len > 0) self.allocator.free(old_entries);
                 set.entries = &.{};
@@ -844,8 +855,11 @@ const Pass = struct {
                     write += 1;
                 } else {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
-                    if (entry.template.evidence.len > 0) self.allocator.free(entry.template.evidence);
-                    if (entry.template.evidence_frames.len > 0) self.allocator.free(entry.template.evidence_frames);
+                    if (entry.template) |template| {
+                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
+                    }
+                    if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
                 }
             }
             if (old_entries.len > 0) self.allocator.free(old_entries);
@@ -853,9 +867,17 @@ const Pass = struct {
         }
     }
 
-    fn remapBoxyTableProcs(self: *Pass) void {
+    fn remapBoxyTableProcs(self: *Pass) Allocator.Error!void {
+        var origins: @TypeOf(self.result.boxy_frozen_method_origins) = .empty;
+        errdefer origins.deinit(self.allocator);
+        var entries = self.result.boxy_frozen_method_origins.iterator();
+        while (entries.next()) |entry| {
+            if (self.maybeRemapProc(entry.key_ptr.*)) |adapter| try origins.put(self.allocator, adapter, entry.value_ptr.*);
+        }
+        self.result.boxy_frozen_method_origins.deinit(self.allocator);
+        self.result.boxy_frozen_method_origins = origins;
         for (self.result.boxy_method_slots.items) |*slot| {
-            if (!slot.present or slot.structural_eq) continue;
+            if (!slot.present) continue;
             slot.proc = self.remapProc(slot.proc);
         }
     }
@@ -889,7 +911,7 @@ const Pass = struct {
 
         var selected_count: usize = 0;
         for (self.result.boxy_method_slots.items) |slot| {
-            if (!slot.present or slot.structural_eq) continue;
+            if (!slot.present) continue;
             const proc_index = @intFromEnum(slot.proc);
             if (proc_index >= proc_count) {
                 reachableProcInvariant("boxy method worker exceeds compact proc_specs len");
@@ -1015,6 +1037,7 @@ const Pass = struct {
                 } else if (s.value == .static_data) {
                     self.verifyStaticDataRef(s.value.static_data);
                 }
+                if (s.fresh_alternative) |proc| self.verifyProcRef(proc, proc_count);
                 self.verifyStmtRef(s.next, stmt_count);
             },
             .assign_call => |s| {
@@ -1035,7 +1058,6 @@ const Pass = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
-            .assign_boxy_eq,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -1334,14 +1356,13 @@ test "reachable proc pass publishes exact deduplicated boxy worker procs" {
     }, .none);
     try result.root_procs.append(std.testing.allocator, root_proc);
 
-    // This pass only inspects each slot's presence, structural-equality status,
-    // and worker proc; method identities are deliberately never read here.
+    // This pass only inspects each slot's presence and worker proc; method
+    // identities are deliberately never read here.
     try result.boxy_method_slots.appendSlice(std.testing.allocator, &.{
         .{ .method = undefined, .proc = second_worker },
         .{ .method = undefined, .proc = second_worker },
         .{ .method = undefined, .proc = first_worker },
         .{ .present = false, .method = undefined, .proc = ignored_proc },
-        .{ .method = undefined, .proc = ignored_proc, .structural_eq = true },
     });
 
     try run(&result);
@@ -1520,6 +1541,23 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
     try run(&result);
     try std.testing.expectEqual(@as(usize, 0), result.erased_fns.items[0].entries.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.evidence.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.evidence_frames.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence_frames.len);
+}
+
+test "reachable proc pass retains frozen method provenance after implementation inlining" {
+    const gpa = std.testing.allocator;
+    var result = try LirProgram.Result.init(gpa, @import("base").target.TargetUsize.native);
+    defer result.deinit();
+    const local = try result.store.addLocal(.{ .layout_idx = .zst });
+    const body = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const implementation_identity = LIR.ProcIdentity.forTest(81);
+    _ = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = implementation_identity, .args = .empty(), .body = body, .ret_layout = .zst }, .none);
+    const adapter = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(82), .args = .empty(), .body = body, .ret_layout = .zst }, .none);
+    try result.root_procs.append(gpa, adapter);
+    const origin = LirProgram.BoxyFrozenMethodOrigin{ .worker = implementation_identity, .requirement_module = .{ .bytes = @splat(0) }, .requirement_type = @enumFromInt(1), .callable_module = .{ .bytes = @splat(0) }, .callable_type = @enumFromInt(2) };
+    try result.boxy_frozen_method_origins.put(gpa, adapter, origin);
+    try run(&result);
+    try std.testing.expectEqual(@as(usize, 1), result.store.procSpecCount());
+    try std.testing.expectEqualDeep(origin, result.boxy_frozen_method_origins.get(result.root_procs.items[0]).?);
 }

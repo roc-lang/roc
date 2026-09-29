@@ -1601,8 +1601,11 @@ pub fn collectNameReferences(
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
             .e_type_dispatch_call => |call| {
-                if (cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
-                    try out.put(allocator, binding.def_idx, {});
+                switch (call.owner) {
+                    .statement => |stmt| if (cir.lookupMethodBindingForOwnerConst(stmt, call.method_name)) |binding| {
+                        try out.put(allocator, binding.def_idx, {});
+                    },
+                    .dispatcher => {},
                 }
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },

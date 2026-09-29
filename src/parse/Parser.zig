@@ -94,7 +94,7 @@ const BracketMatches = struct {
                     if (any_open.pop()) |open| any[open] = index;
                     if (curly_open.pop()) |open| curly[open] = index;
                 },
-                .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotInt, .NoSpaceDotInt, .DotLowerIdent, .NoSpaceDotLowerIdent, .DotQuestionLowerIdent, .NoSpaceDotQuestionLowerIdent, .DotUpperIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedDotQuestionUnicodeIdent, .MalformedNoSpaceDotQuestionUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenStringInterpolation, .CloseStringInterpolation, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpDoubleDotLessThan, .OpDoubleDotEquals, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {},
+                .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotInt, .NoSpaceDotInt, .DotLowerIdent, .NoSpaceDotLowerIdent, .DotQuestionLowerIdent, .NoSpaceDotQuestionLowerIdent, .DotUpperIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedDotQuestionUnicodeIdent, .MalformedNoSpaceDotQuestionUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenStringInterpolation, .CloseStringInterpolation, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpDoubleDotLessThan, .OpDoubleDotEquals, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwForBang, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {},
             }
         }
         return .{ .any = any, .curly = curly, .round = round };
@@ -1729,6 +1729,7 @@ const RequiresEntriesResult = union(enum) {
 };
 
 fn parseRequiresEntriesTokens(self: *Parser) std.mem.Allocator.Error!RequiresEntriesResult {
+    const start = self.pos;
     self.expect(.OpenCurly) catch {
         return .{ .malformed = .expected_requires_rigids_open_curly };
     };
@@ -1828,7 +1829,9 @@ fn parseRequiresEntriesTokens(self: *Parser) std.mem.Allocator.Error!RequiresEnt
             return .{ .malformed = .expected_requires_signatures_close_curly };
         };
     }
-    return .{ .span = try self.store.requiresEntrySpanFrom(requires_entries_top) };
+    var entries = try self.store.requiresEntrySpanFrom(requires_entries_top);
+    entries.region = .{ .start = start, .end = self.pos };
+    return .{ .span = entries };
 }
 
 fn parsePatternString(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx {
@@ -2497,13 +2500,20 @@ const PatternTupleState = struct {
     scratch_top: u32,
 };
 
+const StatementForPatternState = struct {
+    start: Token.Idx,
+    kind: AST.ForKind,
+};
+
 const StatementForExprState = struct {
     start: Token.Idx,
+    kind: AST.ForKind,
     patt: AST.Pattern.Idx,
 };
 
 const StatementForBodyState = struct {
     start: Token.Idx,
+    kind: AST.ForKind,
     patt: AST.Pattern.Idx,
     expr: AST.Expr.Idx,
 };
@@ -2807,15 +2817,23 @@ const ExprMatchBranchAfterBodyState = struct {
     guard: ?AST.Expr.Idx,
 };
 
+const ExprForPatternState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    kind: AST.ForKind,
+};
+
 const ExprForAfterListState = struct {
     start: Token.Idx,
     min_bp: u8,
+    kind: AST.ForKind,
     pattern: AST.Pattern.Idx,
 };
 
 const ExprForAfterBodyState = struct {
     start: Token.Idx,
     min_bp: u8,
+    kind: AST.ForKind,
     pattern: AST.Pattern.Idx,
     list_expr: AST.Expr.Idx,
 };
@@ -2848,12 +2866,14 @@ const OpenSyntaxStack = struct {
     expr_match_after_pattern: std.ArrayList(ExprMatchBranchAfterPatternState) = .empty,
     expr_match_after_guard: std.ArrayList(ExprMatchBranchAfterGuardState) = .empty,
     expr_match_after_body: std.ArrayList(ExprMatchBranchAfterBodyState) = .empty,
+    expr_for_pattern: std.ArrayList(ExprForPatternState) = .empty,
     expr_for_after_list: std.ArrayList(ExprForAfterListState) = .empty,
     expr_for_after_body: std.ArrayList(ExprForAfterBodyState) = .empty,
     expr_lambda_args: std.ArrayList(ExprLambdaArgsState) = .empty,
     statement_token: std.ArrayList(Token.Idx) = .empty,
     statement_decl_body: std.ArrayList(StatementDeclBodyState) = .empty,
     statement_var_body: std.ArrayList(StatementVarBodyState) = .empty,
+    statement_for_pattern: std.ArrayList(StatementForPatternState) = .empty,
     statement_for_expr: std.ArrayList(StatementForExprState) = .empty,
     statement_for_body: std.ArrayList(StatementForBodyState) = .empty,
     statement_while_body: std.ArrayList(StatementWhileBodyState) = .empty,
@@ -3806,12 +3826,13 @@ fn runExprStatementKernel(
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
-                if (tok == .KwFor) {
+                if (tok == .KwFor or tok == .KwForBang) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.pushPattern(open_allocator, .expr_for_pattern, ExprAfterExprState, .{
+                    try open_syntax.pushPattern(open_allocator, .expr_for_pattern, ExprForPatternState, .{
                         .start = start,
                         .min_bp = expr_state.min_bp,
+                        .kind = if (tok == .KwForBang) .stream else .iter,
                     });
                     pattern_root_state = .{
                         .outer_start = self.pos,
@@ -4556,6 +4577,7 @@ fn runExprStatementKernel(
                         try open_syntax.pushExpr(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
                             .start = state.start,
                             .min_bp = state.min_bp,
+                            .kind = state.kind,
                             .pattern = state.pattern,
                             .list_expr = completed,
                         });
@@ -4566,6 +4588,7 @@ fn runExprStatementKernel(
                         const state = open_syntax.popExprPayload(.expr_for_body, ExprForAfterBodyState);
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .for_expr = .{
+                            .kind = state.kind,
                             .region = .{ .start = state.start, .end = self.pos },
                             .patt = state.pattern,
                             .expr = state.list_expr,
@@ -4626,6 +4649,7 @@ fn runExprStatementKernel(
                         last_expr = null;
                         try open_syntax.pushExpr(open_allocator, .statement_for_body, StatementForBodyState, .{
                             .start = state.start,
+                            .kind = state.kind,
                             .patt = state.patt,
                             .expr = completed,
                         });
@@ -4636,6 +4660,7 @@ fn runExprStatementKernel(
                         const state = open_syntax.popExprPayload(.statement_for_body, StatementForBodyState);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .@"for" = .{
+                            .kind = state.kind,
                             .region = .{ .start = state.start, .end = self.pos },
                             .patt = state.patt,
                             .expr = state.expr,
@@ -6307,10 +6332,13 @@ fn runExprStatementKernel(
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
-                if (tok == .KwFor) {
+                if (tok == .KwFor or tok == .KwForBang) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.pushPattern(open_allocator, .statement_for_pattern, Token.Idx, start);
+                    try open_syntax.pushPattern(open_allocator, .statement_for_pattern, StatementForPatternState, .{
+                        .start = start,
+                        .kind = if (tok == .KwForBang) .stream else .iter,
+                    });
                     pattern_root_state = .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
@@ -6705,13 +6733,14 @@ fn runExprStatementKernel(
             if (open_syntax.peekPattern()) |kind| {
                 switch (kind) {
                     .expr_for_pattern => {
-                        const state = open_syntax.popPatternPayload(.expr_for_pattern, ExprAfterExprState);
+                        const state = open_syntax.popPatternPayload(.expr_for_pattern, ExprForPatternState);
                         last_pattern = null;
                         if (self.peek() == .KwIn) {
                             self.advance();
                             try open_syntax.pushExpr(open_allocator, .expr_for_list, ExprForAfterListState, .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
+                                .kind = state.kind,
                                 .pattern = completed,
                             });
                             expr_state = .{ .start = self.pos, .min_bp = 0 };
@@ -6793,12 +6822,13 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     },
                     .statement_for_pattern => {
-                        const start = open_syntax.popPatternPayload(.statement_for_pattern, Token.Idx);
+                        const state = open_syntax.popPatternPayload(.statement_for_pattern, StatementForPatternState);
                         last_pattern = null;
                         if (self.peek() == .KwIn) {
                             self.advance();
                             try open_syntax.pushExpr(open_allocator, .statement_for_expr, StatementForExprState, .{
-                                .start = start,
+                                .start = state.start,
+                                .kind = state.kind,
                                 .patt = completed,
                             });
                             expr_state = .{ .start = self.pos, .min_bp = 0 };

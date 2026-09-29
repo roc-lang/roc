@@ -1332,8 +1332,8 @@ const core_tests = [_]TestCase{
     .{ .name = "problem: int minus dec type mismatch", .source = "1.I64 - 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int times dec type mismatch", .source = "1.I64 * 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int div dec type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .problem = {} } },
-    .{ .name = "problem: F32.is_eq is intentionally unavailable", .source = "F32.is_eq(1.0.F32, 1.0.F32)", .expected = .{ .problem = {} } },
-    .{ .name = "problem: F64.is_eq is intentionally unavailable", .source = "F64.is_eq(1.0.F64, 1.0.F64)", .expected = .{ .problem = {} } },
+    .{ .name = "inspect: F32 opts in to qualified is_eq dispatch", .source = "F32.is_eq(1.0.F32, 1.0.F32)", .expected = .{ .inspect_str = "True" } },
+    .{ .name = "inspect: F64 opts in to qualified is_eq dispatch", .source = "F64.is_eq(1.0.F64, 1.0.F64)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: F32 opts in to receiver is_eq dispatch", .source = "1.0.F32.is_eq(1.0.F32)", .expected = .{ .inspect_str = "True" } },
     .{
         .name = "pipe inserts its lhs and accepts optional direct empty parens",

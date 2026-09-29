@@ -33,8 +33,10 @@ const ELF = struct {
     const SHT_SYMTAB = 2;
     const SHT_STRTAB = 3;
     const SHT_RELA = 4;
+    const SHT_NOBITS = 8;
 
     // Section flags
+    const SHF_WRITE = 0x1;
     const SHF_ALLOC = 0x2;
     const SHF_EXECINSTR = 0x4;
     const SHF_INFO_LINK = 0x40;
@@ -178,6 +180,8 @@ pub const ElfWriter = struct {
     text: []const u8,
     data: std.ArrayList(u8),
     rodata: []const u8,
+    /// Size of `.bss`, which the file declares without storing bytes.
+    zero_fill_size: u64,
 
     // Symbol table
     symbols: std.ArrayList(Symbol),
@@ -216,6 +220,7 @@ pub const ElfWriter = struct {
             .text = &.{},
             .data = .empty,
             .rodata = &.{},
+            .zero_fill_size = 0,
             .symbols = .empty,
             .text_relocs = .empty,
             .rodata_relocs = .empty,
@@ -249,6 +254,10 @@ pub const ElfWriter = struct {
     }
 
     /// Borrow read-only data section contents until write completes.
+    pub fn setZeroFill(self: *Self, size: u64) void {
+        self.zero_fill_size = size;
+    }
+
     pub fn setRodata(self: *Self, rodata: []const u8) void {
         self.rodata = rodata;
     }
@@ -379,7 +388,8 @@ pub const ElfWriter = struct {
         const SHIDX_DEBUG_LINE = 8;
         const SHIDX_DEBUG_ABBREV = 9;
         const SHIDX_DEBUG_INFO = 10;
-        const NUM_SECTIONS = 13;
+        const SHIDX_BSS = 13;
+        const NUM_SECTIONS = 14;
 
         // Add section names to shstrtab
         const shname_text = try self.addString(&self.shstrtab, ".text");
@@ -394,6 +404,7 @@ pub const ElfWriter = struct {
         const shname_debug_info = try self.addString(&self.shstrtab, ".debug_info");
         const shname_rela_debug_line = try self.addString(&self.shstrtab, ".rela.debug_line");
         const shname_rela_debug_info = try self.addString(&self.shstrtab, ".rela.debug_info");
+        const shname_bss = try self.addString(&self.shstrtab, ".bss");
 
         const debug_target_sections = [_]u16{ SHIDX_TEXT, SHIDX_DEBUG_LINE, SHIDX_DEBUG_ABBREV };
         const WRITER_SYMBOL_OFFSET: u32 = 1 + debug_target_sections.len;
@@ -538,7 +549,7 @@ pub const ElfWriter = struct {
         for (self.symbols.items) |sym| {
             const st_info: u8 = blk: {
                 const bind: u8 = if (sym.is_global) ELF.STB_GLOBAL else ELF.STB_LOCAL;
-                const sym_type: u8 = if (sym.is_function) ELF.STT_FUNC else if (sym.section == .rodata) ELF.STT_OBJECT else ELF.STT_NOTYPE;
+                const sym_type: u8 = if (sym.is_function) ELF.STT_FUNC else if (sym.section == .rodata or sym.section == .bss) ELF.STT_OBJECT else ELF.STT_NOTYPE;
                 break :blk (bind << 4) | sym_type;
             };
 
@@ -546,7 +557,7 @@ pub const ElfWriter = struct {
                 .text => SHIDX_TEXT,
                 .data => 0, // Would be data section index
                 .rodata => SHIDX_RODATA,
-                .bss => 0,
+                .bss => SHIDX_BSS,
                 .undef => ELF.SHN_UNDEF,
             };
 
@@ -772,6 +783,22 @@ pub const ElfWriter = struct {
             .sh_entsize = @sizeOf(Elf64_Rela),
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&shdr_rela_debug_info));
+
+        // 13: .bss, declared by size alone; SHT_NOBITS stores no bytes, so
+        // its file offset only has to be inside the file.
+        const shdr_bss = Elf64_Shdr{
+            .sh_name = shname_bss,
+            .sh_type = ELF.SHT_NOBITS,
+            .sh_flags = ELF.SHF_ALLOC | ELF.SHF_WRITE,
+            .sh_addr = 0,
+            .sh_offset = shdr_offset,
+            .sh_size = self.zero_fill_size,
+            .sh_link = 0,
+            .sh_info = 0,
+            .sh_addralign = 16,
+            .sh_entsize = 0,
+        };
+        output.appendSliceAssumeCapacity(std.mem.asBytes(&shdr_bss));
         std.debug.assert(output.items.len == object_size);
     }
 

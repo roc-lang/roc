@@ -833,7 +833,10 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "(" });
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
             try frames.append(allocator, .{ .write = "." });
-            const alias_str = try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@intFromEnum(method_call.type_dispatch_stmt)});
+            const alias_str = switch (method_call.owner) {
+                .statement => |stmt| try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@intFromEnum(stmt)}),
+                .dispatcher => |dispatcher| try std.fmt.allocPrint(allocator, "__type_dispatch_var_{d}__", .{@intFromEnum(dispatcher)}),
+            };
             try frames.append(allocator, .{ .write = alias_str });
         },
         .e_runtime_error => try self.write("<runtime_error>"),
@@ -895,7 +898,10 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .expr = for_expr.expr });
             try frames.append(allocator, .{ .write = " in " });
             try frames.append(allocator, .{ .pattern = for_expr.patt });
-            try frames.append(allocator, .{ .write = "for " });
+            try frames.append(allocator, .{ .write = switch (for_expr.kind) {
+                .iter => "for ",
+                .stream => "for! ",
+            } });
         },
         .e_hosted_lambda => try self.write("<hosted_lambda>"),
         .e_run_low_level => |run_ll| try self.output.print(self.allocator, "<run_low_level: {s}>", .{@tagName(run_ll.op)}),

@@ -56,6 +56,13 @@ fn typeDispatchOwnerVar(module: TypedCIR.Module, stmt_idx: CIR.Statement.Idx) Va
     @panic("type dispatch owner statement was not a type-var alias or type alias");
 }
 
+fn typeDispatchCallDispatcherVar(module: TypedCIR.Module, owner: CIR.TypeDispatchOwner) Var {
+    return switch (owner) {
+        .statement => |stmt_idx| typeDispatchOwnerVar(module, stmt_idx),
+        .dispatcher => |dispatcher| dispatcher,
+    };
+}
+
 /// Public `ProcedureTemplateLookup` declaration.
 pub const ProcedureTemplateLookup = struct {
     module_idx: u32,
@@ -1379,17 +1386,22 @@ pub const EvidenceChainIndex = struct {
 
 /// Reference to an enclosing evidence slot. Explicit per-use callable
 /// instantiations can share the slot's target identity without sharing its
-/// callable instantiation. An independent rank-1 relation rebuilds
+/// callable instantiation. An indexed contract supplies the exact per-use
+/// evidence when the target requires checked records. Otherwise an independent
+/// rank-1 relation rebuilds
 /// callable-derived nested evidence from its callable. It retains the slot's
 /// vector when the target schema is target-owned, or when a recorded
 /// where-method use proves the signature copy shares every non-marker leaf.
 pub const ConstraintEvidenceRef = struct {
-    /// Composite requirements name their exact owner parameter in the checked
-    /// module's evidence pool, so dictionary ABIs need no lexical type search.
+    /// Requirements outside the callable signature and independent callable
+    /// contracts name their exact owner in the checked evidence pool, so
+    /// dictionary ABIs need no lexical type search.
     scheme_param: ?u32 = null,
     index: EvidenceChainIndex,
     independent_callable: bool = false,
     reuse_slot_nested_evidence: bool = false,
+    /// Index of an exact per-call contract alongside the shared target slot.
+    callable_contract: ?u32 = null,
 };
 
 /// Public `CheckedEvidence` declaration.
@@ -1409,6 +1421,8 @@ pub const CheckedEvidence = struct {
     /// Literal-defaulting constraints remain in canonical evidence vectors for
     /// specialization, but do not become Boxy dictionary requirements.
     runtime_dictionary: bool,
+    /// Independent callable contracts in `evidence_refs`, sharing one target slot.
+    callable_contracts: artifact_serialize.Span = .{},
 
     pub const Resolution = union(enum) {
         direct: EvidenceNodeId,
@@ -1518,6 +1532,8 @@ pub const EvidencePathStep = dispatch_evidence.PathStep;
 /// a constraint's fn type, or is an open-row remainder erased on closure).
 pub const EvidenceParamRecord = struct {
     method: canonical.MethodNameId,
+    /// Range of independent callable types in the template table.
+    callable_contracts: artifact_serialize.Span = .{},
     dispatcher_ty: CheckedTypeId,
     /// The constraint's callable type in the owning scheme: the interface
     /// the selected target must satisfy. Relating a target to it binds the
@@ -1636,6 +1652,7 @@ pub const CheckedCallResolution = union(enum) {
         /// its callable instantiation. This is set only for a recorded
         /// where-method use, whose signature copy shares every non-marker leaf.
         reuse_slot_nested_evidence: bool = false,
+        callable_contract: ?u32 = null,
     },
     /// The checker chose a compiler-derived structural implementation.
     structural: StructuralDerivation,
@@ -1977,6 +1994,7 @@ pub const StaticDispatchPlanTable = struct {
             if (tag != .expr_dispatch_call and
                 tag != .expr_interpolation and
                 tag != .expr_type_dispatch_call and
+                tag != .expr_type_dispatch_call_dispatcher and
                 tag != .expr_method_eq) continue;
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
@@ -2049,13 +2067,13 @@ pub const StaticDispatchPlanTable = struct {
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
-                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt)),
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchCallDispatcherVar(module, dispatch_call.owner)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                     try plan_sources.append(allocator, .{
-                        .dispatcher_var = typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt),
+                        .dispatcher_var = typeDispatchCallDispatcherVar(module, dispatch_call.owner),
                         .constraint_fn_var = dispatch_call.constraint_fn_var,
                     });
                 },
@@ -2371,14 +2389,14 @@ pub const StaticDispatchPlanTable = struct {
                 const next_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &next_args);
 
                 const iter_call = IteratorDispatchCall{
-                    .method = try names.internMethodName("iter"),
+                    .method = try names.internMethodIdent(module.identStoreConst(), @bitCast(for_plan.iter_method_ident)),
                     .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(iterable_idx)),
                     .callable_ty = iter_callable_ty,
                     .dispatcher_arg_index = 0,
                     .args = iter_ar,
                 };
                 const next_call = IteratorDispatchCall{
-                    .method = try names.internMethodName("next"),
+                    .method = try names.internMethodIdent(module.identStoreConst(), @bitCast(for_plan.next_method_ident)),
                     .dispatcher_ty = iterator_ty,
                     .callable_ty = next_callable_ty,
                     .dispatcher_arg_index = 0,
@@ -2624,7 +2642,7 @@ const StaticDispatchConstraintIndex = struct {
                 module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var
             else if (node_tag == .expr_interpolation)
                 module.expr(expr_idx).data.e_interpolation.constraint_fn_var
-            else if (node_tag == .expr_type_dispatch_call)
+            else if (node_tag == .expr_type_dispatch_call or node_tag == .expr_type_dispatch_call_dispatcher)
                 module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var
             else if (node_tag == .expr_method_eq)
                 module.expr(expr_idx).data.e_method_eq.constraint_fn_var

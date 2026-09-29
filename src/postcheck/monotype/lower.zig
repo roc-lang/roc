@@ -855,12 +855,23 @@ const CallableInstantiation = struct {
     callable_ty: checked.CheckedTypeId,
 };
 
+/// The substitution checking applied to a selected target's scheme at the
+/// edge that selected it: one checked type per quantified variable, in the
+/// target scheme's `scheme_vars` order, read in `view`.
+const CheckedTargetSubstitution = struct {
+    view: ModuleView,
+    tys: []const checked.CheckedTypeId,
+};
+
 const DraftLocalProcContextId = enum(u32) { _ };
 
 const MethodLookup = struct {
     view: ModuleView,
     target: static_dispatch.MethodTarget,
     instantiation: ?CallableInstantiation = null,
+    /// The checked edge's substitution for the target's scheme, when checking
+    /// selected this target for this relation.
+    substitution: ?CheckedTargetSubstitution = null,
     /// Exact lexical declaration instance for a local method target. Checked
     /// binder ids identify source syntax, not the specialization-local capture
     /// environment in which that declaration was lowered.
@@ -882,6 +893,7 @@ const SpecEvidence = union(enum) {
     /// index from a forwarding frame may survive into the destination schema.
     from_callable: struct {
         independent_callable: bool,
+        callable_contracts: []const SpecEvidence = &.{},
     },
     /// Abstract local scheme parameter, supplied by the checked use edge.
     from_scheme: u32,
@@ -906,6 +918,7 @@ const CheckedSpecStructuralEvidence = struct {
 const SpecStructuralEvidence = struct {
     derivation: static_dispatch.StructuralDerivation,
     checked: ?CheckedSpecStructuralEvidence = null,
+    callable_contracts: []const SpecEvidence = &.{},
 };
 
 const SpecEvidenceTarget = struct {
@@ -914,7 +927,57 @@ const SpecEvidenceTarget = struct {
     instantiation: ?CallableInstantiation,
     local_proc_context: ?DraftLocalProcContextId,
     nested: NestedSpecEvidence,
+    /// The substitution checking applied to the target's scheme where it
+    /// selected the target, which binds quantified variables that neither the
+    /// target's root nor its requirement's callable reaches. It is consumed
+    /// when the target specializes and is not part of the evidence's
+    /// identity: those variables are determined by the selected targets, and
+    /// the specialization is keyed by its completed substitution.
+    substitution: ?CheckedTargetSubstitution = null,
+    callable_contracts: []const SpecEvidence = &.{},
 };
+
+fn evidenceCallableContracts(evidence: SpecEvidence) []const SpecEvidence {
+    return switch (evidence) {
+        .target => |target| target.callable_contracts,
+        .structural => |structural| structural.callable_contracts,
+        .from_callable => |use| use.callable_contracts,
+        .from_scheme, .unreachable_value, .checked_error => &.{},
+    };
+}
+
+fn withCallableContracts(arena: Allocator, evidence: SpecEvidence, contracts: []const SpecEvidence) Allocator.Error!SpecEvidence {
+    const current = evidenceCallableContracts(evidence);
+    if (current.len == contracts.len and (contracts.len == 0 or current.ptr == contracts.ptr)) return evidence;
+    return switch (evidence) {
+        .target => |target| blk: {
+            const copy = try arena.create(SpecEvidenceTarget);
+            copy.* = target.*;
+            copy.callable_contracts = contracts;
+            break :blk .{ .target = copy };
+        },
+        .structural => |structural| blk: {
+            var copy = structural;
+            copy.callable_contracts = contracts;
+            break :blk .{ .structural = copy };
+        },
+        .from_callable => |use| .{ .from_callable = .{
+            .independent_callable = use.independent_callable,
+            .callable_contracts = contracts,
+        } },
+        .from_scheme, .unreachable_value, .checked_error => evidence,
+    };
+}
+
+/// An empty side vector explicitly leaves callable-derived evidence to the
+/// request. Record-owned evidence must always have its exact indexed contract.
+fn selectCallableContract(evidence: SpecEvidence, index: ?u32) ?SpecEvidence {
+    const contract_index = index orelse return null;
+    const contracts = evidenceCallableContracts(evidence);
+    if (contracts.len == 0) return null;
+    if (contract_index >= contracts.len) Common.invariant("dispatch callable contract index out of bounds");
+    return contracts[contract_index];
+}
 
 /// A target's own requirements: resolved by checked evidence in checked module data,
 /// or synthesized lazily at the target's consumption site (compiler-generated
@@ -1100,6 +1163,19 @@ const TargetEvidenceSource = union(enum) {
     materialized_contract: []const SpecEvidence,
 };
 
+/// The substitution an evidence node recorded for its target's scheme, or
+/// null for a monomorphic target.
+fn checkedTargetSubstitution(site_view: ModuleView, node: static_dispatch.EvidenceNode) ?CheckedTargetSubstitution {
+    if (node.subst.len == 0) return null;
+    const table = site_view.static_dispatch_plans;
+    const start: usize = node.subst.start;
+    const len: usize = node.subst.len;
+    if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
+        Common.invariant("checked target substitution range was outside its checked module");
+    }
+    return .{ .view = site_view, .tys = table.site_substitutions[start .. start + len] };
+}
+
 /// A materialized contract already names the checked targets and their nested
 /// contracts. Once its callable relations have been consumed, those edge-local
 /// callable identities must not distinguish otherwise identical specializations.
@@ -1108,19 +1184,58 @@ fn normalizeMaterializedEvidence(
     arena: Allocator,
     contract: []const SpecEvidence,
 ) Allocator.Error![]const SpecEvidence {
-    var normalized: ?[]SpecEvidence = null;
-    for (contract, 0..) |entry, index| switch (entry) {
-        .target => |target| {
-            if (target.instantiation == null) continue;
-            if (normalized == null) normalized = try arena.dupe(SpecEvidence, contract);
-            const replacement = try arena.create(SpecEvidenceTarget);
-            replacement.* = target.*;
-            replacement.instantiation = null;
-            normalized.?[index] = .{ .target = replacement };
-        },
-        .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+    // Each entry's callable contracts normalize first; a contract vector is
+    // a frame of its own, so contract nesting never becomes native call depth.
+    const Frame = struct {
+        contract: []const SpecEvidence,
+        next: usize = 0,
+        normalized: ?[]SpecEvidence = null,
     };
-    return normalized orelse contract;
+    // Shallow contract nesting keeps its frames in place, so an unchanged
+    // vector allocates nothing.
+    var frame_fallback = std.heap.stackFallback(8 * @sizeOf(Frame), arena);
+    const frame_allocator = frame_fallback.get();
+    var frames = std.ArrayList(Frame).empty;
+    defer frames.deinit(frame_allocator);
+    try frames.append(frame_allocator, .{ .contract = contract });
+    var delivered: ?[]const SpecEvidence = null;
+    while (true) {
+        const frame = &frames.items[frames.items.len - 1];
+        if (frame.next == frame.contract.len and delivered == null) {
+            const finished = frames.pop().?;
+            const result = finished.normalized orelse finished.contract;
+            if (frames.items.len == 0) return result;
+            delivered = result;
+            continue;
+        }
+        const entry = frame.contract[frame.next];
+        const original_contracts = evidenceCallableContracts(entry);
+        const contracts = delivered orelse if (original_contracts.len == 0) original_contracts else {
+            try frames.append(frame_allocator, .{ .contract = original_contracts });
+            continue;
+        };
+        delivered = null;
+        frame.next += 1;
+        const contracts_changed = contracts.ptr != original_contracts.ptr;
+        var replacement = entry;
+        switch (entry) {
+            .target => |target| {
+                if (target.instantiation == null and !contracts_changed) continue;
+                const copy = try arena.create(SpecEvidenceTarget);
+                copy.* = target.*;
+                copy.instantiation = null;
+                copy.callable_contracts = contracts;
+                replacement = .{ .target = copy };
+            },
+            .structural, .from_callable => {
+                if (!contracts_changed) continue;
+                replacement = try withCallableContracts(arena, entry, contracts);
+            },
+            .from_scheme, .unreachable_value, .checked_error => continue,
+        }
+        if (frame.normalized == null) frame.normalized = try arena.dupe(SpecEvidence, frame.contract);
+        frame.normalized.?[frame.next - 1] = replacement;
+    }
 }
 
 fn substitutionsShareClasses(graph: *InstGraph, left: SpecSubstitution, right: SpecSubstitution) bool {
@@ -2582,6 +2697,10 @@ fn specEvidenceShallowEql(
     b: SpecEvidence,
     pending: *std.ArrayList(SpecEvidencePair),
 ) Allocator.Error!bool {
+    const a_contracts = evidenceCallableContracts(a);
+    const b_contracts = evidenceCallableContracts(b);
+    if (a_contracts.len != b_contracts.len) return false;
+    for (a_contracts, b_contracts) |a_contract, b_contract| try pending.append(allocator, .{ .a = a_contract, .b = b_contract });
     return switch (a) {
         .target => |a_target| switch (b) {
             .target => |b_target| blk: {
@@ -2619,7 +2738,7 @@ fn specEvidenceShallowEql(
             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => false,
         },
         .from_callable => |a_use| switch (b) {
-            .from_callable => |b_use| std.meta.eql(a_use, b_use),
+            .from_callable => |b_use| a_use.independent_callable == b_use.independent_callable,
             .target, .structural, .from_scheme, .unreachable_value, .checked_error => false,
         },
         .from_scheme => |index| b == .from_scheme and b.from_scheme == index,
@@ -2669,11 +2788,14 @@ const SpecEvidenceWalk = struct {
         walk.pending.deinit(allocator);
     }
 
-    /// The next evidence entry; a target's nested evidence is queued.
+    /// The next evidence entry; its callable contracts and a target's nested
+    /// evidence are queued.
     fn next(walk: *SpecEvidenceWalk, allocator: Allocator, cursor: *[]const SpecEvidence) Allocator.Error!?SpecEvidence {
         while (cursor.len == 0) cursor.* = walk.pending.pop() orelse return null;
         const entry = cursor.*[0];
         cursor.* = cursor.*[1..];
+        const contracts = evidenceCallableContracts(entry);
+        if (contracts.len != 0) try walk.pending.append(allocator, contracts);
         switch (entry) {
             .target => |target| switch (target.nested) {
                 .resolved => |nested| try walk.pending.append(allocator, nested),
@@ -5687,16 +5809,19 @@ const Builder = struct {
         };
     }
 
-    /// A stored evidence vector whose entries are serializing; `target`
-    /// holds the entry whose nested vector is serializing above it.
+    /// A stored evidence vector whose entries are serializing; `pending`
+    /// holds the entry whose nested vector or callable contracts are
+    /// serializing above it.
     const ConstFnEvidenceFrame = struct {
         evidence: []const SpecEvidence,
         next: usize = 0,
-        target: ?struct { index: usize, nested_start: usize } = null,
+        pending: ?struct { root_index: usize, stage: enum { nested, contracts }, nested_start: usize } = null,
     };
 
-    /// Serialize an evidence tree in pre-order. Nested evidence follows type
-    /// nesting, so each nested vector is a frame rather than a native call.
+    /// Serialize an evidence tree in pre-order: each entry's node, its
+    /// nested evidence, then its callable contracts. Nested evidence follows
+    /// type nesting, so each nested vector is a frame rather than a native
+    /// call.
     fn appendConstFnEvidence(
         self: *Builder,
         nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
@@ -5711,24 +5836,36 @@ const Builder = struct {
                 const finished = frames.pop().?;
                 if (frames.items.len == 0) return;
                 const parent = &frames.items[frames.items.len - 1];
-                const pending = parent.target.?;
-                parent.target = null;
-                const target = parent.evidence[parent.next].target;
-                setConstFnTargetNode(nodes, pending.index, target, .{ .resolved = .{
-                    .count = @intCast(finished.evidence.len),
-                    .subtree_len = @intCast(nodes.items.len - pending.nested_start),
-                } });
+                const pending = parent.pending.?;
+                parent.pending = null;
+                const entry = parent.evidence[parent.next];
+                switch (pending.stage) {
+                    .nested => {
+                        setConstFnTargetNode(nodes, pending.root_index, entry.target, .{ .resolved = .{
+                            .count = @intCast(finished.evidence.len),
+                            .subtree_len = @intCast(nodes.items.len - pending.nested_start),
+                        } });
+                        const contracts = evidenceCallableContracts(entry);
+                        if (contracts.len != 0) {
+                            parent.pending = .{ .root_index = pending.root_index, .stage = .contracts, .nested_start = nodes.items.len };
+                            try frames.append(self.allocator, .{ .evidence = contracts });
+                            continue;
+                        }
+                    },
+                    .contracts => setConstFnCallableContractCount(nodes, pending.root_index, finished.evidence.len),
+                }
                 parent.next += 1;
                 continue;
             }
-            switch (frame.evidence[frame.next]) {
+            const entry = frame.evidence[frame.next];
+            const root_index = nodes.items.len;
+            switch (entry) {
                 .target => |target| {
-                    const target_index = nodes.items.len;
                     try nodes.append(self.allocator, undefined);
                     switch (target.nested) {
-                        .synthesize => setConstFnTargetNode(nodes, target_index, target, .from_callable),
+                        .synthesize => setConstFnTargetNode(nodes, root_index, target, .from_callable),
                         .resolved => |resolved| {
-                            frame.target = .{ .index = target_index, .nested_start = nodes.items.len };
+                            frame.pending = .{ .root_index = root_index, .stage = .nested, .nested_start = nodes.items.len };
                             try frames.append(self.allocator, .{ .evidence = resolved });
                             continue;
                         },
@@ -5755,7 +5892,22 @@ const Builder = struct {
                 .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
                 .checked_error => try nodes.append(self.allocator, .checked_error),
             }
+            const contracts = evidenceCallableContracts(entry);
+            if (contracts.len != 0) {
+                frame.pending = .{ .root_index = root_index, .stage = .contracts, .nested_start = nodes.items.len };
+                try frames.append(self.allocator, .{ .evidence = contracts });
+                continue;
+            }
             frame.next += 1;
+        }
+    }
+
+    fn setConstFnCallableContractCount(nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence), root_index: usize, contract_count: usize) void {
+        switch (nodes.items[root_index]) {
+            .target => |*target| target.callable_contracts = @intCast(contract_count),
+            .structural => |*structural| structural.callable_contracts = @intCast(contract_count),
+            .from_callable => |*use| use.callable_contracts = @intCast(contract_count),
+            .from_scheme, .unreachable_value, .checked_error => unreachable,
         }
     }
 
@@ -18750,11 +18902,19 @@ const ActiveConstBindingScope = struct {
 const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
-    kind: enum { procedure, method_contract, local_method_contract } = .procedure,
+    kind: enum { procedure, method_signature, method_contract, local_method_contract } = .procedure,
     family: DraftTemplateFamilyAddress,
     evidence_digest: [32]u8,
+    /// Bucket selector over the request's exact identity bytes, which remain
+    /// the collision authority.
     input_digest: [32]u8,
 };
+
+fn interfaceRequestBucket(bytes: []const u8) [32]u8 {
+    var bucket = [_]u8{0} ** 32;
+    std.mem.writeInt(u64, bucket[0..8], std.hash.Wyhash.hash(0, bytes), .little);
+    return bucket;
+}
 
 /// Immutable input identity and parameterized output constraints. Only settled
 /// leaves refer to the owner's type store; all open cells use local indices.
@@ -24356,7 +24516,7 @@ const BodyContext = struct {
         const address = InterfaceReplayAddress{
             .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, self.view.types.rootKey(source_fn_ty)),
             .evidence_digest = evidence_digest.bytes,
-            .input_digest = TypeDigestHasher.hash(request.bytes),
+            .input_digest = interfaceRequestBucket(request.bytes),
         };
 
         var cached: ?InterfaceSummary = null;
@@ -28615,11 +28775,16 @@ const BodyContext = struct {
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
 
-        const cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
-        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
+        // A divergent discarded expression never yields the value this
+        // statement discards, so it lowers exactly like a divergent block
+        // statement. Its value type is never requested: a checked runtime
+        // error has a deliberately erroneous type, and value evidence for a
+        // divergent call could instantiate a rejected dispatch.
+        if (try self.divergentExprInContextStep(expr_id, .uncontextual)) |step| {
             task.stage = .divergent;
-            return divergentStep(self, expr_id, .{ .at_cell = cell });
+            return step;
         }
+        const cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
         const node = try cell.toGraphNode(self.graph);
         if (try self.nodeIsProvenUninhabited(node)) {
             task.stage = .uninhabited;
@@ -32213,8 +32378,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!?DraftExprId {
-        const entry = self.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
-        if (self.loweringOwnHoistedConstRoot(entry)) return null;
+        const entry = self.restoredHoistedConstEntry(expr_id) orelse return null;
         return try self.restoredHoistedConstAtType(entry, ty);
     }
 
@@ -32223,9 +32387,19 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         request_node: NodeId,
     ) Allocator.Error!?DraftExprId {
+        const entry = self.restoredHoistedConstEntry(expr_id) orelse return null;
+        return try self.restoredHoistedConstAtNode(entry, request_node);
+    }
+
+    /// The hoisted const an expression lowers by restoring, rather than by
+    /// lowering its own checked body.
+    fn restoredHoistedConstEntry(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+    ) ?checked.HoistedConstEntry {
         const entry = self.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
-        return try self.restoredHoistedConstAtNode(entry, request_node);
+        return entry;
     }
 
     fn selectedHoistedConstEntry(
@@ -37612,16 +37786,7 @@ const BodyContext = struct {
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.lowerParseSetFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
         }
-        switch (self.shapeContent(shape_ty)) {
-            .list => |elem_ty| return try self.lowerParseListFromState(elem_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
-            .tuple => |items| {
-                const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(items));
-                defer self.allocator.free(item_tys);
-                return try self.lowerParseTupleFromState(item_tys, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
-            },
-            .box => |payload_ty| return try self.lowerParseBoxFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
-            .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
-        }
+        // The checked nominal codec owns this value, regardless of its backing shape.
         if (self.frozenCustomCodecCallForShape(.parser, shape_ty)) |prepared| {
             return try self.lowerCustomParserFromState(
                 prepared.*,
@@ -37632,6 +37797,16 @@ const BodyContext = struct {
                 state_ty,
                 ret_ty,
             );
+        }
+        switch (self.shapeContent(shape_ty)) {
+            .list => |elem_ty| return try self.lowerParseListFromState(elem_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
+            .tuple => |items| {
+                const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(items));
+                defer self.allocator.free(item_tys);
+                return try self.lowerParseTupleFromState(item_tys, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
+            },
+            .box => |payload_ty| return try self.lowerParseBoxFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
+            .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
         }
         return try self.lowerParseShapeFromState(shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
     }
@@ -46812,15 +46987,18 @@ const BodyContext = struct {
     }
 
     /// A literal-conversion root evaluates its literal's checked conversion
-    /// call to the call's `Try` result. Finalization reports `Err` as the
-    /// literal's own diagnostic and stores the `Ok` payload for every use.
+    /// call and validates it once. Its declared result and shared slot hold
+    /// the `Ok` payload; `Err` terminates with the literal's own rejection.
     fn lowerLiteralConversionRootBody(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
         const plan = self.literalConversionPlan(expr_id);
-        return try self.lowerDispatchExprAtType(self.literalConversionTryType(plan), plan, ret_cell);
+        const try_ty = self.literalConversionTryType(plan);
+        const try_node = try self.instNode(try_ty);
+        const value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
+        return try self.unwrapLiteralConversionAtNode(value, try_node, try ret_cell.toGraphNode(self.graph), self.literalRejectionSite(expr_id));
     }
 
     /// Lower one use of a literal whose conversion checking selected, as that
@@ -46844,15 +47022,13 @@ const BodyContext = struct {
             .pending => {},
             .fn_value, .discarded, .expect => Common.invariant("literal conversion root stored a non-constant payload"),
         }
+        if (self.builder.comptimeValueReadDeclared(self.view, root_id)) {
+            return try self.declaredComptimeValueRead(self.view, root_id, DraftTypeCell.fromGraphNode(request_node), null);
+        }
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
-        const try_cell = DraftTypeCell.fromGraphNode(try_node);
-        const declared = self.builder.comptimeValueReadDeclared(self.view, root_id);
-        const try_value = if (declared)
-            try self.declaredComptimeValueRead(self.view, root_id, try_cell, null)
-        else
-            try self.lowerDispatchExprAtType(try_ty, plan, try_cell);
+        const try_value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
         const site = self.literalRejectionSite(expr_id);
         const expected_kind: Common.LiteralRejectionKind = switch (kind) {
             .numeral => .numeral,
@@ -46863,7 +47039,7 @@ const BodyContext = struct {
         // A conversion root no evaluation requested (its type holds a
         // callable, so the checker left it specialization-owned) is still
         // hoisted, as a literal root of this program.
-        if (declared or !self.builder.literal_roots) return value;
+        if (!self.builder.literal_roots) return value;
         return try self.literalRootRead(expr_id, site, value, request_node);
     }
 
@@ -47579,6 +47755,10 @@ const BodyContext = struct {
     }
 
     fn graphFreeResultTypeForExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+        // A restored hoisted const never performs its checked dispatch, so
+        // that dispatch's graph-free classification does not describe the
+        // restored value's type cell.
+        if (self.restoredHoistedConstEntry(expr_id) != null) return null;
         const expr = self.view.bodies.expr(expr_id);
         const plan_id = switch (expr.data) {
             .dispatch_call => |plan| plan,
@@ -47760,20 +47940,26 @@ const BodyContext = struct {
         return .{ .scope = .{ .owner = owner, .lexical = scope }, .schema = schema, .subst = subst, .vector = vector, .parent = parent };
     }
 
-    /// A stored evidence vector being restored; `target` holds the entry
-    /// whose nested vector is restoring above it.
+    /// A stored evidence vector being restored; `pending` holds the entry
+    /// whose nested vector or callable contracts are restoring above it.
     const StoredEvidenceFrame = struct {
         out: []SpecEvidence,
         next: usize = 0,
-        target: ?struct {
-            materialized: *SpecEvidenceTarget,
-            stored: @FieldType(check.ConstStore.ConstFnEvidence, "target"),
-            nested_start: usize,
-            subtree_len: usize,
+        pending: ?union(enum) {
+            nested: struct {
+                materialized: *SpecEvidenceTarget,
+                stored: @FieldType(check.ConstStore.ConstFnEvidence, "target"),
+                nested_start: usize,
+                subtree_len: usize,
+            },
+            /// The entry's own target, when it is one: the entry holds it
+            /// by const pointer.
+            contracts: ?*SpecEvidenceTarget,
         } = null,
     };
 
-    /// Restore a pre-order evidence tree. Nested evidence follows type
+    /// Restore a pre-order evidence tree: each entry's node, its nested
+    /// evidence, then its callable contracts. Nested evidence follows type
     /// nesting, so each nested vector is a frame rather than a native call.
     fn materializeConstFnEvidenceVector(
         self: *BodyContext,
@@ -47791,35 +47977,47 @@ const BodyContext = struct {
                 const finished = frames.pop().?;
                 if (frames.items.len == 0) return finished.out;
                 const parent = &frames.items[frames.items.len - 1];
-                const pending = parent.target.?;
-                parent.target = null;
-                if (cursor.* - pending.nested_start != pending.subtree_len) {
-                    Common.invariant("stored function nested evidence length differed from its subtree");
+                const pending = parent.pending.?;
+                parent.pending = null;
+                switch (pending) {
+                    .nested => |nested| {
+                        if (cursor.* - nested.nested_start != nested.subtree_len) {
+                            Common.invariant("stored function nested evidence length differed from its subtree");
+                        }
+                        try self.finishStoredEvidenceTarget(nested.materialized, nested.stored, .{ .resolved = finished.out });
+                        parent.out[parent.next] = .{ .target = nested.materialized };
+                        if (nested.stored.callable_contracts != 0) {
+                            parent.pending = .{ .contracts = nested.materialized };
+                            try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, nested.stored.callable_contracts) });
+                            continue;
+                        }
+                    },
+                    .contracts => |target| setSpecEvidenceCallableContracts(&parent.out[parent.next], target, finished.out),
                 }
-                try self.finishStoredEvidenceTarget(pending.materialized, pending.stored, .{ .resolved = finished.out });
-                parent.out[parent.next] = .{ .target = pending.materialized };
                 parent.next += 1;
                 continue;
             }
             if (cursor.* >= nodes.len) Common.invariant("stored function evidence ended before its declared vector length");
             const stored = nodes[cursor.*];
             cursor.* += 1;
+            var contracts_target: ?*SpecEvidenceTarget = null;
             frame.out[frame.next] = switch (stored) {
                 .target => |target| blk: {
                     const materialized = try arena.create(SpecEvidenceTarget);
                     switch (target.nested) {
                         .resolved => |resolved| {
-                            frame.target = .{
+                            frame.pending = .{ .nested = .{
                                 .materialized = materialized,
                                 .stored = target,
                                 .nested_start = cursor.*,
                                 .subtree_len = resolved.subtree_len,
-                            };
+                            } };
                             try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, resolved.count) });
                             continue;
                         },
                         .from_callable => {
                             try self.finishStoredEvidenceTarget(materialized, target, .synthesize);
+                            contracts_target = materialized;
                             break :blk .{ .target = materialized };
                         },
                     }
@@ -47860,7 +48058,27 @@ const BodyContext = struct {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
+            const contract_count: u32 = switch (stored) {
+                .target => |target| target.callable_contracts,
+                .structural => |stored_structural| stored_structural.callable_contracts,
+                .from_callable => |use| use.callable_contracts,
+                .from_scheme, .unreachable_value, .checked_error => 0,
+            };
+            if (contract_count != 0) {
+                frame.pending = .{ .contracts = contracts_target };
+                try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, contract_count) });
+                continue;
+            }
             frame.next += 1;
+        }
+    }
+
+    fn setSpecEvidenceCallableContracts(entry: *SpecEvidence, target: ?*SpecEvidenceTarget, contracts: []const SpecEvidence) void {
+        switch (entry.*) {
+            .target => target.?.callable_contracts = contracts,
+            .structural => |*structural| structural.callable_contracts = contracts,
+            .from_callable => |*use| use.callable_contracts = contracts,
+            .from_scheme, .unreachable_value, .checked_error => unreachable,
         }
     }
 
@@ -48393,15 +48611,10 @@ const BodyContext = struct {
         param: static_dispatch.EvidenceParamRecord,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
-        return switch (ref.resolution) {
-            .direct => |node_id| .{ .target = try self.materializeCheckedEvidenceTarget(
-                site_view,
-                site_view.static_dispatch_plans.evidenceNode(node_id),
-                evidenceParamRequiresConstraintRelation(param),
-                purpose,
-            ) },
-            .constraint, .structural, .unreachable_value, .checked_error, .from_callable, .from_scheme => try self.materializeIndirectCheckedEvidenceRef(site_view, ref),
-        };
+        const refs = [_]static_dispatch.CheckedEvidence{ref};
+        var out: [1]SpecEvidence = undefined;
+        try self.runCheckedEvidenceRefs(site_view, .{ .refs = &refs, .params = .{ .same = param }, .out = &out, .owner = .root }, purpose);
+        return out[0];
     }
 
     /// A checked evidence reference that names no target node of its own.
@@ -48415,6 +48628,9 @@ const BodyContext = struct {
             .constraint => |constraint| blk: {
                 const entry = self.evidence.at(constraint.index) orelse
                     Common.invariant("checked requirement reference was absent from its lexical evidence chain");
+                // The side-vector indexes belong to the receiving schema.
+                // The outer materializer applies its checked forwarding map.
+                if (selectCallableContract(entry, constraint.callable_contract)) |contract| break :blk contract;
                 if (!constraint.independent_callable) break :blk entry;
                 break :blk switch (entry) {
                     .target => |target| independent: {
@@ -48454,48 +48670,145 @@ const BodyContext = struct {
         refs: []const static_dispatch.CheckedEvidence,
         params: []const static_dispatch.EvidenceParamRecord,
         nested: []SpecEvidence,
-        next: usize = 0,
     };
 
-    fn materializeCheckedEvidenceTarget(
+    /// A vector of checked evidence references being materialized. Each
+    /// reference materializes its primary evidence, then its callable
+    /// contracts; a target's nested vector and a contract vector are frames
+    /// of their own, so nested requirement depth never becomes native call
+    /// depth.
+    const CheckedRefsFrame = struct {
+        refs: []const static_dispatch.CheckedEvidence,
+        params: union(enum) {
+            each: []const static_dispatch.EvidenceParamRecord,
+            /// Every callable contract materializes under its owner's
+            /// requirement.
+            same: static_dispatch.EvidenceParamRecord,
+        },
+        out: []SpecEvidence,
+        next: usize = 0,
+        /// The current reference awaits its primary evidence or its
+        /// contracts from the frame above.
+        awaiting: enum { none, primary, contracts } = .none,
+        owner: union(enum) {
+            root,
+            /// The target node whose nested vector this frame is.
+            target: EvidenceTargetFrame,
+            /// The primary evidence whose contract vector this frame is.
+            contracts: SpecEvidence,
+        },
+
+        fn param(frame: *const CheckedRefsFrame) static_dispatch.EvidenceParamRecord {
+            return switch (frame.params) {
+                .each => |params| params[frame.next],
+                .same => |same| same,
+            };
+        }
+    };
+
+    fn runCheckedEvidenceRefs(
         self: *BodyContext,
         site_view: ModuleView,
-        node: static_dispatch.EvidenceNode,
-        retain_instantiation: bool,
+        root: CheckedRefsFrame,
         purpose: EvidenceMaterializationPurpose,
-    ) Allocator.Error!*const SpecEvidenceTarget {
-        var frames = std.ArrayList(EvidenceTargetFrame).empty;
+    ) Allocator.Error!void {
+        const arena = self.builder.evidence_arena.allocator();
+        var frames = std.ArrayList(CheckedRefsFrame).empty;
         defer frames.deinit(self.allocator);
-        try frames.append(self.allocator, try self.enterEvidenceTarget(site_view, node, retain_instantiation, purpose));
+        try frames.append(self.allocator, root);
+        var delivered: ?SpecEvidence = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
-            if (frame.next < frame.refs.len) {
-                const ref = frame.refs[frame.next];
-                const param = frame.params[frame.next];
-                switch (ref.resolution) {
-                    .direct => |node_id| {
-                        const child = try self.enterEvidenceTarget(
-                            site_view,
-                            site_view.static_dispatch_plans.evidenceNode(node_id),
-                            evidenceParamRequiresConstraintRelation(param),
-                            purpose,
-                        );
-                        try frames.append(self.allocator, child);
+            if (delivered) |value| {
+                delivered = null;
+                switch (frame.awaiting) {
+                    .none => unreachable,
+                    .primary => {
+                        frame.awaiting = .none;
+                        if (try self.beginCheckedEvidenceContracts(site_view, &frames, value)) continue;
                     },
-                    .constraint, .structural, .unreachable_value, .checked_error, .from_callable, .from_scheme => {
-                        frame.nested[frame.next] = try self.materializeIndirectCheckedEvidenceRef(site_view, ref);
+                    .contracts => {
+                        frame.awaiting = .none;
+                        frame.out[frame.next] = value;
                         frame.next += 1;
                     },
                 }
                 continue;
             }
+            if (frame.next < frame.refs.len) {
+                const ref = frame.refs[frame.next];
+                switch (ref.resolution) {
+                    .direct => |node_id| {
+                        const target = try self.enterEvidenceTarget(
+                            site_view,
+                            site_view.static_dispatch_plans.evidenceNode(node_id),
+                            evidenceParamRequiresConstraintRelation(frame.param()),
+                            purpose,
+                        );
+                        frame.awaiting = .primary;
+                        try frames.append(self.allocator, .{
+                            .refs = target.refs,
+                            .params = .{ .each = target.params },
+                            .out = target.nested,
+                            .owner = .{ .target = target },
+                        });
+                    },
+                    .constraint, .structural, .unreachable_value, .checked_error, .from_callable, .from_scheme => {
+                        const primary = try self.materializeIndirectCheckedEvidenceRef(site_view, ref);
+                        _ = try self.beginCheckedEvidenceContracts(site_view, &frames, primary);
+                    },
+                }
+                continue;
+            }
             const finished = frames.pop().?;
-            const target = finishEvidenceTarget(site_view, finished);
-            if (frames.items.len == 0) return target;
-            const parent = &frames.items[frames.items.len - 1];
-            parent.nested[parent.next] = .{ .target = target };
-            parent.next += 1;
+            delivered = switch (finished.owner) {
+                .root => return,
+                .target => |target| .{ .target = finishEvidenceTarget(site_view, target) },
+                .contracts => |primary| blk: {
+                    const original = evidenceCallableContracts(primary);
+                    var changed: ?[]SpecEvidence = if (original.len == finished.out.len) null else try arena.alloc(SpecEvidence, finished.out.len);
+                    for (finished.out, 0..) |entry, index| {
+                        if (changed == null and !try specEvidenceEql(self.allocator, original[index], entry)) changed = try arena.dupe(SpecEvidence, original);
+                        if (changed) |contracts| contracts[index] = entry;
+                    }
+                    break :blk try withCallableContracts(arena, primary, changed orelse original);
+                },
+            };
         }
+    }
+
+    /// Materialize the current reference's callable contracts over its
+    /// primary evidence. Returns whether a contract frame now waits above
+    /// the frame; otherwise the reference is complete.
+    fn beginCheckedEvidenceContracts(
+        self: *BodyContext,
+        site_view: ModuleView,
+        frames: *std.ArrayList(CheckedRefsFrame),
+        primary: SpecEvidence,
+    ) Allocator.Error!bool {
+        const arena = self.builder.evidence_arena.allocator();
+        const frame = &frames.items[frames.items.len - 1];
+        const ref = frame.refs[frame.next];
+        const complete: SpecEvidence = if (ref.callable_contracts.len == 0)
+            try withCallableContracts(arena, primary, &.{})
+        else switch (primary) {
+            .from_scheme, .unreachable_value, .checked_error => primary,
+            .target, .structural, .from_callable => {
+                const contracts = site_view.static_dispatch_plans.evidence_refs[ref.callable_contracts.start..][0..ref.callable_contracts.len];
+                const contract_frame: CheckedRefsFrame = .{
+                    .refs = contracts,
+                    .params = .{ .same = frame.param() },
+                    .out = try arena.alloc(SpecEvidence, contracts.len),
+                    .owner = .{ .contracts = primary },
+                };
+                frame.awaiting = .contracts;
+                try frames.append(self.allocator, contract_frame);
+                return true;
+            },
+        };
+        frame.out[frame.next] = complete;
+        frame.next += 1;
+        return false;
     }
 
     fn enterEvidenceTarget(
@@ -48558,6 +48871,7 @@ const BodyContext = struct {
                 .callable => |callable_ty| .{ .view = site_view, .callable_ty = callable_ty },
             } else null,
             .local_proc_context = frame.lookup.local_proc_context,
+            .substitution = checkedTargetSubstitution(site_view, frame.node),
             .nested = if (frame.nested.len != 0 and evidenceVectorCarriesCheckedContract(frame.nested))
                 .{ .resolved = frame.nested }
             else
@@ -48569,7 +48883,7 @@ const BodyContext = struct {
     fn evidenceVectorCarriesCheckedContract(vector: []const SpecEvidence) bool {
         for (vector) |entry| switch (entry) {
             .target => |target| {
-                if (target.instantiation != null) return true;
+                if (target.instantiation != null or target.callable_contracts.len != 0) return true;
                 switch (target.nested) {
                     .resolved => return true,
                     .synthesize => {},
@@ -48601,14 +48915,16 @@ const BodyContext = struct {
                     {
                         Common.invariant("substitution-derived target differed from checked target contract");
                     }
-                    const contract_nested = switch (contract_target.nested) {
-                        .synthesize => break :blk derived,
-                        .resolved => |resolved| NestedSpecEvidence{ .resolved = resolved },
-                    };
+                    if (contract_target.nested == .synthesize and contract_target.substitution == null and contract_target.callable_contracts.len == 0) break :blk derived;
                     const merged = try self.builder.evidence_arena.allocator().create(SpecEvidenceTarget);
                     merged.* = derived_target.*;
                     merged.instantiation = null;
-                    merged.nested = contract_nested;
+                    merged.substitution = contract_target.substitution;
+                    switch (contract_target.nested) {
+                        .synthesize => {},
+                        .resolved => |resolved| merged.nested = .{ .resolved = resolved },
+                    }
+                    merged.callable_contracts = contract_target.callable_contracts;
                     break :blk .{ .target = merged };
                 },
                 .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("checked target contract differed from substitution-derived evidence kind"),
@@ -48634,7 +48950,7 @@ const BodyContext = struct {
         // stored inside that value; that recipe is not an initializer edge.
         if (schema.params.len == 0) return &.{};
         if (site_refs) |refs| {
-            if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
+            return try self.deriveCheckedEvidenceVector(schema, subst, site_view, refs, purpose);
         }
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.alloc(SpecEvidence, schema.params.len);
@@ -48643,68 +48959,9 @@ const BodyContext = struct {
         @memset(derived, false);
         for (schema.params, 0..) |param, k| {
             if (param.source == .scheme_requirement) {
-                if (param.slot != null) Common.invariant("composite requirement occupied a quantified-variable slot");
-                const refs = site_refs orelse Common.invariant("composite scheme requirement had no checked call-site evidence");
-                out[k] = if (refs[k].resolution == .from_scheme)
-                    .{ .from_scheme = @intCast(k) }
-                else
-                    try self.materializeCheckedEvidenceRef(site_view, refs[k], param, purpose);
-                derived[k] = true;
-                continue;
+                Common.invariant("composite scheme requirement had no checked call-site evidence");
             }
             if (param.slot.? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
-            const site_ref: ?static_dispatch.CheckedEvidence = if (site_refs) |refs| refs[k] else null;
-            if (site_ref) |ref| switch (ref.resolution) {
-                .structural => |evidence| {
-                    out[k] = .{ .structural = .{
-                        .derivation = evidence.derivation,
-                        .checked = .{ .view = site_view, .evidence = evidence },
-                    } };
-                    derived[k] = true;
-                },
-                .unreachable_value => {
-                    out[k] = .unreachable_value;
-                    derived[k] = true;
-                },
-                .checked_error => {
-                    out[k] = .checked_error;
-                    derived[k] = true;
-                },
-                .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
-                .from_callable => {
-                    out[k] = .{ .from_callable = .{
-                        .independent_callable = false,
-                    } };
-                    derived[k] = true;
-                },
-                .constraint => |constraint| switch (self.evidence.at(constraint.index) orelse
-                    Common.invariant("checked requirement reference was absent from its lexical evidence chain")) {
-                    .structural => |structural| {
-                        out[k] = .{ .structural = structural };
-                        derived[k] = true;
-                    },
-                    .unreachable_value => {
-                        out[k] = .unreachable_value;
-                        derived[k] = true;
-                    },
-                    .checked_error => {
-                        out[k] = .checked_error;
-                        derived[k] = true;
-                    },
-                    .from_scheme => |index| {
-                        out[k] = .{ .from_scheme = index };
-                        derived[k] = true;
-                    },
-                    .from_callable => |use| {
-                        out[k] = .{ .from_callable = .{
-                            .independent_callable = use.independent_callable or constraint.independent_callable,
-                        } };
-                        derived[k] = true;
-                    },
-                    .target => {},
-                },
-                .direct => {},
-            };
             if (subst[param.slot.?] == .checked_error) {
                 out[k] = .checked_error;
                 derived[k] = true;
@@ -48716,14 +48973,10 @@ const BodyContext = struct {
         // selected target to its constraint binds every quantified variable
         // only that callable reaches. Each such binding can resolve another
         // requirement's receiver, so the derivation runs to a fixpoint before
-        // any receiver is judged open. A checked instantiation record binds
-        // slot identities, hidden ones included. Its complete checked evidence
-        // contract is related below after materialization, rather than using
-        // these intermediate target selections. A forwarded structural codec
+        // any receiver is judged open. A forwarded structural codec
         // carries its checked callable, which can reach variables its receiver
         // does not (a parser's error row), so it is related like a target.
         // The context is created by the first relation.
-        const relate_targets = site_refs == null;
         var scheme_ctx: ?BodyContext = null;
         defer if (scheme_ctx) |*ctx| ctx.deinit();
         var progress = true;
@@ -48742,7 +48995,7 @@ const BodyContext = struct {
                         out[k] = forwarded;
                         derived[k] = true;
                         progress = true;
-                        if (relate_targets) switch (forwarded) {
+                        switch (forwarded) {
                             .structural => |structural| if (structural.checked) |checked_structural| {
                                 if (scheme_ctx == null) {
                                     scheme_ctx = try BodyContext.initWithMethodScope(
@@ -48759,7 +49012,7 @@ const BodyContext = struct {
                                 try self.relateStructuralEvidenceToConstraint(checked_structural, &scheme_ctx.?, param);
                             },
                             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-                        };
+                        }
                         continue;
                     },
                     .target => {},
@@ -48768,7 +49021,6 @@ const BodyContext = struct {
                 out[k] = try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose);
                 derived[k] = true;
                 progress = true;
-                if (!relate_targets) continue;
                 switch (out[k]) {
                     .target => |target| {
                         if (scheme_ctx == null) {
@@ -48794,22 +49046,70 @@ const BodyContext = struct {
             if (derived[k]) continue;
             out[k] = try self.deriveOpenRequirement(schema.view, param, subst[param.slot.?].node, purpose);
         }
-        if (site_refs) |refs| {
-            for (refs, schema.params, out) |ref, param, *entry| switch (ref.resolution) {
-                .direct, .constraint => {
-                    entry.* = try self.mergeCheckedEvidenceContract(
-                        entry.*,
-                        try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose),
-                    );
-                },
-                .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+        return out;
+    }
+
+    /// Checked edges supply every target contract before receiver-based
+    /// selection. Relate those contracts first: one method's signature can
+    /// bind a different requirement's hidden receiver. Reuse the output vector
+    /// for materialization and merging, without a second vector or fixpoint.
+    fn deriveCheckedEvidenceVector(
+        self: *BodyContext,
+        schema: SchemeRequirements,
+        subst: SpecSubstitution,
+        site_view: ModuleView,
+        refs: []const static_dispatch.CheckedEvidence,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error![]const SpecEvidence {
+        if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
+        const out = try self.builder.evidence_arena.allocator().alloc(SpecEvidence, schema.params.len);
+        for (refs, schema.params, out, 0..) |ref, param, *entry, k| {
+            if (param.source == .scheme_requirement) {
+                if (param.slot != null) Common.invariant("composite requirement occupied a quantified-variable slot");
+                entry.* = if (ref.resolution == .from_scheme)
+                    .{ .from_scheme = @intCast(k) }
+                else
+                    try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose);
+                continue;
+            }
+            if (param.slot.? >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
+            entry.* = switch (ref.resolution) {
+                .from_callable => .{ .from_callable = .{ .independent_callable = false } },
+                .from_scheme => Common.invariant("abstract scheme evidence named an ordinary callable parameter"),
+                .direct, .constraint, .structural, .unreachable_value, .checked_error => try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose),
             };
+            if (subst[param.slot.?] == .checked_error) {
+                entry.* = switch (ref.resolution) {
+                    .direct, .constraint => try self.mergeCheckedEvidenceContract(.checked_error, entry.*),
+                    .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => .checked_error,
+                };
+            }
         }
-        if (site_refs != null and purpose != .interface_summary_input) {
+        // Summary lookup describes the unrefined input. On a cache miss its
+        // expansion applies these relations to detached substitution cells;
+        // a hit replays the completed relation without repeating this work.
+        if (purpose != .interface_summary_input) {
             var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
             defer checked_ctx.deinit();
             try checked_ctx.seedSubstitution(schema, subst);
             try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, out);
+        }
+        for (schema.params, out) |param, *entry| {
+            // Structural entries already carry the checked callable contracts
+            // materialized above; only targets need receiver-based selection.
+            if (param.source == .scheme_requirement or entry.* != .target) continue;
+            const node = subst[param.slot.?].node;
+            const derived = derive: {
+                if (self.forwardedRequirement(node, schema.view.names, param.method)) |forwarded| switch (forwarded) {
+                    .target => {},
+                    .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => break :derive forwarded,
+                };
+                break :derive if (self.methodOwnerFromNode(node) != null)
+                    try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose)
+                else
+                    try self.deriveOpenRequirement(schema.view, param, node, purpose);
+            };
+            entry.* = try self.mergeCheckedEvidenceContract(derived, entry.*);
         }
         return out;
     }
@@ -48850,7 +49150,7 @@ const BodyContext = struct {
             },
             .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
             .evidence_digest = @splat(0),
-            .input_digest = TypeDigestHasher.hash(request.bytes),
+            .input_digest = interfaceRequestBucket(request.bytes),
         };
         const use_summaries = self.draft.interface_replay.use_finished_summaries;
         if (use_summaries) {
@@ -48865,7 +49165,50 @@ const BodyContext = struct {
         // Relate an independent copy, so unrelated caller state cannot enter
         // the retained result. Open variables remain fresh on each replay.
         const detached = (try input.instantiate(self.graph))[0];
-        const target_node = if (target.instantiation) |instantiation| blk: {
+        const target_node = try self.instantiateEvidenceTargetSignature(target, address.family);
+        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
+        if (use_summaries) {
+            const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
+            const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(request, self.typeStore(), self.nameStore()))
+                .unchanged
+            else
+                .{ .constraints = constraints };
+            _ = try self.insertInterfaceSummary(.{
+                .address = address,
+                .evidence = evidence,
+                .request = request,
+                .summary = summary,
+            });
+        }
+        try self.graph.unify(detached, constraint_node);
+    }
+
+    /// A checked procedure signature is independent of the request it will
+    /// constrain. Snapshot its construction once, then instantiate fresh open
+    /// cells for each relation, preserving independent callable evidence.
+    fn instantiateEvidenceTargetSignature(
+        self: *BodyContext,
+        target: *const SpecEvidenceTarget,
+        family: DraftTemplateFamilyAddress,
+    ) Allocator.Error!NodeId {
+        const cacheable = target.target.kind == .procedure and self.draft.interface_replay.use_finished_summaries;
+        const address: InterfaceReplayAddress = .{
+            .kind = .method_signature,
+            .family = family,
+            .evidence_digest = @splat(0),
+            .input_digest = @splat(0),
+        };
+        const evidence: StoredConstFnEvidence = .{ .nodes = &.{}, .frames = &.{}, .head = null };
+        const request: InterfaceConstraints.Identity = .{ .bytes = &.{}, .leaves = &.{} };
+        if (cacheable) {
+            if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
+                return switch (summary) {
+                    .constraints => |constraints| (try constraints.instantiate(self.graph))[0],
+                    .unchanged => Common.invariant("checked method signature snapshot had no root"),
+                };
+            }
+        }
+        const node = if (target.instantiation) |instantiation| blk: {
             var instantiation_ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
                 self.builder,
@@ -48887,21 +49230,17 @@ const BodyContext = struct {
             defer target_ctx.deinit();
             break :blk try target_ctx.instNode(lookup.target.callable_ty);
         };
-        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
-        if (use_summaries) {
-            const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
-            const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(request, self.typeStore(), self.nameStore()))
-                .unchanged
-            else
-                .{ .constraints = constraints };
+        if (cacheable) {
+            var scratch = std.heap.ArenaAllocator.init(self.allocator);
+            defer scratch.deinit();
             _ = try self.insertInterfaceSummary(.{
                 .address = address,
                 .evidence = evidence,
                 .request = request,
-                .summary = summary,
+                .summary = .{ .constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{node}) },
             });
         }
-        try self.graph.unify(detached, constraint_node);
+        return node;
     }
 
     /// Relate a checked structural codec's callable to the scheme constraint
@@ -49065,6 +49404,12 @@ const BodyContext = struct {
         dependent: anytype,
         target: *const SpecEvidenceTarget,
     ) NestedSpecEvidence {
+        if (selectCallableContract(.{ .target = target }, dependent.callable_contract)) |contract| {
+            return switch (contract) {
+                .target => |selected| selected.nested,
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("callable target contract selected non-callable evidence"),
+            };
+        }
         return self.dependentCallableNestedEvidenceChecked(dependent, target) catch
             Common.invariant("independent dispatch callable attempted to synthesize SchemeUseRecord-supplied nested evidence");
     }
@@ -49141,6 +49486,31 @@ const BodyContext = struct {
         return try self.substitutionFromCheckedTypes(self.view, table.site_substitutions[start .. start + len]);
     }
 
+    /// Seed a selected target's scheme context with the substitution checking
+    /// applied where it selected the target, as a direct target specializes
+    /// under its recorded substitution. The checked types are instantiated
+    /// together in one context of the selecting module, so variables they
+    /// share stay shared, and relating the target's root to the request then
+    /// refines the slots that root reaches.
+    fn seedCheckedTargetSubstitution(
+        self: *BodyContext,
+        target_ctx: *BodyContext,
+        schema: SchemeRequirements,
+        substitution: CheckedTargetSubstitution,
+    ) Allocator.Error!void {
+        var site_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self.builder,
+            substitution.view,
+            self.method_scope,
+            self.owner_template,
+            self.graph,
+            self.draft,
+        );
+        defer site_ctx.deinit();
+        try target_ctx.seedSubstitution(schema, try site_ctx.substitutionFromCheckedTypes(substitution.view, substitution.tys));
+    }
+
     /// The requirement contract a checked iterator dispatch call recorded for
     /// its target, mirroring `dispatchTargetContract`.
     fn iteratorCallContract(self: *BodyContext, call: static_dispatch.IteratorDispatchCall) ?EvidenceContract {
@@ -49206,15 +49576,19 @@ const BodyContext = struct {
             .evidence_dependent => |dependent| {
                 const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("dispatch resolution evidence was absent from its lexical chain");
-                return switch (entry) {
+                return switch (selectCallableContract(entry, dependent.callable_contract) orelse entry) {
                     .target => |target| .{
                         .target = .{
                             .view = target.view,
                             .target = target.target,
-                            .instantiation = if (dependent.independent_callable)
+                            .instantiation = if (dependent.independent_callable and selectCallableContract(entry, dependent.callable_contract) == null)
                                 null
                             else
                                 target.instantiation,
+                            .substitution = if (dependent.independent_callable)
+                                null
+                            else
+                                target.substitution,
                             .local_proc_context = target.local_proc_context,
                         },
                     },
@@ -49355,7 +49729,7 @@ const BodyContext = struct {
         return switch (resolution) {
             .@"unreachable" => .unreachable_value,
             .checked_error => .checked_error,
-            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (selectCallableContract(entry, dependent.callable_contract) orelse entry) {
                 .from_callable, .unreachable_value => .unreachable_value,
                 .from_scheme => Common.invariant("abstract scheme requirement reached executable dispatch without use evidence"),
                 .checked_error => .checked_error,
@@ -49940,11 +50314,13 @@ const BodyContext = struct {
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
                 const template = lookup.view.templates.get(procedure.template.template);
+                const schema = templateSchemaIn(lookup.view, &template);
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
+                if (lookup.substitution) |substitution| try self.seedCheckedTargetSubstitution(&target_ctx, schema, substitution);
                 const target_root_node = try target_ctx.instNode(template.checked_fn_root);
                 try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
-                const edge = try self.deriveTargetEdge(&target_ctx, templateSchemaIn(lookup.view, &template), evidence_source);
+                const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
                     procedure.template,
@@ -49958,11 +50334,13 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| blk: {
+                const schema = self.scopeSchema(lookup.view, local.dispatch_scope);
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
+                if (lookup.substitution) |substitution| try self.seedCheckedTargetSubstitution(&target_ctx, schema, substitution);
                 const target_root_node = try target_ctx.instNode(source_fn_ty);
                 try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
-                const edge = try self.deriveTargetEdge(&target_ctx, self.scopeSchema(lookup.view, local.dispatch_scope), evidence_source);
+                const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk .{ .local = try self.lowerDraftLocalProcAtNode(
                     .{
                         .binder = local.binder,
@@ -49998,13 +50376,33 @@ const BodyContext = struct {
             // reached only through its constraint signature. Every
             // selected target supplies that relation exactly once;
             // selection itself needs no graph-driven fixpoint here.
-            switch (entry) {
-                .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
-                .structural => |structural| if (structural.checked) |checked_structural| {
-                    try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
-                },
-                .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            try self.relateMaterializedEvidenceConstraint(target_ctx, param, entry);
+            const contracts = evidenceCallableContracts(entry);
+            if (contracts.len != 0) {
+                if (contracts.len != param.callable_contracts.len) Common.invariant("callable contracts differed from their checked schema");
+                const callables = schema.view.templates.evidence_param_callables[param.callable_contracts.start..][0..param.callable_contracts.len];
+                for (contracts, callables) |contract_entry, callable| {
+                    var contract_param = param;
+                    contract_param.callable_ty = callable;
+                    contract_param.callable_contracts = .{};
+                    try self.relateMaterializedEvidenceConstraint(target_ctx, contract_param, contract_entry);
+                }
             }
+        }
+    }
+
+    fn relateMaterializedEvidenceConstraint(
+        self: *BodyContext,
+        target_ctx: *BodyContext,
+        param: static_dispatch.EvidenceParamRecord,
+        entry: SpecEvidence,
+    ) Allocator.Error!void {
+        switch (entry) {
+            .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
+            .structural => |structural| if (structural.checked) |checked_structural| {
+                try self.relateStructuralEvidenceToConstraint(checked_structural, target_ctx, param);
+            },
+            .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
         }
     }
 
@@ -51624,6 +52022,19 @@ const BodyContext = struct {
             list_value.value_expr = try self.lowerSetToList(shape_ty, list_ty, value.value_expr);
             return .{ .tail = .{ .list = .{ .inputs = task.inputs, .value = list_value, .elem_ty = payload_ty } } };
         }
+        // The checked nominal codec owns this value, regardless of its backing shape.
+        if (self.frozenCustomCodecCallForShape(.encoder, shape_ty)) |prepared| {
+            return encodeExpr(try self.lowerCustomEncoderForState(
+                prepared.*,
+                shape_ty,
+                value.value_expr,
+                task.inputs.encoding_expr,
+                task.inputs.encoding_ty,
+                value.state_expr,
+                value.state_ty,
+                value.ret_ty,
+            ));
+        }
         switch (self.shapeContent(shape_ty)) {
             .list => |elem_ty| return .{ .tail = .{ .list = .{ .inputs = task.inputs, .value = value, .elem_ty = elem_ty } } },
             .tuple => |items| {
@@ -51637,18 +52048,6 @@ const BodyContext = struct {
                 return .{ .tail = .{ .shape = .{ .inputs = task.inputs, .value = unboxed } } };
             },
             .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
-        }
-        if (self.frozenCustomCodecCallForShape(.encoder, shape_ty)) |prepared| {
-            return encodeExpr(try self.lowerCustomEncoderForState(
-                prepared.*,
-                shape_ty,
-                value.value_expr,
-                task.inputs.encoding_expr,
-                task.inputs.encoding_ty,
-                value.state_expr,
-                value.state_ty,
-                value.ret_ty,
-            ));
         }
         if (self.encodeScalarMethodName(shape_ty)) |method_name| {
             return encodeExpr(try self.lowerEncodeFormatMethod(method_name, &.{ value.value_expr, value.state_expr }, &.{ shape_ty, value.state_ty }, shape_ty, value.ret_ty));
@@ -59616,7 +60015,7 @@ const BodyContext = struct {
                 };
                 break :blk lookup;
             },
-            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (selectCallableContract(entry, dependent.callable_contract) orelse entry) {
                 .target => |target| .{
                     .view = target.view,
                     .target = target.target,
@@ -59624,7 +60023,7 @@ const BodyContext = struct {
                     // whichever same-name relation the caller materialized.
                     // An independent relation supplies only the target
                     // identity and instantiates against its own plan.
-                    .instantiation = if (dependent.independent_callable)
+                    .instantiation = if (dependent.independent_callable and selectCallableContract(entry, dependent.callable_contract) == null)
                         null
                     else
                         target.instantiation,
@@ -67508,4 +67907,30 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const recursive_items = program.types.span(program.types.get(restored_recursive).tuple);
     try std.testing.expectEqual(restored_recursive, GuardedList.at(recursive_items, 0));
     try std.testing.expectEqual(@as(usize, 4), program.types.typeCount());
+}
+
+test "issue 11737: independent call selects its own nested contract without copying" {
+    const first = [_]SpecEvidence{.unreachable_value};
+    const second = [_]SpecEvidence{.checked_error};
+    const selected: SpecEvidenceTarget = .{
+        .view = undefined,
+        .target = undefined,
+        .instantiation = null,
+        .local_proc_context = null,
+        .nested = .{ .resolved = &second },
+    };
+    const contracts = [_]SpecEvidence{.{ .target = &selected }};
+    var primary = selected;
+    primary.nested = .{ .resolved = &first };
+    primary.callable_contracts = &contracts;
+    const selection = selectCallableContract(.{ .target = &primary }, 0).?;
+    try std.testing.expect(selection.target == &selected);
+    try std.testing.expect(selection.target.nested.resolved.ptr == &second);
+    try std.testing.expect(selectCallableContract(.{ .target = &primary }, null) == null);
+    // Already-consumed relations, including their side contracts, borrow all
+    // vectors. The specialization fast path must allocate nothing.
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    const vector = [_]SpecEvidence{.{ .target = &primary }};
+    const normalized = try normalizeMaterializedEvidence(failing.allocator(), &vector);
+    try std.testing.expect(normalized.ptr == &vector);
 }

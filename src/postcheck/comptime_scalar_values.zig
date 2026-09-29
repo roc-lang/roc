@@ -28,6 +28,7 @@
 //! same constructions through the restored expressions; the lowerer's
 //! static-data candidate path decides those.
 const std = @import("std");
+const builtins = @import("builtins");
 const check = @import("check");
 const core = @import("lir_core");
 const layout = @import("layout");
@@ -62,10 +63,22 @@ pub const Construction = union(enum) {
     },
 };
 
+/// `count` copies of one construction: the value a `List.repeat` or a
+/// constant fill loop completes to. Such a list keeps its static slot, and
+/// a read of it also names an argument-free procedure that builds the list
+/// fresh; ARC chooses one form per read by what the value reaches.
+pub const UniformList = struct {
+    element: Construction,
+    count: u64,
+};
+
 /// Constructions of the completed successful roots of one host program that
 /// lower without a slot, keyed by producer identity.
 pub const CompletedScalarValues = struct {
     entries: Map,
+    /// The completed successful roots that are lists of copies of one
+    /// construction, keyed like `entries`.
+    uniform_lists: UniformMap,
     /// Owns the nested constructions the entries point into.
     arena: std.heap.ArenaAllocator,
 
@@ -88,11 +101,12 @@ pub const CompletedScalarValues = struct {
     };
 
     const Map = std.HashMapUnmanaged(Key, Construction, Context, std.hash_map.default_max_load_percentage);
+    const UniformMap = std.HashMapUnmanaged(Key, UniformList, Context, std.hash_map.default_max_load_percentage);
 
     /// Collects every completed successful root of `program` whose frozen
     /// image decodes to a construction.
     pub fn init(allocator: Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) Allocator.Error!CompletedScalarValues {
-        var values = CompletedScalarValues{ .entries = .empty, .arena = std.heap.ArenaAllocator.init(allocator) };
+        var values = CompletedScalarValues{ .entries = .empty, .uniform_lists = .empty, .arena = std.heap.ArenaAllocator.init(allocator) };
         errdefer values.deinit(allocator);
         var decoder = Decoder{ .program = program, .frozen = frozen, .arena = values.arena.allocator() };
         for (program.static_data_values.items, 0..) |entry, index| {
@@ -101,15 +115,27 @@ pub const CompletedScalarValues = struct {
             const slot: LIR.StaticDataId = @enumFromInt(index);
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
-            const construction = try decoder.decode(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse continue;
-            try values.entries.put(allocator, .{ .module = root.module, .root = root.root }, construction);
+            const key = Key{ .module = root.module, .root = root.root };
+            const construction = try decoder.decode(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse {
+                if (try decoder.decodeUniformList(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |uniform| {
+                    try values.uniform_lists.put(allocator, key, uniform);
+                }
+                continue;
+            };
+            try values.entries.put(allocator, key, construction);
         }
         return values;
     }
 
     pub fn deinit(self: *CompletedScalarValues, allocator: Allocator) void {
         self.entries.deinit(allocator);
+        self.uniform_lists.deinit(allocator);
         self.arena.deinit();
+    }
+
+    /// The list of copies a root completed to, when it did.
+    pub fn uniformListFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: LIR.ComptimeProducer) ?UniformList {
+        return self.uniform_lists.get(.{ .module = module, .root = root });
     }
 
     /// The construction for a root read at `layout_idx`, when the root
@@ -242,6 +268,79 @@ fn emitWithCapacity(ctx: anytype, store: *core.LirStore, origin: LIR.StmtOrigin,
     } }, origin);
 }
 
+/// `target` = `count` copies of `element`, filled rather than looped:
+/// reserve `count` items plus the scratch the range copy overshoots into,
+/// build the element, append it once unchecked, and append the remaining
+/// `count - 1` items as a range copy from index zero, which repeats the one
+/// item at the copier's word-store pace. `ctx` supplies locals as for
+/// `emit`. `count` is at least one and the item layout has a size, as every
+/// decoded uniform list does. Null when `target` is not a list or the
+/// element does not fit its item layout.
+pub fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, origin: LIR.StmtOrigin, target: LIR.LocalId, element: Construction, count: i64, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
+    std.debug.assert(count >= 1);
+    const list_layout = store.getLocal(target).layout_idx;
+    const list_value_layout = layouts.getLayout(list_layout);
+    if (list_value_layout.tag != .list) return null;
+    const element_layout = list_value_layout.getIdx();
+    const element_size: i64 = layouts.layoutSize(layouts.getLayout(element_layout));
+    std.debug.assert(element_size > 0);
+    const capacity_local = try ctx.addLocal(.u64);
+    const reserved = try ctx.addLocal(list_layout);
+    const element_local = try ctx.addLocal(element_layout);
+
+    // A single copy is the seed alone: nothing to fill, no scratch to
+    // reserve.
+    if (count == 1) {
+        const append = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = .list_append_unsafe,
+            .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
+            .args = try store.addLocalSpan(&[_]LIR.LocalId{ reserved, element_local }),
+            .next = next,
+        } }, origin);
+        return try emitReserveAndElement(ctx, store, layouts, origin, capacity_local, 1, reserved, element_local, element, append);
+    }
+
+    const seeded = try ctx.addLocal(list_layout);
+    const zero = try ctx.addLocal(.u64);
+    const rest = try ctx.addLocal(.u64);
+    // The unchecked range copy stores whole words past the range it fills,
+    // so the reservation covers that scratch beyond the count.
+    const scratch_bytes: i64 = builtins.list.append_range_within_scratch_bytes;
+    const scratch_items = @divFloor(scratch_bytes + element_size - 1, element_size);
+    const fill = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = target,
+        .op = .list_append_range_within_unsafe,
+        .rc_effect = LIR.LowLevel.list_append_range_within_unsafe.rcEffect(),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{ seeded, zero, rest }),
+        .next = next,
+    } }, origin);
+    const rest_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = rest, .value = .{ .i64_literal = .{ .value = count - 1, .layout_idx = .u64 } }, .next = fill } }, origin);
+    const zero_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = zero, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } }, .next = rest_literal } }, origin);
+    const seed = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = seeded,
+        .op = .list_append_unsafe,
+        .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{ reserved, element_local }),
+        .next = zero_literal,
+    } }, origin);
+    return try emitReserveAndElement(ctx, store, layouts, origin, capacity_local, count + scratch_items, reserved, element_local, element, seed);
+}
+
+/// `reserved` = a list with `capacity` spare items, then `element_local` =
+/// `element`, then `next`.
+fn emitReserveAndElement(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, origin: LIR.StmtOrigin, capacity_local: LIR.LocalId, capacity: i64, reserved: LIR.LocalId, element_local: LIR.LocalId, element: Construction, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
+    const build_element = try emit(ctx, store, layouts, origin, element_local, element, next) orelse return null;
+    const reserve = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = reserved,
+        .op = .list_with_capacity,
+        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
+        .next = build_element,
+    } }, origin);
+    return try store.addCFStmt(.{ .assign_literal = .{ .target = capacity_local, .value = .{ .i64_literal = .{ .value = capacity, .layout_idx = .u64 } }, .next = reserve } }, origin);
+}
+
 /// Decodes a completed value into its construction by walking the same
 /// const plan the freezer walked, at the same byte offsets. Any part that
 /// is not a scalar, the empty string, an empty list, a record, or a tag
@@ -354,7 +453,7 @@ pub const Decoder = struct {
                 },
                 .tuple, .record => |child_plans| try self.decodeRecord(current.bytes, current.offset, child_plans, value_layout),
                 .tag_union => |variants| try self.decodeTag(current.bytes, current.offset, variants, current.layout_idx),
-                .pending, .layout_only, .box, .fn_value, .erased_fn => .{ .done = null },
+                .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => .{ .done = null },
             };
         }
     }
@@ -403,6 +502,43 @@ pub const Decoder = struct {
             }
         }
         return .{ .empty_list = capacity };
+    }
+
+    /// A list whose items are all one construction, with that construction
+    /// and the count; null for an empty list (an `empty_list` construction),
+    /// a list that is not uniform, or one whose items are not constructions.
+    /// The items live behind the descriptor's relocation, past the backing's
+    /// allocation header, which the relocation's addend skips.
+    pub fn decodeUniformList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, plan_id: Program.ConstPlanId, layout_idx: layout.Idx) Allocator.Error!?UniformList {
+        var plan = self.program.const_plans.items[@intFromEnum(plan_id)];
+        while (plan == .named) plan = self.program.const_plans.items[@intFromEnum(plan.named.backing)];
+        const element_plan = switch (plan) {
+            .list => |element_plan| element_plan,
+            .zst, .scalar, .str, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => return null,
+        };
+        const value_layout = self.program.layouts.getLayout(layout_idx);
+        if (value_layout.tag != .list) return null;
+        const len = self.readWord(bytes, 1) orelse return null;
+        if (len == 0) return null;
+        const exported = data_export orelse return null;
+        const frozen = self.frozen orelse return null;
+        const relocation = relocationAt(exported, offset) orelse return null;
+        const backing = exportNamed(frozen, relocation.target_symbol_name) orelse return null;
+        const element_layout = value_layout.getIdx();
+        const element_size = self.program.layouts.layoutSize(self.program.layouts.getLayout(element_layout));
+        if (element_size == 0) return null;
+        if (relocation.addend < 0) return null;
+        const start = backing.symbol_offset + @as(usize, @intCast(relocation.addend));
+        if (start > backing.bytes.len) return null;
+        const elements = backing.bytes[start..];
+        if (elements.len < len * element_size) return null;
+        const first = elements[0..element_size];
+        var index: usize = 1;
+        while (index < len) : (index += 1) {
+            if (!std.mem.eql(u8, first, elements[index * element_size ..][0..element_size])) return null;
+        }
+        const element = try self.decode(backing, elements, start, element_plan, element_layout) orelse return null;
+        return .{ .element = element, .count = len };
     }
 
     fn decodeRecord(self: *Decoder, bytes: []const u8, offset: usize, child_plans: []const Program.ConstPlanId, value_layout: layout.Layout) Allocator.Error!DecodeStep {
@@ -475,6 +611,20 @@ fn slotSucceeded(program: *const Program.Result, frozen: *const Program.FrozenSt
     const offset = failure_export.symbol_offset + failure_root.role.failure_message.failed_offset;
     if (offset >= failure_export.bytes.len) return false;
     return failure_export.bytes[offset] == 0;
+}
+
+fn relocationAt(data_export: *const Program.StaticDataExport, offset: usize) ?Program.StaticDataRelocation {
+    for (data_export.relocations) |relocation| {
+        if (relocation.offset == offset) return relocation;
+    }
+    return null;
+}
+
+fn exportNamed(frozen: *const Program.FrozenStaticData, name: []const u8) ?*const Program.StaticDataExport {
+    for (frozen.exports) |*item| {
+        if (std.mem.eql(u8, item.symbol_name, name)) return item;
+    }
+    return null;
 }
 
 fn exportOf(frozen: *const Program.FrozenStaticData, slot: LIR.StaticDataId) ?*const Program.StaticDataExport {

@@ -71,7 +71,7 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
     pub const WatchEvent = struct { path: []const u8 };
     pub const WatchCallbackWithContext = *const fn (context: ?*anyopaque, event: WatchEvent) void;
     pub const Watcher = struct {
-        pub fn initAllFiles(
+        pub fn initInputs(
             _: std.mem.Allocator,
             _: std.Io,
             _: []const []const u8,
@@ -86,6 +86,15 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
         }
 
         pub fn deinit(_: *Watcher) void {}
+        pub fn takeInputChange(_: *Watcher, _: usize) bool {
+            return false;
+        }
+        pub fn takeCoverageChange(_: *Watcher) bool {
+            return false;
+        }
+        pub fn hasBackendFailed(_: *Watcher) bool {
+            return false;
+        }
     };
 } else @import("watch");
 
@@ -484,11 +493,30 @@ fn shimLibraryBytes(kind: ShimLibraryKind, target: ?RocTarget) []const u8 {
     };
 }
 
+/// The SHA-256 digest of an embedded link input, computed when `roc` was built
+/// (see src/build/embedded_digests.zig). Test builds embed empty files.
+fn embeddedDigest(comptime name: []const u8) [32]u8 {
+    // The SHA-256 of an empty file.
+    if (builtin.is_test) return .{
+        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+    };
+    return @field(@import("embedded_digests"), name);
+}
+
+/// The digest of `shimLibraryBytes(kind, target)`.
+fn shimLibraryBytesDigest(kind: ShimLibraryKind, _: ?RocTarget) [32]u8 {
+    return switch (kind) {
+        .lir => embeddedDigest("interpreter_shim"),
+        .machine_code => embeddedDigest("machine_code_shim"),
+    };
+}
+
 fn shimLibraryDigest(kind: ShimLibraryKind, target: ?RocTarget) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-shim-library-cache-v1");
+    var hasher = base.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-shim-library-cache-v2");
     updateHashBytes(&hasher, @tagName(kind));
-    hasher.update(shimLibraryBytes(kind, target));
+    hasher.update(&shimLibraryBytesDigest(kind, target));
     var out: [32]u8 = undefined;
     hasher.final(&out);
     return out;
@@ -751,6 +779,88 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
 
 const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
 const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
+
+/// The digest of `DefaultPlatformRuntimeObjects.forTarget(requested)`.
+fn defaultRuntimeDigest(requested: RocTarget) ?[32]u8 {
+    return switch (requested.defaultCpuTarget()) {
+        inline .x64musl,
+        .arm64musl,
+        .x64glibc,
+        .arm64glibc,
+        .x64mac,
+        .arm64mac,
+        .x64win,
+        .x64mingw,
+        .arm64win,
+        .arm64mingw,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        => |target| embeddedDigest("default_runtime_" ++ @tagName(target)),
+        .x64linux => embeddedDigest("default_runtime_x64glibc"),
+        .arm64linux => embeddedDigest("default_runtime_arm64glibc"),
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1mingw,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64v1win,
+        .arm64v1mingw,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => null,
+    };
+}
+
+/// The digest of `DefaultPlatformCompilerRtObjects.forTarget(requested)`.
+fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
+    return switch (requested.defaultCpuTarget()) {
+        inline .x64musl, .arm64musl, .x64glibc, .arm64glibc => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
+        .x64linux => embeddedDigest("default_compiler_rt_x64glibc"),
+        .arm64linux => embeddedDigest("default_compiler_rt_arm64glibc"),
+        .x64mac,
+        .arm64mac,
+        .x64win,
+        .arm64win,
+        .x64mingw,
+        .arm64mingw,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1mingw,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64v1win,
+        .arm64v1mingw,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => null,
+    };
+}
 
 const DefaultPlatformCompilerRtObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_compiler_rt.o");
@@ -1905,17 +2015,17 @@ fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.Cre
     };
 }
 
-fn updateHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn updateHashU32(hasher: *base.Sha256, value: u32) void {
     var buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &buf, value, .little);
     hasher.update(&buf);
 }
 
-fn updateHashBool(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
+fn updateHashBool(hasher: *base.Sha256, value: bool) void {
     hasher.update(if (value) "\x01" else "\x00");
 }
 
-fn updateHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn updateHashBytes(hasher: *base.Sha256, bytes: []const u8) void {
     var len_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &len_buf, @intCast(bytes.len), .little);
     hasher.update(&len_buf);
@@ -1923,7 +2033,7 @@ fn updateHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void
 }
 
 fn bytesDigest(bytes: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return hasher.finalResult();
 }
@@ -1937,7 +2047,7 @@ fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
     };
     defer file.close(ctx.io.std_io);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     var read_buf: [64 * 1024]u8 = undefined;
     while (true) {
         const bytes_read = file.readStreaming(ctx.io.std_io, &.{&read_buf}) catch |err| switch (err) {
@@ -1967,7 +2077,7 @@ fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
 }
 
 fn platformHostShimIdentity(target: RocTarget, entrypoint_names: []const []const u8, debug: bool) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-platform-host-shim-v1");
     updateHashBytes(&hasher, target.toTriple());
     updateHashBool(&hasher, debug);
@@ -2182,7 +2292,7 @@ const LayoutHashContext = struct {
 
     fn hashIdx(
         self: *LayoutHashContext,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: *base.Sha256,
         idx: layout.Idx,
     ) Allocator.Error!void {
         if (idx == layout.Idx.none) {
@@ -2253,7 +2363,7 @@ const LayoutHashContext = struct {
 
 fn updateLayoutFingerprint(
     allocator: Allocator,
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     layouts: *const layout.Store,
     layout_idx: layout.Idx,
 ) Allocator.Error!void {
@@ -2263,7 +2373,7 @@ fn updateLayoutFingerprint(
 }
 
 fn updatePlatformAppRelationIdentity(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) void {
     // Host-boundary fingerprint: hash the relation/binding SHAPE only, never
@@ -2299,7 +2409,7 @@ fn updatePlatformAppRelationIdentity(
 
 fn updateHostCallableLayoutIdentity(
     allocator: Allocator,
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     store: *const lir.LirStore,
     layouts: *const layout.Store,
     platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
@@ -2329,7 +2439,7 @@ fn checkedInterpreterHostIdentity(
     target_usize: base.target.TargetUsize,
     hosted_table: CheckedHostedTable,
 ) Allocator.Error![32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v2");
     updateHashU32(&hasher, @intFromEnum(target_usize));
 
@@ -2357,7 +2467,7 @@ fn checkedInterpreterHostIdentity(
 }
 
 fn updateInterpreterExeFileLinkInput(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     declared_path: []const u8,
     resolved_path: []const u8,
     content_digest: [32]u8,
@@ -2369,7 +2479,7 @@ fn updateInterpreterExeFileLinkInput(
 }
 
 fn updateInterpreterExeAppLinkInput(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     shim_kind: ShimLibraryKind,
     target: RocTarget,
     entrypoint_names: []const []const u8,
@@ -2405,11 +2515,11 @@ fn entrypointAbiDigestFromLirData(
     else
         return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } });
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-entrypoint-abi-v1");
 
     const hashPlacement = struct {
-        fn go(h: *std.crypto.hash.sha2.Sha256, placement: layout.abi.Placement) void {
+        fn go(h: *base.Sha256, placement: layout.abi.Placement) void {
             switch (placement) {
                 .none => updateHashU32(h, 0),
                 .indirect => updateHashU32(h, 1),
@@ -2469,7 +2579,7 @@ fn interpreterExeLinkInputsIdentity(
     entrypoint_names: []const []const u8,
     debug: bool,
 ) (Allocator.Error || CliError)![32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
 
@@ -2494,7 +2604,7 @@ fn defaultRunCheckedHostIdentity(
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-checked-host-v1");
     updateHashBytes(&hasher, @tagName(target));
     updateHashBytes(&hasher, echo_platform.run_shim_platform_main_source);
@@ -2514,14 +2624,14 @@ fn defaultRunCheckedHostIdentity(
 }
 
 fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
-    const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const compiler_rt_bytes = DefaultPlatformCompilerRtObjects.forTarget(target) orelse return null;
+    const runtime_digest = defaultRuntimeDigest(target) orelse return null;
+    const compiler_rt_digest = defaultCompilerRtDigest(target) orelse return null;
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
-    hasher.update(&bytesDigest(runtime_bytes));
-    hasher.update(&bytesDigest(compiler_rt_bytes));
+    hasher.update(&runtime_digest);
+    hasher.update(&compiler_rt_digest);
 
     return hasher.finalResult();
 }
@@ -2535,7 +2645,7 @@ const ShimHostExeCacheInputs = struct {
 };
 
 fn shimHostExeCacheDigest(inputs: ShimHostExeCacheInputs) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-shim-host-cache-v3");
     updateHashBytes(&hasher, build_options.compiler_version);
     updateHashBytes(&hasher, @tagName(inputs.shim_kind));
@@ -2581,7 +2691,7 @@ fn testLinkInputsIdentityForFiles(
     second_resolved: []const u8,
     second_contents: []const u8,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-link-inputs-v1");
     updateHashBytes(&hasher, @tagName(RocTarget.x64linux));
     updateInterpreterExeFileLinkInput(&hasher, first_declared, first_resolved, bytesDigest(first_contents));
@@ -9051,7 +9161,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .entry = 0,
             .frame = null,
             .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_eq", .scope = .program, .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .function }},
             .data = &.{},
         },
     };
@@ -11892,7 +12002,7 @@ fn cliTestCacheKey(
     artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
     specialization_strategy: base.SpecializationStrategy,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(cli_test_cache_magic);
     hasher.update(build_options.compiler_version);
     hasher.update(@tagName(specialization_strategy));
@@ -12222,15 +12332,15 @@ fn buildCliTestPlan(
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
 
-        // Root requests deliberately exclude erroneous bodies. The checked
-        // roots still retain their identities and the checker's diagnostic
+        // Root requests deliberately exclude roots reaching checked errors.
+        // The checked roots retain their identities and the checker's diagnostic
         // facts, so rejected tests can participate in result aggregation
         // without being lowered, executed, or stored in the execution cache.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots) |root| {
             if (root.kind != .expect) continue;
-            if (!artifact.checked_bodies.exprContainsDiagnosticError(root.expr)) continue;
+            if (!artifact.compileTimeRootReachesCheckedError(root)) continue;
             std.debug.assert(root.request_eligibility == .ineligible);
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
@@ -12761,7 +12871,7 @@ fn lowerCheckedSourceToLir(
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
-) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
+) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
         .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -14105,10 +14215,9 @@ const WatchSnapshotError = Allocator.Error;
 const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
 const WatchWriteInputsError = WatchCollectInputSetError || std.Io.Dir.WriteFileError;
 const WatchReadInputsError = WatchCollectPathsError || WatchSnapshotError || error{ WatchInputsMissing, WatchInputsReadFailed, WatchInputsMalformed };
-const WatchDirectoryError = Allocator.Error;
 const WatcherStartError = std.Thread.SpawnError || error{ AlreadyStarted, UnsupportedWatchMode, WatchBackendFailed };
-const WatchRefreshError = WatchSnapshotError || WatchDirectoryError || WatcherStartError;
-const WatchChangeError = WatchSnapshotError;
+const WatchRefreshError = WatchSnapshotError || WatcherStartError;
+const WatchChangeError = WatchRefreshError;
 const WatchInputsPathError = Allocator.Error || std.Io.Dir.CreateDirPathError;
 const WatchSpawnChildError = Allocator.Error || std.process.SpawnError || std.Thread.SpawnError;
 const CliOutputWriteError = error{WriteFailed};
@@ -14797,7 +14906,7 @@ fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFi
     };
     defer ctx.gpa.free(bytes);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return .{ .hash = hasher.finalResult() };
 }
@@ -14821,54 +14930,6 @@ fn watchSnapshotChanged(a: []const WatchSnapshotEntry, b: []const WatchSnapshotE
     return false;
 }
 
-fn existingDirectory(ctx: *CliCtx, path: []const u8) bool {
-    var dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, path, .{}) catch return false;
-    dir.close(ctx.io.std_io);
-    return true;
-}
-
-fn nearestExistingAncestor(ctx: *CliCtx, path: []const u8) WatchDirectoryError![]const u8 {
-    var candidate = try ctx.gpa.dupe(u8, std.fs.path.dirname(path) orelse path);
-    errdefer ctx.gpa.free(candidate);
-
-    while (!existingDirectory(ctx, candidate)) {
-        const parent = std.fs.path.dirname(candidate) orelse break;
-        if (parent.len == candidate.len) break;
-
-        const parent_copy = try ctx.gpa.dupe(u8, parent);
-        ctx.gpa.free(candidate);
-        candidate = parent_copy;
-    }
-
-    return candidate;
-}
-
-fn collectWatchDirectories(ctx: *CliCtx, paths: []const []const u8) WatchDirectoryError![]const []const u8 {
-    var dirs = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (dirs.items) |dir| ctx.gpa.free(dir);
-        dirs.deinit(ctx.gpa);
-    }
-
-    var seen: std.StringHashMapUnmanaged(void) = .{};
-    defer seen.deinit(ctx.gpa);
-
-    for (paths) |path| {
-        const dir = try nearestExistingAncestor(ctx, path);
-        errdefer ctx.gpa.free(dir);
-
-        if (seen.contains(dir)) {
-            ctx.gpa.free(dir);
-            continue;
-        }
-
-        try seen.put(ctx.gpa, dir, {});
-        try dirs.append(ctx.gpa, dir);
-    }
-
-    return dirs.toOwnedSlice(ctx.gpa);
-}
-
 fn refreshWatchState(
     ctx: *CliCtx,
     state: *WatchState,
@@ -14878,13 +14939,10 @@ fn refreshWatchState(
     var owned_input_set = new_input_set;
     errdefer owned_input_set.deinit(ctx);
 
-    const watch_dirs = try collectWatchDirectories(ctx, owned_input_set.inputs);
-    defer freeOwnedPathSlice(ctx.gpa, watch_dirs);
-
     var new_watcher: ?*watch_mod.Watcher = null;
-    if (watch_dirs.len > 0) {
-        new_watcher = try watch_mod.Watcher.initAllFiles(ctx.gpa, ctx.io.std_io, watch_dirs, signal, watchCallback);
-        errdefer if (new_watcher) |watcher| watcher.deinit();
+    errdefer if (new_watcher) |watcher| watcher.deinit();
+    if (owned_input_set.inputs.len > 0) {
+        new_watcher = try watch_mod.Watcher.initInputs(ctx.gpa, ctx.io.std_io, owned_input_set.inputs, signal, watchCallback);
         new_watcher.?.start() catch |err| switch (err) {
             error.WatchBackendFailed => {
                 ctx.io.stderr().writeAll("Error: failed to start filesystem watching for source inputs.\n") catch {};
@@ -14935,7 +14993,34 @@ fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *
     if (!signal.dirty.swap(false, .seq_cst)) return false;
     std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
     _ = signal.dirty.swap(false, .seq_cst);
-    return try watchStateHasByteChanges(ctx, state);
+    const watcher = state.watcher orelse return false;
+    if (watcher.hasBackendFailed()) return error.WatchBackendFailed;
+    if (watcher.takeCoverageChange()) {
+        // Coverage must advance even if creating a directory did not yet change
+        // an input's bytes. Keep the old baseline through registration so edits
+        // during the handoff are detected by refreshWatchState's snapshot check.
+        const input_set = blk: {
+            const paths = try ctx.gpa.alloc([]const u8, state.inputs.len);
+            errdefer ctx.gpa.free(paths);
+            var copied: usize = 0;
+            errdefer for (paths[0..copied]) |path| ctx.gpa.free(path);
+            for (state.inputs, 0..) |path, i| {
+                paths[i] = try ctx.gpa.dupe(u8, path);
+                copied += 1;
+            }
+            const snapshot = try ctx.gpa.dupe(WatchSnapshotEntry, state.snapshot);
+            break :blk WatchInputSet{ .inputs = paths, .snapshot = snapshot };
+        };
+        return refreshWatchState(ctx, state, signal, input_set);
+    }
+    var changed = false;
+    for (state.inputs, state.snapshot, 0..) |path, *entry, index| {
+        if (!watcher.takeInputChange(index)) continue;
+        const current = try readWatchFileState(ctx, path);
+        changed = changed or !entry.state.eql(current);
+        entry.state = current;
+    }
+    return changed;
 }
 
 fn waitForWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!void {
@@ -16811,13 +16896,18 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
     if (args.check) {
         var unformatted_files = std.ArrayList([]const u8).empty;
-        defer unformatted_files.deinit(ctx.gpa);
+        defer {
+            for (unformatted_files.items) |path| ctx.gpa.free(path);
+            unformatted_files.deinit(ctx.gpa);
+        }
 
         for (args.paths) |path| {
             var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, format_options, ctx.io.std_io, stderr);
             defer result.deinit();
-            if (result.unformatted_files) |files| {
+            if (result.unformatted_files) |*files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
+                // Transfer the owned paths so they survive result.deinit().
+                files.clearRetainingCapacity();
             }
             failure_count += result.failure;
         }
@@ -20156,6 +20246,64 @@ test "watch byte change advances snapshot before rebuild completes" {
 
     try testing.expect(try watchStateHasByteChanges(&ctx, &state));
     try testing.expect(!try watchStateHasByteChanges(&ctx, &state));
+}
+
+test "watch exact inputs recover missing directories and atomic replacement" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(root);
+    const input = try std.fs.path.join(allocator, &.{ root, "generated/deep/data.txt" });
+    defer allocator.free(input);
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, try collectWatchInputSet(&ctx, null, &.{input})));
+
+    // Directory creation must advance coverage without requiring byte changes.
+    for ([_][]const u8{ "generated", "generated/deep" }) |relative| {
+        try tmp.dir.createDirPath(testing.io, relative);
+        const directory = try std.fs.path.join(allocator, &.{ root, relative });
+        defer allocator.free(directory);
+        const start = std.Io.Clock.now(.awake, testing.io);
+        while (true) {
+            try testing.expect(!try consumeDebouncedWatchChange(&ctx, &signal, &state));
+            if (state.watcher.?.input_plan.?.nodes.get(directory)) |node| {
+                if (node.kind == .directory) break;
+            }
+            try testing.expect(start.durationTo(std.Io.Clock.now(.awake, testing.io)).toMilliseconds() < 5000);
+            std.Thread.yield() catch {};
+        }
+    }
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "generated/deep/data.txt", .data = "first" });
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "replacement", .data = "second" });
+    try tmp.dir.rename("replacement", tmp.dir, "generated/deep/data.txt", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+
+    // Moving an ancestor removes the logical input even though its inode lives.
+    try tmp.dir.rename("generated", tmp.dir, "moved", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+    // Moving a populated tree into place must discover the file immediately.
+    try tmp.dir.rename("moved", tmp.dir, "generated", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+}
+
+fn expectWatchChangeForTest(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) (WatchChangeError || error{TestUnexpectedResult})!void {
+    const start = std.Io.Clock.now(.awake, ctx.io.std_io);
+    while (!try consumeDebouncedWatchChange(ctx, signal, state)) {
+        try std.testing.expect(start.durationTo(std.Io.Clock.now(.awake, ctx.io.std_io)).toMilliseconds() < 5000);
+        std.Thread.yield() catch {};
+    }
 }
 
 test "appendWindowsQuotedArg" {

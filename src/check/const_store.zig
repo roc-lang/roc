@@ -253,6 +253,7 @@ pub const ConstFnCallableInstantiation = struct {
 /// derivations need the generated-contract identity when their runtime
 /// function is restored after compile-time evaluation.
 pub const ConstFnStructuralEvidence = struct {
+    callable_contracts: u32 = 0,
     derivation: static_dispatch.StructuralDerivation,
     checked: ?struct {
         view: names.CheckedModuleDigest,
@@ -265,6 +266,7 @@ pub const ConstFnStructuralEvidence = struct {
     } = null,
 
     pub fn identityEql(left: ConstFnStructuralEvidence, right: ConstFnStructuralEvidence) bool {
+        if (left.callable_contracts != right.callable_contracts) return false;
         if (!std.meta.eql(left.derivation, right.derivation) or (left.checked == null) != (right.checked == null)) return false;
         const a = left.checked orelse return true;
         const b = right.checked.?;
@@ -286,6 +288,7 @@ pub const ConstFnEvidence = union(enum(u8)) {
         method_callable_key: names.CanonicalTypeKey,
         instantiation: ?ConstFnCallableInstantiation,
         nested: ConstFnNestedEvidence,
+        callable_contracts: u32 = 0,
     },
     structural: ConstFnStructuralEvidence,
     /// A callable-reachable requirement that must be resolved from the
@@ -294,6 +297,7 @@ pub const ConstFnEvidence = union(enum(u8)) {
     /// independently of offsets in the flattened nested-evidence pool.
     from_callable: struct {
         independent_callable: bool = false,
+        callable_contracts: u32 = 0,
     },
     /// Abstract local scheme parameter, supplied by the checked use edge.
     from_scheme: u32,
@@ -1059,6 +1063,15 @@ pub const ConstStore = struct {
             if (cursor >= nodes.len) return null;
             const node = nodes[cursor];
             cursor += 1;
+            // A node's nested vector precedes its callable contracts, so the
+            // contracts wait beneath it on the stack.
+            const contracts = switch (node) {
+                .target => |target| target.callable_contracts,
+                .structural => |structural| structural.callable_contracts,
+                .from_callable => |use| use.callable_contracts,
+                .from_scheme, .unreachable_value, .checked_error => 0,
+            };
+            if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });
             switch (node) {
                 .target => |target| {
                     switch (target.nested) {
@@ -1084,6 +1097,18 @@ pub const ConstStore = struct {
             .nested = .from_callable,
         } }};
         try std.testing.expectEqual(@as(?usize, 1), try evidenceVectorEnd(std.testing.allocator, &evidence, 0, 1));
+    }
+
+    test "issue 11737: stored evidence validates callable contract topology" {
+        const nodes = [_]ConstFnEvidence{
+            .{ .from_callable = .{ .callable_contracts = 1 } },
+            .{ .from_callable = .{ .callable_contracts = 1 } },
+            .checked_error,
+            .unreachable_value,
+        };
+        try std.testing.expectEqual(@as(?usize, 4), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 2));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, nodes[0..2], 0, 1));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 3));
     }
 
     pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {

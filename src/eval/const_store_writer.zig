@@ -119,6 +119,7 @@ pub const Writer = struct {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
                 .pending,
+                .boxy_box,
                 .layout_only,
                 .zst,
                 .scalar,
@@ -299,6 +300,7 @@ pub const Writer = struct {
         var children = std.ArrayList(ValueRequest).empty;
         defer children.deinit(self.allocator);
         const finish: StoreFinish = switch (self.constPlan(request.plan)) {
+            .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => return self.module.const_store.fill(node, .zst),
@@ -388,7 +390,8 @@ pub const Writer = struct {
         var children = std.ArrayList(ValueRequest).empty;
         defer children.deinit(self.allocator);
         try self.appendCaptureRequests(&children, entry.entry.captures, entry.entry.capture_layout, .{ .ptr = entry.capture_ptr });
-        try self.pushStoreFrame(frames, .{ .fn_value = .{ .node = node, .template = entry.entry.template } }, &children, entry.entry.captures);
+        const template = entry.entry.template orelse writerInvariant("Boxy frozen environment has no ConstStore provenance");
+        try self.pushStoreFrame(frames, .{ .fn_value = .{ .node = node, .template = template } }, &children, entry.entry.captures);
     }
 
     const ResolvedErasedEntry = struct {
@@ -738,7 +741,7 @@ pub const Writer = struct {
             .named => |*named| (&named.backing)[0..1],
             .record, .tuple => |children| children,
             .pending, .layout_only => unreachable,
-            .str, .list, .box, .tag_union, .fn_value, .erased_fn => return false,
+            .str, .list, .box, .boxy_box, .tag_union, .fn_value, .erased_fn => return false,
         };
         try frames.append(self.allocator, .{ .id = id, .children = children });
         return null;
@@ -789,6 +792,7 @@ pub const Writer = struct {
                 continue;
             },
             .pending,
+            .boxy_box,
             .layout_only,
             .zst,
             .str,
@@ -923,6 +927,7 @@ pub const Writer = struct {
         }
 
         switch (self.constPlan(request.plan)) {
+            .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached string backing collection"),
             .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
             .zst,

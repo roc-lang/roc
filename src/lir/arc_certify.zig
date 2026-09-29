@@ -466,6 +466,12 @@ fn certifyUniqueArgs(
 
         for (proc_stmts.items) |current| {
             const stmt = store.getCFStmt(current);
+            if (stmt == .assign_literal and stmt.assign_literal.fresh_alternative != null) {
+                diag.context_proc = proc_id;
+                diag.context_stmt = current;
+                diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@intFromEnum(current)});
+                return error.Certification;
+            }
             if (stmt != .assign_low_level) continue;
             const assign = stmt.assign_low_level;
             if (assign.unique_args == 0) continue;
@@ -629,7 +635,7 @@ fn writeFailureContext(
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -835,13 +841,6 @@ fn writeFailureContext(
                 @tagName(a.source_mode),
                 @intFromEnum(a.next),
             }),
-            .assign_boxy_eq => |a| context.append(" target={d} lhs={d} rhs={d} mode={s} next={d}", .{
-                @intFromEnum(a.target),
-                @intFromEnum(a.lhs),
-                @intFromEnum(a.rhs),
-                @tagName(a.source_mode),
-                @intFromEnum(a.next),
-            }),
             inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_reuse_box, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             .store_struct,
             .store_tag,
@@ -935,7 +934,6 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
             (a.source_desc != null and boxyDescRefReadsLocal(a.source_desc.?, needle)) or
             (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)),
         .assign_boxy_inspect => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle),
-        .assign_boxy_eq => |a| a.target == needle or a.lhs == needle or a.rhs == needle or boxyDescRefReadsLocal(a.source_desc, needle),
         .assign_boxy_tag => |a| a.target == needle or boxyDescRefReadsLocal(a.target_desc, needle) or
             (a.payload != null and a.payload.? == needle) or
             (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
@@ -1154,7 +1152,6 @@ fn resultBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -3754,13 +3751,6 @@ const Certifier = struct {
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     try stack.append(self.allocator, assign.next);
                 },
-                .assign_boxy_eq => |assign| {
-                    try self.noteProcLocal(assign.target);
-                    try self.noteProcLocal(assign.lhs);
-                    try self.noteProcLocal(assign.rhs);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, assign.next);
-                },
                 .assign_boxy_tag => |assign| {
                     try self.noteProcLocal(assign.target);
                     if (assign.target_desc.localOrNull()) |local| try self.noteProcLocal(local);
@@ -3990,7 +3980,6 @@ const Certifier = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -4291,13 +4280,6 @@ const Certifier = struct {
                 },
                 .assign_boxy_inspect => |assign| {
                     self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_eq => |assign| {
-                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.lhs);
-                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.rhs);
                     if (assign.source_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -5316,13 +5298,6 @@ const Certifier = struct {
                     try self.requireBoxyDescRef(&state, assign.source_desc);
                     _ = try self.bindBoxyOwnedTarget(&state, assign.target);
                     _ = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    cursor = assign.next;
-                },
-                .assign_boxy_eq => |assign| {
-                    try self.requireBoxyDescRef(&state, assign.source_desc);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    _ = try self.requireBoxyTransferSource(&state, assign.lhs, assign.source_mode);
-                    _ = try self.requireBoxyTransferSource(&state, assign.rhs, assign.source_mode);
                     cursor = assign.next;
                 },
                 .assign_boxy_tag => |assign| {
