@@ -9859,12 +9859,25 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeListCapacity(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset())));
             return;
         }
-        var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
-        defer call_args.deinit(self.allocator);
-        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try call_args.append(self.allocator, try self.ptrType(), self.slot(GuardedList.at(args, 1)).ptr);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), (self.builder orelse return error.CompilationFailed).intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_unsafe)), call_args.types.items, call_args.values.items);
+        // The caller has discharged every check: the list uniquely owns an
+        // allocation with a spare slot. The append is then a copy of the
+        // element's bytes to the slot after the last and a longer length,
+        // emitted in place so a loop of appends carries no call.
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const src_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+        const out_ptr = self.slot(target).ptr;
+        const bytes = try self.loadPointer(src_ptr);
+        const len = try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListLenOffset()));
+        const capacity = try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset()));
+        const offset = wip.bin(.mul, len, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const dst = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
+        try self.copyBytes(dst, self.slot(GuardedList.at(args, 1)).ptr, @intCast(abi.elem_size), LlvmBuilder.Alignment.fromByteUnits(abi.elem_alignment));
+        const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
+        const new_len = wip.bin(.add, len, one, "") catch return error.OutOfMemory;
+        try self.storePointer(out_ptr, bytes);
+        try self.storeListLen(out_ptr, new_len);
+        try self.storeListCapacity(out_ptr, capacity);
     }
 
     fn emitListConcat(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
