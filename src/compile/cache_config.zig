@@ -249,8 +249,13 @@ pub const Constants = struct {
     ///      dispatched method names, and common idents include `Builtin.Stream`.
     /// 113: `Stream` is a checked builtin nominal, so every module interns its
     ///      unqualified and fully qualified type names as common identifiers.
-    /// 115: Combine the Stream builtin identity and effectful for-loop metadata.
-    pub const CACHE_VERSION = 115;
+    /// 114: Combined with the Stream loop format, derived-method markers record
+    ///      their owner type declaration, and a type-rooted dispatch call can
+    ///      dispatch on an explicit type var. Version 113 is reserved for the
+    ///      separate Stream builtin change.
+    /// 115: Reserved for wide-representation-capacity.
+    /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
+    pub const CACHE_VERSION = 116;
 };
 
 /// Configuration for the Roc cache system.

@@ -172,7 +172,7 @@ fn computeCheckedArtifactKeyBytes(
     checking_context_identity_hash: [32]u8,
     direct_import_artifact_keys_hash: [32]u8,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(&source_hash);
     hasher.update(&compiler_artifact_hash);
     hasher.update(&module_identity_hash);
@@ -222,7 +222,7 @@ pub const ImportIdentity = struct {
 };
 
 fn hashBytes(bytes: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return hasher.finalResult();
 }
@@ -247,7 +247,7 @@ fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
         return hashBytes(module_env.getSourceAll());
     }
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hashByteSlice(&hasher, "roc-module-source-inputs-v2");
     hashByteSlice(&hasher, module_env.getSourceAll());
     hashU32(&hasher, @intCast(deps.len));
@@ -284,7 +284,7 @@ fn computeStableModuleIdentityHash(module_env: *const ModuleEnv) [32]u8 {
 }
 
 fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     if (identity.platform_requirement_context) |context| {
         hasher.update(&[_]u8{1});
         hasher.update(&context.bytes);
@@ -316,7 +316,7 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
 }
 
 fn hashExplicitRootRequestInput(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     root: ExplicitRootRequestInput,
 ) void {
     hashByteSlice(hasher, @tagName(root.kind));
@@ -325,7 +325,7 @@ fn hashExplicitRootRequestInput(
     hashByteSlice(hasher, @tagName(root.exposure));
 }
 
-fn hashRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: RootSource) void {
+fn hashRootSource(hasher: *base.Sha256, source: RootSource) void {
     hashByteSlice(hasher, @tagName(source));
     switch (source) {
         .def => |idx| hashU32(hasher, @intFromEnum(idx)),
@@ -340,7 +340,7 @@ fn hashRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: RootSource) void
 }
 
 fn hashDirectImportArtifactKeys(keys: []const CheckedModuleArtifactKey) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hashU32(&hasher, @intCast(keys.len));
     for (keys) |key| hasher.update(&key.bytes);
     return hasher.finalResult();
@@ -372,7 +372,7 @@ pub const PlatformRequirementContextKey = struct {
         platform_content_identity_hash: [32]u8,
         platform_required_declarations_hash: [32]u8,
     ) PlatformRequirementContextKey {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = base.Sha256.init(.{});
         hasher.update(&platform_content_identity_hash);
         hasher.update(&platform_required_declarations_hash);
         return .{ .bytes = hasher.finalResult() };
@@ -8269,6 +8269,7 @@ fn appendStaticDispatchTypeRoots(
         if (tag != .expr_dispatch_call and
             tag != .expr_interpolation and
             tag != .expr_type_dispatch_call and
+            tag != .expr_type_dispatch_call_dispatcher and
             tag != .expr_method_eq) continue;
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
@@ -11859,7 +11860,10 @@ const CheckedSourceNodes = struct {
                 try self.markExprSpan(module, call.args, work);
             },
             .e_type_dispatch_call => |call| {
-                try self.markStatement(call.type_dispatch_stmt, work);
+                switch (call.owner) {
+                    .statement => |stmt| try self.markStatement(stmt, work),
+                    .dispatcher => {},
+                }
                 try self.markExprSpan(module, call.args, work);
             },
             .e_tuple_access => |access| try self.markExpr(access.tuple, work),
@@ -23232,7 +23236,7 @@ pub const PlatformAppRelationKey = struct {
         app_artifact: CheckedModuleArtifactKey,
         requirement_context: PlatformRequirementContextKey,
     ) PlatformAppRelationKey {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = base.Sha256.init(.{});
         hasher.update(&app_artifact.bytes);
         hasher.update(&requirement_context.bytes);
         return .{ .bytes = hasher.finalResult() };
@@ -23335,7 +23339,7 @@ pub const PlatformRequiredDeclarationTable = struct {
         self: *const PlatformRequiredDeclarationTable,
         names: *const canonical.CanonicalNameStore,
     ) [32]u8 {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = base.Sha256.init(.{});
         hashByteSlice(&hasher, "platform_required_declarations");
         hashU32(&hasher, @intCast(self.declarations.len));
         for (self.declarations) |declaration| {
@@ -23357,7 +23361,7 @@ fn hashRequiredTypeForClauseAliases(
     module_env: *const ModuleEnv,
     required_type: ModuleEnv.RequiredType,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hashByteSlice(&hasher, "platform_required_for_clause_aliases");
     const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
     hashU32(&hasher, @intCast(aliases.len));
@@ -26306,7 +26310,7 @@ pub const PlatformPairing = struct {
     const version_hash = artifact_serialize.layoutVersionHash(Serialized, 2);
 
     pub fn cacheKey(platform: CheckedModuleArtifactKey, app: CheckedModuleArtifactKey) CheckedModuleArtifactKey {
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        var hash = base.Sha256.init(.{});
         hash.update("roc-platform-pairing");
         hash.update(&CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
         hash.update(&version_hash);
@@ -36846,6 +36850,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .expr_method_eq,
             .expr_type_method_call,
             .expr_type_dispatch_call,
+            .expr_type_dispatch_call_dispatcher,
             .expr_hosted_lambda,
             => {
                 const expr = store.getExpr(@enumFromInt(raw_node_idx));

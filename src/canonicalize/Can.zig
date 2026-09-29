@@ -4285,7 +4285,7 @@ fn canonicalizeAssociatedItems(
                     const name_text = self.env.getIdent(name_ident);
                     const annotation_expr_kind: AnnotationExprKind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
                         if (self.derivedMethodKind(name_ident)) |kind|
-                            .{ .derived = kind }
+                            .{ .derived = .{ .kind = kind, .owner = owner_stmt_idx } }
                         else
                             .unsupported_generated_method
                     else
@@ -5125,7 +5125,10 @@ fn derivedMethodKind(self: *const Self, ident: Ident.Idx) ?CIR.DerivedMethodKind
 
 const AnnotationExprKind = union(enum) {
     ordinary,
-    derived: CIR.DerivedMethodKind,
+    derived: struct {
+        kind: CIR.DerivedMethodKind,
+        owner: Statement.Idx,
+    },
     unsupported_generated_method,
 };
 
@@ -5137,7 +5140,11 @@ fn addAnnotationExpr(
 ) std.mem.Allocator.Error!Expr.Idx {
     const expr = switch (annotation_expr_kind) {
         .ordinary => Expr{ .e_anno_only = .{ .ident = ident } },
-        .derived => |kind| Expr{ .e_derived_method = .{ .ident = ident, .kind = kind } },
+        .derived => |derived| Expr{ .e_derived_method = .{
+            .ident = ident,
+            .kind = derived.kind,
+            .owner = derived.owner,
+        } },
         .unsupported_generated_method => Expr{ .e_anno_only = .{
             .ident = ident,
             .kind = .unsupported_generated_method,

@@ -55092,13 +55092,18 @@ const BodyContext = struct {
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
 
-        const cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
-        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
+        // A divergent discarded expression never yields the value this
+        // statement discards, so it lowers exactly like a divergent block
+        // statement. Its value type is never requested: a checked runtime
+        // error has a deliberately erroneous type, and value evidence for a
+        // divergent call could instantiate a rejected dispatch.
+        if (try self.lowerDivergentExprInContext(expr_id, .uncontextual)) |divergent| {
             return .{
-                .stmt = try self.addStmt(.{ .expr = try self.lowerDivergentExprAtTypeCell(expr_id, cell) }),
+                .stmt = try self.addStmt(.{ .expr = divergent }),
                 .termination = .checked_control_transfer,
             };
         }
+        const cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
         const node = try cell.toGraphNode(self.graph);
         if (try self.nodeIsProvenUninhabited(node)) {
             return .{
