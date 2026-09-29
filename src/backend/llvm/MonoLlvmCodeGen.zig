@@ -4475,7 +4475,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
             .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
-            .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
+            .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_clear => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
@@ -10156,6 +10156,8 @@ pub const MonoLlvmCodeGen = struct {
             break :blk ListSlice{ .start = safe_start, .len = count };
         } else if (op == .list_sublist or op == .list_sublist_borrowed)
             try self.loadSublistStartLen(GuardedList.at(args, 1))
+        else if (op == .list_clear)
+            ListSlice{ .start = zero, .len = zero }
         else
             return error.UnsupportedLowLevel;
 

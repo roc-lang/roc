@@ -4920,6 +4920,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const record_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     return try self.callListSublistFromRecord(ll, .list_sublist_borrowed, list_local, list_loc, record_loc, record_layout_idx);
                 },
+                .list_clear => {
+                    // list_clear(list) -> List: the zero-length sublist from index zero.
+                    if (args.len != 1) unreachable;
+                    const list_local = GuardedList.at(args, 0);
+                    const list_loc = try self.emitValueLocal(list_local);
+                    return try self.callListClear(ll, list_local, list_loc);
+                },
                 .list_drop_at => {
                     if (args.len != 2) unreachable;
                     const list_local = GuardedList.at(args, 0);
@@ -7496,6 +7503,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_map_write_unsafe,
                 .list_prepend,
                 .list_release_excess_capacity,
+                .list_clear,
                 .list_replace_unsafe,
                 .list_reserve,
                 .list_reverse,
@@ -8968,6 +8976,49 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
+        /// Call the sublist builtin with the zero-length window from index
+        /// zero: `List.clear`.
+        fn callListClear(self: *Self, ll: anytype, list_local: LocalId, list_loc: ValueLocation) Allocator.Error!ValueLocation {
+            const ls = self.layout_store;
+            const list_abi = builtinInternalListAbi(ls, "dev.callListClear.builtin_list_abi", ll.ret_layout);
+            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+            if (list_abi.elem_size_align.size == 0) return self.emitZstList(null);
+
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(frame_ptr, result_offset);
+                try builder.addMemArg(frame_ptr, list_off);
+                try builder.addMemArg(frame_ptr, list_off + 8);
+                try builder.addMemArg(frame_ptr, list_off + 16);
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try builder.addImmArg(0);
+                try builder.addImmArg(0);
+                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
+                try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+                try self.callBoxyBuiltin(&builder, .list_sublist);
+            } else {
+                const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+                defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(frame_ptr, result_offset);
+                try builder.addMemArg(frame_ptr, list_off);
+                try builder.addMemArg(frame_ptr, list_off + 8);
+                try builder.addMemArg(frame_ptr, list_off + 16);
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                try builder.addImmArg(0);
+                try builder.addImmArg(0);
+                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
+                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+                try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_sublist));
+            }
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
         fn callListDropAt(self: *Self, ll: anytype, list_local: LocalId, list_loc: ValueLocation, index_loc: ValueLocation) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const list_abi = builtinInternalListAbi(ls, "dev.callListDropAt.builtin_list_abi", ll.ret_layout);
@@ -10052,7 +10103,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 op != .list_swap and op != .list_drop_first and op != .list_drop_last and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
                 op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
-                op != .list_reserve and op != .list_release_excess_capacity) return null;
+                op != .list_reserve and op != .list_release_excess_capacity and op != .list_clear) return null;
             const abi = builtinInternalListAbi(self.layout_store, "dev.stack_plan.list_abi", self.localLayout(s.target));
             if (abi.elem_size_align.size == 0) return null;
             const args = self.store.getLocalSpan(s.args);

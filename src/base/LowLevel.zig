@@ -87,6 +87,11 @@ pub const LowLevel = enum(u16) {
     list_sort_with,
     list_reserve,
     list_release_excess_capacity,
+    /// `List.clear`: the list with every item removed, keeping its
+    /// allocation and capacity when it is uniquely owned. Every backend
+    /// runs it as a zero-length sublist from index zero, whose result is
+    /// never a slice, so unlike `list_sublist` the result is born unique.
+    list_clear,
     list_split_first,
     list_split_last,
     list_map_prepare_reuse,
@@ -944,6 +949,7 @@ pub const LowLevel = enum(u16) {
             .list_sort_with,
             .list_reserve,
             .list_release_excess_capacity,
+            .list_clear,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             // SIMD byte stores and appends consume/update their List(U8),

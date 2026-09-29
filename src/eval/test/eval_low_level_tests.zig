@@ -1915,6 +1915,22 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(2, 0)" },
     },
     .{
+        // The emptied list keeps its allocation: a uniquely owned list of
+        // ten items with room for sixteen still has room for sixteen.
+        .name = "low_level - clear keeps a unique list's capacity",
+        .source =
+        \\{
+        \\x = List.append(List.with_capacity(16), 1.U8)
+        \\r = List.clear(x)
+        \\(List.len(r), List.capacity(r) >= 16)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, True)" },
+        // The wasm test mode's host imports report every list as shared,
+        // so no list keeps its allocation there.
+        .skip = .{ .wasm = true },
+    },
+    .{
         .name = "low_level - zero-sized list clear reports zero capacity",
         .source =
         \\{
