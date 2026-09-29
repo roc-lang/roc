@@ -608,6 +608,10 @@ const Pass = struct {
     field_values: std.AutoHashMap(u64, NodeId),
     /// Roots of constructed structs, whose fields `field_values` records.
     struct_roots: collections.DenseMap(NodeId, void),
+    /// The `field_values` keys whose field holds a tracked integer: only
+    /// those meet as scalars at a merge. A list field keeps its value's
+    /// length term and must not be replaced by a met scalar.
+    int_fields: collections.DenseMap(u64, void),
     /// The node each loop parameter was bound to when its body was seeded
     /// this round. A back edge carrying that very value brings the
     /// parameter back unchanged, so the entry edges' bounds hold on it too.
@@ -705,6 +709,7 @@ const Pass = struct {
             .global_facts = .empty,
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
             .struct_roots = collections.DenseMap(NodeId, void).init(allocator),
+            .int_fields = collections.DenseMap(u64, void).init(allocator),
             .seeded_param_roots = collections.DenseMap(LocalId, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
@@ -763,6 +768,7 @@ const Pass = struct {
         self.global_facts.deinit(self.allocator);
         self.field_values.deinit();
         self.struct_roots.deinit();
+        self.int_fields.deinit();
         self.seeded_param_roots.deinit();
         self.seeded_param_root_set.deinit();
         self.sum_roots.deinit();
@@ -790,6 +796,7 @@ const Pass = struct {
         self.global_facts.clearRetainingCapacity();
         self.field_values.clearRetainingCapacity();
         self.struct_roots.clearRetainingCapacity();
+        self.int_fields.clearRetainingCapacity();
         self.seeded_param_roots.clearRetainingCapacity();
         self.seeded_param_root_set.clearRetainingCapacity();
         self.sum_roots.clearRetainingCapacity();
@@ -1248,6 +1255,7 @@ const Pass = struct {
             const field_node = (try self.valueOf(field_local)) orelse continue;
             const key = (@as(u64, node) << 16) | @as(u64, @intCast(i));
             try self.field_values.put(key, field_node);
+            try self.int_fields.put(key, {});
             try self.struct_roots.put(node, {});
         }
         try self.bind(target, .{ .node = node });
@@ -1264,8 +1272,9 @@ const Pass = struct {
         }
         const node = (try self.unknownFor(self.localLayout(target))) orelse return self.bindFresh(target);
         try self.field_values.put(key, node);
-        if (trackedIntMax(self.localLayout(target)) != null and self.isSingleAssign(target)) {
-            try self.value_roots.put(node, self.stableLocalOf(target));
+        if (trackedIntMax(self.localLayout(target)) != null) {
+            try self.int_fields.put(key, {});
+            if (self.isSingleAssign(target)) try self.value_roots.put(node, self.stableLocalOf(target));
         }
         try self.bind(target, .{ .node = node });
     }
@@ -2003,7 +2012,9 @@ const Pass = struct {
                 // keeps each carried value's bounds.
                 var field_idx: u16 = 0;
                 while (field_idx < max_struct_meet_fields) : (field_idx += 1) {
-                    const field_node = self.field_values.get((@as(u64, node.root) << 16) | field_idx) orelse continue;
+                    const field_key = (@as(u64, node.root) << 16) | field_idx;
+                    if (!self.int_fields.contains(field_key)) continue;
+                    const field_node = self.field_values.get(field_key) orelse continue;
                     // A field with nothing known about it would only take
                     // an environment slot from a value with bounds.
                     if (!self.captureWorthy(field_node)) continue;
@@ -2289,7 +2300,9 @@ const Pass = struct {
                 // is bound (or freshly made) by the time a field seeds.
                 const node = (try self.metScalarNode(meet)) orelse continue;
                 const parent = (try self.valueOf(meet.local)) orelse continue;
-                try self.field_values.put((@as(u64, self.rootOf(parent)) << 16) | field_idx, node);
+                const field_key = (@as(u64, self.rootOf(parent)) << 16) | field_idx;
+                try self.field_values.put(field_key, node);
+                try self.int_fields.put(field_key, {});
                 try self.struct_roots.put(self.rootOf(parent), {});
                 continue;
             }
