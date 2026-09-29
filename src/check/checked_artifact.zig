@@ -19457,6 +19457,11 @@ const EvidencePass = struct {
             // requirements belong to that scope, not to a representative use.
             if (self.checked_bodies.patternBinder(binder).is_scheme_alias) return;
         }
+        // Resolution reaches a pattern only through one of its value-use
+        // records. A decl nobody instantiated (for example a local inside a
+        // generalized definition, whose variables are generalized only as
+        // part of that definition's scheme) has none, so it owns nothing here.
+        if (!self.value_use_record_by_pattern.contains(@intFromEnum(pattern))) return;
         const pattern_var = ModuleEnv.varFrom(pattern);
         if (self.types.resolveVar(pattern_var).desc.rank != .generalized) return;
         scheme_params.clearRetainingCapacity();
