@@ -3627,6 +3627,95 @@ pub const InstGraph = struct {
 
     /// Whether this exact graph type contains compiler-generated private
     /// opaque evidence at any structural depth.
+    /// A caller's own witness of a callee-authored result. Every class that
+    /// carries generated-private representation evidence is copied into fresh
+    /// nodes, memoized so recursive iterator types keep their cycles; every
+    /// other class is shared. The caller may then join the witness with its
+    /// own producers without changing the callee's completed type, which is
+    /// immutable producer output even while its graph is still live.
+    pub fn privateResultWitness(self: *InstGraph, root: NodeId) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        if (!try self.containsGeneratedPrivate(root)) return root;
+        var copies = collections.DenseMap(NodeId, NodeId).init(self.allocator);
+        defer copies.deinit();
+        return try self.copyPrivateWitness(root, &copies);
+    }
+
+    fn copyPrivateWitness(
+        self: *InstGraph,
+        raw: NodeId,
+        copies: *collections.DenseMap(NodeId, NodeId),
+    ) Allocator.Error!NodeId {
+        const node = self.find(raw);
+        if (copies.get(node)) |copied| return copied;
+        if (!try self.containsGeneratedPrivate(node)) return node;
+        const original = self.content(node);
+        const membership = self.representation_membership.items[@intFromEnum(node)];
+        const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        try copies.put(node, reserved);
+        const copied: InstNode = switch (original) {
+            .redirect => unreachable,
+            .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("a leaf class reported generated-private containment"),
+            .list => |elem| .{ .list = try self.copyPrivateWitness(elem, copies) },
+            .box => |elem| .{ .box = try self.copyPrivateWitness(elem, copies) },
+            .tuple => |items| .{ .tuple = try self.copyPrivateWitnessSpan(items, copies) },
+            .func => |function| .{ .func = .{
+                .args = try self.copyPrivateWitnessSpan(function.args, copies),
+                .ret = try self.copyPrivateWitness(function.ret, copies),
+            } },
+            .tag_union => |row| blk: {
+                const tags = try self.arena().alloc(InstTag, row.tags.len);
+                for (row.tags, tags) |tag, *out| out.* = .{
+                    .name = tag.name,
+                    .checked_name = tag.checked_name,
+                    .payloads = try self.copyPrivateWitnessSpan(tag.payloads, copies),
+                };
+                break :blk .{ .tag_union = .{
+                    .tags = tags,
+                    .ext = try self.copyPrivateWitness(row.ext, copies),
+                    .tags_sorted = row.tags_sorted,
+                } };
+            },
+            .record => |row| blk: {
+                const fields = try self.arena().alloc(InstField, row.fields.len);
+                for (row.fields, fields) |field, *out| {
+                    out.* = field;
+                    out.ty = try self.copyPrivateWitness(field.ty, copies);
+                    if (field.value_ty) |value_ty| out.value_ty = try self.copyPrivateWitness(value_ty, copies);
+                }
+                break :blk .{ .record = .{
+                    .fields = fields,
+                    .ext = try self.copyPrivateWitness(row.ext, copies),
+                } };
+            },
+            .named => |named| blk: {
+                var witness = named.*;
+                witness.args = try self.copyPrivateWitnessSpan(named.args, copies);
+                if (named.backing) |backing| {
+                    witness.backing = .{
+                        .node = try self.copyPrivateWitness(backing.node, copies),
+                        .use = backing.use,
+                        .authority = backing.authority,
+                    };
+                }
+                break :blk try self.namedContent(witness);
+            },
+        };
+        try self.setContent(reserved, copied);
+        self.representation_membership.items[@intFromEnum(self.find(reserved))] = membership;
+        return reserved;
+    }
+
+    fn copyPrivateWitnessSpan(
+        self: *InstGraph,
+        nodes: []const NodeId,
+        copies: *collections.DenseMap(NodeId, NodeId),
+    ) Allocator.Error![]NodeId {
+        const copied = try self.arena().alloc(NodeId, nodes.len);
+        for (nodes, copied) |node, *out| out.* = try self.copyPrivateWitness(node, copies);
+        return copied;
+    }
+
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         if (self.generated_private_nodes == 0) {
             self.countDiagnostic("generated_private_guard_returns");
@@ -10576,7 +10665,7 @@ test "generated iterator identity uses current graph content rather than an impo
         const public_def: Type.TypeDef = .{ .module = module, .type_name = type_name };
         const owned: InstNode = try graph.namedContent(.{
             .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
-            .def = .{ .module = module, .type_name = type_name, .iterator_representation = .minted, .iterator_kind = .range, .iterator_depth = 1 },
+            .def = .{ .module = module, .type_name = type_name, .iterator_representation = .minted, .iterator_kind = .numeric_to, .iterator_depth = 1 },
             .kind = .@"opaque",
             .builtin_owner = .iter,
             .args = try graph.arena().dupe(NodeId, &.{item}),
