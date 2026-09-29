@@ -89,6 +89,7 @@ pub const HostBoundaryOptionalField = types.HostBoundaryOptionalField;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 /// Public `AnnotationOnlyValueUse` re-export.
 pub const AnnotationOnlyValueUse = types.AnnotationOnlyValueUse;
+pub const DerivedMethodValueUse = types.DerivedMethodValueUse;
 pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;
 pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;

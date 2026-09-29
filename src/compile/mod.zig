@@ -144,6 +144,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10765_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10792_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11077_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11736_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10831_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11302_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11438_test.zig"));
@@ -181,6 +182,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11233_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11259_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11670_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11666_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11465_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11217_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11236_test.zig"));
@@ -237,4 +239,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/numeral_literal_pattern_derived_is_eq_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11560_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11305_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11732_test.zig"));
 }

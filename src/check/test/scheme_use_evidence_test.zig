@@ -442,3 +442,19 @@ test "block-local attached procedures record their dispatch target edges" {
     }
     try std.testing.expect(zero_pair_targets >= 2);
 }
+
+test "issue 11737: independent nominal calls still reject a missing nested method" {
+    var env = try TestEnv.init("Test",
+        \\Db(deps) :: { deps : deps }.{
+        \\    run = |db, body| {
+        \\        fetch = db.deps.fetch
+        \\        _ = fetch({}).repeat(3)
+        \\        body({})
+        \\    }
+        \\}
+        \\demo = |db| (db.run(|{}| "a"), db.run(|{}| "b"))
+        \\main = demo(Db.{ deps: { fetch: |{}| 1.U64 } })
+    );
+    defer env.deinit();
+    try env.assertHasTypeError("Missing Method");
+}
