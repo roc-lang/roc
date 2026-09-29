@@ -12466,12 +12466,12 @@ no descriptor replacement, no callable repointing, no post-demand payload
 output, and no representation recovery later.
 
 List-map primitives preserve callable flow before layouts are selected. The
-reuse query relates the input list's element type to the transform's argument
-type. An in-place write relates the stored element to both its input buffer's
-element type and its returned list's element type. These are value-flow
+reuse query relates the input list's item type to the transform's argument
+type. An in-place write relates the stored item to both its input buffer's
+item type and its returned list's item type. These are value-flow
 equalities, including nested callable sets; matching checked source types or
 byte sizes cannot replace them. The cast between input and output buffers does
-not equate their different element types. Layout eligibility is computed only
+not equate their different item types. Layout eligibility is computed only
 from the resulting solved representations.
 
 ### Erased Callable Requirements

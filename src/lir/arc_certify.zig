@@ -7564,7 +7564,7 @@ test "certify flags branches that disagree at a join" {
     try testing.expect(std.mem.find(u8, f.diag.message(), "unbound") != null);
 }
 
-fn certifyDistinctBorrowLenders(release_last_lender: bool) !void {
+fn certifyDistinctBorrowLenders(release_last_lender: bool) (CertifyError || error{ TestUnexpectedResult, TestExpectedError, TestUnexpectedError, NoSpaceLeft })!void {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
     var owners: [12]LIR.LocalId = undefined;

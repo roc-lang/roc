@@ -2357,7 +2357,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     try testing.expectEqual(@as(u32, 1), payload_releases);
 }
 
-fn testContinuationJoin(shared_continuation: bool) !void {
+fn testContinuationJoin(shared_continuation: bool) TestError!void {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
