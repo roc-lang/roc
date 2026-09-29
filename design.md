@@ -12858,6 +12858,22 @@ id that worker emission must lower. Lifted, synthetic, intrinsic, pending
 callable-eval roots, and generated runtime functions are not compatibility
 fallbacks for this path.
 
+Procedure emission is an explicit scheduler, not a walk over the procedure
+graph. The first reference to a worker, an erased-callable entry, a derived
+method procedure, an erased-callable adapter, or a static dictionary method
+adapter reserves that procedure's header—its arguments, return layout, and the
+return local whose descriptor says whether the procedure can return a runtime
+descriptor—and queues its body, so building one body never builds another.
+The scheduler builds queued bodies in reservation order, first building the
+workers a body calls directly as the plan records them (its direct, iterator,
+and generated-codec calls; a static method adapter's worker), so those call
+sites read their callees' final signatures. A direct call to a worker whose
+body is not built yet (inside a cycle of those edges, or a call the plan does
+not record as one) uses the provisional descriptor ABI when the callee's
+reserved return local carries a descriptor local, resolved when the callee's
+body finishes; a worker whose reserved return local carries none never
+returns a runtime descriptor, so calls to it need no provisional form.
+
 Stored-function capture initialization precedes ordinary body execution but is
 part of the ownership-neutral worker LIR seen by ARC. Static descriptors needed
 to restore capture constants are materialized first; capture constants are then

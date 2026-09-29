@@ -102,8 +102,10 @@ pub fn run(
     try procedure_builder.emitRoots(roots);
 
     try appendRequestedLayouts(allocator, modules, roots, plan, &layout_plan, &procedure_builder, &result);
+    try procedure_builder.runProcJobs();
     if (procedure_builder.literal_const_plans) |*plans| try plans.finishRuntimeCallables();
-    procedure_builder.verifyDirectCallAbis();
+    try procedure_builder.runProcJobs();
+    try procedure_builder.verifyDirectCallAbis();
     try procedure_builder.finalizeDescriptorMaterializationCaptures();
     try result.classifyBoxyDescClosures(allocator);
     result.finishExpectSites();
@@ -1346,6 +1348,22 @@ const ProcedureBuilder = struct {
     source_file_ids: std.StringHashMapUnmanaged(u32),
     hosted_catalog: []HostedCatalogEntry = &.{},
     symbols: Common.SymbolGen = .{},
+    /// Procedures reserved for the emission scheduler, in reservation order.
+    proc_jobs: std.ArrayList(ProcJob) = .empty,
+    /// Every reserved job, in reservation order; the scheduler takes them
+    /// from `next_queued_proc_job` on.
+    queued_proc_jobs: std.ArrayList(u32) = .empty,
+    next_queued_proc_job: usize = 0,
+    /// Jobs waiting on the workers they call directly, innermost last.
+    proc_job_stack: std.ArrayList(u32) = .empty,
+    /// Per worker, its non-erased procedure's emission job.
+    worker_jobs: []?u32 = &.{},
+    /// Per worker, the return local its reserved header was built with.
+    worker_return_locals: []?LIR.LocalId = &.{},
+    /// Per worker, where its planned direct callees start in
+    /// `planned_direct_callees`.
+    planned_direct_callee_starts: []u32 = &.{},
+    planned_direct_callees: []Plan.WorkerPlanId = &.{},
 
     const FrozenCallableRecipe = struct {
         worker: Plan.WorkerPlanId,
@@ -1499,6 +1517,14 @@ const ProcedureBuilder = struct {
         self.allocator.free(self.hosted_external_procs);
         self.allocator.free(self.erased_worker_procs);
         self.allocator.free(self.worker_procs);
+        for (self.proc_jobs.items) |*job| self.freeProcJobBody(job);
+        self.proc_jobs.deinit(self.allocator);
+        self.queued_proc_jobs.deinit(self.allocator);
+        self.proc_job_stack.deinit(self.allocator);
+        self.allocator.free(self.worker_jobs);
+        self.allocator.free(self.worker_return_locals);
+        self.allocator.free(self.planned_direct_callee_starts);
+        self.allocator.free(self.planned_direct_callees);
         self.* = undefined;
     }
 
@@ -1864,7 +1890,7 @@ const ProcedureBuilder = struct {
                     }
                 }
             }
-            const worker_proc = try self.emitWorker(resolved);
+            const worker_proc = try self.reserveWorkerProc(resolved);
             const method_proc = try self.emitStaticMethodBoundaryAdapter(
                 resolved,
                 worker_proc,
@@ -2090,7 +2116,7 @@ const ProcedureBuilder = struct {
 
         const slot = LirProgram.BoxyMethodSlot{
             .method = inspect.method,
-            .proc = try self.emitWorker(inspect.worker),
+            .proc = try self.reserveWorkerProc(inspect.worker),
             .nested_dicts = try self.appendStaticHiddenDictRefs(nested_dict_refs.items),
             .adapter = .{
                 .arg_layouts = .{ .start = arg_layouts_start, .len = 1 },
@@ -2455,6 +2481,47 @@ const ProcedureBuilder = struct {
         return .{ .arg_reps = arg_reps, .ret = concrete.ret };
     }
 
+    /// A static dictionary method adapter's body, with the builder its
+    /// reserved header set up. The body calls the method worker, so it is
+    /// built once the worker's signature is final.
+    const StaticMethodAdapterJob = struct {
+        proc_id: LIR.LirProcSpecId,
+        worker_id: Plan.WorkerPlanId,
+        worker_proc: LIR.LirProcSpecId,
+        proc: ProcBodyBuilder,
+        worker_function: StaticMethodFunction,
+        requirement_function: StaticMethodFunction,
+        worker_args: []const Plan.RepChild,
+        requirement_args: []const Plan.RepChild,
+        worker_ret_layout: @FieldType(Layouts.WorkerLayouts, "value"),
+        concrete_function: ?ConcreteMethodCall = null,
+        slot_sources: StaticDescriptorSourceMap = .{},
+        desc_context: StaticDescInstantiationContext = .{},
+        requirement_sources: StaticDescriptorSourceMap = .{},
+        requirement_context: StaticDescInstantiationContext = .{},
+        frame_requirement_descs: []FrameRequirementDescriptor = &.{},
+        frame_requirement_locals: []LIR.LocalId = &.{},
+        worker_call_args: []LIR.LocalId = &.{},
+        arg_local_count: usize = 0,
+        ret_layout: layout.Idx = undefined,
+        args_span: LIR.LocalSpan = undefined,
+
+        fn deinit(job: *StaticMethodAdapterJob, allocator: Allocator) void {
+            job.proc.deinit();
+            if (job.concrete_function) |concrete| allocator.free(concrete.arg_reps);
+            job.slot_sources.deinit(allocator);
+            job.desc_context.deinit(allocator);
+            job.requirement_sources.deinit(allocator);
+            job.requirement_context.deinit(allocator);
+            allocator.free(job.frame_requirement_descs);
+            allocator.free(job.frame_requirement_locals);
+            allocator.free(job.worker_call_args);
+        }
+    };
+
+    /// The procedure a static dictionary exposes for `worker_id`'s method:
+    /// the worker itself when its ABI already matches the requirement, else
+    /// an adapter whose header is reserved here and whose body is queued.
     fn emitStaticMethodBoundaryAdapter(
         self: *ProcedureBuilder,
         worker_id: Plan.WorkerPlanId,
@@ -2486,13 +2553,29 @@ const ProcedureBuilder = struct {
         defer self.result.store.tail_call_builder = saved_tail_builder;
         var worker_origin = try self.workerOrigin(resolved);
         worker_origin.kind = .scaffold;
-        var proc = ProcBodyBuilder.initSyntheticAdapter(
-            self,
-            resolved.module,
-            self.layout_plan.workerLayoutFor(worker_id),
-            worker_origin,
-        );
-        defer proc.deinit();
+        const job = try self.allocator.create(StaticMethodAdapterJob);
+        var job_owned = true;
+        job.* = .{
+            .proc_id = undefined,
+            .worker_id = worker_id,
+            .worker_proc = worker_proc,
+            .proc = ProcBodyBuilder.initSyntheticAdapter(
+                self,
+                resolved.module,
+                self.layout_plan.workerLayoutFor(worker_id),
+                worker_origin,
+            ),
+            .worker_function = worker_function,
+            .requirement_function = requirement_function,
+            .worker_args = undefined,
+            .requirement_args = undefined,
+            .worker_ret_layout = undefined,
+        };
+        defer if (job_owned) {
+            job.deinit(self.allocator);
+            self.allocator.destroy(job);
+        };
+        const proc = &job.proc;
 
         const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_function.rep)].children);
         const worker_args = worker_children[worker_function.args_start..][0..worker_function.arg_count];
@@ -2501,6 +2584,9 @@ const ProcedureBuilder = struct {
         const worker_ret_layout = if (worker_layout.ret) |ret| ret else worker_layout.value;
         const requirement_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_function.rep)].children);
         const requirement_args = requirement_children[requirement_function.args_start..][0..requirement_function.arg_count];
+        job.worker_args = worker_args;
+        job.requirement_args = requirement_args;
+        job.worker_ret_layout = worker_ret_layout;
 
         // Frame-supplied requirement descriptors arrive as arguments the
         // worker does not take, so only an adapter can receive them.
@@ -2536,9 +2622,8 @@ const ProcedureBuilder = struct {
             );
         defer descriptor_mapping.deinit(self.allocator);
 
-        var requirement_sources = StaticDescriptorSourceMap{};
-        defer requirement_sources.deinit(self.allocator);
-        try self.collectStaticMethodRequirementDescriptorSources(&descriptor_mapping, &requirement_sources);
+        const requirement_sources = &job.requirement_sources;
+        try self.collectStaticMethodRequirementDescriptorSources(&descriptor_mapping, requirement_sources);
         // The requirement type is written in the scheme variables of the
         // worker receiving this dictionary. Positions the call descriptors do
         // not cover, such as inside a function-typed argument, take the type the
@@ -2555,39 +2640,27 @@ const ProcedureBuilder = struct {
         // Such an adapter converts through the checked callable type at this
         // edge: the requirement side is lowered apart from the worker's
         // descriptor bindings, and each side reads only its own sources.
-        const concrete_function: ?ConcreteMethodCall = if (try proc.staticMethodSidesShareDescriptors(requirement_function, worker_id))
+        job.concrete_function = if (try proc.staticMethodSidesShareDescriptors(requirement_function, worker_id))
             try self.concreteMethodCall(requirement_fn_ty, instantiation)
         else
             null;
-        defer if (concrete_function) |concrete| self.allocator.free(concrete.arg_reps);
-        if (concrete_function) |concrete| {
+        if (job.concrete_function) |concrete| {
             if (concrete.arg_reps.len != requirement_function.arg_count) {
                 boxyLowerInvariant("static dictionary method callable type arity disagreed with its requirement");
             }
         }
-        var slot_sources = StaticDescriptorSourceMap{};
-        defer slot_sources.deinit(self.allocator);
         for (descriptor_sources.entries.items) |entry| {
-            try slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
+            try job.slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
         }
-        if (concrete_function == null) {
+        if (job.concrete_function == null) {
             for (requirement_sources.entries.items) |entry| {
-                try slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
+                try job.slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
             }
         }
-        var desc_context = StaticDescInstantiationContext{};
-        defer desc_context.deinit(self.allocator);
         proc.static_descriptor_materialization_scope = .{
-            .sources = &slot_sources,
-            .context = &desc_context,
+            .sources = &job.slot_sources,
+            .context = &job.desc_context,
         };
-        var requirement_context = StaticDescInstantiationContext{};
-        defer requirement_context.deinit(self.allocator);
-        const requirement_scope = StaticDescriptorMaterializationScope{
-            .sources = &requirement_sources,
-            .context = &requirement_context,
-        };
-        const concrete_arg_reps: []const Plan.TypeRepId = if (concrete_function) |concrete| concrete.arg_reps else &.{};
 
         const requirement_arg_locals = try self.allocator.alloc(LIR.LocalId, requirement_args.len);
         defer self.allocator.free(requirement_arg_locals);
@@ -2596,8 +2669,9 @@ const ProcedureBuilder = struct {
         }
         try proc.bindPassthroughHiddenDescriptorArgs();
         const worker_hidden_desc_end = proc.arg_locals.items.len;
-        const frame_requirement_locals = try self.allocator.alloc(LIR.LocalId, frame_requirement_descs.len);
-        defer self.allocator.free(frame_requirement_locals);
+        job.frame_requirement_descs = try self.allocator.dupe(FrameRequirementDescriptor, frame_requirement_descs);
+        job.frame_requirement_locals = try self.allocator.alloc(LIR.LocalId, frame_requirement_descs.len);
+        const frame_requirement_locals = job.frame_requirement_locals;
         for (frame_requirement_locals) |*local| {
             local.* = try proc.addArgLocal(.opaque_ptr);
             try proc.markReadOnlyDescriptorInput(local.*);
@@ -2605,7 +2679,7 @@ const ProcedureBuilder = struct {
         const frame_requirement_end = proc.arg_locals.items.len;
         try proc.bindHiddenDictionaryArgs();
         proc.template_frame_descriptors = frame_requirement_descs.len != 0;
-        try proc.bindFrameRequirementDescriptors(frame_requirement_descs, frame_requirement_locals, concrete_function == null);
+        try proc.bindFrameRequirementDescriptors(frame_requirement_descs, frame_requirement_locals, job.concrete_function == null);
         for (requirement_args, requirement_arg_locals) |arg, local| {
             const arg_desc = self.plan.representations.items[@intFromEnum(self.descriptorIdentityRep(arg.rep))].descriptor;
             const frame_index = if (arg_desc) |desc| frameRequirementDescriptorIndex(frame_requirement_descs, desc) else null;
@@ -2615,13 +2689,13 @@ const ProcedureBuilder = struct {
                 try self.staticDescRefForWorkerRepWithSourceMap(
                     arg.rep,
                     null,
-                    &requirement_sources,
-                    &desc_context,
+                    requirement_sources,
+                    &job.desc_context,
                 ));
         }
 
-        const worker_call_args = try self.allocator.alloc(LIR.LocalId, proc.arg_locals.items.len - frame_requirement_descs.len);
-        defer self.allocator.free(worker_call_args);
+        job.worker_call_args = try self.allocator.alloc(LIR.LocalId, proc.arg_locals.items.len - frame_requirement_descs.len);
+        const worker_call_args = job.worker_call_args;
         for (worker_args, worker_arg_layouts, requirement_args, 0..) |worker_arg, worker_arg_layout, requirement_arg, arg_index| {
             worker_call_args[arg_index] = if (worker_arg_layout.layoutIdx() == self.result.store.getLocal(proc.arg_locals.items[arg_index]).layout_idx and
                 try proc.callableValueBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
@@ -2649,12 +2723,53 @@ const ProcedureBuilder = struct {
             }
         }
 
-        const worker_returns_runtime_desc = self.result.store.getProcSpec(worker_proc).runtime_ret_desc != null;
+        job.arg_local_count = proc.arg_locals.items.len;
+        job.args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
+        job.ret_layout = proc.workerRuntimeLayoutForRep(requirement_function.ret).layoutIdx();
+        const proc_symbol = self.symbols.fresh();
+        job.proc_id = try self.result.store.addProcSpec(.{
+            .name = lirSymbol(proc_symbol),
+            .identity = LIR.ProcIdentity.programLocal("boxy", @intFromEnum(proc_symbol)),
+            .args = job.args_span,
+            .body = null,
+            .ret_layout = job.ret_layout,
+            .boxy_runtime_entry = true,
+            .stack_probe = self.stackProbeForProc(job.args_span, LIR.LocalSpan.empty(), job.ret_layout),
+        }, proc.origin.loc);
+        try self.appendProcJob(.{ .static_method_adapter = job });
+        job_owned = false;
+        return job.proc_id;
+    }
+
+    fn buildStaticMethodAdapterBody(self: *ProcedureBuilder, job: *StaticMethodAdapterJob) Allocator.Error!void {
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
+        const proc = &job.proc;
+        const worker_function = job.worker_function;
+        const requirement_function = job.requirement_function;
+        const worker_args = job.worker_args;
+        const requirement_args = job.requirement_args;
+        const worker_call_args = job.worker_call_args;
+        const frame_requirement_descs = job.frame_requirement_descs;
+        const frame_requirement_locals = job.frame_requirement_locals;
+        const concrete_function = job.concrete_function;
+        const concrete_arg_reps: []const Plan.TypeRepId = if (concrete_function) |concrete| concrete.arg_reps else &.{};
+        const requirement_scope = StaticDescriptorMaterializationScope{
+            .sources = &job.requirement_sources,
+            .context = &job.requirement_context,
+        };
+
+        const worker_spec = self.result.store.getProcSpec(job.worker_proc);
+        if (worker_spec.body == null) {
+            boxyLowerInvariant("static dictionary method adapter body was built before its worker");
+        }
+        const worker_returns_runtime_desc = worker_spec.runtime_ret_desc != null;
         const result = try proc.addFrameLocalForRep(requirement_function.ret);
         const raw_result = if (worker_returns_runtime_desc)
             try proc.addFrameLocalForRepWithRequiredFreshDescriptor(worker_function.ret)
         else
-            try proc.addFrameLocalForRuntimeRep(worker_ret_layout, worker_function.ret);
+            try proc.addFrameLocalForRuntimeRep(job.worker_ret_layout, worker_function.ret);
         const raw_result_desc = if (worker_returns_runtime_desc)
             proc.callResultOutputDescriptorLocal(raw_result) orelse
                 boxyLowerInvariant("static dictionary method adapter result had no descriptor output local")
@@ -2677,7 +2792,7 @@ const ProcedureBuilder = struct {
         );
         continuation = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = raw_result,
-            .proc = worker_proc,
+            .proc = job.worker_proc,
             .args = try self.result.store.addLocalSpan(worker_call_args),
             .out_desc = raw_result_desc,
             .next = continuation,
@@ -2717,28 +2832,20 @@ const ProcedureBuilder = struct {
             );
         }
         continuation = try proc.prependStaticDescriptorMaterializationsForSlotsWithSources(
-            &slot_sources,
-            &desc_context,
+            &job.slot_sources,
+            &job.desc_context,
             continuation,
         );
         continuation = try proc.prependWorkerArgumentDescriptorInitializers(continuation);
+        if (proc.arg_locals.items.len != job.arg_local_count) {
+            boxyLowerInvariant("static dictionary method adapter body added arguments after its header was reserved");
+        }
 
-        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
-        const ret_layout = proc.workerRuntimeLayoutForRep(requirement_function.ret).layoutIdx();
-        const proc_symbol = self.symbols.fresh();
-        const proc_id = try self.result.store.addProcSpec(.{
-            .name = lirSymbol(proc_symbol),
-            .identity = LIR.ProcIdentity.programLocal("boxy", @intFromEnum(proc_symbol)),
-            .args = args_span,
-            .body = continuation,
-            .ret_layout = ret_layout,
-            .boxy_runtime_entry = true,
-            .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
-        }, proc.origin.loc);
-        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
+        const proc_spec = self.result.store.getProcSpecPtr(job.proc_id);
+        proc_spec.body = continuation;
         const return_desc = try self.returnDescriptorInfoForBody(
             continuation,
-            args_span,
+            job.args_span,
             self.result.store.getLocal(result).boxy_desc,
             &proc.frame_locals,
         );
@@ -2746,8 +2853,7 @@ const ProcedureBuilder = struct {
         proc_spec.frame_locals = frame_span;
         proc_spec.ret_desc = return_desc.external;
         proc_spec.runtime_ret_desc = return_desc.runtime_local;
-        proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
-        return proc_id;
+        proc_spec.stack_probe = self.stackProbeForProc(job.args_span, frame_span, job.ret_layout);
     }
 
     fn staticMethodCallDescRefsForEvidence(
@@ -4510,9 +4616,27 @@ const ProcedureBuilder = struct {
         helper: bool = false,
     };
 
+    /// A derived method procedure's body, with the builder its reserved
+    /// header set up.
+    const DerivedJob = struct {
+        proc_id: LIR.LirProcSpecId,
+        proc: ProcBodyBuilder,
+        method: Plan.DerivedMethod,
+        rep: Plan.TypeRepId,
+        frame: ?Plan.WorkerPlanId,
+        env: u32,
+        helper: bool,
+        ret_layout: layout.Idx,
+        first: LIR.LocalId,
+        second: LIR.LocalId,
+        result: LIR.LocalId,
+        args_span: LIR.LocalSpan,
+    };
+
     /// A procedure `(operand, second, frame descriptors..., frame
     /// dictionaries...) -> result` performing a derived method over
-    /// `request.rep` under the formal bindings of `request.env`.
+    /// `request.rep` under the formal bindings of `request.env`. Its header
+    /// is reserved here and its body queued.
     fn emitDerivedProc(self: *ProcedureBuilder, request: DerivedProcRequest) Allocator.Error!LIR.LirProcSpecId {
         if (self.layout_plan.worker_layouts.len == 0) {
             boxyLowerInvariant("derived method procedure was emitted without a worker layout context");
@@ -4521,13 +4645,17 @@ const ProcedureBuilder = struct {
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;
-        var proc = ProcBodyBuilder.initSyntheticAdapter(
+        const job = try self.allocator.create(DerivedJob);
+        var job_owned = true;
+        errdefer if (job_owned) self.allocator.destroy(job);
+        job.proc = ProcBodyBuilder.initSyntheticAdapter(
             self,
             procedureModuleById(self.modules, rep.source_type.module),
             self.layout_plan.worker_layouts[0],
             constructlessOrigin(.derived),
         );
-        defer proc.deinit();
+        errdefer if (job_owned) job.proc.deinit();
+        const proc = &job.proc;
 
         var frame_descs = std.ArrayList(FrameRequirementDescriptor).empty;
         defer frame_descs.deinit(self.allocator);
@@ -4612,29 +4740,199 @@ const ProcedureBuilder = struct {
                 },
             });
         }
+        job.proc_id = proc_id;
+        job.method = request.method;
+        job.rep = request.rep;
+        job.frame = request.frame;
+        job.env = request.env;
+        job.helper = request.helper;
+        job.ret_layout = request.ret_layout;
+        job.first = first;
+        job.second = second;
+        job.result = result;
+        job.args_span = args_span;
+        try self.appendProcJob(.{ .derived = job });
+        job_owned = false;
+        return proc_id;
+    }
 
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
-        proc.derived_context = .{ .frame = request.frame, .bindings_start = 0 };
-        if (request.helper) proc.derived_expanding = request.rep;
+    fn buildDerivedBody(self: *ProcedureBuilder, job: *DerivedJob) Allocator.Error!void {
+        const proc = &job.proc;
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = job.result } }, proc.derivedOrigin());
+        proc.derived_context = .{ .frame = job.frame, .bindings_start = 0 };
+        if (job.helper) proc.derived_expanding = job.rep;
         // The environment's formals are bound throughout, as by the nominal
         // backings that enclosed this representation.
         const env_scope = proc.beginNominalBackingFormalScope();
         errdefer proc.dropNominalBackingFormalScope(env_scope);
-        try proc.nominal_formal_bindings.appendSlice(self.allocator, self.plan.derivedEnvBindings(request.env));
-        const scoped_body = switch (request.method) {
-            .equality => try proc.lowerEqRepLocalsInto(result, first, second, request.rep, false, ret_stmt),
-            .hash => try proc.lowerHashRepLocalsInto(result, first, second, request.rep, ret_stmt),
+        try proc.nominal_formal_bindings.appendSlice(self.allocator, self.plan.derivedEnvBindings(job.env));
+        const scoped_body = switch (job.method) {
+            .equality => try proc.lowerEqRepLocalsInto(job.result, job.first, job.second, job.rep, false, ret_stmt),
+            .hash => try proc.lowerHashRepLocalsInto(job.result, job.first, job.second, job.rep, ret_stmt),
         };
         const derived_body = try proc.leaveNominalBackingFormalScope(env_scope, scoped_body);
         proc.derived_context = null;
         const body = try proc.prependStaticDescriptorMaterializationsForScopedSlots(null, derived_body);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
-        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
+        const proc_spec = self.result.store.getProcSpecPtr(job.proc_id);
         proc_spec.body = body;
         proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
         proc_spec.frame_locals = frame_span;
-        proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, request.ret_layout);
-        return proc_id;
+        proc_spec.stack_probe = self.stackProbeForProc(job.args_span, frame_span, job.ret_layout);
+    }
+
+    /// An erased-callable adapter's body, with the builder its reserved
+    /// header set up.
+    const CallableAdapterJob = struct {
+        proc_id: LIR.LirProcSpecId,
+        adapter_proc: ProcBodyBuilder,
+        source_function: ProcBodyBuilder.FunctionChildren,
+        target_function: ProcBodyBuilder.FunctionChildren,
+        descriptor_captures: []CallableAdapterDescriptorCapture,
+        capture_layout: layout.Idx,
+        source_closure: LIR.LocalId,
+        target_arg_locals: []LIR.LocalId,
+        capture_arg: LIR.LocalId,
+        descriptor_locals: []LIR.LocalId,
+        capture_descriptor_initializers: std.ArrayList(ProcBodyBuilder.DescriptorArgLocal),
+        erased_arg_desc_params: LIR.BoxySpan,
+        ret_local: LIR.LocalId,
+        ret_layout: layout.Idx,
+        args_span: LIR.LocalSpan,
+
+        fn deinit(job: *CallableAdapterJob, allocator: Allocator) void {
+            job.adapter_proc.deinit();
+            allocator.free(job.descriptor_captures);
+            allocator.free(job.target_arg_locals);
+            allocator.free(job.descriptor_locals);
+            job.capture_descriptor_initializers.deinit(allocator);
+        }
+    };
+
+    fn buildCallableAdapterBody(self: *ProcedureBuilder, job: *CallableAdapterJob) Allocator.Error!void {
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
+        const adapter_proc = &job.adapter_proc;
+        const source_function = job.source_function;
+        const target_function = job.target_function;
+        const target_args = adapter_proc.functionArgChildren(target_function);
+        const source_args = adapter_proc.functionArgChildren(source_function);
+        const target_arg_locals = job.target_arg_locals;
+        const proc_id = job.proc_id;
+        const ret_local = job.ret_local;
+
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, adapter_proc.origin);
+        var continuation = ret_stmt;
+
+        const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
+        continuation = try adapter_proc.assignPlannedCallBoundary(
+            ret_local,
+            raw_ret,
+            target_function.ret,
+            source_function.ret,
+            continuation,
+        );
+        const call_target = raw_ret;
+
+        const out_desc = adapter_proc.callResultOutputDescriptorLocal(call_target);
+        if (out_desc) |local| {
+            try adapter_proc.markDescriptorLocalBound(local);
+        }
+
+        const call_args = try self.allocator.alloc(LIR.LocalId, source_function.arg_count);
+        defer self.allocator.free(call_args);
+        for (source_args, target_args, target_arg_locals, call_args) |source_arg, target_arg, target_arg_local, *call_arg| {
+            call_arg.* = if (try adapter_proc.callableValueBoundaryIsDirect(source_arg.rep, target_arg.rep))
+                target_arg_local
+            else
+                try adapter_proc.addFrameBoundaryTargetLocalForRep(source_arg.rep);
+        }
+
+        const call_placeholder = try self.result.store.addCFStmt(.runtime_error, adapter_proc.origin);
+        var call_with_args = call_placeholder;
+        var arg_index = source_function.arg_count;
+        while (arg_index > 0) {
+            arg_index -= 1;
+            if (call_args[arg_index] == target_arg_locals[arg_index]) continue;
+            call_with_args = try adapter_proc.assignPlannedCallBoundaryCopyingSource(
+                call_args[arg_index],
+                target_arg_locals[arg_index],
+                source_args[arg_index].rep,
+                target_args[arg_index].rep,
+                call_with_args,
+            );
+        }
+
+        var arg_desc_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer arg_desc_initializers.deinit(self.allocator);
+        const arg_descs = try adapter_proc.erasedCallArgumentDescriptorRefs(
+            source_args,
+            call_args,
+            &arg_desc_initializers,
+        );
+        const expected_result_desc = try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
+        try adapter_proc.appendResultDescriptorInitializers(&arg_desc_initializers, expected_result_desc);
+        const call_stmt = try self.result.store.addCFStmt(.{
+            .assign_call_erased = .{
+                .target = call_target,
+                .closure = job.source_closure,
+                .args = try self.result.store.addLocalSpan(call_args),
+                .arg_layouts = try adapter_proc.appendErasedArgumentLayouts(call_args),
+                .arg_plan = try adapter_proc.erasedCallArgsPlan(call_args),
+                .arg_descs = arg_descs.locals,
+                .arg_desc_keys = arg_descs.keys,
+                // `result_desc` governs materialization into the source
+                // signature's result layout. `out_desc` separately
+                // preserves the exact descriptor returned by the callable.
+                .result_desc = expected_result_desc.desc,
+                .out_desc = out_desc,
+                .reuse_closure = false,
+                .reuse_source = null,
+                .next = continuation,
+            },
+        }, adapter_proc.origin);
+        const call_entry = try adapter_proc.prependDescriptorArgMaterializations(arg_desc_initializers.items, call_stmt);
+        try self.result.store.replaceCFStmt(call_placeholder, self.result.store.getCFStmt(call_entry), self.result.store.stmtOrigin(call_entry));
+        continuation = call_with_args;
+
+        continuation = try adapter_proc.prependStaticDescriptorMaterializationsForSlots(continuation);
+        continuation = try adapter_proc.prependWorkerArgumentDescriptorInitializers(continuation);
+        continuation = try adapter_proc.prependCallableAdapterCaptureBindings(
+            job.capture_arg,
+            job.capture_layout,
+            job.source_closure,
+            job.descriptor_locals,
+            try adapter_proc.prependDescriptorArgMaterializations(
+                job.capture_descriptor_initializers.items,
+                continuation,
+            ),
+        );
+
+        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
+        proc_spec.body = continuation;
+        proc_spec.erased_arg_desc_offsets = try adapter_proc.callableAdapterArgumentDescriptorCaptureOffsets(
+            target_function,
+            job.descriptor_captures,
+            job.capture_layout,
+        );
+        proc_spec.erased_arg_layouts = try adapter_proc.appendErasedArgumentLayouts(target_arg_locals);
+        proc_spec.erased_arg_desc_params = job.erased_arg_desc_params;
+        proc_spec.erased_capture_arg = job.capture_arg;
+        const return_desc = try self.returnDescriptorInfoForBody(
+            continuation,
+            job.args_span,
+            self.result.store.getLocal(ret_local).boxy_desc,
+            &adapter_proc.frame_locals,
+        );
+        const frame_span = try self.result.store.addLocalSpan(adapter_proc.frame_locals.items);
+        proc_spec.frame_locals = frame_span;
+        proc_spec.ret_desc = return_desc.external;
+        proc_spec.runtime_ret_desc = return_desc.runtime_local;
+        proc_spec.stack_probe = self.stackProbeForProc(job.args_span, frame_span, job.ret_layout);
     }
 
     /// The recursive helper for a derived method over `rep_id` in `frame`
@@ -5940,6 +6238,10 @@ const ProcedureBuilder = struct {
         @memset(self.erased_worker_procs, null);
         self.hosted_external_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.resolved_workers.items.len);
         @memset(self.hosted_external_procs, null);
+        self.worker_jobs = try self.allocator.alloc(?u32, self.resolved_workers.items.len);
+        @memset(self.worker_jobs, null);
+        self.worker_return_locals = try self.allocator.alloc(?LIR.LocalId, self.resolved_workers.items.len);
+        @memset(self.worker_return_locals, null);
 
         if (self.plan.literal_evidence) |*evidence| {
             try self.literal_dicts.appendNTimes(self.allocator, null, evidence.initializers.items.len);
@@ -5948,11 +6250,17 @@ const ProcedureBuilder = struct {
             for (evidence.initializers.items, 0..) |_, index| _ = try self.emitLiteralAccessor(@intCast(index));
         }
 
-        for (self.plan.roots.items, self.layout_plan.roots.items, 0..) |root, root_layout, request_index| {
+        for (self.plan.roots.items, self.layout_plan.roots.items) |root, root_layout| {
             if (root.id != root_layout.root) boxyLowerInvariant("boxy root layout table disagreed with root plan order");
             if (root.worker != root_layout.worker) boxyLowerInvariant("boxy root layout table disagreed with root worker plan");
+            _ = try self.reserveWorkerProc(root.worker);
+        }
+        // Host wrappers read their workers' finished signatures.
+        try self.runProcJobs();
+
+        for (self.plan.roots.items, self.layout_plan.roots.items, 0..) |root, root_layout, request_index| {
             const worker_layout = self.layout_plan.workerLayoutFor(root.worker);
-            const worker_proc = try self.emitWorker(root.worker);
+            const worker_proc = try self.reserveWorkerProc(root.worker);
             const worker_plan = self.plan.workers.items[@intFromEnum(root.worker)];
             const hidden_count = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs).len +
                 self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts).len;
@@ -5975,6 +6283,7 @@ const ProcedureBuilder = struct {
             metadata.test_plan = Common.testPlanMetadataForRoot(roots, root.request, request_index);
             try self.result.root_metadata.append(self.allocator, metadata);
         }
+        try self.runProcJobs();
     }
 
     /// Descriptor templates remain mutable graph reservations while lowering
@@ -6242,7 +6551,187 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn emitWorker(
+    /// A procedure whose header is reserved at its first reference and whose
+    /// body the emission scheduler builds later, so building one body never
+    /// builds another.
+    const ProcJob = struct {
+        status: enum {
+            /// Reserved; the body is not started.
+            queued,
+            /// On the scheduler's stack while the workers its body calls
+            /// directly are built first.
+            waiting,
+            finished,
+        } = .queued,
+        /// The body still to build; null once built.
+        body: ?union(enum) {
+            worker: *WorkerJob,
+            derived: *DerivedJob,
+            callable_adapter: *CallableAdapterJob,
+            static_method_adapter: *StaticMethodAdapterJob,
+            /// A literal conversion's procedures, filling its reserved
+            /// dictionary's method slot.
+            literal: struct { index: u32, method_slot: u32 },
+        },
+    };
+
+    /// A worker's body, or its erased-callable entry's body, with the builder
+    /// its reserved header set up.
+    const WorkerJob = struct {
+        worker: Plan.WorkerPlanId,
+        proc_id: LIR.LirProcSpecId,
+        proc: ProcBodyBuilder,
+        body_source: WorkerBodySource,
+        ret_local: LIR.LocalId,
+        ret_layout: layout.Idx,
+        args_span: LIR.LocalSpan,
+        erased: ?struct {
+            worker_function: ProcBodyBuilder.FunctionChildren,
+            erased_arg_desc_params: LIR.BoxySpan,
+        },
+    };
+
+    fn freeProcJobBody(self: *ProcedureBuilder, job: *ProcJob) void {
+        const body = job.body orelse return;
+        job.body = null;
+        switch (body) {
+            .worker => |worker_job| {
+                worker_job.proc.deinit();
+                self.allocator.destroy(worker_job);
+            },
+            .derived => |derived_job| {
+                derived_job.proc.deinit();
+                self.allocator.destroy(derived_job);
+            },
+            .callable_adapter => |adapter_job| {
+                adapter_job.deinit(self.allocator);
+                self.allocator.destroy(adapter_job);
+            },
+            .static_method_adapter => |adapter_job| {
+                adapter_job.deinit(self.allocator);
+                self.allocator.destroy(adapter_job);
+            },
+            .literal => {},
+        }
+    }
+
+    fn appendProcJob(self: *ProcedureBuilder, body: @FieldType(ProcJob, "body")) Allocator.Error!void {
+        const index: u32 = @intCast(self.proc_jobs.items.len);
+        try self.proc_jobs.ensureUnusedCapacity(self.allocator, 1);
+        try self.queued_proc_jobs.append(self.allocator, index);
+        self.proc_jobs.appendAssumeCapacity(.{ .body = body });
+    }
+
+    /// The workers `worker` calls directly, as the plan records them: the
+    /// callees whose finished signatures its body's call sites read.
+    fn plannedDirectCallees(self: *ProcedureBuilder, worker: Plan.WorkerPlanId) Allocator.Error![]const Plan.WorkerPlanId {
+        if (self.planned_direct_callee_starts.len == 0) {
+            const worker_count = self.plan.workers.items.len;
+            const starts = try self.allocator.alloc(u32, worker_count + 1);
+            errdefer self.allocator.free(starts);
+            @memset(starts, 0);
+            inline for (.{ "direct_calls", "iterator_calls", "generated_codec_calls" }) |table| {
+                for (@field(self.plan, table).items) |call| starts[@intFromEnum(call.caller) + 1] += 1;
+            }
+            for (1..starts.len) |index| starts[index] += starts[index - 1];
+            const callees = try self.allocator.alloc(Plan.WorkerPlanId, starts[worker_count]);
+            errdefer self.allocator.free(callees);
+            const cursors = try self.allocator.dupe(u32, starts[0..worker_count]);
+            defer self.allocator.free(cursors);
+            inline for (.{ "direct_calls", "iterator_calls", "generated_codec_calls" }) |table| {
+                for (@field(self.plan, table).items) |call| {
+                    const caller = @intFromEnum(call.caller);
+                    callees[cursors[caller]] = call.worker;
+                    cursors[caller] += 1;
+                }
+            }
+            self.planned_direct_callee_starts = starts;
+            self.planned_direct_callees = callees;
+        }
+        const index = @intFromEnum(worker);
+        return self.planned_direct_callees[self.planned_direct_callee_starts[index]..self.planned_direct_callee_starts[index + 1]];
+    }
+
+    /// Build every reserved body. A job's body first waits on the workers it
+    /// calls directly, so their signatures are final at its call sites; a
+    /// callee already waiting (a cycle) is called through the provisional
+    /// descriptor ABI resolved when it finishes. Bodies build in reservation
+    /// order otherwise.
+    fn runProcJobs(self: *ProcedureBuilder) Allocator.Error!void {
+        while (true) {
+            if (self.proc_job_stack.items.len != 0) {
+                const job_index = self.proc_job_stack.items[self.proc_job_stack.items.len - 1];
+                switch (self.proc_jobs.items[job_index].status) {
+                    .finished => self.proc_job_stack.items.len -= 1,
+                    .queued => {
+                        self.proc_jobs.items[job_index].status = .waiting;
+                        try self.pushProcJobCallees(job_index);
+                    },
+                    .waiting => {
+                        self.proc_job_stack.items.len -= 1;
+                        try self.buildProcJob(job_index);
+                    },
+                }
+                continue;
+            }
+            if (self.next_queued_proc_job == self.queued_proc_jobs.items.len) return;
+            const next = self.queued_proc_jobs.items[self.next_queued_proc_job];
+            self.next_queued_proc_job += 1;
+            if (self.proc_jobs.items[next].status == .queued) {
+                try self.proc_job_stack.append(self.allocator, next);
+            }
+        }
+    }
+
+    /// Push the unstarted jobs of the workers `job_index`'s body calls
+    /// directly, first callee on top.
+    fn pushProcJobCallees(self: *ProcedureBuilder, job_index: u32) Allocator.Error!void {
+        const body = self.proc_jobs.items[job_index].body orelse
+            boxyLowerInvariant("boxy emission job waited after its body was built");
+        switch (body) {
+            .worker => |worker_job| {
+                const callees = try self.plannedDirectCallees(worker_job.worker);
+                var index = callees.len;
+                while (index > 0) {
+                    index -= 1;
+                    try self.pushWorkerJob(callees[index]);
+                }
+            },
+            .static_method_adapter => |adapter_job| try self.pushWorkerJob(adapter_job.worker_id),
+            .derived, .callable_adapter, .literal => {},
+        }
+    }
+
+    fn pushWorkerJob(self: *ProcedureBuilder, worker: Plan.WorkerPlanId) Allocator.Error!void {
+        _ = try self.reserveWorkerProc(worker);
+        const job_index = self.worker_jobs[@intFromEnum(worker)] orelse
+            boxyLowerInvariant("reserved boxy worker had no emission job");
+        if (self.proc_jobs.items[job_index].status == .queued) {
+            try self.proc_job_stack.append(self.allocator, job_index);
+        }
+    }
+
+    fn buildProcJob(self: *ProcedureBuilder, job_index: u32) Allocator.Error!void {
+        const body = self.proc_jobs.items[job_index].body orelse
+            boxyLowerInvariant("boxy emission job was built twice");
+        switch (body) {
+            .worker => |worker_job| if (worker_job.erased != null)
+                try self.buildErasedWorkerBody(worker_job)
+            else
+                try self.buildWorkerBody(worker_job),
+            .derived => |derived_job| try self.buildDerivedBody(derived_job),
+            .callable_adapter => |adapter_job| try self.buildCallableAdapterBody(adapter_job),
+            .static_method_adapter => |adapter_job| try self.buildStaticMethodAdapterBody(adapter_job),
+            .literal => |literal| try self.buildLiteralAccessor(literal.index, literal.method_slot),
+        }
+        const job = &self.proc_jobs.items[job_index];
+        job.status = .finished;
+        self.freeProcJobBody(job);
+    }
+
+    /// The worker's procedure, reserving its header and queueing its body at
+    /// the first reference.
+    fn reserveWorkerProc(
         self: *ProcedureBuilder,
         worker_id: Plan.WorkerPlanId,
     ) Allocator.Error!LIR.LirProcSpecId {
@@ -6251,25 +6740,18 @@ const ProcedureBuilder = struct {
         if (self.worker_procs[index]) |existing| return existing;
 
         const resolved = self.resolved_workers.items[index];
-        switch (resolved.body) {
-            .checked_expr,
-            .intrinsic,
-            .hosted,
-            .unimplemented,
-            .generated_codec,
-            .generated_field_iterator,
-            .generated_interpolation_step,
-            => {},
-        }
-
         const saved_tail_builder = self.result.store.tail_call_builder;
         self.result.store.tail_call_builder = null;
         defer self.result.store.tail_call_builder = saved_tail_builder;
-        var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id), try self.workerOrigin(resolved));
-        defer proc.deinit();
+        const job = try self.allocator.create(WorkerJob);
+        var job_owned = true;
+        errdefer if (job_owned) self.allocator.destroy(job);
+        job.proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id), try self.workerOrigin(resolved));
+        errdefer if (job_owned) job.proc.deinit();
+        const proc = &job.proc;
 
         proc.erased_argument_descriptors = true;
-        const body_source = try self.bodySourceForWorker(resolved, &proc);
+        const body_source = try self.bodySourceForWorker(resolved, proc);
         try proc.bindHiddenDescriptorArgs();
         try proc.bindHiddenDictionaryArgs();
         try proc.bindLambdaArgDescriptors();
@@ -6286,12 +6768,34 @@ const ProcedureBuilder = struct {
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc.origin.loc);
         self.worker_procs[index] = proc_id;
+        self.worker_return_locals[index] = ret_local;
+        try self.setProcDebugName(proc_id, resolved);
+        job.worker = worker_id;
+        job.proc_id = proc_id;
+        job.body_source = body_source;
+        job.ret_local = ret_local;
+        job.ret_layout = ret_layout;
+        job.args_span = args_span;
+        job.erased = null;
+        self.worker_jobs[index] = @intCast(self.proc_jobs.items.len);
+        try self.appendProcJob(.{ .worker = job });
+        job_owned = false;
+        return proc_id;
+    }
+
+    fn buildWorkerBody(self: *ProcedureBuilder, job: *WorkerJob) Allocator.Error!void {
+        const resolved = self.resolved_workers.items[@intFromEnum(job.worker)];
+        const proc = &job.proc;
+        const proc_id = job.proc_id;
+        const ret_local = job.ret_local;
+        const args_span = job.args_span;
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
         var tail_builder = lir_core.TailCallBuilder.init(self.allocator, proc_id);
         defer tail_builder.deinit();
         self.result.store.tail_call_builder = &tail_builder;
-        try self.setProcDebugName(proc_id, resolved);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
-        var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
+        var body_stmt = try self.lowerWorkerBodyInto(resolved, proc, job.body_source, ret_local, ret_stmt);
         body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
         body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
@@ -6307,22 +6811,166 @@ const ProcedureBuilder = struct {
             self.result.store.getLocal(ret_local).boxy_desc,
             &proc.frame_locals,
         );
+        self.requireReturnDescriptorAbi(ret_local, return_desc);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         proc_spec.frame_locals = frame_span;
         proc_spec.ret_desc = return_desc.external;
         proc_spec.runtime_ret_desc = return_desc.runtime_local;
-        proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
+        proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, job.ret_layout);
         try self.resolvePendingDirectCallDescriptorAbis(proc_id, return_desc.runtime_local != null);
         // All self-call ABI fixups are resolved with this worker's signature.
         // Later descriptor capture finalization does not change continuations.
         tail_builder.adapters = self.result.boxy_adapters.items;
         const tail_sites = try tail_builder.finish(&self.result.store);
         self.result.store.getProcSpecPtr(proc_id).tail_calls = tail_sites;
+    }
+
+    /// A worker returns a runtime descriptor only through the descriptor
+    /// local its return local was reserved with, so a caller can read from
+    /// the reserved header whether an unfinished callee might.
+    fn requireReturnDescriptorAbi(self: *const ProcedureBuilder, ret_local: LIR.LocalId, return_desc: ReturnDescriptorInfo) void {
+        if (return_desc.runtime_local == null) return;
+        const desc = self.result.store.getLocal(ret_local).boxy_desc orelse
+            boxyLowerInvariant("boxy worker returned a runtime descriptor from a return local reserved without one");
+        if (desc.localOrNull() == null) {
+            boxyLowerInvariant("boxy worker returned a runtime descriptor from a return local reserved with a static one");
+        }
+    }
+
+    /// Whether a direct call to `worker` must use the provisional descriptor
+    /// ABI: the callee's body is not built yet and its reserved return local
+    /// can carry a runtime descriptor.
+    fn directCallNeedsProvisionalAbi(self: *const ProcedureBuilder, worker: Plan.WorkerPlanId, callee_proc: LIR.LirProcSpecId) bool {
+        const callee_spec = self.result.store.getProcSpec(callee_proc);
+        if (callee_spec.body != null) return false;
+        const ret_local = self.worker_return_locals[@intFromEnum(worker)] orelse
+            boxyLowerInvariant("boxy direct call reached a worker without a reserved return local");
+        const desc = self.result.store.getLocal(ret_local).boxy_desc orelse return false;
+        return desc.localOrNull() != null;
+    }
+
+    fn reserveErasedWorkerProc(
+        self: *ProcedureBuilder,
+        worker_id: Plan.WorkerPlanId,
+    ) Allocator.Error!LIR.LirProcSpecId {
+        const index = @intFromEnum(worker_id);
+        if (index >= self.erased_worker_procs.len) boxyLowerInvariant("boxy erased callable referenced a missing worker proc");
+        if (self.erased_worker_procs[index]) |existing| return existing;
+
+        const resolved = self.resolved_workers.items[index];
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
+        const job = try self.allocator.create(WorkerJob);
+        var job_owned = true;
+        errdefer if (job_owned) self.allocator.destroy(job);
+        job.proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id), try self.workerOrigin(resolved));
+        errdefer if (job_owned) job.proc.deinit();
+        const proc = &job.proc;
+
+        const body_source = try self.bodySourceForWorker(resolved, proc);
+        try proc.prepareErasedWorkerCaptures();
+        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
+        const worker_function = proc.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("boxy erased worker representation was not callable");
+        const erased_arg_desc_params = try proc.bindErasedArgumentDescriptorParams(worker_function);
+        const erased_reuse_arg = try proc.addArgLocal(try self.result.layouts.insertErasedCallable());
+        try proc.bindLambdaArgDescriptors();
+        const ret_local = try proc.addWorkerReturnLocal(true);
+        const ret_layout = proc.workerReturnLayout();
+        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
+        const proc_symbol = self.symbols.fresh();
+        const proc_id = try self.result.store.addProcSpec(.{
+            .name = lirSymbol(proc_symbol),
+            .identity = LIR.ProcIdentity.programLocal("boxy", @intFromEnum(proc_symbol)),
+            .args = args_span,
+            .body = null,
+            .ret_layout = ret_layout,
+            .abi = .erased_callable,
+            .erased_reuse_arg = erased_reuse_arg,
+            .erased_call_args = try proc.erasedCallArgsPlan(
+                proc.arg_locals.items[0..worker_function.arg_count],
+            ),
+            .boxy_runtime_entry = true,
+            .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
+        }, proc.origin.loc);
+        self.erased_worker_procs[index] = proc_id;
+        try self.setProcDebugName(proc_id, resolved);
+        job.worker = worker_id;
+        job.proc_id = proc_id;
+        job.body_source = body_source;
+        job.ret_local = ret_local;
+        job.ret_layout = ret_layout;
+        job.args_span = args_span;
+        job.erased = .{ .worker_function = worker_function, .erased_arg_desc_params = erased_arg_desc_params };
+        try self.appendProcJob(.{ .worker = job });
+        job_owned = false;
         return proc_id;
     }
 
+    fn buildErasedWorkerBody(self: *ProcedureBuilder, job: *WorkerJob) Allocator.Error!void {
+        const resolved = self.resolved_workers.items[@intFromEnum(job.worker)];
+        const proc = &job.proc;
+        const proc_id = job.proc_id;
+        const ret_local = job.ret_local;
+        const args_span = job.args_span;
+        const erased = job.erased.?;
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
+
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
+        var body_stmt = try self.lowerWorkerBodyInto(resolved, proc, job.body_source, ret_local, ret_stmt);
+        body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
+        body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
+        body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
+        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
+        body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
+        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
+        proc_spec.body = body_stmt;
+        proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
+        proc_spec.erased_arg_desc_offsets = try proc.erasedArgumentDescriptorCaptureOffsets();
+        proc_spec.erased_arg_layouts = try proc.appendErasedArgumentLayouts(
+            proc.arg_locals.items[0..erased.worker_function.arg_count],
+        );
+        proc_spec.erased_arg_desc_params = erased.erased_arg_desc_params;
+        proc_spec.erased_capture_arg = proc.erased_capture_arg;
+        const return_desc = try self.returnDescriptorInfoForBody(
+            body_stmt,
+            args_span,
+            self.result.store.getLocal(ret_local).boxy_desc,
+            &proc.frame_locals,
+        );
+        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
+        proc_spec.frame_locals = frame_span;
+        proc_spec.ret_desc = return_desc.external;
+        proc_spec.runtime_ret_desc = return_desc.runtime_local;
+        proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, job.ret_layout);
+    }
+
+    /// The dictionary a literal conversion's evidence names, reserving it and
+    /// queueing its procedures at the first reference.
     fn emitLiteralAccessor(self: *ProcedureBuilder, index: u32) Allocator.Error!LIR.BoxyDictId {
         if (self.literal_dicts.items[index]) |id| return id;
+        const evidence = &self.plan.literal_evidence.?;
+        const initializer = evidence.initializers.items[index];
+        const site = self.plan.literal_sites.items[initializer.site];
+        const module = procedureModuleById(self.modules, site.source.module);
+        const dict: LIR.BoxyDictId = @enumFromInt(self.result.boxy_dicts.items.len);
+        const method: u32 = @intCast(self.result.boxy_method_slots.items.len);
+        try self.result.boxy_method_slots.append(self.allocator, .{
+            .method = module.static_dispatch_plans.plans[@intFromEnum(site.dispatch)].method,
+            .proc = undefined,
+        });
+        try self.result.boxy_dicts.append(self.allocator, .{ .method_slots = .{ .start = method, .len = 1 } });
+        self.literal_dicts.items[index] = dict;
+        try self.appendProcJob(.{ .literal = .{ .index = index, .method_slot = method } });
+        return dict;
+    }
+
+    /// Build a literal conversion's accessor, the getter its dictionary
+    /// exposes, and its initializer.
+    fn buildLiteralAccessor(self: *ProcedureBuilder, index: u32, method_slot: u32) Allocator.Error!void {
         const evidence = &self.plan.literal_evidence.?;
         const initializer = evidence.initializers.items[index];
         const site = self.plan.literal_sites.items[initializer.site];
@@ -6403,14 +7051,7 @@ const ProcedureBuilder = struct {
             .runtime_ret_desc = getter_return.runtime_local,
             .boxy_runtime_entry = true,
         }, origin.loc);
-        const dict: LIR.BoxyDictId = @enumFromInt(self.result.boxy_dicts.items.len);
-        const method: u32 = @intCast(self.result.boxy_method_slots.items.len);
-        try self.result.boxy_method_slots.append(self.allocator, .{
-            .method = module.static_dispatch_plans.plans[@intFromEnum(site.dispatch)].method,
-            .proc = getter_id,
-        });
-        try self.result.boxy_dicts.append(self.allocator, .{ .method_slots = .{ .start = method, .len = 1 } });
-        self.literal_dicts.items[index] = dict;
+        self.result.boxy_method_slots.items[method_slot].proc = getter_id;
 
         var proc = ProcBodyBuilder.initSyntheticAdapter(self, module, self.layout_plan.workerLayoutFor(site.worker), origin);
         defer proc.deinit();
@@ -6480,7 +7121,6 @@ const ProcedureBuilder = struct {
             .plan = constant_plan,
             .value_slot = value_slot,
         };
-        return dict;
     }
 
     fn needsFrozenCallableRecipes(self: *const ProcedureBuilder) bool {
@@ -6506,91 +7146,6 @@ const ProcedureBuilder = struct {
             if (std.mem.eql(u8, &existing.key, &key)) return;
         }
         try self.frozen_callable_recipes.append(self.allocator, .{ .worker = worker, .source_rep = source_rep, .entry = entry, .key = key, .capture_layout = capture_layout, .on_drop = on_drop, .result_rep = result_rep, .rep = target_rep, .fields = try self.allocator.dupe(FrozenCaptureRecipe, fields) });
-    }
-
-    fn emitErasedWorker(
-        self: *ProcedureBuilder,
-        worker_id: Plan.WorkerPlanId,
-    ) Allocator.Error!LIR.LirProcSpecId {
-        const index = @intFromEnum(worker_id);
-        if (index >= self.erased_worker_procs.len) boxyLowerInvariant("boxy erased callable referenced a missing worker proc");
-        if (self.erased_worker_procs[index]) |existing| return existing;
-
-        const resolved = self.resolved_workers.items[index];
-        switch (resolved.body) {
-            .checked_expr,
-            .intrinsic,
-            .hosted,
-            .unimplemented,
-            .generated_codec,
-            .generated_field_iterator,
-            .generated_interpolation_step,
-            => {},
-        }
-
-        const saved_tail_builder = self.result.store.tail_call_builder;
-        self.result.store.tail_call_builder = null;
-        defer self.result.store.tail_call_builder = saved_tail_builder;
-        var proc = ProcBodyBuilder.init(self, resolved.module, self.layout_plan.workerLayoutFor(worker_id), try self.workerOrigin(resolved));
-        defer proc.deinit();
-
-        const body_source = try self.bodySourceForWorker(resolved, &proc);
-        try proc.prepareErasedWorkerCaptures();
-        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
-        const worker_function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("boxy erased worker representation was not callable");
-        const erased_arg_desc_params = try proc.bindErasedArgumentDescriptorParams(worker_function);
-        const erased_reuse_arg = try proc.addArgLocal(try self.result.layouts.insertErasedCallable());
-        try proc.bindLambdaArgDescriptors();
-        const ret_local = try proc.addWorkerReturnLocal(true);
-        const ret_layout = proc.workerReturnLayout();
-        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
-        const proc_symbol = self.symbols.fresh();
-        const proc_id = try self.result.store.addProcSpec(.{
-            .name = lirSymbol(proc_symbol),
-            .identity = LIR.ProcIdentity.programLocal("boxy", @intFromEnum(proc_symbol)),
-            .args = args_span,
-            .body = null,
-            .ret_layout = ret_layout,
-            .abi = .erased_callable,
-            .erased_reuse_arg = erased_reuse_arg,
-            .erased_call_args = try proc.erasedCallArgsPlan(
-                proc.arg_locals.items[0..worker_function.arg_count],
-            ),
-            .boxy_runtime_entry = true,
-            .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
-        }, proc.origin.loc);
-        self.erased_worker_procs[index] = proc_id;
-        try self.setProcDebugName(proc_id, resolved);
-
-        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, proc.origin);
-        var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
-        body_stmt = try proc.prependWorkerReturnDescriptorInitializers(body_stmt);
-        body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
-        body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
-        body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
-        body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
-        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
-        proc_spec.body = body_stmt;
-        proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
-        proc_spec.erased_arg_desc_offsets = try proc.erasedArgumentDescriptorCaptureOffsets();
-        proc_spec.erased_arg_layouts = try proc.appendErasedArgumentLayouts(
-            proc.arg_locals.items[0..worker_function.arg_count],
-        );
-        proc_spec.erased_arg_desc_params = erased_arg_desc_params;
-        proc_spec.erased_capture_arg = proc.erased_capture_arg;
-        const return_desc = try self.returnDescriptorInfoForBody(
-            body_stmt,
-            args_span,
-            self.result.store.getLocal(ret_local).boxy_desc,
-            &proc.frame_locals,
-        );
-        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
-        proc_spec.frame_locals = frame_span;
-        proc_spec.ret_desc = return_desc.external;
-        proc_spec.runtime_ret_desc = return_desc.runtime_local;
-        proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
-        return proc_id;
     }
 
     fn emitHostedExternalProc(
@@ -7754,7 +8309,7 @@ const ProcedureBuilder = struct {
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated interpolation step worker was not callable");
         const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
-        const erased_proc = try self.emitErasedWorker(worker_id);
+        const erased_proc = try self.reserveErasedWorkerProc(worker_id);
         const result_desc = try proc.exactCallResultDescriptorRef(function.ret);
         const boundary = try self.generatedCallablePackBoundary(proc, target, target_rep, function, next);
         const entry = try proc.packGeneratedErasedCallable(
@@ -7880,7 +8435,7 @@ const ProcedureBuilder = struct {
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated FieldNames iterator step worker was not callable");
         const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
-        const erased_proc = try self.emitErasedWorker(worker_id);
+        const erased_proc = try self.reserveErasedWorkerProc(worker_id);
         const result_desc = try proc.exactCallResultDescriptorRef(function.ret);
         const boundary = try self.generatedCallablePackBoundary(proc, target, target_rep, function, next);
         const capture_layout_value = self.result.layouts.getLayout(worker_layout.erased_capture_layout);
@@ -9061,7 +9616,7 @@ const ProcedureBuilder = struct {
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated codec callback worker was not callable");
         const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
-        const erased_proc = try self.emitErasedWorker(worker_id);
+        const erased_proc = try self.reserveErasedWorkerProc(worker_id);
         const boundary = try self.generatedCallablePackBoundary(proc, target, target_rep, function, next);
         const result_desc = try proc.exactCallResultDescriptorRef(function.ret);
         const entry = try proc.packGeneratedErasedCallable(
@@ -13427,7 +13982,7 @@ const ProcedureBuilder = struct {
         }
 
         const runtime_layout = self.layout_plan.workerLayoutFor(runtime_worker_id);
-        const erased_proc = try self.emitErasedWorker(runtime_worker_id);
+        const erased_proc = try self.reserveErasedWorkerProc(runtime_worker_id);
         const result_desc = try proc.exactCallResultDescriptorRef(runtime_fn.ret);
         var captured_value_count: usize = 0;
         for (captures) |capture| {
@@ -14047,11 +14602,16 @@ const ProcedureBuilder = struct {
         return dynamic.contains(result_local);
     }
 
-    fn verifyDirectCallAbis(self: *ProcedureBuilder) void {
+    fn verifyDirectCallAbis(self: *ProcedureBuilder) Allocator.Error!void {
+        // A provisional call kept in its descriptor-returning form is exempt:
+        // its replacement form is unused.
+        var unused_static_calls = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
+        defer unused_static_calls.deinit();
         for (self.pending_direct_call_descriptor_abis.items) |pending| {
             if (!pending.resolved) {
                 boxyLowerInvariant("boxy recursive direct-call descriptor ABI remained unresolved after procedure emission");
             }
+            if (!pending.uses_static_replacement) try unused_static_calls.put(pending.static_call, {});
         }
         for (0..self.result.store.cfStmtCount()) |stmt_index| {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
@@ -14066,9 +14626,7 @@ const ProcedureBuilder = struct {
                             .{ stmt_index, @intFromEnum(assign.proc), call_args.len, callee_args.len },
                         );
                     }
-                    for (self.pending_direct_call_descriptor_abis.items) |pending| {
-                        if (pending.resolved and !pending.uses_static_replacement and pending.static_call == stmt_id) break;
-                    } else {
+                    if (!unused_static_calls.contains(stmt_id)) {
                         if ((assign.out_desc != null) != (callee.runtime_ret_desc != null)) {
                             std.debug.panic(
                                 "boxy lower invariant violated: direct-call descriptor output disagreed with finalized callee ABI: stmt={d} callee={d} call_out={any} callee_out={any}",
@@ -22127,7 +22685,7 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
         adapter: ?CallableAdapterBoundary,
     ) Allocator.Error!ExprStep {
-        const erased_proc = try self.parent.emitErasedWorker(worker_id);
+        const erased_proc = try self.parent.reserveErasedWorkerProc(worker_id);
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         const worker_function = self.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("boxy raw callable worker was not an erased-callable representation");
@@ -24073,10 +24631,9 @@ const ProcBodyBuilder = struct {
 
         var continuation = next;
         const direct_result_desc = try self.directCallResultDescriptorRef(worker_ret_rep, hidden_desc_args, hidden_desc_locals);
-        const callee_proc = try self.parent.emitWorker(worker_id);
+        const callee_proc = try self.parent.reserveWorkerProc(worker_id);
         const callee_spec = self.parent.result.store.getProcSpec(callee_proc);
-        const provisional_runtime_result_desc = callee_spec.runtime_ret_desc == null and
-            callee_spec.body == null;
+        const provisional_runtime_result_desc = self.parent.directCallNeedsProvisionalAbi(worker_id, callee_proc);
         const runtime_result_desc = callee_spec.runtime_ret_desc != null or provisional_runtime_result_desc;
         const target_desc = self.parent.result.store.getLocal(target).boxy_desc;
         const checked_return_types_match = if (ret_substitution) |substitution|
@@ -36145,6 +36702,8 @@ const ProcBodyBuilder = struct {
         return params.items.len != 0;
     }
 
+    /// The adapter from `source_function` to `target_function`, reserving its
+    /// header and queueing its body at the first use.
     fn emitCallableAdapterProc(
         self: *ProcBodyBuilder,
         source_function: FunctionChildren,
@@ -36155,7 +36714,8 @@ const ProcBodyBuilder = struct {
         }
 
         const descriptor_captures = try self.collectCallableAdapterDescriptorCaptures(source_function, target_function);
-        defer self.parent.allocator.free(descriptor_captures);
+        var captures_owned = true;
+        defer if (captures_owned) self.parent.allocator.free(descriptor_captures);
         cached: for (self.parent.callable_adapter_cache.items) |entry| {
             if (entry.source_rep != source_function.rep or entry.target_rep != target_function.rep) continue;
             if (entry.materialize_reps.len != descriptor_captures.len) continue;
@@ -36173,23 +36733,28 @@ const ProcBodyBuilder = struct {
         const saved_tail_builder = self.parent.result.store.tail_call_builder;
         self.parent.result.store.tail_call_builder = null;
         defer self.parent.result.store.tail_call_builder = saved_tail_builder;
-        var adapter_proc = ProcBodyBuilder.initSyntheticAdapter(self.parent, self.module, self.worker_layout, self.scaffoldOrigin());
-        defer adapter_proc.deinit();
+        const job = try self.parent.allocator.create(ProcedureBuilder.CallableAdapterJob);
+        var job_owned = true;
+        errdefer if (job_owned) self.parent.allocator.destroy(job);
+        job.adapter_proc = ProcBodyBuilder.initSyntheticAdapter(self.parent, self.module, self.worker_layout, self.scaffoldOrigin());
+        job.descriptor_captures = &.{};
+        job.target_arg_locals = &.{};
+        job.descriptor_locals = &.{};
+        job.capture_descriptor_initializers = .empty;
+        errdefer if (job_owned) job.deinit(self.parent.allocator);
+        job.descriptor_captures = descriptor_captures;
+        captures_owned = false;
+        const adapter_proc = &job.adapter_proc;
 
         const source_closure = try adapter_proc.addFrameLocal(source_closure_layout);
         const target_args = self.functionArgChildren(target_function);
-        const source_args = self.functionArgChildren(source_function);
-        const target_arg_locals = try self.parent.allocator.alloc(LIR.LocalId, target_function.arg_count);
-        defer self.parent.allocator.free(target_arg_locals);
-        for (target_args, target_arg_locals) |arg, *local| {
+        job.target_arg_locals = try self.parent.allocator.alloc(LIR.LocalId, target_function.arg_count);
+        for (target_args, job.target_arg_locals) |arg, *local| {
             local.* = try adapter_proc.addArgLocalForRep(arg.rep);
         }
         const capture_arg = try adapter_proc.addArgLocal(.opaque_ptr);
-        const descriptor_locals = try self.parent.allocator.alloc(LIR.LocalId, descriptor_captures.len);
-        defer self.parent.allocator.free(descriptor_locals);
-        var capture_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
-        defer capture_descriptor_initializers.deinit(self.parent.allocator);
-        for (descriptor_captures, descriptor_locals) |capture, *local| {
+        job.descriptor_locals = try self.parent.allocator.alloc(LIR.LocalId, descriptor_captures.len);
+        for (descriptor_captures, job.descriptor_locals) |capture, *local| {
             local.* = try adapter_proc.addFrameLocal(.opaque_ptr);
             try adapter_proc.bindDescriptorCaptureSourceLocal(capture, local.*);
         }
@@ -36198,8 +36763,8 @@ const ProcBodyBuilder = struct {
             capture_index -= 1;
             try adapter_proc.bindDescriptorCaptureTargetLocal(
                 descriptor_captures[capture_index],
-                descriptor_locals[capture_index],
-                &capture_descriptor_initializers,
+                job.descriptor_locals[capture_index],
+                &job.capture_descriptor_initializers,
             );
         }
         const erased_arg_desc_params = try adapter_proc.bindErasedArgumentDescriptorParams(target_function);
@@ -36217,7 +36782,7 @@ const ProcBodyBuilder = struct {
             .ret_layout = ret_layout,
             .abi = .erased_callable,
             .erased_reuse_arg = erased_reuse_arg,
-            .erased_call_args = try adapter_proc.erasedCallArgsPlan(target_arg_locals),
+            .erased_call_args = try adapter_proc.erasedCallArgsPlan(job.target_arg_locals),
             .boxy_runtime_entry = true,
             .stack_probe = self.parent.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, adapter_proc.origin.loc);
@@ -36231,115 +36796,18 @@ const ProcBodyBuilder = struct {
             .capture_layout = capture_layout,
         };
         try self.parent.callable_adapter_cache.append(self.parent.allocator, cache_entry);
-
-        const ret_stmt = try self.parent.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, adapter_proc.origin);
-        var continuation = ret_stmt;
-
-        const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
-        continuation = try adapter_proc.assignPlannedCallBoundary(
-            ret_local,
-            raw_ret,
-            target_function.ret,
-            source_function.ret,
-            continuation,
-        );
-        const call_target = raw_ret;
-
-        const out_desc = adapter_proc.callResultOutputDescriptorLocal(call_target);
-        if (out_desc) |local| {
-            try adapter_proc.markDescriptorLocalBound(local);
-        }
-
-        const call_args = try self.parent.allocator.alloc(LIR.LocalId, source_function.arg_count);
-        defer self.parent.allocator.free(call_args);
-        for (source_args, target_args, target_arg_locals, call_args) |source_arg, target_arg, target_arg_local, *call_arg| {
-            call_arg.* = if (try adapter_proc.callableValueBoundaryIsDirect(source_arg.rep, target_arg.rep))
-                target_arg_local
-            else
-                try adapter_proc.addFrameBoundaryTargetLocalForRep(source_arg.rep);
-        }
-
-        const call_placeholder = try self.parent.result.store.addCFStmt(.runtime_error, adapter_proc.origin);
-        var call_with_args = call_placeholder;
-        var arg_index = source_function.arg_count;
-        while (arg_index > 0) {
-            arg_index -= 1;
-            if (call_args[arg_index] == target_arg_locals[arg_index]) continue;
-            call_with_args = try adapter_proc.assignPlannedCallBoundaryCopyingSource(
-                call_args[arg_index],
-                target_arg_locals[arg_index],
-                source_args[arg_index].rep,
-                target_args[arg_index].rep,
-                call_with_args,
-            );
-        }
-
-        var arg_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
-        defer arg_desc_initializers.deinit(self.parent.allocator);
-        const arg_descs = try adapter_proc.erasedCallArgumentDescriptorRefs(
-            source_args,
-            call_args,
-            &arg_desc_initializers,
-        );
-        const expected_result_desc = try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
-        try adapter_proc.appendResultDescriptorInitializers(&arg_desc_initializers, expected_result_desc);
-        const call_stmt = try self.parent.result.store.addCFStmt(.{
-            .assign_call_erased = .{
-                .target = call_target,
-                .closure = source_closure,
-                .args = try self.parent.result.store.addLocalSpan(call_args),
-                .arg_layouts = try adapter_proc.appendErasedArgumentLayouts(call_args),
-                .arg_plan = try adapter_proc.erasedCallArgsPlan(call_args),
-                .arg_descs = arg_descs.locals,
-                .arg_desc_keys = arg_descs.keys,
-                // `result_desc` governs materialization into the source
-                // signature's result layout. `out_desc` separately
-                // preserves the exact descriptor returned by the callable.
-                .result_desc = expected_result_desc.desc,
-                .out_desc = out_desc,
-                .reuse_closure = false,
-                .reuse_source = null,
-                .next = continuation,
-            },
-        }, adapter_proc.origin);
-        const call_entry = try adapter_proc.prependDescriptorArgMaterializations(arg_desc_initializers.items, call_stmt);
-        try self.parent.result.store.replaceCFStmt(call_placeholder, self.parent.result.store.getCFStmt(call_entry), self.parent.result.store.stmtOrigin(call_entry));
-        continuation = call_with_args;
-
-        continuation = try adapter_proc.prependStaticDescriptorMaterializationsForSlots(continuation);
-        continuation = try adapter_proc.prependWorkerArgumentDescriptorInitializers(continuation);
-        continuation = try adapter_proc.prependCallableAdapterCaptureBindings(
-            capture_arg,
-            capture_layout,
-            source_closure,
-            descriptor_locals,
-            try adapter_proc.prependDescriptorArgMaterializations(
-                capture_descriptor_initializers.items,
-                continuation,
-            ),
-        );
-
-        const proc_spec = self.parent.result.store.getProcSpecPtr(proc_id);
-        proc_spec.body = continuation;
-        proc_spec.erased_arg_desc_offsets = try adapter_proc.callableAdapterArgumentDescriptorCaptureOffsets(
-            target_function,
-            descriptor_captures,
-            capture_layout,
-        );
-        proc_spec.erased_arg_layouts = try adapter_proc.appendErasedArgumentLayouts(target_arg_locals);
-        proc_spec.erased_arg_desc_params = erased_arg_desc_params;
-        proc_spec.erased_capture_arg = capture_arg;
-        const return_desc = try self.parent.returnDescriptorInfoForBody(
-            continuation,
-            args_span,
-            self.parent.result.store.getLocal(ret_local).boxy_desc,
-            &adapter_proc.frame_locals,
-        );
-        const frame_span = try self.parent.result.store.addLocalSpan(adapter_proc.frame_locals.items);
-        proc_spec.frame_locals = frame_span;
-        proc_spec.ret_desc = return_desc.external;
-        proc_spec.runtime_ret_desc = return_desc.runtime_local;
-        proc_spec.stack_probe = self.parent.stackProbeForProc(args_span, frame_span, ret_layout);
+        job.proc_id = proc_id;
+        job.source_function = source_function;
+        job.target_function = target_function;
+        job.capture_layout = capture_layout;
+        job.source_closure = source_closure;
+        job.capture_arg = capture_arg;
+        job.erased_arg_desc_params = erased_arg_desc_params;
+        job.ret_local = ret_local;
+        job.ret_layout = ret_layout;
+        job.args_span = args_span;
+        try self.parent.appendProcJob(.{ .callable_adapter = job });
+        job_owned = false;
         return cache_entry;
     }
 
@@ -42746,7 +43214,7 @@ const ConstPlanBuilder = struct {
                 }
                 break :next candidate;
             } else return null;
-            const entry_proc = try self.procedure_builder.emitErasedWorker(static_fn.worker);
+            const entry_proc = try self.procedure_builder.reserveErasedWorkerProc(static_fn.worker);
             var duplicate = false;
             for (build.entries.items) |entry| {
                 if (entry.entry == entry_proc) {
@@ -44381,9 +44849,10 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
     const call = out.lir_result.store.getCFStmt(body).assign_call;
     try std.testing.expectEqual(proc_id, call.proc);
     try std.testing.expect(call.args.isEmpty());
-    const adapt = out.lir_result.store.getCFStmt(call.next).assign_boxy_adapt;
-    try std.testing.expectEqual(call.target, adapt.source);
-    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = adapt.target } }, out.lir_result.store.getCFStmt(adapt.next));
+    // A U64 result carries no descriptor, so the call to the unfinished
+    // worker needs no provisional descriptor form.
+    try std.testing.expect(call.out_desc == null);
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = call.target } }, out.lir_result.store.getCFStmt(call.next));
 }
 
 test "boxy lowerer emits checked crash as terminal LIR crash" {
