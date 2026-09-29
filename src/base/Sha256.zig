@@ -23,24 +23,6 @@ pub const block_length = 64;
 /// Accepted for `std.crypto.hash.sha2.Sha256` compatibility; SHA-256 has no options.
 pub const Options = struct {};
 
-comptime {
-    // Every 64-bit target other than x86_64 must carry the SHA-256
-    // instructions: there is no software path for them, by decision. build.zig
-    // adds the feature to the baseline CPU; a `-Dcpu` that drops it is an
-    // unsupported target. x86_64 always has a path: the hardware rounds,
-    // runtime dispatch, or the portable rounds (see `dispatches_at_runtime`
-    // and `uses_software_rounds` in sha256_rounds.zig).
-    switch (rounds.arch_class) {
-        .x86_64 => {},
-        .aarch64 => if (!rounds.hasHardwareSupport) {
-            @compileError("roc requires the ARMv8 `sha2` extension on aarch64 targets; CPUs without SHA-256 instructions are not supported");
-        },
-        .other => if (@sizeOf(usize) == 8) {
-            @compileError("roc requires SHA-256 instructions on 64-bit targets, and has no SHA-256 implementation for this architecture");
-        },
-    }
-}
-
 state: rounds.State = rounds.initial_state,
 buf: rounds.Block = undefined,
 buf_len: u8 = 0,
@@ -48,6 +30,25 @@ total_len: u64 = 0,
 
 /// Start an empty digest.
 pub fn init(_: Options) Sha256 {
+    // Digest metadata is also used by frozen-image consumers that never hash.
+    // Enforce the hashing CPU contract when constructing a hasher.
+    comptime {
+        // Every 64-bit target other than x86_64 must carry the SHA-256
+        // instructions: there is no software path for them, by decision. build.zig
+        // adds the feature to the baseline CPU; a `-Dcpu` that drops it is an
+        // unsupported target. x86_64 always has a path: the hardware rounds,
+        // runtime dispatch, or the portable rounds (see `dispatches_at_runtime`
+        // and `uses_software_rounds` in sha256_rounds.zig).
+        switch (rounds.arch_class) {
+            .x86_64 => {},
+            .aarch64 => if (!rounds.hasHardwareSupport) {
+                @compileError("roc requires the ARMv8 `sha2` extension on aarch64 targets; CPUs without SHA-256 instructions are not supported");
+            },
+            .other => if (@sizeOf(usize) == 8) {
+                @compileError("roc requires SHA-256 instructions on 64-bit targets, and has no SHA-256 implementation for this architecture");
+            },
+        }
+    }
     return .{};
 }
 

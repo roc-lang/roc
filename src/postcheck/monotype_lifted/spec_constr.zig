@@ -7810,6 +7810,21 @@ const Cloner = struct {
             .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         }
 
+        // Different outer constructors cannot expose shared leaves to one continuation.
+        if (task.joins.len == 1 and task.joins[0].binding == .pattern and task.joins[0].sites.items.len > 1) {
+            const sites = task.joins[0].sites.items;
+            const outer_values = try self.pass.allocator.alloc(Value, sites.len);
+            defer self.pass.allocator.free(outer_values);
+            for (sites, outer_values) |site, *value| {
+                if (site.values.len != 1) Common.invariant("let-of-case pattern join site did not supply one value");
+                value.* = site.values[0];
+            }
+            if (!self.valuesShareOuterSkeleton(outer_values)) {
+                self.let_case_builds.shrinkRetainingCapacity(task.frame_index);
+                return .{ .ret = .{ .maybe_data = null } };
+            }
+        }
+
         // Wrap the rewritten case in its live join points, innermost last so
         // every jump site in the case sits inside each join's remainder.
         frame.index = task.joins.len;
@@ -8375,6 +8390,54 @@ const Cloner = struct {
     const let_case_join_leaf_budget: u32 = 1024;
     const let_case_join_param_cap: usize = 64;
 
+    /// Whether every value has the same outermost constructor: the same tag,
+    /// record fields, tuple arity, nominal type, or callable target and
+    /// capture identities. Only such values decompose into shared leaves.
+    fn valuesShareOuterSkeleton(self: *Cloner, values: []const Value) bool {
+        const first = values[0];
+        for (values[1..]) |other| {
+            if (std.meta.activeTag(other) != std.meta.activeTag(first)) return false;
+            switch (first) {
+                .expr, .runtime_anchor, .static_data_candidate => return false,
+                .tag => |first_tag| {
+                    const other_tag = other.tag;
+                    if (other_tag.ty != first_tag.ty) return false;
+                    if (!self.pass.program.names.tagLabelTextEql(other_tag.name, first_tag.name)) return false;
+                    if (other_tag.payloads.len != first_tag.payloads.len) return false;
+                },
+                .record => |first_record| {
+                    const other_record = other.record;
+                    if (other_record.ty != first_record.ty) return false;
+                    if (other_record.fields.len != first_record.fields.len) return false;
+                    for (other_record.fields, first_record.fields) |other_field, first_field| {
+                        if (!self.pass.program.names.recordFieldLabelTextEql(other_field.name, first_field.name)) return false;
+                    }
+                },
+                .tuple => |first_tuple| {
+                    const other_tuple = other.tuple;
+                    if (other_tuple.ty != first_tuple.ty) return false;
+                    if (other_tuple.items.len != first_tuple.items.len) return false;
+                },
+                .nominal => |first_nominal| {
+                    if (other.nominal.ty != first_nominal.ty) return false;
+                },
+                .callable => |first_callable| {
+                    const other_callable = other.callable;
+                    if (other_callable.ty != first_callable.ty) return false;
+                    if (other_callable.fn_id != first_callable.fn_id) return false;
+                    if (other_callable.captures.len != first_callable.captures.len) return false;
+                    for (other_callable.captures, first_callable.captures) |other_capture, first_capture| {
+                        if (other_capture.id != first_capture.id) return false;
+                    }
+                },
+            }
+        }
+        return switch (first) {
+            .expr, .runtime_anchor, .static_data_candidate => false,
+            .tag, .record, .tuple, .nominal, .callable => true,
+        };
+    }
+
     /// Structure-decompose the values every site supplies for one binder
     /// slot. Where all sites agree on the same constructor skeleton, the
     /// skeleton is rebuilt over fresh parameter locals minted for its opaque
@@ -8398,48 +8461,10 @@ const Cloner = struct {
         const values = task.values;
         if (task.params.items.len >= let_case_join_param_cap) return false;
         if (task.budget.admit(1) != .admitted) return false;
-        switch (values[0]) {
-            .expr, .runtime_anchor, .static_data_candidate => return false,
-            .tag => |first| for (values[1..]) |other| {
-                if (other != .tag) return false;
-                const other_tag = other.tag;
-                if (other_tag.ty != first.ty) return false;
-                if (!self.pass.program.names.tagLabelTextEql(other_tag.name, first.name)) return false;
-                if (other_tag.payloads.len != first.payloads.len) return false;
-            },
-            .record => |first| for (values[1..]) |other| {
-                if (other != .record) return false;
-                const other_record = other.record;
-                if (other_record.ty != first.ty) return false;
-                if (other_record.fields.len != first.fields.len) return false;
-                for (other_record.fields, first.fields) |other_field, first_field| {
-                    if (!self.pass.program.names.recordFieldLabelTextEql(other_field.name, first_field.name)) return false;
-                }
-            },
-            .tuple => |first| for (values[1..]) |other| {
-                if (other != .tuple) return false;
-                const other_tuple = other.tuple;
-                if (other_tuple.ty != first.ty) return false;
-                if (other_tuple.items.len != first.items.len) return false;
-            },
-            .nominal => |first| for (values[1..]) |other| {
-                if (other != .nominal) return false;
-                if (other.nominal.ty != first.ty) return false;
-            },
-            .callable => |first| {
-                task.iterator_step = first.iterator_step;
-                for (values[1..]) |other| {
-                    if (other != .callable) return false;
-                    const other_callable = other.callable;
-                    if (other_callable.ty != first.ty) return false;
-                    if (other_callable.fn_id != first.fn_id) return false;
-                    if (other_callable.captures.len != first.captures.len) return false;
-                    task.iterator_step = task.iterator_step and other_callable.iterator_step;
-                    for (other_callable.captures, first.captures) |other_capture, first_capture| {
-                        if (other_capture.id != first_capture.id) return false;
-                    }
-                }
-            },
+        if (!self.valuesShareOuterSkeleton(values)) return false;
+        if (values[0] == .callable) {
+            task.iterator_step = values[0].callable.iterator_step;
+            for (values[1..]) |other| task.iterator_step = task.iterator_step and other.callable.iterator_step;
         }
         return true;
     }
@@ -8925,6 +8950,13 @@ const Cloner = struct {
                 self.nextBlockStatement(frame, task);
             },
             BlockValueCursor.let_continuation => {
+                const value = input.?.get(.value);
+                if (value != .expr and task.statements.items.len == 0 and !task.terminated) {
+                    task.bindings.appendChain(task.block_bindings.*);
+                    if (task.stmt_context) |context| context.restore(self);
+                    task.stmt_context = null;
+                    return self.finishBlockValueTask(task, value);
+                }
                 // The continuation's value is branch-built. The block
                 // keeps it as its recorded tail so a case over this
                 // block reads the arms' structure instead of one
@@ -13167,6 +13199,16 @@ const Cloner = struct {
         }
     }
 
+    /// Whether a nominal pattern's backing pattern binds its value only
+    /// through record-field or tuple-item reads, which apply to the nominal
+    /// value itself.
+    fn patternProjectsNominalBacking(self: *const Cloner, backing_pat: Ast.PatId) bool {
+        return switch (self.pass.program.getPat(backing_pat).data) {
+            .record, .tuple => true,
+            .bind, .wildcard, .as, .tag, .nominal, .list, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => false,
+        };
+    }
+
     fn bindPatToReusableValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
         return switch (try self.valueCanSubstitute(value)) {
             .proven => if (try self.bindPatToFlowValue(pat_id, value)) .match else .unknown,
@@ -13286,7 +13328,11 @@ const Cloner = struct {
                     .runtime_anchor => |anchor| .{ frame.pat_id, anchor.structure.* },
                     .static_data_candidate => |candidate| .{ frame.pat_id, candidate.structure.* },
                     .nominal => |nominal| .{ backing_pat, nominal.backing.* },
-                    .expr, .tag, .record, .tuple, .callable => return .{ .done = false },
+                    .expr => |receiver| if (canReadFieldsFromExpr(self.pass.program, receiver) and self.patternProjectsNominalBacking(backing_pat))
+                        .{ backing_pat, value }
+                    else
+                        return .{ .done = false },
+                    .tag, .record, .tuple, .callable => return .{ .done = false },
                 };
                 self.wrapper_strip_depth += 1;
                 frame.stage = .nominal;
