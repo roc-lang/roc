@@ -184,8 +184,10 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
     defer layouts.deinit();
     const flag = try store.addLocal(.{ .layout_idx = .bool });
     const result = try store.addLocal(.{ .layout_idx = .u64 });
-    const bool_join: LIR.JoinPointId = @enumFromInt(0);
-    const unreached_join: LIR.JoinPointId = @enumFromInt(1);
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const bool_join = fixture_join_ids.freshJoinPoint();
+    const unreached_join = fixture_join_ids.freshJoinPoint();
 
     // join 0(flag) = switch flag { 1 => ret, _ => ret }
     const ret_true = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
@@ -227,7 +229,7 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
     defer scratch.deinit();
     try runProc(&store, &layouts, proc, scratch.allocator());
 
-    var join_ids = std.AutoHashMap(LIR.JoinPointId, void).init(testing.allocator);
+    var join_ids = collections.DenseMap(LIR.JoinPointId, void).init(testing.allocator);
     defer join_ids.deinit();
     var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
     defer jump_targets.deinit(testing.allocator);
@@ -2173,15 +2175,11 @@ const Pass = struct {
         // Jump records cover only code the prescan reached, and it never scans
         // a join body without a reachable jump. Retargeting must still cover
         // every structural jump, or an unscanned one would keep the join id
-        // this rewrite retires.
+        // this rewrite retires. Most procedures thread nothing, so the walk
+        // waits for the first join that qualifies.
         var structural_jumps = std.ArrayList(JumpRecord).empty;
         defer structural_jumps.deinit(self.allocator);
-        var walk = try BodyClone.ReachableStmts.initWithAllocator(self.store, body, self.allocator);
-        defer walk.deinit();
-        while (try walk.next()) |stmt| {
-            const cf = self.store.getCFStmt(stmt);
-            if (cf == .jump) try structural_jumps.append(self.allocator, .{ .target = cf.jump.target, .stmt = stmt });
-        }
+        var structural_jumps_ready = false;
         for (self.joins_in_order.items) |join_stmt| {
             const join = switch (self.store.getCFStmt(join_stmt)) {
                 .join => |j| j,
@@ -2299,6 +2297,16 @@ const Pass = struct {
                 }
             }
             if (!shape_ok) continue;
+
+            if (!structural_jumps_ready) {
+                var walk = try BodyClone.ReachableStmts.initWithAllocator(self.store, body, self.allocator);
+                defer walk.deinit();
+                while (try walk.next()) |stmt| {
+                    const cf = self.store.getCFStmt(stmt);
+                    if (cf == .jump) try structural_jumps.append(self.allocator, .{ .target = cf.jump.target, .stmt = stmt });
+                }
+                structural_jumps_ready = true;
+            }
 
             const true_id: JoinPointId = @enumFromInt(self.max_join_id);
             const false_id: JoinPointId = @enumFromInt(self.max_join_id + 1);
