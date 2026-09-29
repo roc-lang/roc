@@ -119,6 +119,7 @@ pub const Writer = struct {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
                 .pending,
+                .boxy_box,
                 .layout_only,
                 .zst,
                 .scalar,
@@ -212,6 +213,7 @@ pub const Writer = struct {
     ) Error!void {
         const plan = self.constPlan(plan_id);
         switch (plan) {
+            .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => self.module.const_store.fill(node, .zst),
@@ -374,7 +376,7 @@ pub const Writer = struct {
                 break :blk true;
             },
             .pending, .layout_only => unreachable,
-            .str, .list, .box, .tag_union, .fn_value, .erased_fn => false,
+            .str, .list, .box, .boxy_box, .tag_union, .fn_value, .erased_fn => false,
         };
         try self.product_eligibility.put(id, result);
         return result;
@@ -421,6 +423,7 @@ pub const Writer = struct {
             .scalar => true,
             .named => |named| self.planIsScalar(named.backing),
             .pending,
+            .boxy_box,
             .layout_only,
             .zst,
             .str,
@@ -678,16 +681,17 @@ pub const Writer = struct {
         const resolved = try self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
         for (set.entries) |entry| {
             if (entry.entry != resolved.proc) continue;
+            const template = entry.template orelse writerInvariant("Boxy frozen environment has no ConstStore provenance");
             const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr });
             defer self.module.const_store.allocator.free(captures);
             return try self.module.const_store.appendFn(.{
-                .fn_def = entry.template.fn_def,
-                .source_fn_ty = entry.template.source_fn_ty,
-                .source_fn_key = entry.template.source_fn_key,
+                .fn_def = template.fn_def,
+                .source_fn_ty = template.source_fn_ty,
+                .source_fn_key = template.source_fn_key,
                 .captures = captures,
-                .evidence = entry.template.evidence,
-                .evidence_frames = entry.template.evidence_frames,
-                .evidence_frame_head = entry.template.evidence_frame_head,
+                .evidence = template.evidence,
+                .evidence_frames = template.evidence_frames,
+                .evidence_frame_head = template.evidence_frame_head,
             });
         }
         writerInvariant("erased callable result did not match an explicit erased function entry");
@@ -773,6 +777,7 @@ pub const Writer = struct {
         }
 
         switch (self.constPlan(plan_id)) {
+            .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached string backing collection"),
             .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
             .zst,

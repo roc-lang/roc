@@ -19,14 +19,14 @@ apply = |f, n| {
 use = |n| apply(describe, n)
 ~~~
 # EXPECTED
-CONFLICTING TAG - issue_11621_conflicting_tag_payloads.md:8:6:8:14
+CONFLICTING TAG - issue_11621_conflicting_tag_payloads.md:12:1:12:4
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Conflicting Tag")
-		(region (start 8 6) (end 8 14))
+		(region (start 12 1) (end 12 4))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -39,9 +39,11 @@ CONFLICTING TAG - issue_11621_conflicting_tag_payloads.md:8:6:8:14
 			(reflow "payloads")
 			(reflow "."))
 		(document
-			(source-region (file "issue_11621_conflicting_tag_payloads.md") (start 8 6) (end 8 14) (annotation error) (line-text "\t_ = step(n)?"))
+			(source-region (file "issue_11621_conflicting_tag_payloads.md") (start 12 1) (end 12 4) (annotation error) (line-text "use = |n| apply(describe, n)"))
 			(line-break)
-			(reflow "Here it is:")
+			(reflow "One comes from here:")
+			(line-break)
+			(source-region (file "issue_11621_conflicting_tag_payloads.md") (start 8 6) (end 8 14) (annotation error) (line-text "\t_ = step(n)?"))
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

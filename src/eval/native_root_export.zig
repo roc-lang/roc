@@ -28,6 +28,7 @@ pub const CallableResolution = struct {
 /// Evaluator callback supplying exact callable procedure and capture identities.
 /// Missing evaluator registry evidence propagates its terminal runtime error.
 pub const CallableResolver = struct {
+    runtime: ?*const @import("boxy_runtime.zig").BoxyRuntime = null,
     context: ?*anyopaque = null,
     resolve: *const fn (?*anyopaque, [*]u8) error{RuntimeError}!CallableResolution = missingCallableResolver,
 };
@@ -147,6 +148,7 @@ const Builder = struct {
     nodes: std.ArrayList(Node) = .empty,
     jobs: std.ArrayList(Job) = .empty,
     allocations: std.AutoHashMapUnmanaged(AllocationKey, Destination) = .empty,
+    frozen_descriptors: std.AutoHashMapUnmanaged(Program.BoxyTypeDescId, Destination) = .empty,
 
     fn size(self: *const Builder, idx: layout.Idx) usize {
         return self.program.layouts.layoutSize(self.program.layouts.getLayout(idx));
@@ -228,6 +230,9 @@ const Builder = struct {
         const plan = self.program.const_plans.items[@intFromEnum(job.plan)];
         switch (plan) {
             .pending, .layout_only => invariant("incomplete const plan reached native root export"),
+            .boxy_box => |box| if (self.size(box.layout_idx) != 0) {
+                try self.boxed(job, box.payload, box.layout_idx);
+            },
             .zst => {},
             .scalar => {
                 if (physical.tag != .scalar or physical.getScalar().tag == .opaque_ptr or physical.getScalar().tag == .str) invariant("scalar export plan did not name pointer-free scalar bytes");
@@ -384,20 +389,76 @@ const Builder = struct {
         } else invariant("native callable capture plan had non-struct multiple captures");
     }
 
+    fn frozenDescriptor(self: *Builder, id: Program.BoxyTypeDescId) Allocator.Error!Destination {
+        if (self.frozen_descriptors.get(id)) |dest| return dest;
+        const descriptor = &self.program.boxy_type_descs.items[@intFromEnum(id)];
+        if (descriptor.closure != .closed) invariant("frozen descriptor recipe retained runtime context");
+        // Boxy descriptors are pointer-free image rows. Their child references
+        // remain IDs in this program's immutable sidecar, exactly as in LirImage.
+        const symbol = try self.addNode(try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len)), @sizeOf(Program.BoxyTypeDesc), @alignOf(Program.BoxyTypeDesc));
+        const dest = Destination{ .symbol = symbol };
+        @memcpy(self.bytes(dest, @sizeOf(Program.BoxyTypeDesc)), std.mem.asBytes(descriptor));
+        try self.frozen_descriptors.put(self.allocator, id, dest);
+        return dest;
+    }
+
+    fn boxyCaptureLocation(self: *Builder, idx: layout.Idx, slot: u32) struct { idx: layout.Idx, offset: usize } {
+        const physical = self.program.layouts.getLayout(idx);
+        if (physical.tag == .struct_) return .{
+            .idx = self.program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
+            .offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
+        };
+        if (slot != 0) invariant("non-struct Boxy capture had multiple fields");
+        return .{ .idx = idx, .offset = 0 };
+    }
+
+    fn frozenDictionary(self: *Builder, id: Program.BoxyDictId) Allocator.Error!Destination {
+        const dict = self.program.boxy_dicts.items[@intFromEnum(id)];
+        if (dict.template) invariant("frozen dictionary retained a runtime template");
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
+        const symbol = try self.addNode(name, @sizeOf(Program.BoxyDict), @alignOf(Program.BoxyDict));
+        const dest = Destination{ .symbol = symbol, .offset = 0 };
+        @memcpy(self.bytes(dest, @sizeOf(Program.BoxyDict)), std.mem.asBytes(&dict));
+        return dest;
+    }
+
+    fn matchesBoxyEnvironment(self: *Builder, entry: Program.ErasedFn, source: Value) Allocator.Error!bool {
+        const boxy = entry.boxy orelse return true;
+        var matcher = @import("boxy_frozen_evidence.zig").Matcher{ .allocator = self.allocator, .program = self.program, .runtime = self.callables.runtime orelse invariant("Boxy freeze recipe lacked evaluator evidence tables") };
+        defer matcher.deinit();
+        for (boxy.captures) |capture| switch (capture.value) {
+            .value, .contents_descriptor => {},
+            .descriptor => |id| {
+                const field = self.boxyCaptureLocation(entry.capture_layout, capture.slot);
+                const ptr = source.offset(field.offset).read(usize);
+                if (ptr == 0) return false;
+                if (!try matcher.descriptor(@ptrFromInt(ptr), &self.program.boxy_type_descs.items[@intFromEnum(id)])) return false;
+            },
+            .dictionary => |id| {
+                const field = self.boxyCaptureLocation(entry.capture_layout, capture.slot);
+                const ptr = source.offset(field.offset).read(usize);
+                if (ptr == 0) return false;
+                if (!try matcher.dictionary(@ptrFromInt(ptr), &self.program.boxy_dicts.items[@intFromEnum(id)])) return false;
+            },
+        };
+        return true;
+    }
+
     fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId) Error!void {
         const address = job.source.read(usize);
         if (address == 0) invariant("native erased callable had a null payload");
         const resolved = try self.callables.resolve(self.callables.context, @ptrFromInt(address));
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
-        for (set.entries) |entry| {
+        for (set.entries, 0..) |entry, recipe_index| {
             if (entry.entry != resolved.proc) continue;
+            if (!try self.matchesBoxyEnvironment(entry, .{ .ptr = resolved.capture_ptr })) continue;
             const result = try self.reserveAllocation(.{
                 .address = address,
                 .plan = job.plan,
                 .layout_idx = job.layout_idx,
                 .count = 1,
                 .kind = .erased,
-            }, builtins.erased_callable.payloadSize(self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            }, if (entry.boxy != null) builtins.erased_callable.compilerPayloadSize(self.size(entry.capture_layout)) else builtins.erased_callable.payloadSize(self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
             const proc_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(resolved.proc).identity);
@@ -407,6 +468,7 @@ const Builder = struct {
                 .kind = .function_pointer,
                 .callable_capture_offset = builtins.erased_callable.capture_offset,
                 .procedure = resolved.proc,
+                .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null,
             });
             const on_drop: ?layout.RcHelperKey = switch (entry.on_drop) {
                 .none => null,
@@ -421,7 +483,18 @@ const Builder = struct {
                     .rc_helper = helper,
                 });
             }
-            try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(builtins.erased_callable.capture_offset));
+            if (entry.boxy) |boxy| {
+                for (boxy.captures) |capture| {
+                    const field = self.boxyCaptureLocation(entry.capture_layout, capture.slot);
+                    const dest = result.dest.offsetBy(builtins.erased_callable.capture_offset + field.offset);
+                    switch (capture.value) {
+                        .value => |plan| try self.enqueue(plan, field.idx, .{ .ptr = resolved.capture_ptr + field.offset }, dest, .value),
+                        .descriptor, .contents_descriptor => |id| try self.relocate(dest, try self.frozenDescriptor(id)),
+                        .dictionary => |id| try self.relocate(dest, try self.frozenDictionary(id)),
+                    }
+                }
+                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(builtins.erased_callable.capture_offset + builtins.erased_callable.compilerMetadataOffset(self.size(entry.capture_layout))), try self.frozenDescriptor(id));
+            } else try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(builtins.erased_callable.capture_offset));
             return;
         }
         invariant("native erased callable did not match an explicit entry");

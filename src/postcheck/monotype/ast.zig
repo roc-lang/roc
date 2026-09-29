@@ -458,12 +458,13 @@ pub fn fnEvidenceDigest(
     head: ?u32,
 ) EvidenceDigest {
     var hasher = TypeDigestHasher.init();
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v5");
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v6");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
         switch (entry) {
             .target => |target| {
+                writeU32(&hasher, target.callable_contracts);
                 writeBytes(&hasher, &target.view.bytes);
                 writeMethodTarget(&hasher, target.method, target.method_callable_key);
                 if (target.instantiation) |instantiation| {
@@ -481,6 +482,7 @@ pub fn fnEvidenceDigest(
                 }
             },
             .structural => |structural| {
+                writeU32(&hasher, structural.callable_contracts);
                 writeStructuralDerivation(&hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
                     writeU8(&hasher, 1);
@@ -497,6 +499,7 @@ pub fn fnEvidenceDigest(
                 } else writeU8(&hasher, 0);
             },
             .from_callable => |use| {
+                writeU32(&hasher, use.callable_contracts);
                 writeU8(&hasher, @intFromBool(use.independent_callable));
             },
             .from_scheme => |index| writeU32(&hasher, index),
@@ -557,6 +560,7 @@ pub fn fnEvidenceEql(
 }
 
 fn fnEvidenceTargetEql(left: anytype, right: @TypeOf(left)) bool {
+    if (left.callable_contracts != right.callable_contracts) return false;
     if (!std.meta.eql(left.view, right.view)) return false;
     if (!methodTargetIdentityEql(left.method, left.method_callable_key, right.method, right.method_callable_key)) return false;
     if (left.instantiation) |left_instantiation| {
@@ -3134,4 +3138,22 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try std.testing.expectEqual(name, copy.proc_debug_names.get(@enumFromInt(1)).?);
     try std.testing.expectEqual(name, try copy.names.internExportName("entry"));
     try std.testing.expect(copy.types.isFrozen());
+}
+
+test "issue 11737: callable contract topology distinguishes specialization identities" {
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
+    };
+    const left = [_]check.ConstStore.ConstFnEvidence{
+        .{ .from_callable = .{ .callable_contracts = 1 } },
+        .{ .from_callable = .{} },
+        .checked_error,
+    };
+    const right = [_]check.ConstStore.ConstFnEvidence{
+        .{ .from_callable = .{} },
+        .{ .from_callable = .{ .callable_contracts = 1 } },
+        .checked_error,
+    };
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }

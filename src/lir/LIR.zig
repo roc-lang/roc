@@ -350,9 +350,6 @@ pub const RcReason = enum(u8) {
     low_level_arg_effect,
     /// `LowLevel.RcEffect.retain_result` without `skip_result_retain`.
     low_level_result_effect,
-    /// `assign_boxy_eq` with `source_mode == .move`: the equality consumes
-    /// both operands, so the emitter retains `lhs` and `rhs` ahead of it.
-    boxy_eq_move_arg,
     /// `assign_call_dict` argument outside `ArcPlanStep.transfer_mask`: the
     /// dictionary method takes ownership of an argument the caller keeps.
     dict_call_arg,
@@ -1085,6 +1082,14 @@ pub const CFStmt = union(enum) {
     assign_literal: struct {
         target: LocalId,
         value: LiteralValue,
+        /// For a read of a compile-time list of copies of one value, held as
+        /// static data in `value`: the argument-free procedure that builds
+        /// the same list fresh. ARC chooses one form per read—the static
+        /// datum when nothing the value reaches needs it unique, the fresh
+        /// build when its birth lets ARC prove a mutating consumer's
+        /// argument unique—and clears this, so no consumer after ARC sees
+        /// it set.
+        fresh_alternative: ?LirProcSpecId = null,
         next: CFStmtId,
     },
     assign_call: struct {
@@ -1216,14 +1221,6 @@ pub const CFStmt = union(enum) {
     assign_boxy_inspect: struct {
         target: LocalId,
         source: LocalId,
-        source_desc: BoxyDescRef,
-        source_mode: BoxyTransferMode = .borrow,
-        next: CFStmtId,
-    },
-    assign_boxy_eq: struct {
-        target: LocalId,
-        lhs: LocalId,
-        rhs: LocalId,
         source_desc: BoxyDescRef,
         source_mode: BoxyTransferMode = .borrow,
         next: CFStmtId,

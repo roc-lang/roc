@@ -20,7 +20,7 @@ TYPE MISMATCH - type_record_basic.md:6:13:6:13
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 6 13) (end 6 45))
+		(region (start 6 21) (end 6 44))
 		(headline
 			(reflow "The")
 			(reflow " ")

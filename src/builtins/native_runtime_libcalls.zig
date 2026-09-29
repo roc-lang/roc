@@ -135,7 +135,8 @@ pub fn resolve(name: []const u8) ?usize {
         if (std.mem.eql(u8, name, entry[0])) return @intFromPtr(entry[1]);
     }
     if (builtin.os.tag.isDarwin()) {
-        if (std.mem.eql(u8, name, "bzero")) return @intFromPtr(&host_routines.bzero);
+        // Darwin codegen also emits the libc __bzero entry point.
+        if (std.mem.eql(u8, name, "bzero") or std.mem.eql(u8, name, "__bzero")) return @intFromPtr(&host_routines.bzero);
     }
     if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) {
         if (std.mem.eql(u8, name, "___chkstk_ms")) return @intFromPtr(&host_routines.___chkstk_ms);
@@ -174,4 +175,14 @@ test "resolved division and remainder match native i128 arithmetic" {
     try std.testing.expectEqual(@as(i128, 1), modti3(7, -2));
     // I128.div_try(I128.lowest, -1) overflows to lowest under truncating wrap.
     try std.testing.expectEqual(min, divti3(min, -1));
+}
+
+test "Darwin zero-fill libcalls clear exactly the requested bytes" {
+    if (!builtin.os.tag.isDarwin()) return error.SkipZigTest;
+    for ([_][]const u8{ "bzero", "__bzero" }) |name| {
+        const zero: *const fn (?[*]u8, usize) callconv(.c) void = @ptrFromInt(resolve(name).?);
+        var bytes = [_]u8{0xaa} ** 8;
+        zero(bytes[2..].ptr, 4);
+        try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xaa, 0, 0, 0, 0, 0xaa, 0xaa }, &bytes);
+    }
 }

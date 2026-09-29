@@ -9,6 +9,7 @@ const tracy = @import("tracy");
 const types_mod = @import("types");
 const can = @import("can");
 const reporting = @import("reporting");
+const tokenize = @import("parse").tokenize;
 
 const snapshot = @import("snapshot.zig");
 const diff = @import("snapshot/diff.zig");
@@ -85,6 +86,7 @@ const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const AnnotationOnlyValueUse = problem_mod.AnnotationOnlyValueUse;
+const DerivedMethodValueUse = problem_mod.DerivedMethodValueUse;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
@@ -158,6 +160,9 @@ pub const ReportBuilder = struct {
     diff_fields: SnapshotRecordFieldSafeList,
     diff_tags: SnapshotTagSafeList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
+    /// Interned display text lets mismatch reports recognize identical renderings
+    /// without conflating them with semantic type equality.
+    type_displays: base.SerialStringInterner = .{},
     /// When the current report is a record-destructure pattern mismatch, holds
     /// the pattern and value type snapshots so `makeMismatchReport` can show the
     /// tailored `field: _` / `..` hint in place of the generic field diff.
@@ -214,6 +219,7 @@ pub const ReportBuilder = struct {
         self.diff_fields.deinit(self.gpa);
         self.diff_tags.deinit(self.gpa);
         self.typo_suggestions.deinit();
+        self.type_displays.deinit(self.gpa);
     }
 
     /// Reset report builder, only fields it owns
@@ -252,8 +258,39 @@ pub const ReportBuilder = struct {
         return self.can_ir.store.getExprRegion(@enumFromInt(id.expr_node));
     }
 
+    /// Point at the construct introducing an expression instead of covering its
+    /// body, where independent diagnostics may need their own highlights.
+    fn expressionHighlightRegion(self: *Self, region: Region) Allocator.Error!Region {
+        const source = self.source[region.start.offset..region.end.offset];
+        if (source.len == 0 or (source[0] != 'm' and source[0] != '|')) return region;
+
+        // Use tokens to distinguish the keyword from an identifier and to keep
+        // pipes inside strings, comments, or nested patterns out of the header.
+        var env = try base.CommonEnv.init(self.gpa, source);
+        defer env.deinit(self.gpa);
+        var messages: [0]tokenize.Diagnostic = .{};
+        var tokenizer = try tokenize.Tokenizer.init(&env, self.gpa, source, &messages);
+        defer tokenizer.deinit(self.gpa);
+        try tokenizer.tokenize(self.gpa);
+        const tags = tokenizer.output.tokens.items(.tag);
+        if (tags[0] == .KwMatch)
+            return Region.from_raw_offsets(region.start.offset, region.start.offset + tokenizer.output.resolve(0).end.offset);
+        if (tags[0] != .OpBar) return region;
+        var depth: usize = 0;
+        for (tags[1..], 1..) |tag, i| {
+            if (tag == .OpenRound or tag == .NoSpaceOpenRound or tag == .OpenSquare or tag == .OpenCurly or tag == .OpenStringInterpolation) {
+                depth += 1;
+            } else if (tag == .CloseRound or tag == .CloseSquare or tag == .CloseCurly or tag == .CloseStringInterpolation) {
+                depth -|= 1;
+            } else if (tag == .OpBar and depth == 0) {
+                return Region.from_raw_offsets(region.start.offset, region.start.offset + tokenizer.output.resolve(i).end.offset);
+            }
+        }
+        return region;
+    }
+
     fn addSourceHighlightRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
-        const region_info = self.module_env.calcRegionInfo(region);
+        const region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(region));
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -294,7 +331,7 @@ pub const ReportBuilder = struct {
         const outer_region_info = self.module_env.calcRegionInfo(outer_region.*);
 
         const inner_region = self.getRegionSafe(inner_region_idx) orelse return;
-        const inner_region_info = self.module_env.calcRegionInfo(inner_region.*);
+        const inner_region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(inner_region.*));
 
         const display_region = SourceCodeDisplayRegion{
             .line_text = try self.gpa.dupe(u8, outer_region_info.calculateLineText(self.source, self.module_env.getLineStarts())),
@@ -579,8 +616,10 @@ pub const ReportBuilder = struct {
 
         const actual_formatted = self.getFormattedString(actual_snapshot);
         const expected_formatted = self.getFormattedString(expected_snapshot);
+        const actual_display = try self.type_displays.insert(self.gpa, actual_formatted);
+        const expected_display = try self.type_displays.insert(self.gpa, expected_formatted);
 
-        if (std.mem.eql(u8, actual_formatted, expected_formatted)) {
+        if (actual_display == expected_display) {
             try D.renderSlice(&.{D.bytes("The type involved is:")}, self, &report);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -1064,6 +1103,9 @@ pub const ReportBuilder = struct {
             },
             .annotation_only_value_use => |data| {
                 return self.buildAnnotationOnlyValueUseReport(data);
+            },
+            .derived_method_value_use => |data| {
+                return self.buildDerivedMethodValueUseReport(data);
             },
             .unsupported_generated_method => |data| {
                 return self.buildUnsupportedGeneratedMethodReport(data);
@@ -2595,6 +2637,19 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Whether this failed dispatch is the `iter` call of a plain `for` loop
+    /// whose operand is a `Stream`, which only `for!` can consume.
+    fn isPlainForLoopOverStream(self: *Self, data: DispatcherDoesNotImplMethod) bool {
+        const types_store = &self.module_env.types;
+        const failed_fn = types_store.resolveVar(data.fn_var).var_;
+        for (self.module_env.for_loop_dispatch_plans.items.items) |plan| {
+            if (types_store.resolveVar(@enumFromInt(plan.iter_fn_var)).var_ != failed_fn) continue;
+            const nominal = types_store.resolveVar(data.dispatcher_var).desc.content.unwrapNominalType() orelse return false;
+            return nominal.ident.ident_idx.eql(self.module_env.idents.builtin_stream);
+        }
+        return false;
+    }
+
     /// Build a report for when a type doesn't have the expected static dispatch
     /// method
     fn buildStaticDispatchDispatcherDoesNotImplMethod(
@@ -2694,6 +2749,19 @@ pub const ReportBuilder = struct {
                             D.bytes("associated with it in the type's declaration."),
                         }, self, &report);
                     }
+                } else if (self.isPlainForLoopOverStream(data)) {
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("A"),
+                        D.bytes("for").withAnnotation(.inline_code),
+                        D.bytes("loop can only go through pure iterators. To loop over a"),
+                        D.bytes("Stream").withAnnotation(.inline_code),
+                        D.bytes(", use").withNoPrecedingSpace(),
+                        D.bytes("for!").withAnnotation(.inline_code),
+                        D.bytes("instead, which pulls each item with the effectful"),
+                        D.bytes("next!").withAnnotation(.inline_code),
+                        D.bytes("and so can only be used in an effectful function."),
+                    }, self, &report);
                 } else {
                     try D.renderSlice(&.{
                         D.bytes("Hint:").withAnnotation(.emphasized),
@@ -5050,6 +5118,26 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildDerivedMethodValueUseReport(self: *Self, data: DerivedMethodValueUse) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Derived Method Used As Value", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The compiler derives"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("for this type, so it can only be called directly, not used as a value."),
+        }, self, &report, &report.headline);
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Call it here with its arguments instead."),
+        }, self, &report);
+        return report;
+    }
+
     fn buildUnsupportedGeneratedMethodReport(self: *Self, data: UnsupportedGeneratedMethod) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Unsupported Generated Method", "", .warning);
         errdefer report.deinit();
@@ -5347,14 +5435,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.match_expr)))) |match_region| {
-            const region_info = self.module_env.calcRegionInfo(match_region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceHighlightRegion(&report, match_region.*);
             try report.document.addLineBreak();
         }
 

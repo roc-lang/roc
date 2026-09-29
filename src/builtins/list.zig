@@ -763,9 +763,9 @@ pub fn listAppendRangeWithin(
     const count: usize = @intCast(@min(count_u64, @as(u64, @intCast(std.math.maxInt(usize)))));
 
     // Reserve scratch beyond the appended range so every copy below may run
-    // in bursts of whole-word stores that overshoot the range, by up to 39
-    // bytes. The scratch stays within capacity and outside the length.
-    const slop_elements: u64 = (40 + element_width - 1) / element_width;
+    // in bursts of whole-word stores that overshoot the range. The scratch
+    // stays within capacity and outside the length.
+    const slop_elements: u64 = (append_range_within_scratch_bytes + element_width - 1) / element_width;
     var output = listReserveForAppend(
         list,
         alignment,
@@ -782,6 +782,10 @@ pub fn listAppendRangeWithin(
     appendRangeWithinCore(&output, start, count, element_width, elements_refcounted, inc_context, inc);
     return output;
 }
+
+/// The bytes past an appended range that a range-within append's whole-word
+/// stores may overshoot into, which its capacity must cover beyond the range.
+pub const append_range_within_scratch_bytes: usize = 40;
 
 /// Append `count` elements copied from the list itself beginning at `start`,
 /// with every check already discharged by the caller: the list uniquely owns
@@ -804,7 +808,7 @@ pub fn listAppendRangeWithinUnsafe(
     std.debug.assert(!list.isSeamlessSlice());
     std.debug.assert(list.isUnique(roc_ops));
     std.debug.assert(list.getCapacity() * element_width >=
-        (list.len() + count) * element_width + 40);
+        (list.len() + count) * element_width + append_range_within_scratch_bytes);
 
     var output = list;
     appendRangeWithinCore(&output, start, count, element_width, elements_refcounted, inc_context, inc);

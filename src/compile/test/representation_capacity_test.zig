@@ -54,14 +54,14 @@ fn expectAppRuns(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.Low
     };
 }
 
-fn expectBodyRuns(body: []const u8) !void {
+fn expectBodyRuns(body: []const u8) harness.LowerToLirHarnessError!void {
     try harness.runLoweredInspection(body, .{ .specialization_strategy = .lss }, expectAppRuns);
     try harness.runLoweredInspection(body, .{ .specialization_strategy = .boxy }, expectAppRuns);
 }
 
 /// Tags sort by label text, so `T9998` and `T9999` hold discriminants 65,535
 /// and 65,536: the last 16-bit value and the first one past it.
-fn wideTagUnionBody(allocator: std.mem.Allocator) ![]u8 {
+fn wideTagUnionBody(allocator: std.mem.Allocator) (std.mem.Allocator.Error || std.Io.Writer.Error)![]u8 {
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
     try out.writer.writeAll("Big : [");
@@ -92,7 +92,7 @@ fn wideTagUnionBody(allocator: std.mem.Allocator) ![]u8 {
     return out.toOwnedSlice();
 }
 
-fn wideRecordBody(allocator: std.mem.Allocator) ![]u8 {
+fn wideRecordBody(allocator: std.mem.Allocator) (std.mem.Allocator.Error || std.Io.Writer.Error)![]u8 {
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
     try out.writer.writeAll("main! = |_args| {\n    var $record = { ");
@@ -109,7 +109,7 @@ fn wideRecordBody(allocator: std.mem.Allocator) ![]u8 {
     return out.toOwnedSlice();
 }
 
-fn wideTupleBody(allocator: std.mem.Allocator) ![]u8 {
+fn wideTupleBody(allocator: std.mem.Allocator) (std.mem.Allocator.Error || std.Io.Writer.Error)![]u8 {
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
     try out.writer.writeAll("main! = |_args| {\n    var $tuple = (");

@@ -415,7 +415,6 @@ pub const BoxyBuiltinFn = enum {
     adapt,
     tag,
     tag_payload,
-    eq,
     drop,
     tag_match,
     desc_copy,
@@ -468,7 +467,6 @@ pub const BoxyBuiltinFn = enum {
             .adapt => "roc_boxy_adapt",
             .tag => "roc_boxy_tag",
             .tag_payload => "roc_boxy_tag_payload",
-            .eq => "roc_boxy_eq",
             .drop => "roc_boxy_drop",
             .tag_match => "roc_boxy_tag_match",
             .desc_copy => "roc_boxy_desc_copy",
@@ -536,7 +534,6 @@ pub const BoxyBuiltinFn = enum {
             .unbox,
             .adapt,
             .tag,
-            .eq,
             .drop,
             .tag_match,
             .desc_copy,
@@ -10190,7 +10187,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
-                    .assign_boxy_eq,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -10265,7 +10261,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_dict_ref,
                     .assign_boxy_reuse_box,
                     .assign_boxy_inspect,
-                    .assign_boxy_eq,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -10334,7 +10329,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
-                    .assign_boxy_eq,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -18381,25 +18375,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
-        fn generateBoxyEq(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
-            const target_layout = self.localLayout(assign.target);
-            const lhs_off = try self.boxyLocalBytesOffset(assign.lhs);
-            const rhs_off = try self.boxyLocalBytesOffset(assign.rhs);
-            const value_layout = self.localLayout(assign.lhs);
-            const desc_slot = try self.boxyDescRefToSlot(assign.source_desc);
-
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            if (lhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            if (rhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(value_layout));
-            try builder.addMemArg(frame_ptr, desc_slot);
-            try self.callBoxyBuiltin(&builder, .eq);
-            const out_slot = self.codegen.allocStackSlot(8);
-            try self.emitStore(.w64, frame_ptr, out_slot, ret_reg_0);
-            return self.stackLocationForLayout(target_layout, out_slot);
-        }
-
         /// Allocate a short-lived general register used only during instruction selection.
         /// Semantic values are materialized to `local_locations`; exhausting this pool
         /// therefore indicates an internal lifetime bug rather than source-level pressure.
@@ -22842,12 +22817,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .assign_boxy_inspect => |assign| {
                             const value_loc = try self.generateBoxyInspect(assign);
-                            try self.bindAssignedLocal(assign.target, value_loc);
-                            try work.append(wa, .{ .node = assign.next });
-                        },
-
-                        .assign_boxy_eq => |assign| {
-                            const value_loc = try self.generateBoxyEq(assign);
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },

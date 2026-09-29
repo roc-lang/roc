@@ -2736,7 +2736,6 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -2870,7 +2869,6 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -3156,10 +3154,6 @@ pub const MonoLlvmCodeGen = struct {
             },
             .assign_boxy_inspect => |assign| {
                 try self.emitBoxyInspect(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_eq => |assign| {
-                try self.emitBoxyEq(assign);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_boxy_tag => |assign| {
@@ -3649,23 +3643,6 @@ pub const MonoLlvmCodeGen = struct {
                 try self.resolveBoxyDesc(assign.source_desc),
             },
         );
-    }
-
-    fn emitBoxyEq(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        const result = try self.callBoxy(
-            "roc_boxy_eq",
-            .i1,
-            &.{ ptr_ty, ptr_ty, .i32, ptr_ty },
-            &.{
-                try self.boxyValuePtr(assign.lhs),
-                try self.boxyValuePtr(assign.rhs),
-                try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.lhs))),
-                try self.resolveBoxyDesc(assign.source_desc),
-            },
-        );
-        try self.storeBool(self.slot(assign.target).ptr, result);
     }
 
     fn emitBoxyTag(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
