@@ -14696,8 +14696,9 @@ pushed along by the loop it describes (a cursor that advances by a constant
 each iteration bounded against a length, say) and would weaken forever, so
 it is replaced by a tombstone that later rounds skip and that keeps the
 widening from being forgotten. Accumulated slack inside a query is clamped
-far outside any genuine bound; past that magnitude the facts contradict one
-another, which the clamp preserves without letting the arithmetic overflow.
+far outside any genuine bound; past that magnitude the ordering constraints
+contradict one another, which the clamp preserves without letting the arithmetic
+overflow.
 
 A loop parameter that a back edge carries back as the very value its body
 was seeded with is unchanged around the loop, so the meet keeps the entry

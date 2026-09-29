@@ -404,7 +404,8 @@ const LenInvariant = struct {
     /// that died kills it too.
     hit_deps: u64 = 0,
     /// The progress epoch in which this invariant last failed verification;
-    /// it is seeded again only once a later epoch has strengthened the facts.
+    /// it is seeded again only after a later epoch rewrites a statement or
+    /// persists a new bound and reaches its fixpoint.
     died_epoch: u32 = 0,
 };
 
