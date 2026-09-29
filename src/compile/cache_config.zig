@@ -251,7 +251,11 @@ pub const Constants = struct {
     ///      their owner type declaration, and a type-rooted dispatch call can
     ///      dispatch on an explicit type var. Version 113 is reserved for the
     ///      separate Stream builtin change.
-    pub const CACHE_VERSION = 114;
+    /// 115: Checked type keys are computed by the shared key engine: equal
+    ///      recursive types share one key however they are unrolled, type
+    ///      variables are written as relative references, and a child is
+    ///      referred to by its key plus the variables it shares.
+    pub const CACHE_VERSION = 115;
 };
 
 /// Configuration for the Roc cache system.

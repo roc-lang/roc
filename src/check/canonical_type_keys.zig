@@ -13,6 +13,7 @@ const collections = @import("collections");
 const can = @import("can");
 const types = @import("types");
 const canonical = @import("canonical_names.zig");
+const type_key_engine = @import("type_key_engine.zig");
 
 const ModuleEnv = can.ModuleEnv;
 
@@ -48,14 +49,9 @@ pub fn fromVarInfo(
     env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!TypeKeyInfo {
-    var builder = Builder.init(allocator, store, env);
-    defer builder.deinit();
-    try builder.writeVar(var_);
-    return .{
-        .key = .{ .bytes = builder.digestKey().bytes },
-        .contains_identity_variables = builder.contains_identity_variables,
-        .composable = builder.encodingComposes(),
-    };
+    var digester = Digester.init(allocator, store, env);
+    defer digester.deinit();
+    return try digester.info(var_);
 }
 
 /// Build a checker-local shape key while preserving the identity of variables
@@ -70,22 +66,21 @@ pub fn fromVarWithAnchoredIdentities(
     var_: Var,
     anchors: *const std.AutoHashMap(Var, void),
 ) Allocator.Error!canonical.CanonicalTypeKey {
-    var builder = Builder.init(allocator, store, env);
-    defer builder.deinit();
-    builder.identity_anchors = anchors;
-    builder.write_identity_names = false;
-    try builder.writeVar(var_);
-    return .{ .bytes = builder.digestKey().bytes };
+    var digester = Digester.init(allocator, store, env);
+    defer digester.deinit();
+    digester.adapter.identity_anchors = anchors;
+    digester.adapter.write_identity_names = false;
+    return (try digester.info(var_)).key;
 }
 
 /// Public `identityVarsFromVar` function.
 ///
-/// The identity variables (flex/rigid) reachable from `var_`, in the exact
-/// first-encounter order the canonical key digest assigns them slots
-/// (`writeIdentityVariable`). The index in the returned slice IS the identity
-/// slot embedded in the key bytes, so two representations of the same type
-/// (solver vars here, checked payloads in a `CheckedTypeStore`) enumerate
-/// identities in the same order. Caller owns the returned slice.
+/// The identity variables (flex/rigid) reachable from `var_`, in depth-first
+/// first-encounter order over exactly the children a key encodes, entering
+/// each variable's constraints. A checked type in a `CheckedTypeStore`
+/// enumerates its variables in the same order
+/// (`type_key_engine.appendIdentityOrder`), so two representations of the
+/// same type pair their identities by index. Caller owns the returned slice.
 pub fn identityVarsFromVar(
     allocator: Allocator,
     store: *const TypeStore,
@@ -95,7 +90,7 @@ pub fn identityVarsFromVar(
     var builder = Inspector.init(allocator, store, env);
     defer builder.deinit();
     try builder.writeVar(var_);
-    return try allocator.dupe(types.Var, builder.identity_variables.entries.items);
+    return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
 /// Whether the canonical-key walk enumerates a variable with this descriptor
@@ -111,8 +106,8 @@ pub fn isIdentityVariable(desc: types.Descriptor) bool {
 }
 
 /// Enumerate a complete scheme under one identity numbering. The callable's
-/// slots keep their canonical order; explicit relation roots append only
-/// identities not already reachable from that callable.
+/// variables keep their `identityVarsFromVar` order; explicit relation roots
+/// append only identities not already reachable from that callable.
 pub fn identityVarsFromScheme(
     allocator: Allocator,
     store: *const TypeStore,
@@ -124,11 +119,11 @@ pub fn identityVarsFromScheme(
     defer builder.deinit();
     try builder.writeVar(root);
     for (relation_roots) |relation_root| try builder.writeVar(relation_root);
-    return try allocator.dupe(types.Var, builder.identity_variables.entries.items);
+    return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
 /// Append the identity variables reachable from `var_`, method requirements
-/// included, to `out` in the canonical slot order.
+/// included, to `out` in `identityVarsFromVar` order.
 pub fn appendIdentityVarsFromVar(
     allocator: Allocator,
     store: *const TypeStore,
@@ -139,7 +134,7 @@ pub fn appendIdentityVarsFromVar(
     var builder = Inspector.init(allocator, store, env);
     defer builder.deinit();
     try builder.writeVar(var_);
-    try out.appendSlice(allocator, builder.identity_variables.entries.items);
+    try out.appendSlice(allocator, builder.identity_variables.items);
 }
 
 /// Return the identity variables exposed by a type's ordinary structure,
@@ -154,7 +149,7 @@ pub fn identityVarsFromVarIgnoringConstraints(
     defer builder.deinit();
     builder.walk_identity_constraints = false;
     try builder.writeVar(var_);
-    return try allocator.dupe(types.Var, builder.identity_variables.entries.items);
+    return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
 /// Public `fromVarErrSensitive` function.
@@ -169,11 +164,10 @@ pub fn fromVarErrSensitive(
     env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeKey {
-    var builder = Builder.init(allocator, store, env);
-    defer builder.deinit();
-    builder.err_by_var = true;
-    try builder.writeVar(var_);
-    return .{ .bytes = builder.digestKey().bytes };
+    var digester = Digester.init(allocator, store, env);
+    defer digester.deinit();
+    digester.adapter.err_by_var = true;
+    return (try digester.info(var_)).key;
 }
 
 /// Public `fromConcreteVar` function.
@@ -183,11 +177,10 @@ pub fn fromConcreteVar(
     env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeKey {
-    var builder = Builder.init(allocator, store, env);
-    defer builder.deinit();
-    builder.require_concrete = true;
-    try builder.writeVar(var_);
-    return .{ .bytes = builder.digestKey().bytes };
+    var digester = Digester.init(allocator, store, env);
+    defer digester.deinit();
+    digester.adapter.require_concrete = true;
+    return (try digester.info(var_)).key;
 }
 
 /// Public `schemeFromVar` function.
@@ -197,67 +190,81 @@ pub fn schemeFromVar(
     env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
-    var builder = Builder.init(allocator, store, env);
-    defer builder.deinit();
-    try builder.writeTag(.canonical_type_scheme);
-    try builder.writeVar(var_);
-    return .{ .bytes = builder.digestKey().bytes };
+    var digester = Digester.init(allocator, store, env);
+    defer digester.deinit();
+    return schemeKeyForType((try digester.info(var_)).key);
+}
+
+/// A source scheme's key: its root type's key in the scheme namespace.
+fn schemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
+    var hasher = TypeDigestHasher.init();
+    hasher.update(&.{@intFromEnum(KeyTag.canonical_type_scheme)});
+    hasher.update(&key.bytes);
+    return .{ .bytes = hasher.finalResult() };
 }
 
 /// Reusable scratch for complete source-scheme digests within one module.
-/// Every request starts a new digest and new identity/cycle numbering; only
-/// allocation capacity survives. No type information is memoized here.
+/// Every request starts from a fresh digest unless the caller promised, with
+/// `retainComposedKeys`, that the store no longer changes.
 pub const SchemeWriter = struct {
-    builder: Builder,
+    digester: Digester,
     /// Count complete digest requests in tests; no storage in compiler builds.
     test_digests: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
 
     /// Bind scratch to the source store and its module-local names.
     pub fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) SchemeWriter {
-        return .{ .builder = Builder.init(allocator, store, env) };
+        return .{ .digester = Digester.init(allocator, store, env) };
     }
 
     /// Release all retained traversal storage.
     pub fn deinit(self: *SchemeWriter) void {
-        self.builder.deinit();
+        self.digester.deinit();
     }
 
-    /// Keep composed subtree keys across requests. Only valid while the
-    /// source store is no longer mutated.
+    /// Keep every class and key across requests. Only valid while the source
+    /// store is no longer mutated.
     pub fn retainComposedKeys(self: *SchemeWriter) void {
-        self.builder.retain_composed_keys = true;
+        self.digester.retain = true;
     }
 
     /// Digest a whole source scheme, including after a failed earlier request.
     pub fn fromVar(self: *SchemeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeSchemeKey {
         if (builtin.is_test) self.test_digests += 1;
-        const builder = &self.builder;
-        builder.resetDigest();
-        try builder.writeTag(.canonical_type_scheme);
-        try builder.writeVar(var_);
-        return .{ .bytes = builder.digestKey().bytes };
+        return schemeKeyForType((try self.digester.info(var_)).key);
     }
 };
 
-/// Reusable complete type digests for one source module. Only allocation
-/// capacity survives a request; no type information or identity numbering does.
+/// Reusable complete type digests for one source module. Plain requests keep
+/// their classes and keys across requests once `retainComposedKeys` promises
+/// the store no longer changes; every other request starts fresh.
 pub const TypeWriter = struct {
-    builder: Builder,
+    digester: Digester,
+    /// Error-sensitive and anchored requests: different encodings of the same
+    /// nodes, so they never share the plain digester's classes and keys.
+    mode_digester: Digester,
     inspector: Inspector,
+    /// Count scheme digest requests in tests; no storage in compiler builds.
+    test_scheme_digests: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
 
     pub fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) TypeWriter {
-        return .{ .builder = Builder.init(allocator, store, env), .inspector = Inspector.init(allocator, store, env) };
+        return .{
+            .digester = Digester.init(allocator, store, env),
+            .mode_digester = Digester.init(allocator, store, env),
+            .inspector = Inspector.init(allocator, store, env),
+        };
     }
 
     pub fn deinit(self: *TypeWriter) void {
-        self.builder.deinit();
+        self.digester.deinit();
+        self.mode_digester.deinit();
         self.inspector.deinit();
     }
 
     /// Whether requests report rows that repeat a label (see
     /// `takeDuplicateRow`) instead of treating them as an invariant violation.
     pub fn setReportDuplicateRows(self: *TypeWriter, report: bool) void {
-        self.builder.report_duplicate_rows = report;
+        self.digester.adapter.report_duplicate_rows = report;
+        self.mode_digester.adapter.report_duplicate_rows = report;
         self.inspector.report_duplicate_rows = report;
     }
 
@@ -265,49 +272,47 @@ pub const TypeWriter = struct {
     /// result reflected only each label's first occurrence, so a caller that
     /// receives a row must normalize it and ask again.
     pub fn takeDuplicateRow(self: *TypeWriter) ?Var {
-        const row = self.builder.duplicate_row orelse self.inspector.duplicate_row;
-        self.builder.duplicate_row = null;
+        const row = self.digester.adapter.duplicate_row orelse
+            self.mode_digester.adapter.duplicate_row orelse
+            self.inspector.duplicate_row;
+        self.digester.adapter.duplicate_row = null;
+        self.mode_digester.adapter.duplicate_row = null;
         self.inspector.duplicate_row = null;
         return row;
     }
 
-    /// Keep composed subtree keys across requests. Only valid while the
-    /// source store is no longer mutated.
+    /// Keep every class and key across requests. Only valid while the source
+    /// store is no longer mutated.
     pub fn retainComposedKeys(self: *TypeWriter) void {
-        self.builder.retain_composed_keys = true;
+        self.digester.retain = true;
     }
 
     pub fn fromVar(self: *TypeWriter, var_: Var) Allocator.Error!TypeKeyInfo {
-        if (self.builder.retain_composed_keys and self.builder.sharesComposedKeys()) {
-            if (self.builder.composed_keys.get(self.builder.store.resolveVar(var_).var_)) |key| {
-                return .{ .key = key, .contains_identity_variables = false, .composable = true };
-            }
-        }
-        self.builder.resetDigest();
-        try self.builder.writeVar(var_);
-        return .{
-            .key = .{ .bytes = self.builder.digestKey().bytes },
-            .contains_identity_variables = self.builder.contains_identity_variables,
-            .composable = self.builder.encodingComposes(),
-        };
+        return try self.digester.info(var_);
+    }
+
+    /// The scheme key of `var_`, sharing this writer's classes and keys.
+    pub fn schemeFromVar(self: *TypeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeSchemeKey {
+        if (builtin.is_test) self.test_scheme_digests += 1;
+        return schemeKeyForType((try self.digester.info(var_)).key);
     }
 
     /// Dispatch-state keys retain the identity of each erroneous root.
     pub fn fromVarErrSensitive(self: *TypeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeKey {
-        self.builder.err_by_var = true;
-        defer self.builder.err_by_var = false;
-        return (try self.fromVar(var_)).key;
+        self.mode_digester.adapter.err_by_var = true;
+        defer self.mode_digester.adapter.err_by_var = false;
+        return (try self.mode_digester.info(var_)).key;
     }
 
     /// Anchor identities only for this checker-local digest.
     pub fn fromVarWithAnchoredIdentities(self: *TypeWriter, var_: Var, anchors: *const std.AutoHashMap(Var, void)) Allocator.Error!canonical.CanonicalTypeKey {
-        self.builder.identity_anchors = anchors;
-        self.builder.write_identity_names = false;
+        self.mode_digester.adapter.identity_anchors = anchors;
+        self.mode_digester.adapter.write_identity_names = false;
         defer {
-            self.builder.identity_anchors = null;
-            self.builder.write_identity_names = true;
+            self.mode_digester.adapter.identity_anchors = null;
+            self.mode_digester.adapter.write_identity_names = true;
         }
-        return (try self.fromVar(var_)).key;
+        return (try self.mode_digester.info(var_)).key;
     }
 
     /// Inspect exactly the graph traversed by a canonical digest.
@@ -323,7 +328,7 @@ pub const TypeWriter = struct {
     pub fn identityVarsFromVar(self: *TypeWriter, var_: Var) Allocator.Error![]Var {
         self.inspector.resetDigest();
         try self.inspector.writeVar(var_);
-        return self.inspector.allocator.dupe(Var, self.inspector.identity_variables.entries.items);
+        return self.inspector.allocator.dupe(Var, self.inspector.identity_variables.items);
     }
 
     /// Enumerate a callable and its explicit relations under one fresh
@@ -332,7 +337,7 @@ pub const TypeWriter = struct {
         self.inspector.resetDigest();
         try self.inspector.writeVar(root);
         for (relation_roots) |relation_root| try self.inspector.writeVar(relation_root);
-        return self.inspector.allocator.dupe(Var, self.inspector.identity_variables.entries.items);
+        return self.inspector.allocator.dupe(Var, self.inspector.identity_variables.items);
     }
 
     /// Enumerate ordinary structure without following identity constraints.
@@ -355,7 +360,7 @@ pub const TypeWriter = struct {
     pub fn appendIdentityVarsFromVar(self: *TypeWriter, var_: Var, out: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
         self.inspector.resetDigest();
         try self.inspector.writeVar(var_);
-        try out.appendSlice(self.inspector.allocator, self.inspector.identity_variables.entries.items);
+        try out.appendSlice(self.inspector.allocator, self.inspector.identity_variables.items);
     }
 
     /// Like `appendIdentityVarsFromVar`, treating every var whose resolved
@@ -388,6 +393,487 @@ pub fn containsError(
     return builder.contains_error;
 }
 
+const KeyEngine = type_key_engine.Engine(SourceAdapter);
+
+/// The key tags the engine writes itself, shared by every checked-type key
+/// encoder.
+pub const key_engine_tags = type_key_engine.Tags{
+    .identity_ref = @intFromEnum(KeyTag.identity_var_ref),
+    .cycle = @intFromEnum(KeyTag.cycle),
+    .child_key = @intFromEnum(KeyTag.child_key),
+    .child_key_mapped = @intFromEnum(KeyTag.child_key_mapped),
+};
+
+/// Keys source types through the shared engine. Without `retain`, every
+/// request starts from nothing, because the store may have changed since the
+/// last one; with it, classes and keys persist across requests.
+const Digester = struct {
+    adapter: SourceAdapter,
+    engine: KeyEngine,
+    retain: bool = false,
+
+    fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Digester {
+        return .{
+            .adapter = SourceAdapter.init(allocator, store, env),
+            .engine = KeyEngine.init(allocator, key_engine_tags),
+        };
+    }
+
+    fn deinit(self: *Digester) void {
+        self.engine.deinit();
+        self.adapter.deinit();
+    }
+
+    fn info(self: *Digester, var_: Var) Allocator.Error!TypeKeyInfo {
+        if (!self.retain) self.engine.reset();
+        // A failed request can leave partial classes behind.
+        errdefer self.engine.reset();
+        const summary = try self.engine.summarize(&self.adapter, @intFromEnum(var_));
+        return .{
+            .key = .{ .bytes = summary.key },
+            .contains_identity_variables = summary.contains_identity,
+            .composable = summary.composable,
+        };
+    }
+};
+
+/// Describes source type-store nodes to the key engine, in the checked-type
+/// key encoding: each node's own bytes and its ordered children.
+const SourceAdapter = struct {
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    idents: *const Ident.Store,
+    require_concrete: bool = false,
+    /// Digest erroneous content as its resolved root var instead of one
+    /// universal token, so unrelated poisoned positions never key equal.
+    err_by_var: bool = false,
+    /// Checker-local identities that keep their store identity instead of
+    /// being alpha-renamed while comparing private requirement shapes.
+    identity_anchors: ?*const std.AutoHashMap(Var, void) = null,
+    /// Durable canonical keys preserve source-level variable names. Ephemeral
+    /// requirement-shape keys ignore them because names do not affect type
+    /// compatibility.
+    write_identity_names: bool = true,
+    /// Whether a row that repeats a label along its extension chain is
+    /// reported to the caller (the checker, which normalizes the row and
+    /// asks again) instead of violating the settled-row invariant.
+    report_duplicate_rows: bool = false,
+    /// The first row found repeating a label since the last report was taken.
+    duplicate_row: ?Var = null,
+    rank_scratch: base.TextRankCache,
+    text_ranks: []const u32 = &.{},
+    fields: std.ArrayList(RecordFieldForKey) = .empty,
+    tags: std.ArrayList(TagForKey) = .empty,
+    field_sort_scratch: std.ArrayList(RecordFieldForKey) = .empty,
+    tag_sort_scratch: std.ArrayList(TagForKey) = .empty,
+    ext_seen: collections.IndexedStack(Var),
+
+    fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) SourceAdapter {
+        return .{
+            .allocator = allocator,
+            .store = store,
+            .env = env,
+            .idents = env.getIdentStoreConst(),
+            .rank_scratch = base.TextRankCache.init(allocator),
+            .ext_seen = collections.IndexedStack(Var).init(allocator),
+        };
+    }
+
+    fn deinit(self: *SourceAdapter) void {
+        self.rank_scratch.deinit();
+        self.fields.deinit(self.allocator);
+        self.tags.deinit(self.allocator);
+        self.field_sort_scratch.deinit(self.allocator);
+        self.tag_sort_scratch.deinit(self.allocator);
+        self.ext_seen.deinit();
+    }
+
+    pub fn resolve(self: *SourceAdapter, node: u32) u32 {
+        return @intFromEnum(self.store.resolveVar(@enumFromInt(node)).var_);
+    }
+
+    fn child(self: *SourceAdapter, sink: *type_key_engine.Sink, var_: Var) Allocator.Error!void {
+        try sink.child(@intFromEnum(self.store.resolveVar(var_).var_));
+    }
+
+    fn tag(sink: *type_key_engine.Sink, comptime key_tag: KeyTag) Allocator.Error!void {
+        try sink.byte(@intFromEnum(key_tag));
+    }
+
+    fn ident(self: *SourceAdapter, sink: *type_key_engine.Sink, idx: Ident.Idx) Allocator.Error!void {
+        try sink.text(self.idents.getText(idx));
+    }
+
+    pub fn describe(self: *SourceAdapter, node: u32, sink: *type_key_engine.Sink) Allocator.Error!type_key_engine.NodeKind {
+        const var_: Var = @enumFromInt(node);
+        const resolved = self.store.resolveVar(var_);
+        if (self.err_by_var and resolved.desc.content == .err) {
+            try tag(sink, .err_var);
+            try sink.varint(node);
+            sink.contains_error = true;
+            return .leaf;
+        }
+
+        // The checker explicitly records when it closes an otherwise
+        // unresolved identity to `[]`; the surviving root is that identity.
+        if (resolved.desc.flags.empty_tag_union_is_default) {
+            return try self.describeIdentity(sink, var_, .defaulted_empty_tag_union, null, types.StaticDispatchConstraint.SafeList.Range.empty());
+        }
+
+        switch (resolved.desc.content) {
+            .flex => |flex| {
+                if (self.require_concrete) {
+                    if (self.flexLiteralDefaultKind(flex)) |kind| {
+                        try self.writeLiteralDefault(sink, kind);
+                        return .leaf;
+                    }
+                    invariantViolation("concrete canonical type key requested for unsolved flex type variable");
+                }
+                return try self.describeIdentity(sink, var_, .flex, flex.name, flex.constraints);
+            },
+            .rigid => |rigid| {
+                if (self.require_concrete) {
+                    invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
+                }
+                return try self.describeIdentity(sink, var_, .rigid, rigid.name, rigid.constraints);
+            },
+            .err => {
+                try tag(sink, .err);
+                sink.contains_error = true;
+            },
+            .field_presence => |field_presence| switch (field_presence) {
+                .required => try tag(sink, .presence_required),
+                .optional => try tag(sink, .presence_optional),
+                .defaulted => |id| {
+                    try tag(sink, .presence_defaulted);
+                    try sink.text(self.env.moduleIdentityHash(id.origin_module));
+                    try sink.varint(id.expr_node);
+                },
+            },
+            .alias => |alias| {
+                try tag(sink, .alias);
+                try self.namedSourceIdentity(sink, alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
+                try self.child(sink, self.store.getAliasBackingVar(alias));
+                const args = self.store.sliceAliasArgs(alias);
+                try sink.varint(@intCast(args.len));
+                for (args) |arg| try self.child(sink, arg);
+            },
+            .structure => |flat| try self.describeFlat(sink, var_, flat),
+        }
+        return .content;
+    }
+
+    /// A type variable: its header (kind, name, constraint count), then each
+    /// constraint's method name, callable, and origin. An anchored variable
+    /// instead keeps its store identity as a leaf.
+    fn describeIdentity(
+        self: *SourceAdapter,
+        sink: *type_key_engine.Sink,
+        var_: Var,
+        comptime key_tag: KeyTag,
+        name: ?Ident.Idx,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
+    ) Allocator.Error!type_key_engine.NodeKind {
+        if (self.identity_anchors) |anchors| {
+            if (anchors.contains(var_)) {
+                try tag(sink, .identity_var_anchor);
+                try sink.varint(@intFromEnum(var_));
+                sink.counts_identity = true;
+                return .leaf;
+            }
+        }
+        try tag(sink, key_tag);
+        if (self.write_identity_names) {
+            try sink.boolean(name != null);
+            if (name) |text| try self.ident(sink, text);
+        }
+        const items = self.store.sliceStaticDispatchConstraints(constraints);
+        try sink.varint(@intCast(items.len));
+        sink.constraint_count = @intCast(items.len);
+        for (items) |constraint| {
+            try self.ident(sink, constraint.fn_name);
+            try self.child(sink, constraint.fn_var);
+            try sink.text(@tagName(constraint.origin));
+            try sink.boolean(constraint.origin.binopNegated());
+            const maybe_num_literal = constraint.origin.numeralInfo();
+            try sink.boolean(maybe_num_literal != null);
+            if (maybe_num_literal) |num_literal| try sink.bytes(&num_literal.keyBytes());
+        }
+        return .identity;
+    }
+
+    fn describeFlat(self: *SourceAdapter, sink: *type_key_engine.Sink, var_: Var, flat: types.FlatType) Allocator.Error!void {
+        switch (flat) {
+            .empty_record => try tag(sink, .empty_record),
+            .empty_tag_union => try tag(sink, .empty_tag_union),
+            .record => |record| try self.describeRecord(sink, var_, record.fields, record.ext),
+            .tuple => |tuple| {
+                try tag(sink, .tuple);
+                const elems = self.store.sliceVars(tuple.elems);
+                try sink.varint(@intCast(elems.len));
+                for (elems) |elem| try self.child(sink, elem);
+            },
+            .nominal_type => |nominal| {
+                if (self.store.nominalDeclIsInvalid(nominal)) sink.contains_error = true;
+                try tag(sink, .nominal);
+                try self.namedSourceIdentity(sink, nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
+                try sink.boolean(nominal.isOpaque());
+                const args = self.store.sliceNominalArgs(nominal);
+                try sink.varint(@intCast(args.len));
+                for (args) |arg| try self.child(sink, arg);
+            },
+            .fn_pure, .fn_unbound => |func| {
+                try tag(sink, .fn_pure);
+                try self.describeFunc(sink, func);
+            },
+            .fn_effectful => |func| {
+                try tag(sink, .fn_effectful);
+                try self.describeFunc(sink, func);
+            },
+            .tag_union => |tag_union| try self.describeTagUnion(sink, var_, tag_union.tags, tag_union.ext),
+        }
+    }
+
+    /// A function's argument count, its arguments, then its return type.
+    fn describeFunc(self: *SourceAdapter, sink: *type_key_engine.Sink, func: types.Func) Allocator.Error!void {
+        const args = self.store.sliceVars(func.args);
+        try sink.varint(@intCast(args.len));
+        for (args) |arg| try self.child(sink, arg);
+        try self.child(sink, func.ret);
+    }
+
+    /// Follow a row's extension chain while it continues the same kind of
+    /// row, starting after `row` itself so a chain looping back ends there.
+    fn rowTail(self: *SourceAdapter, row: Var, ext: Var, comptime kind: enum { record, tag_union }) Allocator.Error!?Var {
+        self.ext_seen.clearRetainingCapacity();
+        _ = try self.ext_seen.getOrPush(row);
+        var tail: ?Var = ext;
+        while (tail) |tail_var| {
+            const resolved = self.store.resolveVar(tail_var);
+            if (try self.ext_seen.getOrPush(resolved.var_) != null) break;
+            if (std.meta.activeTag(resolved.desc.content) != .structure) break;
+            const flat = resolved.desc.content.structure;
+            switch (kind) {
+                .record => switch (flat) {
+                    .empty_record => return null,
+                    .record => |record| {
+                        try self.appendRecordFields(record.fields);
+                        tail = record.ext;
+                    },
+                    .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => break,
+                },
+                .tag_union => switch (flat) {
+                    .empty_tag_union => return null,
+                    .tag_union => |tag_union| {
+                        try self.appendTags(tag_union.tags);
+                        tail = tag_union.ext;
+                    },
+                    .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => break,
+                },
+            }
+        }
+        return tail;
+    }
+
+    fn appendRecordFields(self: *SourceAdapter, range: types.RecordField.SafeMultiList.Range) Allocator.Error!void {
+        const slice = self.store.getRecordFieldsSlice(range);
+        for (slice.items(.name), slice.items(.presence)) |name, presence| {
+            try self.fields.append(self.allocator, .{ .name = name, .presence = presence });
+        }
+    }
+
+    fn appendTags(self: *SourceAdapter, range: types.Tag.SafeMultiList.Range) Allocator.Error!void {
+        const slice = self.store.getTagsSlice(range);
+        for (slice.items(.name), slice.items(.args)) |name, args| {
+            try self.tags.append(self.allocator, .{ .name = name, .args = args });
+        }
+    }
+
+    /// Keep the first of each run of equal labels in a sorted row and return
+    /// the number kept. A settled row never repeats a label; the checker
+    /// asks to be told about a repeated one so it can normalize the row.
+    fn dropRepeatedLabels(self: *SourceAdapter, row: Var, comptime Item: type, items: []Item, comptime message: []const u8) usize {
+        var kept: usize = 1;
+        for (items[1..]) |item| {
+            if (self.idents.idxTextEql(items[kept - 1].name, item.name)) {
+                if (!self.report_duplicate_rows) invariantViolation(message);
+                if (self.duplicate_row == null) self.duplicate_row = row;
+                continue;
+            }
+            items[kept] = item;
+            kept += 1;
+        }
+        return kept;
+    }
+
+    fn recordFieldRank(self: *SourceAdapter, field: RecordFieldForKey) u32 {
+        return self.text_ranks[field.name.idx];
+    }
+
+    fn tagRank(self: *SourceAdapter, tag_for_key: TagForKey) u32 {
+        return self.text_ranks[tag_for_key.name.idx];
+    }
+
+    /// A record row normalized across its extension chain: fields sorted by
+    /// label, then the row's tail.
+    fn describeRecord(
+        self: *SourceAdapter,
+        sink: *type_key_engine.Sink,
+        row: Var,
+        head: types.RecordField.SafeMultiList.Range,
+        ext: Var,
+    ) Allocator.Error!void {
+        self.fields.clearRetainingCapacity();
+        try self.appendRecordFields(head);
+        const tail = try self.rowTail(row, ext, .record);
+        var fields = self.fields.items;
+        if (fields.len > 1) {
+            self.text_ranks = try self.idents.textRanks(&self.rank_scratch);
+            try base.TextRankCache.sortByRank(RecordFieldForKey, fields, &self.field_sort_scratch, self.allocator, self, recordFieldRank);
+            fields = fields[0..self.dropRepeatedLabels(row, RecordFieldForKey, fields, "canonical type key row normalization found duplicate record fields")];
+        }
+        if (tail == null and fields.len == 0) {
+            try tag(sink, .empty_record);
+            return;
+        }
+
+        try tag(sink, .record);
+        try sink.varint(@intCast(fields.len));
+        for (fields) |field| {
+            try self.ident(sink, field.name);
+            const type_var = switch (field.presence.decode()) {
+                .required => |var_| blk: {
+                    try sink.boolean(false);
+                    break :blk var_;
+                },
+                .unknown => |unknown| blk: {
+                    switch (self.store.resolveVar(unknown.presence).desc.content) {
+                        .field_presence => |presence| switch (presence) {
+                            .required => try sink.boolean(false),
+                            .defaulted => |id| {
+                                try tag(sink, .field_default);
+                                try sink.text(self.env.moduleIdentityHash(id.origin_module));
+                                try sink.varint(id.expr_node);
+                            },
+                            .optional => try tag(sink, .presence_optional_field),
+                        },
+                        .flex => {
+                            try tag(sink, .presence_variable);
+                            try self.child(sink, unknown.presence);
+                        },
+                        .err => {
+                            try tag(sink, .err);
+                            sink.contains_error = true;
+                        },
+                        .rigid, .alias, .structure => invariantViolation("canonical type key reached a field presence variable holding non-presence content"),
+                    }
+                    break :blk unknown.var_;
+                },
+            };
+            try self.child(sink, type_var);
+        }
+        if (tail) |tail_var| {
+            try self.child(sink, tail_var);
+        } else {
+            try tag(sink, .empty_record);
+        }
+    }
+
+    /// A tag-union row normalized across its extension chain: tags sorted by
+    /// name with their payloads, then the row's tail.
+    fn describeTagUnion(
+        self: *SourceAdapter,
+        sink: *type_key_engine.Sink,
+        row: Var,
+        head: types.Tag.SafeMultiList.Range,
+        ext: Var,
+    ) Allocator.Error!void {
+        self.tags.clearRetainingCapacity();
+        try self.appendTags(head);
+        const tail = try self.rowTail(row, ext, .tag_union);
+        var tags = self.tags.items;
+        if (tags.len > 1) {
+            self.text_ranks = try self.idents.textRanks(&self.rank_scratch);
+            try base.TextRankCache.sortByRank(TagForKey, tags, &self.tag_sort_scratch, self.allocator, self, tagRank);
+            tags = tags[0..self.dropRepeatedLabels(row, TagForKey, tags, "canonical type key row normalization found duplicate tags")];
+        }
+        if (tail == null and tags.len == 0) {
+            try tag(sink, .empty_tag_union);
+            return;
+        }
+
+        try tag(sink, .tag_union);
+        try sink.varint(@intCast(tags.len));
+        for (tags) |tag_for_key| {
+            try self.ident(sink, tag_for_key.name);
+            const args = self.store.sliceVars(tag_for_key.args);
+            try sink.varint(@intCast(args.len));
+            for (args) |arg| try self.child(sink, arg);
+        }
+        if (tail) |tail_var| {
+            try self.child(sink, tail_var);
+        } else {
+            try tag(sink, .empty_tag_union);
+        }
+    }
+
+    /// Write a named type's source identity: the declaring module's 32-byte
+    /// deep CONTENT identity plus the within-module discriminator, mirroring
+    /// `sameNominalIdentity` in unify.zig exactly. No name text participates
+    /// in the module component, so the digest never depends on coordinator
+    /// naming or build directories.
+    fn namedSourceIdentity(self: *SourceAdapter, sink: *type_key_engine.Sink, origin_module: base.ModuleIdentity.Idx, name: Ident.Idx, source_decl: ?u32) Allocator.Error!void {
+        try sink.text(self.env.moduleIdentityHash(origin_module));
+        try sink.boolean(source_decl != null);
+        if (source_decl) |decl| {
+            try sink.varint(decl);
+        } else {
+            try self.ident(sink, name);
+        }
+    }
+
+    /// INVARIANT: a still-open flex may be keyed as the canonical literal
+    /// default (Dec for numerals, Str for quotes) ONLY when every constraint on
+    /// it is a literal conversion. Any other constraint feeds the checker's
+    /// candidate probing, which may commit a non-default candidate; such a var
+    /// must already be concrete when a concrete key is requested. Both the
+    /// kind and the literal-conversion test come from the defaulting oracle
+    /// (src/types/literal_defaulting.zig), so keys cannot disagree with the
+    /// checker's defaulting about which vars default.
+    fn flexLiteralDefaultKind(self: *SourceAdapter, flex: types.Flex) ?LiteralKind {
+        const literal_idents = types.literal_defaulting.LiteralMethodIdents{
+            .from_numeral = self.env.idents.from_numeral,
+            .from_quote = self.env.idents.from_quote,
+            .from_interpolation = self.env.idents.from_interpolation,
+        };
+        const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
+        const kind = types.literal_defaulting.dominantKind(literal_idents, constraints);
+        var has_other = false;
+        for (constraints) |constraint| {
+            if (types.literal_defaulting.constraintLiteralKind(literal_idents, constraint) == null) {
+                has_other = true;
+            }
+        }
+        if (kind != null and has_other) {
+            invariantViolation("concrete canonical type key requested for an open literal with non-literal constraints (defaulting was skipped)");
+        }
+        return kind;
+    }
+
+    fn writeLiteralDefault(self: *SourceAdapter, sink: *type_key_engine.Sink, kind: LiteralKind) Allocator.Error!void {
+        try tag(sink, .nominal);
+        switch (types.literal_defaulting.defaultTargetForKind(kind)) {
+            .dec => try self.ident(sink, builtinDecTypeIdent(self.idents)),
+            .str => try self.ident(sink, builtinStrTypeIdent(self.idents)),
+        }
+        try self.ident(sink, builtinModuleIdent(self.idents));
+        try sink.boolean(false);
+        try sink.boolean(true);
+        try sink.varint(0);
+    }
+};
+
 const RecordFieldForKey = struct {
     name: Ident.Idx,
     presence: types.RecordField.Presence,
@@ -396,94 +882,6 @@ const RecordFieldForKey = struct {
 const TagForKey = struct {
     name: Ident.Idx,
     args: Var.SafeList.Range,
-};
-
-/// One suspended step of the digest walk. A frame is created only after its
-/// node's leading bytes are already in the hasher, so byte order is the
-/// recursion's: the frame then dispatches children one at a time and emits
-/// whatever trailing bytes follow them. Child runs are held as slices into the
-/// type store, which the digest never writes to, so a run stays valid across
-/// the children that suspend the frame holding it.
-const Frame = union(enum) {
-    alias: AliasFrame,
-    vars: VarsFrame,
-    func: FuncFrame,
-    record: RecordFrame,
-    tag_union: TagUnionFrame,
-    constraints: ConstraintsFrame,
-};
-
-/// An alias digests its backing structure first, then its argument count, then
-/// the arguments—the count follows the backing subtree, so it cannot be
-/// written when the frame is created.
-const AliasFrame = struct {
-    backing: Var,
-    args: []const Var,
-    idx: u32 = 0,
-    stage: enum { backing, args_count, args } = .backing,
-};
-
-/// A run of child vars whose count is already written: tuple elements and
-/// nominal arguments.
-const VarsFrame = struct {
-    vars: []const Var,
-    idx: u32 = 0,
-};
-
-const FuncFrame = struct {
-    args: []const Var,
-    ret: Var,
-    idx: u32 = 0,
-    stage: enum { args, ret, done } = .args,
-};
-
-/// A normalized record row. The row's fields are collected and sorted into
-/// `Builder.pending_fields` before the frame exists, so the frame carries the
-/// base of its own run and re-reads entries by index: a nested row appends
-/// above this run and truncates back to its own base when it finishes.
-const RecordFrame = struct {
-    fields_base: u32,
-    fields_count: u32,
-    idx: u32 = 0,
-    tail: ?Var,
-    stage: enum { field_head, presence_var, type_var, tail, done } = .field_head,
-};
-
-/// A normalized tag-union row, holding both the position within the row and
-/// the position within the current tag's payload run.
-const TagUnionFrame = struct {
-    tags_base: u32,
-    tags_count: u32,
-    tag_idx: u32 = 0,
-    args: []const Var = &.{},
-    arg_idx: u32 = 0,
-    tail: ?Var,
-    stage: enum { tag_head, tag_args, tail, done } = .tag_head,
-};
-
-/// A static-dispatch constraint list. Each constraint writes its name, then
-/// its function type as a child, then the origin bytes that follow it.
-const ConstraintsFrame = struct {
-    constraints: []const types.StaticDispatchConstraint,
-    idx: u32 = 0,
-    stage: enum { head, origin } = .head,
-};
-
-const Builder = Walk(true);
-const Inspector = Walk(false);
-
-/// Whether a content node is the one a walk was requested for. Only nested
-/// nodes are replaced by child-key references; the requested root's key is
-/// the hash of its own encoding.
-const NodePosition = enum { walk_root, child };
-
-const NodeMark = struct {
-    root: Var,
-    start: u32,
-    identity_tokens: u32,
-    cycle_tokens: u32,
-    err_tokens: u32,
-    position: NodePosition,
 };
 
 /// One-byte node and field tags of the checked-type key encoding, shared by
@@ -518,6 +916,10 @@ pub const KeyTag = enum(u8) {
     child_key,
     named,
     padding,
+    /// A reference to a child's key plus the identity variables it shares
+    /// with what the enclosing encoding already defined (see
+    /// `type_key_engine`).
+    child_key_mapped,
 };
 
 /// Append a key node's one-byte tag.
@@ -536,8 +938,9 @@ pub fn appendKeyVarint(buf: *std.ArrayList(u8), allocator: Allocator, value: u32
     try buf.append(allocator, @truncate(rest));
 }
 
-/// Refer to a composed subtree by its key. Both checked-type key encoders
-/// write exactly these bytes in place of a context-free subtree.
+/// Refer to a composable subtree by its key: exactly the bytes the key engine
+/// writes for a child whose encoding defines no identity variable and which
+/// lies on no cycle.
 pub fn writeChildKeyReference(buf: *std.ArrayList(u8), allocator: Allocator, key: canonical.CanonicalTypeKey) Allocator.Error!void {
     try appendKeyTag(buf, allocator, .child_key);
     try buf.appendSlice(allocator, &key.bytes);
@@ -560,986 +963,102 @@ pub fn composedFunctionKey(
     return .{ .bytes = TypeDigestHasher.hash(buf.items) };
 }
 
-/// One ordered type traversal, specialized for the data its caller consumes.
-/// Inspection needs only the first visit to a shared subgraph: subsequent
-/// visits cannot introduce identities absent from that first traversal. The
-/// digest must instead encode every occurrence, with the original cycle slots.
-fn Walk(comptime digest: bool) type {
-    return struct {
-        const Self = @This();
-        allocator: Allocator,
-        store: *const TypeStore,
-        env: *const ModuleEnv,
-        idents: *const Ident.Store,
-        /// The encoding of the digest in progress. A finished node whose range
-        /// is composable is replaced by its child-key reference (see
-        /// `finishNode`), so the digest hashes this buffer once at the end.
-        buf: if (digest) std.ArrayList(u8) else void,
-        /// One mark per content node whose bytes are still being written,
-        /// innermost last, in lockstep with the content entries on `active`.
-        nodes: if (digest) std.ArrayList(NodeMark) else void,
-        /// Identity-variable and cycle tokens written so far. A node whose
-        /// range contains neither is context-free: identity slots and cycle
-        /// slots are the only bytes that depend on where a subtree is walked.
-        identity_tokens: u32 = 0,
-        cycle_tokens: u32 = 0,
-        /// Erroneous-content tokens written so far. An error-sensitive key
-        /// writes each erroneous root's identity, so a range containing one
-        /// composes only in the plain encoding.
-        err_tokens: u32 = 0,
-        /// Keys of composable roots already digested. Entries depend only on
-        /// the immutable store, so they survive requests exactly when
-        /// `retain_composed_keys` promises the store no longer changes.
-        composed_keys: if (digest) collections.DenseMap(Var, canonical.CanonicalTypeKey) else void,
-        retain_composed_keys: bool = false,
-        active: collections.IndexedStack(Var),
-        visited: if (digest) void else collections.IndexedStack(Var),
-        rank_scratch: base.TextRankCache,
-        text_ranks: []const u32 = &.{},
-        identity_variables: collections.IndexedStack(Var),
-        /// Suspended steps of the walk, innermost last. The walk descends on this
-        /// heap stack rather than the native one, so digest depth is bounded only
-        /// by available memory.
-        frames: std.ArrayList(Frame),
-        /// Collected row fields, one contiguous run per record frame in flight.
-        pending_fields: std.ArrayList(RecordFieldForKey),
-        /// Collected row tags, one contiguous run per tag-union frame in flight.
-        pending_tags: std.ArrayList(TagForKey),
-        field_sort_scratch: std.ArrayList(RecordFieldForKey),
-        tag_sort_scratch: std.ArrayList(TagForKey),
-        /// Extension vars already reached by the row collection currently running.
-        /// Collection runs to completion without dispatching children, so one
-        /// buffer serves every row node.
-        ext_seen: collections.IndexedStack(Var),
-        require_concrete: bool = false,
-        contains_identity_variables: bool = false,
-        detect_errors: bool = false,
-        contains_error: bool = false,
-        /// Digest erroneous content as its resolved root var instead of one
-        /// universal token, so unrelated poisoned positions never key equal.
-        err_by_var: bool = false,
-        /// Checker-local identities that must not be alpha-renamed while comparing
-        /// private requirement shapes.
-        identity_anchors: ?*const std.AutoHashMap(Var, void) = null,
-        /// Durable canonical keys preserve source-level variable names. Ephemeral
-        /// requirement-shape keys ignore them because names do not affect type
-        /// compatibility.
-        write_identity_names: bool = true,
-        /// Structural scheme-interface walks stop at an identity so attached
-        /// requirements do not become externally visible anchors.
-        walk_identity_constraints: bool = true,
-        /// Resolved roots the walk treats as opaque leaves: it neither enters
-        /// their content nor enumerates them as identities. A hole-sharing
-        /// predeclared scheme passes its live `_` hole vars here, because a
-        /// hole is monomorphic within its recursive group and shared by the
-        /// scheme and the body, so whatever the group has solved it to so far
-        /// is not part of either side's quantified interface.
-        opaque_roots: []const Var = &.{},
-        /// Whether a row that repeats a label along its extension chain is
-        /// reported to the caller (the checker, which normalizes the row and
-        /// asks again) instead of violating the settled-row invariant.
-        report_duplicate_rows: bool = false,
-        /// The first row found repeating a label since the last reset.
-        duplicate_row: ?Var = null,
-        /// The root whose content is being written; rows report themselves by it.
-        writing_root: Var = undefined,
+/// Reachability over exactly the children a key encodes, in the same order:
+/// identity variables in first-encounter order, erroneous content, and rows
+/// that repeat a label. A shared subgraph is visited once, since a second
+/// visit cannot reach an identity the first did not.
+const Inspector = struct {
+    allocator: Allocator,
+    adapter: SourceAdapter,
+    descriptions: type_key_engine.Store = .{},
+    visited: collections.DenseMap(u32, void),
+    frames: std.ArrayList(Frame) = .empty,
+    identity_variables: std.ArrayList(Var) = .empty,
+    /// Structural scheme-interface walks stop at an identity so attached
+    /// requirements do not become externally visible anchors.
+    walk_identity_constraints: bool = true,
+    /// Resolved roots the walk treats as opaque leaves: it neither enters
+    /// their content nor enumerates them as identities. A hole-sharing
+    /// predeclared scheme passes its live `_` hole vars here, because a hole
+    /// is monomorphic within its recursive group and shared by the scheme and
+    /// the body, so whatever the group has solved it to so far is not part of
+    /// either side's quantified interface.
+    opaque_roots: []const Var = &.{},
+    detect_errors: bool = false,
+    contains_error: bool = false,
+    report_duplicate_rows: bool = false,
+    duplicate_row: ?Var = null,
 
-        fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Self {
-            return .{
-                .allocator = allocator,
-                .store = store,
-                .env = env,
-                .idents = env.getIdentStoreConst(),
-                .buf = if (digest) .empty else {},
-                .nodes = if (digest) .empty else {},
-                .composed_keys = if (digest) collections.DenseMap(Var, canonical.CanonicalTypeKey).init(allocator) else {},
-                .active = collections.IndexedStack(Var).init(allocator),
-                .visited = if (digest) {} else collections.IndexedStack(Var).init(allocator),
-                .rank_scratch = base.TextRankCache.init(allocator),
-                .identity_variables = collections.IndexedStack(Var).init(allocator),
-                .frames = .empty,
-                .pending_fields = .empty,
-                .pending_tags = .empty,
-                .field_sort_scratch = .empty,
-                .tag_sort_scratch = .empty,
-                .ext_seen = collections.IndexedStack(Var).init(allocator),
-            };
-        }
+    const Frame = struct { desc: type_key_engine.Desc, item: u32 };
 
-        fn deinit(self: *Self) void {
-            self.rank_scratch.deinit();
-            self.ext_seen.deinit();
-            self.tag_sort_scratch.deinit(self.allocator);
-            self.field_sort_scratch.deinit(self.allocator);
-            self.pending_tags.deinit(self.allocator);
-            self.pending_fields.deinit(self.allocator);
-            self.frames.deinit(self.allocator);
-            self.identity_variables.deinit();
-            self.active.deinit();
-            if (!digest) self.visited.deinit();
-            if (digest) {
-                self.buf.deinit(self.allocator);
-                self.nodes.deinit(self.allocator);
-                self.composed_keys.deinit();
+    fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Inspector {
+        return .{
+            .allocator = allocator,
+            .adapter = SourceAdapter.init(allocator, store, env),
+            .visited = collections.DenseMap(u32, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *Inspector) void {
+        self.adapter.deinit();
+        self.descriptions.deinit(self.allocator);
+        self.visited.deinit();
+        self.frames.deinit(self.allocator);
+        self.identity_variables.deinit(self.allocator);
+    }
+
+    /// Start a fresh traversal: the store may have changed since the last.
+    fn resetDigest(self: *Inspector) void {
+        self.descriptions.clearRetainingCapacity();
+        self.visited.clearRetainingCapacity();
+        self.frames.clearRetainingCapacity();
+        self.identity_variables.clearRetainingCapacity();
+        self.contains_error = false;
+        self.duplicate_row = null;
+    }
+
+    /// Visit everything reachable from `var_`, continuing the current
+    /// traversal's identity numbering.
+    fn writeVar(self: *Inspector, var_: Var) Allocator.Error!void {
+        self.adapter.report_duplicate_rows = self.report_duplicate_rows;
+        const frames_base = self.frames.items.len;
+        errdefer self.frames.items.len = frames_base;
+        try self.visit(self.adapter.resolve(@intFromEnum(var_)));
+        while (self.frames.items.len > frames_base) {
+            const frame = &self.frames.items[self.frames.items.len - 1];
+            const items = self.descriptions.itemsOf(frame.desc);
+            if (frame.item >= items.len) {
+                self.frames.items.len -= 1;
+                continue;
             }
+            const item = items[frame.item];
+            frame.item += 1;
+            if (item.isChild()) try self.visit(item.child);
         }
-
-        fn resetDigest(self: *Self) void {
-            if (digest) {
-                self.buf.clearRetainingCapacity();
-                self.nodes.clearRetainingCapacity();
-                if (!self.retain_composed_keys) self.composed_keys.clearRetainingCapacity();
-            }
-            self.identity_tokens = 0;
-            self.cycle_tokens = 0;
-            self.err_tokens = 0;
-            self.active.clearRetainingCapacity();
-            if (!digest) self.visited.clearRetainingCapacity();
-            self.identity_variables.clearRetainingCapacity();
-            self.frames.clearRetainingCapacity();
-            self.pending_fields.clearRetainingCapacity();
-            self.pending_tags.clearRetainingCapacity();
-            self.ext_seen.clearRetainingCapacity();
-            self.contains_identity_variables = false;
-            self.contains_error = false;
-            self.duplicate_row = null;
+        if (self.adapter.duplicate_row) |row| {
+            if (self.duplicate_row == null) self.duplicate_row = row;
+            self.adapter.duplicate_row = null;
         }
+    }
 
-        /// Digest the type reachable from `var_`, driving the walk to completion on
-        /// the frame stack.
-        fn writeVar(self: *Self, var_: Var) Allocator.Error!void {
-            const frames_base = self.frames.items.len;
-            const active_base = self.active.entries.items.len;
-            const visited_base = if (digest) {} else self.visited.entries.items.len;
-            const identity_base = self.identity_variables.entries.items.len;
-            const fields_base = self.pending_fields.items.len;
-            const tags_base = self.pending_tags.items.len;
-            const nodes_base = if (digest) self.nodes.items.len else {};
-            // A completed walk drains every buffer back to its entry length. An
-            // allocation failure mid-walk can leave entries behind, so unwind them
-            // here and keep the builder's buffers consistent on both exit paths.
-            errdefer {
-                self.frames.items.len = frames_base;
-                self.active.truncate(active_base);
-                if (!digest) self.visited.truncate(visited_base);
-                self.identity_variables.truncate(identity_base);
-                self.ext_seen.clearRetainingCapacity();
-                self.pending_fields.items.len = fields_base;
-                self.pending_tags.items.len = tags_base;
-                if (digest) self.nodes.items.len = nodes_base;
-            }
-
-            if (!try self.requestNode(var_, .walk_root)) {
-                while (self.frames.items.len > frames_base) {
-                    const top = &self.frames.items[self.frames.items.len - 1];
-                    // A step either suspends after requesting exactly one child
-                    // (having already written its own resume state), or finishes
-                    // without requesting anything—so popping on finish always
-                    // removes the frame the step ran for.
-                    const finished = switch (top.*) {
-                        .alias => |*frame| try self.stepAlias(frame),
-                        .vars => |*frame| try self.stepVars(frame),
-                        .func => |*frame| try self.stepFunc(frame),
-                        .record => |*frame| try self.stepRecord(frame),
-                        .tag_union => |*frame| try self.stepTagUnion(frame),
-                        .constraints => |*frame| try self.stepConstraints(frame),
-                    };
-                    if (finished) {
-                        self.frames.items.len -= 1;
-                    }
-                }
-            }
-
-            std.debug.assert(self.active.entries.items.len == active_base);
+    fn visit(self: *Inspector, node: u32) Allocator.Error!void {
+        if ((try self.visited.getOrPut(node)).found_existing) return;
+        for (self.opaque_roots) |opaque_root| {
+            if (@intFromEnum(opaque_root) == node) return;
         }
-
-        /// Digest one var's head: write every byte that precedes its children and
-        /// either finish it outright (returning true) or push the frame that will
-        /// dispatch its children (returning false).
-        fn request(self: *Self, var_: Var) Allocator.Error!bool {
-            return self.requestNode(var_, .child);
+        const desc = try type_key_engine.describe(SourceAdapter, &self.adapter, self.allocator, &self.descriptions, node, false);
+        if (self.detect_errors and desc.contains_error) self.contains_error = true;
+        switch (desc.kind) {
+            .identity => {
+                try self.identity_variables.append(self.allocator, @enumFromInt(node));
+                if (!self.walk_identity_constraints) return;
+            },
+            .content => {},
+            .leaf => return,
         }
-
-        /// Composed keys are shared only between walks that encode a subtree
-        /// identically; concrete keys encode open literals as their defaults.
-        /// Only error-free subtrees are recorded, because error-sensitive
-        /// keys encode erroneous content by its root.
-        fn sharesComposedKeys(self: *const Self) bool {
-            return digest and !self.require_concrete;
-        }
-
-        fn requestNode(self: *Self, var_: Var, position: NodePosition) Allocator.Error!bool {
-            const resolved = self.store.resolveVar(var_);
-            const root = resolved.var_;
-            if (!digest) {
-                if (try self.visited.getOrPush(root) != null) return true;
-            }
-            if (digest and position == .child and self.sharesComposedKeys()) {
-                if (self.composed_keys.get(root)) |key| {
-                    try writeChildKeyReference(&self.buf, self.allocator, key);
-                    return true;
-                }
-            }
-
-            for (self.opaque_roots) |opaque_root| {
-                if (opaque_root == root) {
-                    self.identity_tokens += 1;
-                    try self.writeTag(.opaque_root);
-                    try self.writeU32(@intFromEnum(root));
-                    return true;
-                }
-            }
-
-            if (self.err_by_var and resolved.desc.content == .err) {
-                self.err_tokens += 1;
-                try self.writeTag(.err_var);
-                try self.writeU32(@intFromEnum(root));
-                return true;
-            }
-
-            // The checker explicitly records when it closes an otherwise
-            // unresolved identity to `[]`. Encode the surviving union-find root so
-            // every reference to that identity shares one checked type digest.
-            if (resolved.desc.flags.empty_tag_union_is_default) {
-                return try self.writeIdentityVariable(
-                    root,
-                    .defaulted_empty_tag_union,
-                    null,
-                    types.StaticDispatchConstraint.SafeList.Range.empty(),
-                );
-            }
-
-            const content_tag = std.meta.activeTag(resolved.desc.content);
-            if (content_tag == .flex) {
-                const flex = resolved.desc.content.flex;
-                if (self.require_concrete) {
-                    if (self.flexLiteralDefaultKind(flex)) |kind| {
-                        try self.writeLiteralDefault(kind);
-                        return true;
-                    }
-                    invariantViolation("concrete canonical type key requested for unsolved flex type variable");
-                }
-                return try self.writeIdentityVariable(root, .flex, flex.name, flex.constraints);
-            }
-            if (content_tag == .rigid) {
-                const rigid = resolved.desc.content.rigid;
-                if (self.require_concrete) {
-                    invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
-                }
-                return try self.writeIdentityVariable(root, .rigid, rigid.name, rigid.constraints);
-            }
-
-            if (try self.active.getOrPush(root)) |slot| {
-                self.cycle_tokens += 1;
-                try self.writeTag(.cycle);
-                try self.writeU32(slot);
-                return true;
-            }
-
-            if (digest) {
-                self.nodes.append(self.allocator, .{
-                    .root = root,
-                    .start = @intCast(self.buf.items.len),
-                    .identity_tokens = self.identity_tokens,
-                    .cycle_tokens = self.cycle_tokens,
-                    .err_tokens = self.err_tokens,
-                    .position = position,
-                }) catch |err| {
-                    self.popActive();
-                    return err;
-                };
-            }
-            self.writing_root = root;
-            if (try self.writeContent(resolved.desc.content)) return false;
-            try self.finishNode();
-            return true;
-        }
-
-        /// Pop the finished content node on top of `active`. A digested node
-        /// whose range wrote no identity or cycle token has the same bytes in
-        /// every context, so its key is the hash of that range and an
-        /// enclosing node refers to it by that key.
-        fn finishNode(self: *Self) Allocator.Error!void {
-            self.popActive();
-            if (digest) try self.composeFinishedNode();
-        }
-
-        fn composeFinishedNode(self: *Self) Allocator.Error!void {
-            const mark = self.nodes.pop().?;
-            if (mark.identity_tokens != self.identity_tokens or mark.cycle_tokens != self.cycle_tokens) return;
-            const error_free = mark.err_tokens == self.err_tokens;
-            if (self.err_by_var and !error_free) return;
-            const key: canonical.CanonicalTypeKey = .{ .bytes = TypeDigestHasher.hash(self.buf.items[mark.start..]) };
-            if (error_free and self.sharesComposedKeys() and (mark.position == .child or self.retain_composed_keys)) {
-                try self.composed_keys.put(mark.root, key);
-            }
-            if (mark.position == .walk_root) return;
-            self.buf.items.len = mark.start;
-            try writeChildKeyReference(&self.buf, self.allocator, key);
-        }
-
-        /// Whether everything written since the last reset is context-free.
-        fn encodingComposes(self: *const Self) bool {
-            return self.identity_tokens == 0 and self.cycle_tokens == 0;
-        }
-
-        /// The key of the digest this builder has written.
-        fn digestKey(self: *const Self) canonical.CanonicalTypeKey {
-            return .{ .bytes = TypeDigestHasher.hash(self.buf.items) };
-        }
-
-        /// Whether `writeIdentityVariable` finished the identity outright: an
-        /// identity with constraints suspends on the constraint list instead.
-        fn writeIdentityVariable(
-            self: *Self,
-            root: Var,
-            comptime tag: KeyTag,
-            name: ?Ident.Idx,
-            constraints: types.StaticDispatchConstraint.SafeList.Range,
-        ) Allocator.Error!bool {
-            self.contains_identity_variables = true;
-            self.identity_tokens += 1;
-            if (self.identity_anchors) |anchors| {
-                if (anchors.contains(root)) {
-                    try self.writeTag(.identity_var_anchor);
-                    try self.writeU32(@intFromEnum(root));
-                    return true;
-                }
-            }
-            const slot: u32 = @intCast(self.identity_variables.entries.items.len);
-            if (digest) {
-                if (try self.identity_variables.getOrPush(root)) |existing| {
-                    try self.writeTag(.identity_var_ref);
-                    try self.writeU32(existing);
-                    return true;
-                }
-            } else {
-                // Inspection's visited index already excludes repeated IDs.
-                try self.identity_variables.entries.append(self.allocator, root);
-            }
-            try self.writeTag(tag);
-            try self.writeU32(slot);
-            if (self.write_identity_names) {
-                try self.writeOptionalIdent(name);
-            }
-
-            if (!self.walk_identity_constraints) return true;
-            const items = self.store.sliceStaticDispatchConstraints(constraints);
-            try self.writeU32(@intCast(items.len));
-            if (items.len == 0) return true;
-            try self.frames.append(self.allocator, .{ .constraints = .{ .constraints = items } });
-            return false;
-        }
-
-        fn popActive(self: *Self) void {
-            _ = self.active.pop();
-        }
-
-        /// Write `content`'s leading bytes with its root already on `active`.
-        /// Returns true when a frame was pushed to dispatch children, false when
-        /// the content had none and the caller must pop `active` itself.
-        fn writeContent(self: *Self, content: types.Content) Allocator.Error!bool {
-            switch (content) {
-                .err => {
-                    if (self.detect_errors) self.contains_error = true;
-                    self.err_tokens += 1;
-                    try self.writeTag(.err);
-                    return false;
-                },
-                .flex => |flex| {
-                    if (self.require_concrete) {
-                        if (self.flexLiteralDefaultKind(flex)) |kind| {
-                            try self.writeLiteralDefault(kind);
-                            return false;
-                        }
-                        invariantViolation("concrete canonical type key requested for unsolved flex type variable");
-                    }
-                    invariantViolation("canonical type key reached an unsolved flex without its root identity");
-                },
-                .rigid => {
-                    if (self.require_concrete) {
-                        invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
-                    }
-                    invariantViolation("canonical type key reached an unsolved rigid without its root identity");
-                },
-                .field_presence => |field_presence| {
-                    switch (field_presence) {
-                        .required => try self.writeTag(.presence_required),
-                        .optional => try self.writeTag(.presence_optional),
-                        .defaulted => |id| {
-                            try self.writeTag(.presence_defaulted);
-                            try self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
-                            try self.writeU32(id.expr_node);
-                        },
-                    }
-                    return false;
-                },
-                .alias => |alias| {
-                    try self.writeTag(.alias);
-                    try self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
-                    try self.frames.append(self.allocator, .{ .alias = .{
-                        .backing = self.store.getAliasBackingVar(alias),
-                        .args = self.store.sliceAliasArgs(alias),
-                    } });
-                    return true;
-                },
-                .structure => |flat| return try self.writeFlat(flat),
-            }
-        }
-
-        /// INVARIANT: a still-open flex may be keyed as the canonical literal
-        /// default (Dec for numerals, Str for quotes) ONLY when every constraint on
-        /// it is a literal conversion—either a literal's own `from_literal`
-        /// constraint or a `where`-clause contract naming a literal-conversion hook.
-        /// Such a var is exactly what the checker's defaulting commits to the kind's
-        /// default.
-        /// Any OTHER constraint (binop/method usage, or a `where` clause naming some
-        /// other method) feeds the checker's candidate probing, which may commit a
-        /// non-default candidate (e.g. an integer-only method commits I64); such a
-        /// var must already be concrete when a concrete key is requested, so finding
-        /// one still open here means an upstream defaulting step was skipped—
-        /// keying it as the default would be a guess, so we raise an invariant
-        /// violation instead.
-        ///
-        /// Both the kind and the "is this a literal conversion" test come from the
-        /// defaulting oracle (src/types/literal_defaulting.zig), so this key builder
-        /// cannot disagree with the checker's defaulting about which vars default—
-        /// including the mixed-kind set (both numeral and quote literal constraints,
-        /// reachable only via a flex/flex merge the checker reports as a type error,
-        /// so it never survives to key generation), where the oracle's precedence
-        /// deterministically picks `numeral`.
-        fn flexLiteralDefaultKind(self: *Self, flex: types.Flex) ?LiteralKind {
-            const literal_idents = types.literal_defaulting.LiteralMethodIdents{
-                .from_numeral = self.env.idents.from_numeral,
-                .from_quote = self.env.idents.from_quote,
-                .from_interpolation = self.env.idents.from_interpolation,
-            };
-            const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
-            const kind = types.literal_defaulting.dominantKind(literal_idents, constraints);
-            var has_other = false;
-            for (constraints) |constraint| {
-                if (types.literal_defaulting.constraintLiteralKind(literal_idents, constraint) == null) {
-                    has_other = true;
-                }
-            }
-            if (kind != null and has_other) {
-                invariantViolation("concrete canonical type key requested for an open literal with non-literal constraints (defaulting was skipped)");
-            }
-            return kind;
-        }
-
-        fn writeLiteralDefault(self: *Self, kind: LiteralKind) Allocator.Error!void {
-            try self.writeTag(.nominal);
-            switch (types.literal_defaulting.defaultTargetForKind(kind)) {
-                .dec => try self.writeIdent(builtinDecTypeIdent(self.idents)),
-                .str => try self.writeIdent(builtinStrTypeIdent(self.idents)),
-            }
-            try self.writeIdent(builtinModuleIdent(self.idents));
-            try self.writeOptionalU32(null);
-            try self.writeBool(true);
-            try self.writeU32(0);
-        }
-
-        /// Write `flat`'s leading bytes, returning true when a frame was pushed.
-        fn writeFlat(self: *Self, flat: types.FlatType) Allocator.Error!bool {
-            switch (flat) {
-                .empty_record => {
-                    try self.writeTag(.empty_record);
-                    return false;
-                },
-                .empty_tag_union => {
-                    try self.writeTag(.empty_tag_union);
-                    return false;
-                },
-                .record => |record| return try self.writeNormalizedRecordPayload(record.fields, record.ext),
-                .tuple => |tuple| {
-                    try self.writeTag(.tuple);
-                    return try self.pushVarRange(tuple.elems);
-                },
-                .nominal_type => |nominal| {
-                    if (self.detect_errors and self.store.nominalDeclIsInvalid(nominal)) {
-                        self.contains_error = true;
-                    }
-                    try self.writeTag(.nominal);
-                    try self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
-                    try self.writeBool(nominal.isOpaque());
-                    const args = self.store.sliceNominalArgs(nominal);
-                    try self.writeU32(@intCast(args.len));
-                    return try self.pushVars(args);
-                },
-                .fn_pure, .fn_unbound => |func| {
-                    try self.writeTag(.fn_pure);
-                    return try self.pushFunc(func);
-                },
-                .fn_effectful => |func| {
-                    try self.writeTag(.fn_effectful);
-                    return try self.pushFunc(func);
-                },
-                .tag_union => |tag_union| return try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
-            }
-        }
-
-        /// A function digests its argument count, then its arguments, then its
-        /// return type.
-        fn pushFunc(self: *Self, func: types.Func) Allocator.Error!bool {
-            const args = self.store.sliceVars(func.args);
-            try self.writeU32(@intCast(args.len));
-            try self.frames.append(self.allocator, .{ .func = .{ .args = args, .ret = func.ret } });
-            return true;
-        }
-
-        fn pushVarRange(self: *Self, range: Var.SafeList.Range) Allocator.Error!bool {
-            const vars = self.store.sliceVars(range);
-            try self.writeU32(@intCast(vars.len));
-            return try self.pushVars(vars);
-        }
-
-        /// An empty run has no children to dispatch, so it needs no frame at all.
-        fn pushVars(self: *Self, vars: []const Var) Allocator.Error!bool {
-            if (vars.len == 0) return false;
-            try self.frames.append(self.allocator, .{ .vars = .{ .vars = vars } });
-            return true;
-        }
-
-        fn stepAlias(self: *Self, frame: *AliasFrame) Allocator.Error!bool {
-            while (true) {
-                switch (frame.stage) {
-                    .backing => {
-                        frame.stage = .args_count;
-                        if (!try self.request(frame.backing)) return false;
-                    },
-                    .args_count => {
-                        try self.writeU32(@intCast(frame.args.len));
-                        frame.stage = .args;
-                    },
-                    .args => {
-                        if (frame.idx < frame.args.len) {
-                            const arg = frame.args[frame.idx];
-                            frame.idx += 1;
-                            if (!try self.request(arg)) return false;
-                            continue;
-                        }
-                        try self.finishNode();
-                        return true;
-                    },
-                }
-            }
-        }
-
-        fn stepVars(self: *Self, frame: *VarsFrame) Allocator.Error!bool {
-            while (true) {
-                if (frame.idx < frame.vars.len) {
-                    const child = frame.vars[frame.idx];
-                    frame.idx += 1;
-                    if (!try self.request(child)) return false;
-                    continue;
-                }
-                try self.finishNode();
-                return true;
-            }
-        }
-
-        fn stepFunc(self: *Self, frame: *FuncFrame) Allocator.Error!bool {
-            while (true) {
-                switch (frame.stage) {
-                    .args => {
-                        if (frame.idx < frame.args.len) {
-                            const arg = frame.args[frame.idx];
-                            frame.idx += 1;
-                            if (!try self.request(arg)) return false;
-                            continue;
-                        }
-                        frame.stage = .ret;
-                    },
-                    .ret => {
-                        frame.stage = .done;
-                        if (!try self.request(frame.ret)) return false;
-                    },
-                    .done => {
-                        try self.finishNode();
-                        return true;
-                    },
-                }
-            }
-        }
-
-        fn appendRecordFieldsForKey(
-            self: *Self,
-            range: types.RecordField.SafeMultiList.Range,
-        ) Allocator.Error!void {
-            const slice = self.store.getRecordFieldsSlice(range);
-            const names = slice.items(.name);
-            const presences = slice.items(.presence);
-            for (names, presences) |name, presence| {
-                try self.pending_fields.append(self.allocator, .{
-                    .name = name,
-                    .presence = presence,
-                });
-            }
-        }
-
-        /// Collect a record row's fields—the head run plus everything its
-        /// extension chain contributes—into a fresh run on `pending_fields`, and
-        /// report the extension var the row ends on, if any.
-        fn collectRecordRow(
-            self: *Self,
-            head: types.RecordField.SafeMultiList.Range,
-            ext: Var,
-        ) Allocator.Error!?Var {
-            try self.appendRecordFieldsForKey(head);
-
-            var tail: ?Var = ext;
-            self.ext_seen.clearRetainingCapacity();
-            while (tail) |tail_var| {
-                const resolved = self.store.resolveVar(tail_var);
-                const root = resolved.var_;
-                if (self.active.get(root) != null) break;
-                if (try self.ext_seen.getOrPush(root) != null) break;
-                const content = resolved.desc.content;
-                if (std.meta.activeTag(content) != .structure) break;
-                const flat = content.structure;
-                const flat_tag = std.meta.activeTag(flat);
-                if (flat_tag == .empty_record) {
-                    tail = null;
-                    break;
-                }
-                if (flat_tag == .record) {
-                    try self.appendRecordFieldsForKey(flat.record.fields);
-                    tail = flat.record.ext;
-                    continue;
-                }
-                break;
-            }
-            return tail;
-        }
-
-        /// Keep the first of each run of equal labels in a sorted row and return
-        /// the number kept. A settled row never repeats a label; the checker
-        /// asks to be told about a repeated one so it can normalize the row.
-        fn dropRepeatedLabels(self: *Self, comptime Item: type, items: []Item, comptime message: []const u8) usize {
-            var kept: usize = 1;
-            for (items[1..]) |item| {
-                if (self.idents.idxTextEql(items[kept - 1].name, item.name)) {
-                    if (!self.report_duplicate_rows) invariantViolation(message);
-                    if (self.duplicate_row == null) self.duplicate_row = self.writing_root;
-                    continue;
-                }
-                items[kept] = item;
-                kept += 1;
-            }
-            return kept;
-        }
-
-        fn writeNormalizedRecordPayload(
-            self: *Self,
-            head: types.RecordField.SafeMultiList.Range,
-            ext: Var,
-        ) Allocator.Error!bool {
-            const fields_base: u32 = @intCast(self.pending_fields.items.len);
-            const tail = try self.collectRecordRow(head, ext);
-
-            var fields = self.pending_fields.items[fields_base..];
-            if (fields.len > 1) {
-                self.text_ranks = try self.idents.textRanks(&self.rank_scratch);
-                try base.TextRankCache.sortByRank(RecordFieldForKey, fields, &self.field_sort_scratch, self.allocator, self, recordFieldForKeyRank);
-                const unique = self.dropRepeatedLabels(RecordFieldForKey, fields, "canonical type key row normalization found duplicate record fields");
-                self.pending_fields.items.len = fields_base + unique;
-                fields = fields[0..unique];
-            }
-            if (tail == null and fields.len == 0) {
-                self.pending_fields.items.len = fields_base;
-                try self.writeTag(.empty_record);
-                return false;
-            }
-
-            try self.writeTag(.record);
-            try self.writeU32(@intCast(fields.len));
-            try self.frames.append(self.allocator, .{ .record = .{
-                .fields_base = fields_base,
-                .fields_count = @intCast(fields.len),
-                .tail = tail,
-            } });
-            return true;
-        }
-
-        fn stepRecord(self: *Self, frame: *RecordFrame) Allocator.Error!bool {
-            while (true) {
-                switch (frame.stage) {
-                    .field_head => {
-                        if (frame.idx < frame.fields_count) {
-                            const index = frame.fields_base + frame.idx;
-                            const field = self.pending_fields.items[index];
-                            try self.writeIdent(field.name);
-                            const type_var = switch (field.presence.decode()) {
-                                .required => |var_| blk: {
-                                    try self.writeBool(false);
-                                    break :blk var_;
-                                },
-                                .unknown => |unknown| blk: {
-                                    switch (self.store.resolveVar(unknown.presence).desc.content) {
-                                        .field_presence => |presence| switch (presence) {
-                                            .required => try self.writeBool(false),
-                                            .defaulted => |id| {
-                                                try self.writeTag(.field_default);
-                                                try self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
-                                                try self.writeU32(id.expr_node);
-                                            },
-                                            .optional => try self.writeTag(.presence_optional_field),
-                                        },
-                                        .flex => {
-                                            try self.writeTag(.presence_variable);
-                                            frame.stage = .presence_var;
-                                            if (!try self.request(unknown.presence)) return false;
-                                        },
-                                        .err => {
-                                            if (self.detect_errors) self.contains_error = true;
-                                            self.err_tokens += 1;
-                                            try self.writeTag(.err);
-                                        },
-                                        .rigid, .alias, .structure => invariantViolation("canonical type key reached a field presence variable holding non-presence content"),
-                                    }
-                                    break :blk unknown.var_;
-                                },
-                            };
-                            // A flex presence first writes its identity above; all
-                            // other kinds proceed directly to the value type.
-                            if (frame.stage == .presence_var) continue;
-                            frame.stage = .type_var;
-                            if (!try self.request(type_var)) return false;
-                            continue;
-                        }
-                        self.pending_fields.items.len = frame.fields_base;
-                        frame.stage = .tail;
-                    },
-                    .presence_var => {
-                        const field = self.pending_fields.items[frame.fields_base + frame.idx];
-                        frame.stage = .type_var;
-                        if (!try self.request(field.presence.typeVar())) return false;
-                    },
-                    .type_var => {
-                        frame.idx += 1;
-                        frame.stage = .field_head;
-                    },
-                    .tail => {
-                        frame.stage = .done;
-                        if (frame.tail) |tail_var| {
-                            if (!try self.request(tail_var)) return false;
-                        } else {
-                            try self.writeTag(.empty_record);
-                        }
-                    },
-                    .done => {
-                        try self.finishNode();
-                        return true;
-                    },
-                }
-            }
-        }
-
-        fn appendTagsForKey(
-            self: *Self,
-            range: types.Tag.SafeMultiList.Range,
-        ) Allocator.Error!void {
-            const slice = self.store.getTagsSlice(range);
-            const names = slice.items(.name);
-            const args = slice.items(.args);
-            for (names, args) |name, arg_range| {
-                try self.pending_tags.append(self.allocator, .{
-                    .name = name,
-                    .args = arg_range,
-                });
-            }
-        }
-
-        fn writeNormalizedTagUnionPayload(
-            self: *Self,
-            head: types.Tag.SafeMultiList.Range,
-            ext: Var,
-        ) Allocator.Error!bool {
-            const tags_base: u32 = @intCast(self.pending_tags.items.len);
-            try self.appendTagsForKey(head);
-
-            var tail: ?Var = ext;
-            self.ext_seen.clearRetainingCapacity();
-            while (tail) |tail_var| {
-                const resolved = self.store.resolveVar(tail_var);
-                const root = resolved.var_;
-                if (self.active.get(root) != null) break;
-                if (try self.ext_seen.getOrPush(root) != null) break;
-                const content = resolved.desc.content;
-                if (std.meta.activeTag(content) != .structure) break;
-                const flat = content.structure;
-                const flat_tag = std.meta.activeTag(flat);
-                if (flat_tag == .empty_tag_union) {
-                    tail = null;
-                    break;
-                }
-                if (flat_tag == .tag_union) {
-                    try self.appendTagsForKey(flat.tag_union.tags);
-                    tail = flat.tag_union.ext;
-                    continue;
-                }
-                break;
-            }
-
-            var tags = self.pending_tags.items[tags_base..];
-            if (tags.len > 1) {
-                self.text_ranks = try self.idents.textRanks(&self.rank_scratch);
-                try base.TextRankCache.sortByRank(TagForKey, tags, &self.tag_sort_scratch, self.allocator, self, tagForKeyRank);
-                const unique = self.dropRepeatedLabels(TagForKey, tags, "canonical type key row normalization found duplicate tags");
-                self.pending_tags.items.len = tags_base + unique;
-                tags = tags[0..unique];
-            }
-            if (tail == null and tags.len == 0) {
-                self.pending_tags.items.len = tags_base;
-                try self.writeTag(.empty_tag_union);
-                return false;
-            }
-
-            try self.writeTag(.tag_union);
-            try self.writeU32(@intCast(tags.len));
-            try self.frames.append(self.allocator, .{ .tag_union = .{
-                .tags_base = tags_base,
-                .tags_count = @intCast(tags.len),
-                .tail = tail,
-            } });
-            return true;
-        }
-
-        fn stepTagUnion(self: *Self, frame: *TagUnionFrame) Allocator.Error!bool {
-            while (true) {
-                switch (frame.stage) {
-                    .tag_head => {
-                        if (frame.tag_idx >= frame.tags_count) {
-                            self.pending_tags.items.len = frame.tags_base;
-                            frame.stage = .tail;
-                            continue;
-                        }
-                        const index = frame.tags_base + frame.tag_idx;
-                        const tag = self.pending_tags.items[index];
-                        try self.writeIdent(tag.name);
-                        frame.args = self.store.sliceVars(tag.args);
-                        try self.writeU32(@intCast(frame.args.len));
-                        frame.arg_idx = 0;
-                        frame.stage = .tag_args;
-                    },
-                    .tag_args => {
-                        if (frame.arg_idx < frame.args.len) {
-                            const arg = frame.args[frame.arg_idx];
-                            frame.arg_idx += 1;
-                            if (!try self.request(arg)) return false;
-                            continue;
-                        }
-                        frame.tag_idx += 1;
-                        frame.stage = .tag_head;
-                    },
-                    .tail => {
-                        frame.stage = .done;
-                        if (frame.tail) |tail_var| {
-                            if (!try self.request(tail_var)) return false;
-                        } else {
-                            try self.writeTag(.empty_tag_union);
-                        }
-                    },
-                    .done => {
-                        try self.finishNode();
-                        return true;
-                    },
-                }
-            }
-        }
-
-        fn recordFieldForKeyRank(self: *Self, field: RecordFieldForKey) u32 {
-            return self.text_ranks[field.name.idx];
-        }
-
-        fn tagForKeyRank(self: *Self, tag: TagForKey) u32 {
-            return self.text_ranks[tag.name.idx];
-        }
-
-        fn stepConstraints(self: *Self, frame: *ConstraintsFrame) Allocator.Error!bool {
-            while (true) {
-                switch (frame.stage) {
-                    .head => {
-                        if (frame.idx >= frame.constraints.len) return true;
-                        const constraint = frame.constraints[frame.idx];
-                        try self.writeIdent(constraint.fn_name);
-                        frame.stage = .origin;
-                        if (!try self.request(constraint.fn_var)) return false;
-                    },
-                    .origin => {
-                        const constraint = frame.constraints[frame.idx];
-                        try self.writeBytes(@tagName(constraint.origin));
-                        try self.writeBool(constraint.origin.binopNegated());
-                        const maybe_num_literal = constraint.origin.numeralInfo();
-                        try self.writeBool(maybe_num_literal != null);
-                        if (maybe_num_literal) |num_literal| {
-                            if (digest) try self.buf.appendSlice(self.allocator, &num_literal.keyBytes());
-                        }
-                        frame.idx += 1;
-                        frame.stage = .head;
-                    },
-                }
-            }
-        }
-
-        fn writeOptionalIdent(self: *Self, maybe_ident: ?Ident.Idx) Allocator.Error!void {
-            if (!digest) return;
-            try self.writeBool(maybe_ident != null);
-            if (maybe_ident) |ident| {
-                try self.writeIdent(ident);
-            }
-        }
-
-        fn writeOptionalU32(self: *Self, maybe_value: ?u32) Allocator.Error!void {
-            if (!digest) return;
-            try self.writeBool(maybe_value != null);
-            if (maybe_value) |value| {
-                try self.writeU32(value);
-            }
-        }
-
-        /// Write a named type's source identity: the declaring module's 32-byte
-        /// deep CONTENT identity plus the within-module discriminator, mirroring
-        /// `sameNominalIdentity` in unify.zig exactly. No name text participates
-        /// in the module component, so the digest never depends on coordinator
-        /// naming or build directories.
-        fn writeNamedSourceIdentity(self: *Self, origin_module: base.ModuleIdentity.Idx, ident: Ident.Idx, source_decl: ?u32) Allocator.Error!void {
-            if (!digest) return;
-            try self.writeBytes(self.env.moduleIdentityHash(origin_module));
-            try self.writeOptionalU32(source_decl);
-            if (source_decl == null) {
-                try self.writeIdent(ident);
-            }
-        }
-
-        fn writeIdent(self: *Self, ident: Ident.Idx) Allocator.Error!void {
-            if (!digest) return;
-            try self.writeBytes(self.idents.getText(ident));
-        }
-
-        fn writeTag(self: *Self, comptime tag: KeyTag) Allocator.Error!void {
-            if (!digest) return;
-            try appendKeyTag(&self.buf, self.allocator, tag);
-        }
-
-        fn writeBytes(self: *Self, bytes: []const u8) Allocator.Error!void {
-            if (!digest) return;
-            try self.writeU32(@intCast(bytes.len));
-            try self.buf.appendSlice(self.allocator, bytes);
-        }
-
-        fn writeBool(self: *Self, value: bool) Allocator.Error!void {
-            if (!digest) return;
-            try self.buf.append(self.allocator, if (value) 1 else 0);
-        }
-
-        fn writeU32(self: *Self, value: u32) Allocator.Error!void {
-            if (!digest) return;
-            try appendKeyVarint(&self.buf, self.allocator, value);
-        }
-    };
-}
+        try self.frames.append(self.allocator, .{ .desc = desc, .item = 0 });
+    }
+};
 
 fn builtinDecTypeIdent(idents: *const Ident.Store) Ident.Idx {
     return idents.builtinDecTypeIdent();
@@ -1848,9 +1367,9 @@ test "canonical type key digests a spine deeper than any native-stack budget" {
         current = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems } } });
     }
 
-    // Digesting the same spine twice must agree: the frame machine's cycle
-    // slots and identity slots are assigned by walk order, so a walk that
-    // drifted would key the same type two different ways.
+    // Digesting the same spine twice must agree: cycle and variable
+    // references are assigned by walk order, so a walk that drifted would key
+    // the same type two different ways.
     const first = try fromVar(allocator, &store, &env, current);
     const second = try fromVar(allocator, &store, &env, current);
     try std.testing.expectEqualSlices(u8, first.bytes[0..], second.bytes[0..]);
@@ -1989,9 +1508,10 @@ test "type writer reuses maps and resets complete digests after allocation failu
     var writer = TypeWriter.init(counter.allocator(), &store, &env);
     defer writer.deinit();
     _ = try writer.fromVar(root);
+    // Every allocation a first request for `root` makes can fail.
+    const allocations = counter.allocations;
     _ = try writer.fromVar(closed);
     const allocated = counter.allocated_bytes;
-    const allocations = counter.allocations;
     for (0..128) |_| {
         try std.testing.expectEqualDeep(expected, try writer.fromVar(root));
         try std.testing.expectEqualDeep(closed_expected, try writer.fromVar(closed));
@@ -2103,7 +1623,64 @@ test "scheme identity enumeration reuses scratch and recovers from every allocat
     }
 }
 
-test "inspection preserves digest identity order across composed shared cyclic graphs" {
+/// First-encounter identity order for the test graphs below (tuples,
+/// functions, records whose tails are identities), traversed directly on the
+/// store in the key encoding's child order.
+fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const ModuleEnv, roots: []const Var) ![]Var {
+    var visited = std.AutoHashMap(Var, void).init(gpa);
+    defer visited.deinit();
+    var order = std.ArrayList(Var).empty;
+    errdefer order.deinit(gpa);
+    var stack = std.ArrayList(Var).empty;
+    defer stack.deinit(gpa);
+    var rank_cache = base.TextRankCache.init(gpa);
+    defer rank_cache.deinit();
+    const ranks = try env.getIdentStoreConst().textRanks(&rank_cache);
+    for (roots) |root| {
+        try stack.append(gpa, root);
+        while (stack.pop()) |next| {
+            const resolved = store.resolveVar(next);
+            if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+            var children = std.ArrayList(Var).empty;
+            defer children.deinit(gpa);
+            switch (resolved.desc.content) {
+                .flex, .rigid => try order.append(gpa, resolved.var_),
+                .structure => |flat| switch (flat) {
+                    .tuple => |tuple| try children.appendSlice(gpa, store.sliceVars(tuple.elems)),
+                    .fn_pure => |func| {
+                        try children.appendSlice(gpa, store.sliceVars(func.args));
+                        try children.append(gpa, func.ret);
+                    },
+                    .record => |record| {
+                        const fields = store.getRecordFieldsSlice(record.fields);
+                        var by_name: [3]struct { rank: u32, var_: Var } = undefined;
+                        for (fields.items(.name), fields.items(.presence), 0..) |name, presence, i| {
+                            by_name[i] = .{ .rank = ranks[name.idx], .var_ = presence.typeVar() };
+                        }
+                        std.mem.sort(@TypeOf(by_name[0]), by_name[0..fields.len], {}, struct {
+                            fn lessThan(_: void, a: @TypeOf(by_name[0]), b: @TypeOf(by_name[0])) bool {
+                                return a.rank < b.rank;
+                            }
+                        }.lessThan);
+                        for (by_name[0..fields.len]) |field| try children.append(gpa, field.var_);
+                        try children.append(gpa, record.ext);
+                    },
+                    .empty_record, .empty_tag_union, .nominal_type, .fn_effectful, .fn_unbound, .tag_union => unreachable,
+                },
+                .alias, .err, .field_presence => unreachable,
+            }
+            // Visit children in order: push in reverse.
+            var i = children.items.len;
+            while (i > 0) {
+                i -= 1;
+                try stack.append(gpa, children.items[i]);
+            }
+        }
+    }
+    return try order.toOwnedSlice(gpa);
+}
+
+test "inspection enumerates identities in first-encounter key order across shared cyclic graphs" {
     const gpa = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(11363);
     for (0..200) |_| {
@@ -2136,15 +1713,13 @@ test "inspection preserves digest identity order across composed shared cyclic g
         }
         var writer = TypeWriter.init(gpa, &store, &env);
         defer writer.deinit();
-        var digest = Builder.init(gpa, &store, &env);
-        defer digest.deinit();
         // Multiple roots share one identity numbering, as scheme relations do.
         const relations = vars[1..4];
-        try digest.writeVar(vars[0]);
-        for (relations) |root| try digest.writeVar(root);
+        const expected = try referenceIdentityOrder(gpa, &store, &env, vars[0..4]);
+        defer gpa.free(expected);
         const actual = try writer.identityVarsFromScheme(vars[0], relations);
         defer gpa.free(actual);
-        try std.testing.expectEqualSlices(Var, digest.identity_variables.entries.items, actual);
+        try std.testing.expectEqualSlices(Var, expected, actual);
     }
 }
 
@@ -2238,16 +1813,10 @@ test "issue 11350 inspection preserves identity slots through constraints and cy
     var writer = TypeWriter.init(gpa, &store, &env);
     defer writer.deinit();
     inline for (.{ true, false }) |walk_constraints| {
-        var digest = Builder.init(gpa, &store, &env);
-        defer digest.deinit();
-        digest.walk_identity_constraints = walk_constraints;
-        try digest.writeVar(root);
-        const expected = digest.identity_variables.entries.items;
-        const slots: []const Var = if (walk_constraints)
+        const expected: []const Var = if (walk_constraints)
             &.{ rigid, rigid_private, flex, flex_private, nominal_arg }
         else
             &.{ rigid, flex, nominal_arg };
-        try std.testing.expectEqualSlices(Var, slots, expected);
         const actual = if (walk_constraints)
             try identityVarsFromVar(gpa, &store, &env, root)
         else
@@ -2287,8 +1856,9 @@ test "composed keys are the same whether or not a retaining writer keyed the chi
     try std.testing.expectEqualDeep(fresh, try writer.fromVar(outer));
     try std.testing.expectEqualDeep(inner_key, try fromVarInfo(allocator, &store, &env, inner));
 
-    // A subtree reached through a cycle is walked in place: its slots name
-    // ancestors, so keying the child first must not change the parent.
+    // A subtree reached through a cycle is walked in place: its cycle
+    // references name ancestors, so keying the child first must not change
+    // the parent.
     const cyclic = try store.fresh();
     const cyclic_elems = try store.appendVars(&.{ cyclic, leaf });
     try store.setVarContent(cyclic, .{ .structure = .{ .tuple = .{ .elems = cyclic_elems } } });
@@ -2394,9 +1964,17 @@ const KeyEncodingReader = struct {
     fn node(self: *KeyEncodingReader) Error!void {
         switch (try self.tag()) {
             .child_key => try self.skip(32),
-            .cycle, .identity_var_ref, .identity_var_anchor, .err_var, .opaque_root => _ = try self.varint(),
+            .child_key_mapped => {
+                try self.skip(32);
+                if (try self.varint() == 0) return error.TestUnexpectedResult;
+                for (0..try self.varint()) |_| {
+                    _ = try self.varint();
+                    if (try self.varint() == 0) return error.TestUnexpectedResult;
+                }
+            },
+            .cycle, .identity_var_ref => if (try self.varint() == 0) return error.TestUnexpectedResult,
+            .identity_var_anchor, .err_var, .opaque_root => _ = try self.varint(),
             .flex, .rigid, .defaulted_empty_tag_union => {
-                _ = try self.varint();
                 if (try self.boolean()) try self.lengthPrefixed();
                 if (try self.varint() != 0) return error.TestUnexpectedResult;
             },
@@ -2455,6 +2033,7 @@ const KeyEncodingReader = struct {
                             .tag_union,
                             .canonical_type_scheme,
                             .child_key,
+                            .child_key_mapped,
                             .named,
                             .padding,
                             => return error.TestUnexpectedResult,
@@ -2517,18 +2096,395 @@ test "key encodings decode back into their tag sequence" {
         .elems = try store.appendVars(&.{ nominal, function }),
     } } });
 
-    var builder = Builder.init(allocator, &store, &env);
-    defer builder.deinit();
-    try builder.writeVar(root);
+    var digester = Digester.init(allocator, &store, &env);
+    defer digester.deinit();
+    _ = try digester.info(root);
 
-    var reader = KeyEncodingReader{ .bytes = builder.buf.items, .allocator = allocator };
+    // Every class has its own encoding; each must decode completely.
+    var reader = KeyEncodingReader{ .bytes = &.{}, .allocator = allocator };
     defer reader.tags.deinit(allocator);
-    try reader.node();
-    try std.testing.expectEqual(builder.buf.items.len, reader.pos);
-    for ([_]KeyTag{ .tuple, .nominal, .flex, .child_key, .fn_pure, .record, .identity_var_ref, .tag_union, .alias }) |expected| {
+    for (0..digester.engine.classCount()) |class| {
+        const bytes = try digester.engine.encodingOf(@intCast(class));
+        reader.bytes = bytes;
+        reader.pos = 0;
+        try reader.node();
+        try std.testing.expectEqual(bytes.len, reader.pos);
+    }
+    for ([_]KeyTag{ .tuple, .nominal, .flex, .child_key, .child_key_mapped, .fn_pure, .record, .identity_var_ref, .tag_union, .alias }) |expected| {
         const found = for (reader.tags.items) |seen| {
             if (seen == expected) break true;
         } else false;
         try std.testing.expect(found);
     }
+}
+
+fn testTagUnion(store: *TypeStore, tags: []const types.Tag) !types.Content {
+    return .{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(tags),
+        .ext = try store.freshFromContent(.{ .structure = .empty_tag_union }),
+    } } };
+}
+
+test "a recursive type has one key however many times it is unrolled" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    const nil_name = try env.insertIdent(Ident.for_text("Nil"));
+    const cons_name = try env.insertIdent(Ident.for_text("Cons"));
+    var store = try TypeStore.initCapacity(gpa, 64, 32);
+    defer store.deinit();
+    const elem = try store.freshFromContent(.{ .structure = .empty_record });
+
+    // rolled = [Nil, Cons({}, rolled)]
+    const rolled = try store.fresh();
+    try store.setVarContent(rolled, try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ elem, rolled }) },
+    }));
+    // once = [Nil, Cons({}, rolled)]: the same infinite type, unrolled once.
+    const once = try store.freshFromContent(try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ elem, rolled }) },
+    }));
+    const twice = try store.freshFromContent(try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ elem, once }) },
+    }));
+    // A two-node cycle that denotes the same type.
+    const left = try store.fresh();
+    const right = try store.fresh();
+    try store.setVarContent(left, try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ elem, right }) },
+    }));
+    try store.setVarContent(right, try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ elem, left }) },
+    }));
+    // A different recursive type: its payload order differs.
+    const other = try store.fresh();
+    try store.setVarContent(other, try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ other, elem }) },
+    }));
+
+    const expected = try fromVar(gpa, &store, &env, rolled);
+    try std.testing.expectEqualDeep(expected, try fromVar(gpa, &store, &env, once));
+    try std.testing.expectEqualDeep(expected, try fromVar(gpa, &store, &env, twice));
+    try std.testing.expectEqualDeep(expected, try fromVar(gpa, &store, &env, left));
+    try std.testing.expectEqualDeep(expected, try fromVar(gpa, &store, &env, right));
+    try std.testing.expect(!std.meta.eql(expected, try fromVar(gpa, &store, &env, other)));
+
+    // A retaining writer, which keeps classes across requests, agrees in any
+    // request order.
+    var writer = TypeWriter.init(gpa, &store, &env);
+    defer writer.deinit();
+    writer.retainComposedKeys();
+    for ([_]Var{ twice, left, once, rolled, right }) |var_| {
+        try std.testing.expectEqualDeep(expected, (try writer.fromVar(var_)).key);
+    }
+
+    // Inside another type, an unrolled layer still denotes the same type.
+    const holder_rolled = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ rolled, elem }) } } });
+    const holder_once = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ once, elem }) } } });
+    try std.testing.expectEqualDeep(try fromVar(gpa, &store, &env, holder_rolled), try fromVar(gpa, &store, &env, holder_once));
+}
+
+test "an unrolled recursive type with type variables keeps its variable sharing" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    const nil_name = try env.insertIdent(Ident.for_text("Nil"));
+    const cons_name = try env.insertIdent(Ident.for_text("Cons"));
+    var store = try TypeStore.initCapacity(gpa, 64, 32);
+    defer store.deinit();
+    const a = try store.fresh();
+    const b = try store.fresh();
+
+    // rolled = [Nil, Cons(a, rolled)]
+    const rolled = try store.fresh();
+    try store.setVarContent(rolled, try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ a, rolled }) },
+    }));
+    const same = try store.freshFromContent(try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ a, rolled }) },
+    }));
+    // The outer layer holds `b`, the inner layers `a`: a different type.
+    const mixed = try store.freshFromContent(try testTagUnion(&store, &.{
+        .{ .name = nil_name, .args = try store.appendVars(&.{}) },
+        .{ .name = cons_name, .args = try store.appendVars(&.{ b, rolled }) },
+    }));
+    try std.testing.expectEqualDeep(try fromVar(gpa, &store, &env, rolled), try fromVar(gpa, &store, &env, same));
+    try std.testing.expect(!std.meta.eql(try fromVar(gpa, &store, &env, rolled), try fromVar(gpa, &store, &env, mixed)));
+}
+
+test "keys follow variable sharing across referenced children" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(gpa, 64, 32);
+    defer store.deinit();
+    const tuple = struct {
+        fn of(s: *TypeStore, elems: []const Var) !Var {
+            return try s.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try s.appendVars(elems) } } });
+        }
+    }.of;
+    const a = try store.fresh();
+    const b = try store.fresh();
+    const c = try store.fresh();
+    const d = try store.fresh();
+
+    // ((a, b), a) and its renaming ((c, d), c) are one type; ((a, b), b) is
+    // another. The inner pair is a referenced child, so the outer `a` or `b`
+    // must be recognized as one of its variables.
+    const first = try tuple(&store, &.{ try tuple(&store, &.{ a, b }), a });
+    const renamed = try tuple(&store, &.{ try tuple(&store, &.{ c, d }), c });
+    const second = try tuple(&store, &.{ try tuple(&store, &.{ a, b }), b });
+    const fresh_outer = try tuple(&store, &.{ try tuple(&store, &.{ a, b }), c });
+    const first_key = try fromVar(gpa, &store, &env, first);
+    try std.testing.expectEqualDeep(first_key, try fromVar(gpa, &store, &env, renamed));
+    try std.testing.expect(!std.meta.eql(first_key, try fromVar(gpa, &store, &env, second)));
+    try std.testing.expect(!std.meta.eql(first_key, try fromVar(gpa, &store, &env, fresh_outer)));
+    try std.testing.expect(!std.meta.eql(try fromVar(gpa, &store, &env, second), try fromVar(gpa, &store, &env, fresh_outer)));
+
+    // (x, x) and (x, y) differ; each equals its renaming.
+    try std.testing.expectEqualDeep(try fromVar(gpa, &store, &env, try tuple(&store, &.{ a, a })), try fromVar(gpa, &store, &env, try tuple(&store, &.{ c, c })));
+    try std.testing.expect(!std.meta.eql(try fromVar(gpa, &store, &env, try tuple(&store, &.{ a, a })), try fromVar(gpa, &store, &env, try tuple(&store, &.{ a, b }))));
+
+    // Two referenced children sharing a variable, versus not sharing one.
+    const shared = try tuple(&store, &.{ try tuple(&store, &.{ a, b }), try tuple(&store, &.{ b, c }) });
+    const unshared = try tuple(&store, &.{ try tuple(&store, &.{ a, b }), try tuple(&store, &.{ c, d }) });
+    const shared_renamed = try tuple(&store, &.{ try tuple(&store, &.{ c, d }), try tuple(&store, &.{ d, a }) });
+    try std.testing.expect(!std.meta.eql(try fromVar(gpa, &store, &env, shared), try fromVar(gpa, &store, &env, unshared)));
+    try std.testing.expectEqualDeep(try fromVar(gpa, &store, &env, shared), try fromVar(gpa, &store, &env, shared_renamed));
+}
+
+/// Whether two rooted types denote the same (possibly infinite) tree up to a
+/// consistent renaming of their type variables: the definition keys encode.
+/// Pairs already assumed equal are not revisited (co-induction), and each
+/// variable pairs with exactly one other, checked in both directions.
+const EqualityOracle = struct {
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    gpa: Allocator,
+    assumed: std.AutoHashMap([2]Var, void),
+    forward: std.AutoHashMap(Var, Var),
+    backward: std.AutoHashMap(Var, Var),
+    pending: std.ArrayList([2]Var) = .empty,
+
+    fn init(gpa: Allocator, store: *const TypeStore, env: *const ModuleEnv) EqualityOracle {
+        return .{
+            .store = store,
+            .env = env,
+            .gpa = gpa,
+            .assumed = std.AutoHashMap([2]Var, void).init(gpa),
+            .forward = std.AutoHashMap(Var, Var).init(gpa),
+            .backward = std.AutoHashMap(Var, Var).init(gpa),
+        };
+    }
+
+    fn deinit(self: *EqualityOracle) void {
+        self.assumed.deinit();
+        self.forward.deinit();
+        self.backward.deinit();
+        self.pending.deinit(self.gpa);
+    }
+
+    fn equal(self: *EqualityOracle, left: Var, right: Var) !bool {
+        try self.pending.append(self.gpa, .{ left, right });
+        while (self.pending.pop()) |pair| {
+            if (!try self.step(pair[0], pair[1])) return false;
+        }
+        return true;
+    }
+
+    fn step(self: *EqualityOracle, left_var: Var, right_var: Var) !bool {
+        const left = self.store.resolveVar(left_var);
+        const right = self.store.resolveVar(right_var);
+        if ((try self.assumed.getOrPut(.{ left.var_, right.var_ })).found_existing) return true;
+        switch (left.desc.content) {
+            .flex => |left_flex| {
+                if (right.desc.content != .flex) return false;
+                const forward = try self.forward.getOrPut(left.var_);
+                const backward = try self.backward.getOrPut(right.var_);
+                if (forward.found_existing or backward.found_existing) {
+                    return forward.found_existing and backward.found_existing and
+                        forward.value_ptr.* == right.var_ and backward.value_ptr.* == left.var_;
+                }
+                forward.value_ptr.* = right.var_;
+                backward.value_ptr.* = left.var_;
+                const left_constraints = self.store.sliceStaticDispatchConstraints(left_flex.constraints);
+                const right_constraints = self.store.sliceStaticDispatchConstraints(right.desc.content.flex.constraints);
+                if (left_constraints.len != right_constraints.len) return false;
+                for (left_constraints, right_constraints) |l, r| {
+                    if (!self.env.getIdentStoreConst().idxTextEql(l.fn_name, r.fn_name)) return false;
+                    try self.pending.append(self.gpa, .{ l.fn_var, r.fn_var });
+                }
+                return true;
+            },
+            .structure => |left_flat| {
+                if (right.desc.content != .structure) return false;
+                const right_flat = right.desc.content.structure;
+                switch (left_flat) {
+                    .empty_tag_union => return right_flat == .empty_tag_union,
+                    .tuple => |left_tuple| {
+                        if (right_flat != .tuple) return false;
+                        return try self.pairAll(self.store.sliceVars(left_tuple.elems), self.store.sliceVars(right_flat.tuple.elems));
+                    },
+                    .fn_pure => |left_fn| {
+                        if (right_flat != .fn_pure) return false;
+                        try self.pending.append(self.gpa, .{ left_fn.ret, right_flat.fn_pure.ret });
+                        return try self.pairAll(self.store.sliceVars(left_fn.args), self.store.sliceVars(right_flat.fn_pure.args));
+                    },
+                    .tag_union => |left_union| {
+                        if (right_flat != .tag_union) return false;
+                        const left_tags = self.store.getTagsSlice(left_union.tags);
+                        const right_tags = self.store.getTagsSlice(right_flat.tag_union.tags);
+                        if (left_tags.len != right_tags.len) return false;
+                        for (left_tags.items(.name), left_tags.items(.args), right_tags.items(.name), right_tags.items(.args)) |ln, la, rn, ra| {
+                            if (!self.env.getIdentStoreConst().idxTextEql(ln, rn)) return false;
+                            if (!try self.pairAll(self.store.sliceVars(la), self.store.sliceVars(ra))) return false;
+                        }
+                        try self.pending.append(self.gpa, .{ left_union.ext, right_flat.tag_union.ext });
+                        return true;
+                    },
+                    .empty_record, .record, .nominal_type, .fn_effectful, .fn_unbound => unreachable,
+                }
+            },
+            .rigid, .alias, .err, .field_presence => unreachable,
+        }
+    }
+
+    fn pairAll(self: *EqualityOracle, left: []const Var, right: []const Var) !bool {
+        if (left.len != right.len) return false;
+        for (left, right) |l, r| try self.pending.append(self.gpa, .{ l, r });
+        return true;
+    }
+};
+
+test "keys are equal exactly when types are equal up to renaming, over random shared cyclic graphs" {
+    const gpa = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(11801);
+    const random = rng.random();
+    var equal_pairs: usize = 0;
+    for (0..300) |_| {
+        var env = try ModuleEnv.init(gpa, "");
+        defer env.deinit();
+        const names = [_]Ident.Idx{
+            try env.insertIdent(Ident.for_text("A")),
+            try env.insertIdent(Ident.for_text("B")),
+        };
+        const method = try env.insertIdent(Ident.for_text("step"));
+        var store = try TypeStore.initCapacity(gpa, 256, 64);
+        defer store.deinit();
+
+        // A small pool of nodes: constrained and unconstrained variables,
+        // tuples, functions, and single-tag unions, with random sharing and
+        // cycles. Half the pool is then copied with fresh variables, so equal
+        // pairs are common.
+        const pool_len = 8;
+        var pool: [pool_len * 2]Var = undefined;
+        for (&pool) |*v| v.* = try store.fresh();
+        var shapes: [pool_len]u8 = undefined;
+        var children: [pool_len][2]usize = undefined;
+        var tag_choice: [pool_len]usize = undefined;
+        for (0..pool_len) |i| {
+            shapes[i] = random.uintLessThan(u8, 5);
+            children[i] = .{ random.uintLessThan(usize, pool_len), random.uintLessThan(usize, pool_len) };
+            tag_choice[i] = random.uintLessThan(usize, names.len);
+        }
+        const empty_union = try store.freshFromContent(.{ .structure = .empty_tag_union });
+        for (0..2) |copy| {
+            const base_index = copy * pool_len;
+            for (0..pool_len) |i| {
+                const self_var = pool[base_index + i];
+                const c0 = pool[base_index + children[i][0]];
+                const c1 = pool[base_index + children[i][1]];
+                const content: types.Content = switch (shapes[i]) {
+                    0 => .{ .flex = types.Flex.init() },
+                    1 => .{ .flex = types.Flex.init().withConstraints(try store.appendStaticDispatchConstraints(&.{.{
+                        .fn_name = method,
+                        .fn_var = c0,
+                        .origin = .method_call,
+                    }})) },
+                    2 => .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ c0, c1 }) } } },
+                    3 => .{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{c0}), .ret = c1 } } },
+                    4 => .{ .structure = .{ .tag_union = .{
+                        .tags = try store.appendTags(&.{.{ .name = names[tag_choice[i]], .args = try store.appendVars(&.{ c0, c1 }) }}),
+                        .ext = empty_union,
+                    } } },
+                    else => unreachable,
+                };
+                try store.setVarContent(self_var, content);
+            }
+        }
+
+        var writer = TypeWriter.init(gpa, &store, &env);
+        defer writer.deinit();
+        writer.retainComposedKeys();
+        for (0..24) |_| {
+            const left = pool[random.uintLessThan(usize, pool.len)];
+            const right = pool[random.uintLessThan(usize, pool.len)];
+            var oracle = EqualityOracle.init(gpa, &store, &env);
+            defer oracle.deinit();
+            const same = try oracle.equal(left, right);
+            const keys_equal = std.meta.eql((try writer.fromVar(left)).key, (try writer.fromVar(right)).key);
+            // A fresh, non-retaining key must agree with the retained one.
+            try std.testing.expectEqualDeep((try writer.fromVar(left)).key, try fromVar(gpa, &store, &env, left));
+            if (same != keys_equal) {
+                std.debug.print("oracle says {} but keys say {} for {} vs {}; shapes {any} children {any}\n", .{ same, keys_equal, left, right, shapes, children });
+                return error.TestUnexpectedResult;
+            }
+            if (same) equal_pairs += 1;
+        }
+    }
+    // The generator must exercise both outcomes substantially.
+    if (equal_pairs <= 500) {
+        std.debug.print("only {} equal pairs\n", .{equal_pairs});
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "keying every link of a constrained-variable chain takes work linear in its length" {
+    const gpa = std.testing.allocator;
+    var work: [2]u64 = undefined;
+    for ([_]usize{ 400, 800 }, &work) |len, *out| {
+        var env = try ModuleEnv.init(gpa, "");
+        defer env.deinit();
+        const method = try env.insertIdent(Ident.for_text("map"));
+        var store = try TypeStore.initCapacity(gpa, 4 * len + 8, 2 * len + 8);
+        defer store.deinit();
+        // link_i has a `.map` constraint (link_i, (c_i -> c_i)) -> link_{i+1},
+        // the shape an unannotated chain of method calls generalizes to.
+        const links = try gpa.alloc(Var, len + 1);
+        defer gpa.free(links);
+        links[len] = try store.fresh();
+        var i = len;
+        while (i > 0) {
+            i -= 1;
+            links[i] = try store.fresh();
+            const c = try store.fresh();
+            const callback = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{c}), .ret = c } } });
+            const callable = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+                .args = try store.appendVars(&.{ links[i], callback }),
+                .ret = links[i + 1],
+            } } });
+            try store.setVarContent(links[i], .{ .flex = types.Flex.init().withConstraints(try store.appendStaticDispatchConstraints(&.{.{
+                .fn_name = method,
+                .fn_var = callable,
+                .origin = .method_call,
+            }})) });
+        }
+        // Key every link, as checked-module publication does.
+        var writer = TypeWriter.init(gpa, &store, &env);
+        defer writer.deinit();
+        writer.retainComposedKeys();
+        for (links) |link| _ = try writer.fromVar(link);
+        out.* = writer.digester.engine.work;
+    }
+    // Doubling the chain at most roughly doubles the work; the quadratic
+    // walk of every link's whole remaining chain quadrupled it.
+    try std.testing.expect(work[1] * 10 <= work[0] * 25);
 }
