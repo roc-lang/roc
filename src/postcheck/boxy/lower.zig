@@ -25384,6 +25384,13 @@ const ProcBodyBuilder = struct {
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const field_rep = self.repForType(pattern.ty);
         const field_local = try self.addFrameLocalForRepWithFreshDescriptor(field_rep);
+        // The read below writes the descriptor the tuple stores for this
+        // element; the sub-pattern, lowered first, must already see it.
+        const tuple_rep = self.tupleRepForBoundary(self.repForType(tuple_ty)) orelse
+            boxyLowerInvariant("tuple pattern source did not have a tuple representation");
+        if (!self.isZstLocal(field_local) and self.payloadFieldCarriesRuntimeDesc(tuple_rep, field_index)) {
+            _ = try self.mutableDescriptorLocalForValue(field_local);
+        }
         const bound = try self.lowerPatternThen(pattern_id, field_local, on_match, miss, remaps);
         return try self.lowerTupleFieldReadInto(
             field_local,
@@ -25968,7 +25975,8 @@ const ProcBodyBuilder = struct {
         {
             return try self.assignRepresentationBoundary(target, source, target_rep, source_rep, next);
         }
-        return try self.assignLocal(target, source, next);
+        // A source without a runtime descriptor has its representation's.
+        return try self.assignLocalFromRep(target, source, source_rep, next);
     }
 
     fn bindMatchBinderFromRep(
@@ -25989,7 +25997,7 @@ const ProcBodyBuilder = struct {
         {
             return try self.assignRepresentationBoundary(target, source, target_rep, source_rep, next);
         }
-        return try self.assignLocal(target, source, next);
+        return try self.assignLocalFromRep(target, source, source_rep, next);
     }
 
     fn matchBinderRepresentative(
