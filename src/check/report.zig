@@ -86,6 +86,7 @@ const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const AnnotationOnlyValueUse = problem_mod.AnnotationOnlyValueUse;
+const DerivedMethodValueUse = problem_mod.DerivedMethodValueUse;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
@@ -159,6 +160,9 @@ pub const ReportBuilder = struct {
     diff_fields: SnapshotRecordFieldSafeList,
     diff_tags: SnapshotTagSafeList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
+    /// Interned display text lets mismatch reports recognize identical renderings
+    /// without conflating them with semantic type equality.
+    type_displays: base.SerialStringInterner = .{},
     /// When the current report is a record-destructure pattern mismatch, holds
     /// the pattern and value type snapshots so `makeMismatchReport` can show the
     /// tailored `field: _` / `..` hint in place of the generic field diff.
@@ -215,6 +219,7 @@ pub const ReportBuilder = struct {
         self.diff_fields.deinit(self.gpa);
         self.diff_tags.deinit(self.gpa);
         self.typo_suggestions.deinit();
+        self.type_displays.deinit(self.gpa);
     }
 
     /// Reset report builder, only fields it owns
@@ -611,8 +616,10 @@ pub const ReportBuilder = struct {
 
         const actual_formatted = self.getFormattedString(actual_snapshot);
         const expected_formatted = self.getFormattedString(expected_snapshot);
+        const actual_display = try self.type_displays.insert(self.gpa, actual_formatted);
+        const expected_display = try self.type_displays.insert(self.gpa, expected_formatted);
 
-        if (std.mem.eql(u8, actual_formatted, expected_formatted)) {
+        if (actual_display == expected_display) {
             try D.renderSlice(&.{D.bytes("The type involved is:")}, self, &report);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -1096,6 +1103,9 @@ pub const ReportBuilder = struct {
             },
             .annotation_only_value_use => |data| {
                 return self.buildAnnotationOnlyValueUseReport(data);
+            },
+            .derived_method_value_use => |data| {
+                return self.buildDerivedMethodValueUseReport(data);
             },
             .unsupported_generated_method => |data| {
                 return self.buildUnsupportedGeneratedMethodReport(data);
@@ -5104,6 +5114,26 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Give that declaration a value body, or stop referring to it here."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildDerivedMethodValueUseReport(self: *Self, data: DerivedMethodValueUse) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Derived Method Used As Value", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The compiler derives"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("for this type, so it can only be called directly, not used as a value."),
+        }, self, &report, &report.headline);
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Call it here with its arguments instead."),
         }, self, &report);
         return report;
     }

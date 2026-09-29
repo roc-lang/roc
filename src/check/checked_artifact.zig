@@ -8268,6 +8268,7 @@ fn appendStaticDispatchTypeRoots(
         if (tag != .expr_dispatch_call and
             tag != .expr_interpolation and
             tag != .expr_type_dispatch_call and
+            tag != .expr_type_dispatch_call_dispatcher and
             tag != .expr_method_eq) continue;
 
         const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
@@ -11857,7 +11858,10 @@ const CheckedSourceNodes = struct {
                 try self.markExprSpan(module, call.args, work);
             },
             .e_type_dispatch_call => |call| {
-                try self.markStatement(call.type_dispatch_stmt, work);
+                switch (call.owner) {
+                    .statement => |stmt| try self.markStatement(stmt, work),
+                    .dispatcher => {},
+                }
                 try self.markExprSpan(module, call.args, work);
             },
             .e_tuple_access => |access| try self.markExpr(access.tuple, work),
@@ -36844,6 +36848,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .expr_method_eq,
             .expr_type_method_call,
             .expr_type_dispatch_call,
+            .expr_type_dispatch_call_dispatcher,
             .expr_hosted_lambda,
             => {
                 const expr = store.getExpr(@enumFromInt(raw_node_idx));

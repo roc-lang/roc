@@ -53,6 +53,7 @@ pub const Problem = union(enum) {
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
     annotation_only_value_use: AnnotationOnlyValueUse,
+    derived_method_value_use: DerivedMethodValueUse,
     unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
@@ -171,6 +172,14 @@ pub const AnnotationOnlyValue = struct {
 /// A lookup resolved to a declaration that names no value, so this site has
 /// nothing to evaluate.
 pub const AnnotationOnlyValueUse = struct {
+    region: base.Region,
+};
+
+/// A compiler-derived associated method was used as a value instead of being
+/// called. A derived method is a dispatch on its owner type, and only a call
+/// dispatches.
+pub const DerivedMethodValueUse = struct {
+    method_name: Ident.Idx,
     region: base.Region,
 };
 
