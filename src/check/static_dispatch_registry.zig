@@ -56,6 +56,13 @@ fn typeDispatchOwnerVar(module: TypedCIR.Module, stmt_idx: CIR.Statement.Idx) Va
     @panic("type dispatch owner statement was not a type-var alias or type alias");
 }
 
+fn typeDispatchCallDispatcherVar(module: TypedCIR.Module, owner: CIR.TypeDispatchOwner) Var {
+    return switch (owner) {
+        .statement => |stmt_idx| typeDispatchOwnerVar(module, stmt_idx),
+        .dispatcher => |dispatcher| dispatcher,
+    };
+}
+
 /// Public `ProcedureTemplateLookup` declaration.
 pub const ProcedureTemplateLookup = struct {
     module_idx: u32,
@@ -1987,6 +1994,7 @@ pub const StaticDispatchPlanTable = struct {
             if (tag != .expr_dispatch_call and
                 tag != .expr_interpolation and
                 tag != .expr_type_dispatch_call and
+                tag != .expr_type_dispatch_call_dispatcher and
                 tag != .expr_method_eq) continue;
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
@@ -2059,13 +2067,13 @@ pub const StaticDispatchPlanTable = struct {
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
-                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt)),
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchCallDispatcherVar(module, dispatch_call.owner)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                     try plan_sources.append(allocator, .{
-                        .dispatcher_var = typeDispatchOwnerVar(module, dispatch_call.type_dispatch_stmt),
+                        .dispatcher_var = typeDispatchCallDispatcherVar(module, dispatch_call.owner),
                         .constraint_fn_var = dispatch_call.constraint_fn_var,
                     });
                 },
@@ -2634,7 +2642,7 @@ const StaticDispatchConstraintIndex = struct {
                 module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var
             else if (node_tag == .expr_interpolation)
                 module.expr(expr_idx).data.e_interpolation.constraint_fn_var
-            else if (node_tag == .expr_type_dispatch_call)
+            else if (node_tag == .expr_type_dispatch_call or node_tag == .expr_type_dispatch_call_dispatcher)
                 module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var
             else if (node_tag == .expr_method_eq)
                 module.expr(expr_idx).data.e_method_eq.constraint_fn_var
