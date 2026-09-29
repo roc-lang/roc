@@ -11,7 +11,7 @@
 //! targets such as wasm32, x86_64 macOS (see `uses_software_rounds`), and
 //! self-hosted-backend x86_64 builds for a CPU without the extension. All
 //! three produce identical state transitions; the tests in
-//! `TypeDigestHasher.zig` compare them against `std.crypto.hash.sha2.Sha256`.
+//! `Sha256.zig` compare them against `std.crypto.hash.sha2.Sha256`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -129,7 +129,7 @@ pub const uses_software_rounds = arch_class == .x86_64 and builtin.os.tag == .ma
 /// above Ice Lake / Zen) takes `hasHardwareSupport` instead and pays no
 /// dispatch.
 ///
-/// Only LLVM assembles `roundX86Sha` for a CPU without the extension: its
+/// Only LLVM assembles `compressX86Sha` for a CPU without the extension: its
 /// assembler accepts any x86 instruction, whereas Zig's self-hosted x86_64
 /// backend (the Debug backend) encodes only instructions in the target CPU's
 /// feature set and rejects the SHA and SSSE3 ones otherwise. So a self-hosted
@@ -155,7 +155,7 @@ fn compressDetecting(state: *State, blocks: []const Block) void {
 }
 
 /// Whether the CPU running this process reports the x86 SHA extension, along
-/// with the SSSE3 that `roundX86Sha` also uses for `palignr`. Only meaningful
+/// with the SSSE3 that `compressX86Sha` also uses for `palignr`. Only meaningful
 /// on x86_64.
 pub fn x86HasShaExtension() bool {
     if (comptime arch_class != .x86_64) return false;
@@ -208,7 +208,7 @@ const K = [64]u32{
 pub fn compressHardware(state: *State, blocks: []const Block) void {
     switch (arch_class) {
         .aarch64 => for (blocks) |*block| roundAarch64Sha2(state, block),
-        .x86_64 => for (blocks) |*block| roundX86Sha(state, block),
+        .x86_64 => compressX86Sha(state, blocks),
         .other => @compileError("SHA-256 hardware compression is only implemented for aarch64 and x86_64"),
     }
 }
@@ -263,57 +263,72 @@ fn roundAarch64Sha2(state: *State, block: *const Block) void {
     state[4..8].* = y +% @as(V4u32, state[4..8].*);
 }
 
-fn roundX86Sha(state: *State, block: *const Block) void {
+/// The x86 SHA rounds over consecutive blocks. The state stays in the two
+/// vectors `sha256rnds2` works on from the first block to the last, and each
+/// block's message words load with one byte swap per four words, so the only
+/// per-block work outside the SHA instructions is the schedule and the
+/// feed-forward addition.
+fn compressX86Sha(state: *State, blocks: []const Block) void {
     const V4u32 = @Vector(4, u32);
-    var s: [64]u32 align(16) = undefined;
-    loadSchedule(block, &s);
     var x: V4u32 = [_]u32{ state[5], state[4], state[1], state[0] };
     var y: V4u32 = [_]u32{ state[7], state[6], state[3], state[2] };
-    const s_v = @as(*[16]V4u32, @ptrCast(&s));
 
-    comptime var k: u8 = 0;
-    inline while (k < 16) : (k += 1) {
-        if (k < 12) {
-            var tmp = s_v[k];
-            s_v[k + 4] = asm (
-                \\ sha256msg1 %[w4_7], %[tmp]
-                \\ movdqa %[w12_15], %[result]
-                \\ palignr $0x4, %[w8_11], %[result]
-                \\ paddd %[tmp], %[result]
-                \\ sha256msg2 %[w12_15], %[result]
-                : [tmp] "=&x" (tmp),
-                  [result] "=&x" (-> V4u32),
-                : [_] "0" (tmp),
-                  [w4_7] "x" (s_v[k + 1]),
-                  [w8_11] "x" (s_v[k + 2]),
-                  [w12_15] "x" (s_v[k + 3]),
+    for (blocks) |*block| {
+        const x_in = x;
+        const y_in = y;
+        var s_v: [16]V4u32 = undefined;
+        inline for (0..4) |i| {
+            const words: *align(1) const V4u32 = @ptrCast(block[16 * i ..][0..16]);
+            s_v[i] = @byteSwap(words.*);
+        }
+
+        comptime var k: u8 = 0;
+        inline while (k < 16) : (k += 1) {
+            if (k < 12) {
+                var tmp = s_v[k];
+                s_v[k + 4] = asm (
+                    \\ sha256msg1 %[w4_7], %[tmp]
+                    \\ movdqa %[w12_15], %[result]
+                    \\ palignr $0x4, %[w8_11], %[result]
+                    \\ paddd %[tmp], %[result]
+                    \\ sha256msg2 %[w12_15], %[result]
+                    : [tmp] "=&x" (tmp),
+                      [result] "=&x" (-> V4u32),
+                    : [_] "0" (tmp),
+                      [w4_7] "x" (s_v[k + 1]),
+                      [w8_11] "x" (s_v[k + 2]),
+                      [w12_15] "x" (s_v[k + 3]),
+                );
+            }
+
+            const w: V4u32 = s_v[k] +% @as(V4u32, K[4 * k ..][0..4].*);
+            y = asm ("sha256rnds2 %[x], %[y]"
+                : [y] "=x" (-> V4u32),
+                : [_] "0" (y),
+                  [x] "x" (x),
+                  [_] "{xmm0}" (w),
+            );
+
+            x = asm ("sha256rnds2 %[y], %[x]"
+                : [x] "=x" (-> V4u32),
+                : [_] "0" (x),
+                  [y] "x" (y),
+                  [_] "{xmm0}" (@as(V4u32, @bitCast(@as(u128, @bitCast(w)) >> 64))),
             );
         }
 
-        const w: V4u32 = s_v[k] +% @as(V4u32, K[4 * k ..][0..4].*);
-        y = asm ("sha256rnds2 %[x], %[y]"
-            : [y] "=x" (-> V4u32),
-            : [_] "0" (y),
-              [x] "x" (x),
-              [_] "{xmm0}" (w),
-        );
-
-        x = asm ("sha256rnds2 %[y], %[x]"
-            : [x] "=x" (-> V4u32),
-            : [_] "0" (x),
-              [y] "x" (y),
-              [_] "{xmm0}" (@as(V4u32, @bitCast(@as(u128, @bitCast(w)) >> 64))),
-        );
+        x +%= x_in;
+        y +%= y_in;
     }
 
-    state[0] +%= x[3];
-    state[1] +%= x[2];
-    state[4] +%= x[1];
-    state[5] +%= x[0];
-    state[2] +%= y[3];
-    state[3] +%= y[2];
-    state[6] +%= y[1];
-    state[7] +%= y[0];
+    state[0] = x[3];
+    state[1] = x[2];
+    state[4] = x[1];
+    state[5] = x[0];
+    state[2] = y[3];
+    state[3] = y[2];
+    state[6] = y[1];
+    state[7] = y[0];
 }
 
 const RoundParam = struct { a: usize, b: usize, c: usize, d: usize, e: usize, f: usize, g: usize, h: usize, i: usize };
