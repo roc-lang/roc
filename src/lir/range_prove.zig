@@ -471,7 +471,7 @@ const EnvMeet = struct {
 };
 
 /// Bound on locals carried through one merge's environment meet.
-const merge_env_cap: usize = 64;
+const merge_env_cap: usize = 128;
 /// Struct fields considered when a struct local's fields meet.
 const max_struct_meet_fields: u16 = 16;
 
@@ -528,7 +528,7 @@ const LoopFacts = struct {
 };
 
 /// Bound on persisted per-merge env locals.
-const merge_env_persist_cap: usize = 64;
+const merge_env_persist_cap: usize = 128;
 
 /// One local's stable upper bounds carried across rounds for a merge head.
 const StoredEnvBound = struct {
@@ -1999,6 +1999,9 @@ const Pass = struct {
                 var field_idx: u16 = 0;
                 while (field_idx < max_struct_meet_fields) : (field_idx += 1) {
                     const field_node = self.field_values.get((@as(u64, node.root) << 16) | field_idx) orelse continue;
+                    // A field with nothing known about it would only take
+                    // an environment slot from a value with bounds.
+                    if (!self.captureWorthy(field_node)) continue;
                     if (state.env.items.len >= merge_env_cap) break;
                     const fnode = self.nodes.items[field_node];
                     const lower = try self.valueLowerBoundsNode(field_node);
