@@ -20410,13 +20410,29 @@ const EvidencePass = struct {
         return switch (evidence.resolution) {
             .direct => |id| switch (self.evidence_nodes.items[@intFromEnum(id)].target.kind) {
                 .procedure => switch (self.procedureEvidenceSchema(self.evidence_nodes.items[@intFromEnum(id)].target)) {
-                    .none, .from_callable => false,
+                    .none => false,
+                    .from_callable => self.procedureHasCodecEvidenceParam(self.evidence_nodes.items[@intFromEnum(id)].target),
                     .from_target, .requires_record => true,
                 },
                 .local_proc, .structural => true,
             },
             .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => true,
         };
+    }
+
+    /// A callable-derived codec requirement resolves to a structural parser or
+    /// encoder only through a checked generated-codec derivation, which a
+    /// per-use callable cannot derive after checking.
+    fn procedureHasCodecEvidenceParam(self: *EvidencePass, target: static_dispatch.MethodTarget) bool {
+        const target_view = self.procedureEvidenceView(target);
+        for (target_view.table.evidenceParams(&target_view.template)) |param| {
+            const structural = param.structural orelse continue;
+            switch (structural) {
+                .parser, .encoder => return true,
+                .equality, .hash, .map, .map_effectful => {},
+            }
+        }
+        return false;
     }
 
     /// Intern only sparse side vectors. Children have already been interned,
