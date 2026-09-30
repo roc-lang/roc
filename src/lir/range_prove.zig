@@ -89,7 +89,7 @@ pub const ResourceError = Allocator.Error;
 /// round, so the backstop must cover a chain of a couple of dozen joins.
 const max_rounds: u32 = 48;
 /// Bound on collected facts along one path.
-const max_facts: usize = 512;
+const max_facts: usize = 1024;
 /// Bound on symbolic value nodes per proc round.
 const max_nodes: usize = 1 << 14;
 /// Bound on nodes touched by one inequality query.
@@ -274,6 +274,14 @@ const FactOrigin = union(enum) {
 };
 
 /// One ordering fact between root nodes: `value(a) <= value(b) + c`.
+/// A fact without its origin, for recognizing one seeded twice.
+const FactKey = struct {
+    a: NodeId,
+    b: NodeId,
+    c: i128,
+    assumed: u64,
+};
+
 const Fact = struct {
     a: NodeId,
     b: NodeId,
@@ -662,6 +670,8 @@ const Pass = struct {
     max_join_id: u32,
     scratch: std.ArrayList(CFStmtId),
     query_best: collections.DenseMap(NodeId, i128),
+    /// Scratch for `dedupeFacts`.
+    fact_seen: std.AutoHashMap(FactKey, void),
     /// Assumption bits of the facts the current fact-graph query relaxed
     /// through; reset by each top-level query.
     query_used: u64 = 0,
@@ -728,6 +738,7 @@ const Pass = struct {
             .max_join_id = 0,
             .scratch = .empty,
             .query_best = collections.DenseMap(NodeId, i128).init(allocator),
+            .fact_seen = std.AutoHashMap(FactKey, void).init(allocator),
             .rewrites = 0,
             .proof_records = .empty,
             .proof_facts = .empty,
@@ -781,6 +792,7 @@ const Pass = struct {
         self.join_parent.deinit();
         self.scratch.deinit(self.allocator);
         self.query_best.deinit();
+        self.fact_seen.deinit();
         self.proof_records.deinit(self.allocator);
         self.proof_facts.deinit(self.allocator);
         if (self.read_counts) |*counts| counts.deinit();
@@ -939,6 +951,22 @@ const Pass = struct {
 
     fn clampSlack(x: i128) i128 {
         return @max(-slack_limit, @min(slack_limit, x));
+    }
+
+    /// Drop repeats among the facts a region starts with. The same fact
+    /// arrives from several seeds (global facts, the raw meet, the stable
+    /// meet, persisted loop facts), and repeats would only spend the fact
+    /// cap and slow every query.
+    fn dedupeFacts(self: *Pass) ResourceError!void {
+        self.fact_seen.clearRetainingCapacity();
+        var keep: usize = 0;
+        for (self.facts.items) |fact| {
+            const gop = try self.fact_seen.getOrPut(.{ .a = fact.a, .b = fact.b, .c = fact.c, .assumed = fact.assumed });
+            if (gop.found_existing) continue;
+            self.facts.items[keep] = fact;
+            keep += 1;
+        }
+        self.facts.shrinkRetainingCapacity(keep);
     }
 
     fn addFact(self: *Pass, fact: Fact) ResourceError!void {
@@ -3558,6 +3586,7 @@ const Pass = struct {
             self.frames.clearRetainingCapacity();
             try self.facts.appendSlice(self.allocator, self.global_facts.items);
             try self.seedFromMerge(head);
+            try self.dedupeFacts();
             try self.frames.append(self.allocator, .{
                 .stmt = head,
                 .facts_len = self.facts.items.len,
