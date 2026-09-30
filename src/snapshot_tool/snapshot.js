@@ -171,13 +171,18 @@ function buildTextClassSegments(text, byteToUtf16, tokens, highlightRange) {
   return segments;
 }
 
+// Keep source bytes and range metadata unchanged; only displayed text expands.
+function visibleSourceText(text) {
+  return Array.from(text, char => window.rocBidiControls?.[char] ?? char).join("");
+}
+
 function updateDomFromSegments(container, newSegments) {
   container.innerHTML = "";
   for (const seg of newSegments) {
     if (seg.class) {
       const span = document.createElement("span");
       span.className = seg.class;
-      span.textContent = seg.text;
+      span.textContent = visibleSourceText(seg.text);
       // Add byte range data attributes for consistent mapping
       if (seg.byteStart !== undefined && seg.byteEnd !== undefined) {
         span.dataset.byteStart = seg.byteStart;
@@ -186,7 +191,7 @@ function updateDomFromSegments(container, newSegments) {
       }
       container.appendChild(span);
     } else {
-      container.appendChild(document.createTextNode(seg.text));
+      container.appendChild(document.createTextNode(visibleSourceText(seg.text)));
     }
   }
   // Add event listeners for reverse highlighting

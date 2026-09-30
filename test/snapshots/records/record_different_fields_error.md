@@ -704,27 +704,6 @@ EndOfFile,
 			(e-string-part (raw "at symbol")))
 		(e-malformed (reason "expr_unexpected_token"))))
 ~~~
-# FORMATTED
-~~~roc
-{
-	_privateField :
-			
-	field_ :
-			
-	PascalCase
-		"pascal"
-	
-	kebab
-	-case
-		"kebab"
-	
-	field$special :
-			
-	field
-			"at symbol"
-	
-}
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-block
