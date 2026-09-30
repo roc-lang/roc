@@ -288,6 +288,7 @@ pub const InterfaceConstraints = struct {
         shareable: collections.DenseMap(NodeId, bool),
         share_seen: collections.DenseMap(NodeId, void),
         related_ids: std.AutoHashMap(Capture.RelatedKey, u32),
+        settled_leaf_ids: std.AutoHashMap([32]u8, NodeId),
         settled_sealed: collections.DenseMap(NodeId, Type.TypeId),
         settled_sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
         retained_sealed: collections.DenseMap(NodeId, Type.TypeId),
@@ -303,6 +304,7 @@ pub const InterfaceConstraints = struct {
                 .shareable = collections.DenseMap(NodeId, bool).init(allocator),
                 .share_seen = collections.DenseMap(NodeId, void).init(allocator),
                 .related_ids = std.AutoHashMap(Capture.RelatedKey, u32).init(allocator),
+                .settled_leaf_ids = std.AutoHashMap([32]u8, NodeId).init(allocator),
                 .settled_sealed = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
                 .settled_sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
                 .retained_sealed = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
@@ -316,6 +318,7 @@ pub const InterfaceConstraints = struct {
             self.shareable.deinit();
             self.share_seen.deinit();
             self.related_ids.deinit();
+            self.settled_leaf_ids.deinit();
             self.settled_sealed.deinit();
             self.settled_sealed_types.deinit();
             self.retained_sealed.deinit();
@@ -367,6 +370,7 @@ pub const InterfaceConstraints = struct {
             .shareable = scratch.shareable,
             .share_seen = scratch.share_seen,
             .related_ids = scratch.related_ids,
+            .settled_leaf_ids = scratch.settled_leaf_ids,
             .nodes = scratch.nodes,
             .open_nodes = scratch.open_nodes,
             .kinds = scratch.kinds,
@@ -377,6 +381,7 @@ pub const InterfaceConstraints = struct {
             builder.shareable.clearRetainingCapacity();
             builder.share_seen.clearRetainingCapacity();
             builder.related_ids.clearRetainingCapacity();
+            builder.settled_leaf_ids.clearRetainingCapacity();
             builder.nodes.clearRetainingCapacity();
             builder.open_nodes.clearRetainingCapacity();
             builder.kinds.clearRetainingCapacity();
@@ -385,6 +390,7 @@ pub const InterfaceConstraints = struct {
             scratch.shareable = builder.shareable;
             scratch.share_seen = builder.share_seen;
             scratch.related_ids = builder.related_ids;
+            scratch.settled_leaf_ids = builder.settled_leaf_ids;
             scratch.nodes = builder.nodes;
             scratch.open_nodes = builder.open_nodes;
             scratch.kinds = builder.kinds;
@@ -526,7 +532,7 @@ pub const InterfaceConstraints = struct {
     pub fn equivalenceIdentityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error![]const u8 {
         var arena = std.heap.ArenaAllocator.init(graph.allocator);
         defer arena.deinit();
-        var canonical = Canonicalizer{ .source = self, .name_store = graph.name_store, .allocator = arena.allocator() };
+        var canonical = Canonicalizer{ .source = self, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
         const constraints = try canonical.run();
         var writer = IdentityWriter{ .graph = graph };
         defer {
@@ -542,8 +548,12 @@ pub const InterfaceConstraints = struct {
     /// with one member relates nothing within the interface and is dropped,
     /// and an open node that finished as a settled type and carries no other
     /// evidence is that settled leaf, whichever form its capture chose.
+    /// Recursive-slot and forced-dynamic membership only decide iterator
+    /// representations, so they are no evidence on a class that finished as a
+    /// type containing no iterator interface.
     const Canonicalizer = struct {
         source: InterfaceConstraints,
+        types: *Type.Store,
         name_store: *const names.NameStore,
         allocator: Allocator,
         settled: std.AutoHashMapUnmanaged(NodeId, Type.TypeId) = .empty,
@@ -636,7 +646,8 @@ pub const InterfaceConstraints = struct {
                 };
                 const ty = open.finished orelse continue;
                 const vacuous_group = if (open.related_group) |group| self.group_sizes.get(group).? == 1 else true;
-                if (open.source != null or open.recursive_slot or open.forced_dynamic or open.constructor_evidence or open.private_backing or !vacuous_group) continue;
+                if (open.source != null or open.constructor_evidence or open.private_backing or !vacuous_group) continue;
+                if ((open.recursive_slot or open.forced_dynamic) and try self.containsIterator(ty)) continue;
                 var collected = Children{ .allocator = self.allocator };
                 _ = try mapValue(&collected, InstNode, open.content);
                 if (collected.kinds != 0) continue;
@@ -657,6 +668,58 @@ pub const InterfaceConstraints = struct {
                     if (changed) break;
                 }
             }
+        }
+
+        /// Whether a finished type reaches an iterator interface, following the
+        /// same positions as `Type.Store.containsIteratorInterface` without
+        /// writing its cache.
+        fn containsIterator(self: *Canonicalizer, root: Type.TypeId) Allocator.Error!bool {
+            var pending: std.ArrayList(Type.TypeId) = .empty;
+            var visited: std.AutoHashMapUnmanaged(Type.TypeId, void) = .empty;
+            try pending.append(self.allocator, root);
+            while (pending.pop()) |ty| {
+                if ((try visited.getOrPut(self.allocator, ty)).found_existing) continue;
+                switch (self.types.get(ty)) {
+                    .primitive, .erased, .zst => {},
+                    .list, .box => |child| try pending.append(self.allocator, child),
+                    .tuple => |items| {
+                        const item_types = self.types.span(items);
+                        for (0..GuardedList.borrowLen(item_types)) |index| try pending.append(self.allocator, GuardedList.at(item_types, index));
+                    },
+                    .func => |function| {
+                        const arg_types = self.types.span(function.args);
+                        for (0..GuardedList.borrowLen(arg_types)) |index| try pending.append(self.allocator, GuardedList.at(arg_types, index));
+                        try pending.append(self.allocator, function.ret);
+                    },
+                    .tag_union => |tags| {
+                        const variants = self.types.tagSpan(tags);
+                        for (0..GuardedList.borrowLen(variants)) |variant_index| {
+                            const payloads = self.types.span(GuardedList.at(variants, variant_index).payloads);
+                            for (0..GuardedList.borrowLen(payloads)) |index| try pending.append(self.allocator, GuardedList.at(payloads, index));
+                        }
+                    },
+                    .record => |fields| {
+                        const record_fields = self.types.fieldSpan(fields);
+                        for (0..GuardedList.borrowLen(record_fields)) |index| {
+                            const field = GuardedList.at(record_fields, index);
+                            try pending.append(self.allocator, field.ty);
+                            if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                        }
+                    },
+                    .named => |named| {
+                        if (named.builtin_owner) |owner| if (static_dispatch.isIteratorOwner(owner)) return true;
+                        const args = self.types.span(named.args);
+                        for (0..GuardedList.borrowLen(args)) |index| try pending.append(self.allocator, GuardedList.at(args, index));
+                        if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                        const declared_fields = self.types.declaredFieldSpan(named.declared_order);
+                        for (0..GuardedList.borrowLen(declared_fields)) |index| switch (GuardedList.at(declared_fields, index)) {
+                            .named => {},
+                            .padding => |padding| try pending.append(self.allocator, padding),
+                        };
+                    },
+                }
+            }
+            return false;
         }
 
         fn sortedRows(self: *Canonicalizer, open: OpenNode) Allocator.Error!OpenNode {
@@ -812,6 +875,11 @@ pub const InterfaceConstraints = struct {
         shareable: collections.DenseMap(NodeId, bool),
         share_seen: collections.DenseMap(NodeId, void),
         related_ids: std.AutoHashMap(RelatedKey, u32),
+        /// Settled leaves already captured, by representation digest. Classes
+        /// holding one settled type are captured as one leaf, so the
+        /// interface relates them as the same type whichever checked
+        /// occurrence each was reached through.
+        settled_leaf_ids: std.AutoHashMap([32]u8, NodeId),
 
         nodes: std.ArrayList(Node) = .empty,
         open_nodes: std.ArrayList(OpenNode) = .empty,
@@ -851,7 +919,19 @@ pub const InterfaceConstraints = struct {
             // Source-interface evidence belongs to the original request node,
             // which may have redirected to a different class representative.
             if (self.graph.requestSourceInterface(raw) == null and try self.canShare(root)) {
-                self.nodes.items[@intFromEnum(id)] = .{ .mono = try self.settled.sealNode(root) };
+                const sealed = try self.settled.sealNode(root);
+                const digest = self.graph.types.representationDigestCached(self.graph.name_store, sealed, null);
+                const existing = try self.settled_leaf_ids.getOrPut(digest.bytes);
+                if (existing.found_existing) {
+                    // Nothing was captured after this node's placeholder:
+                    // sharing and sealing checks capture no nodes.
+                    std.debug.assert(self.nodes.items.len == @intFromEnum(id) + 1);
+                    _ = self.nodes.pop();
+                    try self.node_ids.put(root, existing.value_ptr.*);
+                    return existing.value_ptr.*;
+                }
+                existing.value_ptr.* = id;
+                self.nodes.items[@intFromEnum(id)] = .{ .mono = sealed };
                 return id;
             }
             const open_index: u32 = @intCast(self.open_nodes.items.len);
