@@ -326,6 +326,94 @@ pub fn appendSuccessorsWithAllocator(
     }
 }
 
+/// Replace every control-flow successor of `stmt_id` with
+/// `resolve(ctx, successor)`, covering exactly the edges `appendSuccessors`
+/// visits. A pass that deletes statements routes each incoming edge past the
+/// deleted ones with this, instead of copying a successor over a deleted
+/// statement (which would duplicate any join it copied).
+pub fn redirectSuccessors(
+    store: *LirStore,
+    stmt_id: CFStmtId,
+    ctx: anytype,
+    comptime resolve: fn (@TypeOf(ctx), CFStmtId) CFStmtId,
+) void {
+    switch (store.getCFStmtPtr(stmt_id).*) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => |*s| s.next = resolve(ctx, s.next),
+        .boxy_tag_match => |*s| {
+            s.on_match = resolve(ctx, s.on_match);
+            s.on_miss = resolve(ctx, s.on_miss);
+        },
+        .str_match => |*s| {
+            s.on_match = resolve(ctx, s.on_match);
+            s.on_miss = resolve(ctx, s.on_miss);
+        },
+        .str_match_set => |*s| {
+            s.on_miss = resolve(ctx, s.on_miss);
+            const arms = store.getStrMatchArmsMut(s.arms);
+            for (0..arms.len) |arm_index| {
+                const arm = GuardedList.atPtr(arms, arm_index);
+                arm.on_match = resolve(ctx, arm.on_match);
+            }
+        },
+        .switch_stmt => |*s| {
+            s.default_branch = resolve(ctx, s.default_branch);
+            if (s.continuation) |continuation| s.continuation = resolve(ctx, continuation);
+            const branches = store.getCFSwitchBranchesMut(s.branches);
+            for (0..branches.len) |branch_index| {
+                const branch = GuardedList.atPtr(branches, branch_index);
+                branch.body = resolve(ctx, branch.body);
+            }
+        },
+        .switch_initialized_payload => |*s| {
+            s.initialized_branch = resolve(ctx, s.initialized_branch);
+            s.uninitialized_branch = resolve(ctx, s.uninitialized_branch);
+        },
+        .join => |*s| {
+            s.body = resolve(ctx, s.body);
+            s.remainder = resolve(ctx, s.remainder);
+        },
+        .jump,
+        .ret,
+        .crash,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .loop_continue,
+        .loop_break,
+        => {},
+    }
+}
+
 /// Per-local operand read counts over the statements reachable from one proc
 /// body. A rewrite that fuses a producer into its consumer orphans the
 /// producer's result local; these counts let a pass require that no other

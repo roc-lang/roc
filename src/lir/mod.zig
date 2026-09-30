@@ -29,6 +29,7 @@ pub const StrAppend = @import("str_append.zig");
 /// Shared proc-body cloning and rewrite-soundness helpers before ARC.
 pub const BodyClone = @import("body_clone.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
+pub const PruneJoinParams = @import("prune_join_params.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
 pub const SingleUseInline = @import("single_use_inline.zig");
 pub const ForwardingJoinInline = @import("forwarding_join_inline.zig");
@@ -171,6 +172,7 @@ test "lir tests" {
     std.testing.refAllDecls(ReturnSlot);
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
+    std.testing.refAllDecls(PruneJoinParams);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(ComptimeValueGuards);
     std.testing.refAllDecls(ComptimeRootAccessors);

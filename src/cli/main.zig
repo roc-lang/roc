@@ -17420,6 +17420,7 @@ fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics)
             .trmc => "TRMC",
             .forwarding_join => "Forwarding joins",
             .tag_fusion => "Tag-case fusion",
+            .prune_join_params => "Join parameter pruning",
             .scalarize => "Join scalarization",
             .loop_append => "Loop append promotion",
             .range => "Range proving",
@@ -17578,8 +17579,8 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
         .prepared_statement_rows = 100,
         .appended_statements = 30,
         .peak_retained_shards = 8,
-        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7 },
-        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6 },
+        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8 },
+        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7 },
     });
     try std.testing.expectEqualStrings("Tasks submitted", rows[0].name);
     try std.testing.expectEqual(@as(u64, 10), rows[0].count);
@@ -17587,7 +17588,8 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
     try std.testing.expectEqual(@as(u64, 8), rows[4].count);
     try std.testing.expectEqualStrings("Forwarding joins tasks", rows[7].name);
     try std.testing.expectEqualStrings("Tag-case fusion rewrites", rows[10].name);
-    try std.testing.expectEqualStrings("Box reuse rewrites", rows[18].name);
+    try std.testing.expectEqualStrings("Join parameter pruning tasks", rows[11].name);
+    try std.testing.expectEqualStrings("Box reuse rewrites", rows[20].name);
     for (0..std.meta.fields(lir.CheckedPipeline.LirPassPhase).len) |index| {
         try std.testing.expectEqual(@as(u64, @intCast(index + 1)), rows[5 + 2 * index].count);
         try std.testing.expectEqual(@as(u64, @intCast(index)), rows[6 + 2 * index].count);

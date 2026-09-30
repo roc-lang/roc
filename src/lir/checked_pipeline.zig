@@ -1650,6 +1650,9 @@ fn finishLoweredOutput(
             try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion);
         }
     }
+    // Every mode: a join parameter nothing reads still keeps its written
+    // value alive past any consuming call on the entry path.
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params);
     if (target.scalarize_joins) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
     }
