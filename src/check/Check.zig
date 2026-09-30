@@ -7946,7 +7946,7 @@ fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Er
             .alias => |la| {
                 const ra = switch (r.desc.content) {
                     .alias => |alias| alias,
-                    else => return false,
+                    .flex, .rigid, .field_presence, .structure, .err => return false,
                 };
                 if (!la.ident.ident_idx.eql(ra.ident.ident_idx) or la.origin_module != ra.origin_module or
                     @as(u32, @bitCast(la.source_decl)) != @as(u32, @bitCast(ra.source_decl))) return false;
@@ -7959,7 +7959,7 @@ fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Er
             .structure => |lflat| {
                 const rflat = switch (r.desc.content) {
                     .structure => |flat| flat,
-                    else => return false,
+                    .flex, .rigid, .alias, .field_presence, .err => return false,
                 };
                 if (std.meta.activeTag(lflat) != std.meta.activeTag(rflat)) return false;
                 switch (lflat) {
@@ -7982,7 +7982,7 @@ fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Er
                     .fn_pure, .fn_effectful, .fn_unbound => |lf| {
                         const rf = switch (rflat) {
                             .fn_pure, .fn_effectful, .fn_unbound => |func| func,
-                            else => unreachable,
+                            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable,
                         };
                         try pending.append(self.gpa, .{ .left = lf.ret, .right = rf.ret });
                         const la = self.types.sliceVars(lf.args);

@@ -673,7 +673,7 @@ pub const InterfaceConstraints = struct {
                     std.mem.sortUnstable(InstTag, tags, self.name_store, instTagLessThan);
                     result.content = .{ .tag_union = .{ .tags = tags, .ext = row.ext, .tags_sorted = true } };
                 },
-                else => {},
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
             }
             return result;
         }
