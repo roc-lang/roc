@@ -1459,6 +1459,28 @@ expensive optimization and code-generation pipeline. Post-merge elimination
 cleans up definitions and aliases whose final reachability is only visible
 after app calls have been resolved. Both passes preserve real definitions for
 builtin calls that the application can inline.
+
+The `Crypto` builtins' SHA-256 compresses with the target's SHA-256
+instructions exactly when the CPU features the target's builtins are compiled
+with carry them (the x86 SHA extension with SSSE3, or the ARMv8 `sha2`
+extension), and with portable rounds otherwise; `Rounds.forCpu` in
+`src/builtins/sha256.zig` is the one rule. Code compiled into Roc programs
+never selects rounds at runtime with CPUID or any other probe; only the
+compiler binary's own hashing dispatches at runtime. A dev builtins object gets
+the rounds its own compile target selects, and since a `v1` target links its
+default twin's object, those objects carry no instruction above the
+architecture baseline (the native objects drop the compiler's SHA-256 floor).
+The 64-bit LLVM payload cannot choose, because it is compiled before its target
+is known, so it references its compression function by symbol, and the LLVM
+backend links one of three separate compression payloads into it before
+pruning: the one built for the rounds the target machine's CPU features select
+(portable, x86 SHA, or aarch64 `sha2`), each compiled for exactly the features
+its rounds need. The 32-bit payload keeps portable rounds inline, since no
+32-bit target has SHA-256 instructions Roc uses. The serialized incremental
+SHA-256 state is the builtin's own versioned format (the chaining words, the
+pending partial block, and the message length), independent of which rounds
+produced it, so saved states resume identically on every target.
+
 LLVM object emission must request function and data sections, and the final
 target linker must use section garbage collection where the target format
 supports it.
@@ -3486,10 +3508,12 @@ software rounds. x86_64 stays at the architecture baseline, because Intel's
 Skylake through Comet Lake cores have no SHA extension: a released x86_64
 compiler for anything but macOS carries both the hardware and the portable
 rounds and picks one with CPUID the first time a process digests a type
-(`dispatches_at_runtime` in src/base/sha256_rounds.zig), and x86_64 macOS,
+(`dispatches_at_runtime` in src/base/sha256.zig), and x86_64 macOS,
 whose Intel Macs are all such cores, always uses the portable rounds
 (`uses_software_rounds` there), as do 32-bit targets such as wasm32. Every path
-yields the same digest bytes; only the speed differs.
+yields the same digest bytes; only the speed differs. The rounds themselves are
+shared with the `Crypto` builtins (`src/builtins/sha256.zig`); the runtime
+dispatch is the compiler's alone.
 
 All producers for a key domain must agree on the encoding, including child
 digests, length prefixes, identity numbering, and domain tags. The hash
@@ -18910,9 +18934,11 @@ Instead, each (architecture, OS) target has a static floor:
   multiply is required for competitive CRC-32. As of 2026 this floor covers
   ~95% of the consumer installed base and 100% of what Windows 11 supports;
   RHEL 10 already requires v3.
-- **AArch64:** Armv8.0-A plus AES and DotProd. This names exactly the two
-  extensions the builtins lower to instead of selecting a CPU model that would
-  pull in unrelated architecture revisions. It covers every Apple Silicon Mac,
+- **AArch64:** Armv8.0-A plus AES, SHA-256, and DotProd. This names exactly
+  the extensions the builtins lower to (AES and DotProd for SIMD, SHA-256 for
+  `Crypto`; AES and SHA-256 are both the Armv8 Cryptographic Extension, which
+  CPUs implement together) instead of selecting a CPU model that would pull in
+  unrelated architecture revisions. It covers every Apple Silicon Mac,
   every major ARM cloud chip, and Raspberry Pi 5. Raspberry Pi 3/4 lack these
   extensions.
 - **wasm:** the `simd128` feature (universally shipped in engines since

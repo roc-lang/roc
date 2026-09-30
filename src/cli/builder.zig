@@ -48,6 +48,17 @@ pub const OptimizationLevel = enum {
     }
 };
 
+/// How the builtin bitcode merged into an app module is built.
+pub const LinkedBuiltins = struct {
+    /// Builtins reach the host via extern symbols (the symbol ABI).
+    host_call_extern: bool,
+    /// The SHA-256 rounds the target's CPU features select
+    /// (`builtins.sha256.Rounds.forCpu` of the CPU that `cpu` and `features`
+    /// name). The 64-bit builtin payload links the compression function built
+    /// for them.
+    sha256_rounds: builtins.sha256.Rounds,
+};
+
 /// Configuration for compiling LLVM bitcode to object files
 pub const CompileConfig = struct {
     input_path: []const u8,
@@ -59,8 +70,7 @@ pub const CompileConfig = struct {
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
     fuzz: bool = false, // Enable libFuzzer-compatible sanitizer coverage
-    link_builtins: bool = false,
-    host_call_extern: bool = false, // Builtins reach the host via extern symbols (the symbol ABI)
+    link_builtins: ?LinkedBuiltins = null, // The builtin bitcode to merge into the app module, if any
     pic: bool = false, // Position-independent code (required for shared library output)
     no_target_libcalls: bool = false,
     lower_memory_intrinsics_to_loops: bool = false,
@@ -254,6 +264,9 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const builtins64_extern_bc: []const u8 = "";
     pub const builtins32_core_extern_bc: []const u8 = "";
     pub const builtins64_core_extern_bc: []const u8 = "";
+    pub const sha256_portable_bc: []const u8 = "";
+    pub const sha256_x86_sha_bc: []const u8 = "";
+    pub const sha256_aarch64_sha2_bc: []const u8 = "";
 };
 
 const core_builtin_roots = builtin_registry.core_root_symbols;
@@ -283,6 +296,20 @@ fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void
         32 => if (use_core) llvm_embedded.builtins32_core_bc else llvm_embedded.builtins32_bc,
         64 => if (use_core) llvm_embedded.builtins64_core_bc else llvm_embedded.builtins64_bc,
         else => "",
+    };
+}
+
+/// The payload defining the 64-bit builtin bitcode's SHA-256 compression for
+/// `rounds`. The 32-bit payload carries its portable rounds inline, since no
+/// 32-bit target has SHA-256 instructions Roc uses.
+fn selectSha256RoundsBitcode(ptr_width: u16, rounds: builtins.sha256.Rounds) ?[]const u8 {
+    return switch (ptr_width) {
+        64 => switch (rounds) {
+            .portable => llvm_embedded.sha256_portable_bc,
+            .x86_sha => llvm_embedded.sha256_x86_sha_bc,
+            .aarch64_sha2 => llvm_embedded.sha256_aarch64_sha2_bc,
+        },
+        else => null,
     };
 }
 
@@ -433,7 +460,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     // available_externally). Builtin aliases and definitions are internalized
     // after app references are resolved so LLVM and the final linker can remove
     // unused builtin code.
-    if (config.link_builtins) {
+    if (config.link_builtins) |linked_builtins| {
         var app_defs = std.StringHashMap(void).init(gpa);
         defer {
             var keys = app_defs.keyIterator();
@@ -485,7 +512,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             try app_defs.put(name, {});
         }
 
-        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, config.host_call_extern);
+        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, linked_builtins.host_call_extern);
         if (builtins_bc.len == 0) {
             std.log.err("No embedded builtin bitcode for {d}-bit target pointers", .{config.target.ptrBitWidth()});
             return false;
@@ -496,6 +523,22 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
             externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
             externs.LLVMSetDataLayout(builtins_module, externs.LLVMGetDataLayoutStr(module));
+            if (selectSha256RoundsBitcode(config.target.ptrBitWidth(), linked_builtins.sha256_rounds)) |rounds_bc| {
+                const rounds_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(rounds_bc.ptr, rounds_bc.len, "roc-sha256-rounds-bc");
+                var rounds_module: ?*anyopaque = null;
+                if (externs.LLVMParseBitcode2(rounds_buf, &rounds_module) != 0) {
+                    std.log.err("Failed to parse SHA-256 rounds bitcode", .{});
+                    return false;
+                }
+                externs.LLVMSetTarget(rounds_module, target_triple_z.ptr);
+                externs.LLVMSetDataLayout(rounds_module, externs.LLVMGetDataLayoutStr(module));
+                // Linking destroys rounds_module; its definition then prunes
+                // and merges with the rest of the builtins.
+                if (externs.LLVMLinkModules2(builtins_module, rounds_module) != 0) {
+                    std.log.err("Failed to link SHA-256 rounds bitcode into builtin bitcode", .{});
+                    return false;
+                }
+            }
             if (externs.LLVMGetNamedGlobal(builtins_module, "llvm.used")) |used| {
                 externs.LLVMDeleteGlobal(used);
             }
