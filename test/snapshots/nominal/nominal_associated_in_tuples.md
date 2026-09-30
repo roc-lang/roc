@@ -148,9 +148,7 @@ boxed = Container(X)
 				(ty-lookup (name "Foo.Baz") (local)))))
 	(d-let
 		(p-assign (ident "boxed"))
-		(e-tag (name "Container")
-			(args
-				(e-tag (name "X"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-apply (name "Container") (local)
 				(ty-lookup (name "Foo.Bar") (local)))))
