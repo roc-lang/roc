@@ -35,6 +35,7 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 const LocalId = LIR.LocalId;
+const Body = @import("body_clone.zig");
 
 /// Locals whose every write is a static-backed literal.
 pub const ImmortalLocals = struct {
@@ -221,13 +222,7 @@ const Pass = struct {
 /// Returns how many statements were dropped.
 pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
     if (!anyStaticLiteral(store)) {
-        if (@import("builtin").mode == .Debug) {
-            var check = try compute(gpa, store);
-            defer check.deinit(gpa);
-            for (0..store.localCount()) |index| {
-                if (check.contains(@enumFromInt(@as(u32, @intCast(index))))) immortalInvariant("a program without static-literal shapes held an immortal local");
-            }
-        }
+        if (@import("builtin").mode == .Debug) try verifyNothingToElide(gpa, store);
         return 0;
     }
     var immortal = try compute(gpa, store);
@@ -421,6 +416,34 @@ fn anyStaticLiteral(store: *const LirStore) bool {
         if (store.getProcSpec(@enumFromInt(@as(u32, @intCast(index)))).shapes.static_literal) return true;
     }
     return false;
+}
+
+/// A store whose procedures record no static-backed literal must give elision
+/// nothing to drop. Statements no procedure reaches are left behind by earlier
+/// rewrites and are not part of the program, so only procedure bodies count.
+fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!void {
+    var immortal = try compute(gpa, store);
+    defer immortal.deinit(gpa);
+    var work: std.ArrayList(LIR.CFStmtId) = .empty;
+    defer work.deinit(gpa);
+    var visited = try std.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
+    defer visited.deinit(gpa);
+    for (0..store.procSpecCount()) |index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(index))));
+        if (proc.body) |body| try work.append(gpa, body);
+        while (work.pop()) |stmt_id| {
+            if (visited.isSet(@intFromEnum(stmt_id))) continue;
+            visited.set(@intFromEnum(stmt_id));
+            try Body.appendSuccessorsWithAllocator(store, &work, stmt_id, gpa);
+            const value = switch (store.getCFStmt(stmt_id)) {
+                .incref => |stmt| stmt.value,
+                .decref => |stmt| stmt.value,
+                .decref_if_initialized => |stmt| stmt.value,
+                else => continue,
+            };
+            if (immortal.contains(value)) immortalInvariant("a program without static-literal shapes counted references on an immortal local");
+        }
+    }
 }
 
 fn immortalInvariant(comptime message: []const u8) noreturn {

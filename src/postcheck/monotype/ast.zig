@@ -1743,7 +1743,8 @@ pub const ProgramBuilder = struct {
     }
 
     /// Fork the immutable specialization output while preserving every id.
-    /// The fork owns its arrays and diagnostic/literal bytes independently.
+    /// The fork owns its arrays and diagnostic/literal bytes independently,
+    /// and retains the shared constant payloads its literals view.
     pub fn cloneFrozen(self: *const ProgramBuilder, allocator: std.mem.Allocator) std.mem.Allocator.Error!ProgramBuilder {
         if (!self.types.isFrozen()) Common.invariant("Monotype cloning requires a frozen program");
         var result = ProgramBuilder.init(allocator);
@@ -1756,10 +1757,9 @@ pub const ProgramBuilder = struct {
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
         for (self.string_literals.unsafeRawItemsForView()) |literal| {
-            var copied = literal;
-            copied.backing = try allocator.dupe(u8, literal.backing);
+            const copied = try literal.clone(allocator);
             result.string_literals.append(allocator, copied) catch |err| {
-                allocator.free(copied.backing);
+                copied.deinit(allocator);
                 return err;
             };
         }
