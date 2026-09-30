@@ -33,8 +33,84 @@ const shallower_depth_str = std.fmt.comptimePrint("{d}", .{shallower_depth});
 /// depth.
 const loop_depth = 300;
 
+/// Lowering a custom-parser chain for compile-time evaluation relates each
+/// level's codec contract and layout to every level inside it.
+const codec_chain_depth = 100;
+
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
+}
+
+/// A custom parser whose where-clause asks for its argument's parser, applied
+/// to a record holding the next level: settling each level's custom parser
+/// validates the derived parser of the record inside it.
+const codec_chain_prelude =
+    \\Format := [Default].{
+    \\    parse_u64 : Format, State -> Try({ value : U64, rest : State }, [FormatError])
+    \\    parse_u64 = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state| Ok(Done(state))
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(U64), Done]
+    \\
+    \\Wrap(a) := [Wrap(a)].{
+    \\    parser_for : Format -> (State -> Try({ value : Wrap(a), rest : State }, [FormatError, ..errs]))
+    \\        where [a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs]))]
+    \\    parser_for = |format| |state| {
+    \\        Inner : a
+    \\        parse_inner = Inner.parser_for(format)
+    \\        parsed = parse_inner(state)?
+    \\        Ok({ value: Wrap.Wrap(parsed.value), rest: parsed.rest })
+    \\    }
+    \\}
+    \\
+    \\parse : State -> Try(a, [FormatError, ..errs])
+    \\    where [
+    \\        a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+    \\    ]
+    \\parse = |input| {
+    \\    Shape : a
+    \\    parse_shape = Shape.parser_for(Format.Default)
+    \\    parsed = parse_shape(input)?
+    \\    Ok(parsed.value)
+    \\}
+    \\
+;
+
+fn codecChain(comptime n: usize) []const u8 {
+    return codec_chain_prelude ++
+        "probe : State -> Try(" ++ repeat("Wrap({ x : ", n) ++ "U64" ++ repeat(" })", n) ++ ", [FormatError])\n" ++
+        "probe = |input| parse(input)\n\n" ++
+        "main = match probe(State.Done) {\n    Ok(_) => \"ok\"\n    Err(_) => \"err\"\n}\n";
 }
 
 /// Deep-nesting eval cases, each run on a small stack under both
@@ -299,6 +375,34 @@ const cases = [_]TestCase{
         .source = "nested = " ++ repeat("[", depth) ++ "1.U64" ++ repeat("]", depth) ++ "\nmain = List.len(nested)\n",
         .expected = .{ .inspect_str = "1" },
         .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "issue 11698: lambdas nested as call arguments",
+        .source_kind = .module,
+        .source = "apply = |f, x| f(x)\nmain = " ++ repeat("apply(|_| ", shallow_depth) ++ "1.U64" ++ repeat(", 0.U64)", shallow_depth) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: closures nested as call arguments",
+        .source_kind = .module,
+        .source = "apply = |f, x| f(x)\nmain = {\n    a = 1.U64\n    " ++ repeat("apply(|_| ", shallow_depth) ++ "a" ++ repeat(", 0.U64)", shallow_depth) ++ "\n}\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: lambdas nested as method arguments",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("[1.U64].map(|_| ", shallow_depth) ++ "1.U64" ++ repeat(").len()", shallow_depth) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: custom parsers nesting derived record parsers",
+        .source_kind = .module,
+        .source = codecChain(codec_chain_depth),
+        .expected = .{ .inspect_str = "\"err\"" },
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
         .name = "issue 11698: deeply nested records",

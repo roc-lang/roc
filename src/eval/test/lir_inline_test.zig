@@ -11697,7 +11697,7 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
     }
 }
 
-test "tail-call lowering preserves boxy return adaptations" {
+test "tail-call lowering loops a boxy self-call whose resolved ABI needs no return adaptation" {
     const allocator = std.testing.allocator;
     const source =
         \\walk : U64, U64 -> U64
@@ -11732,7 +11732,11 @@ test "tail-call lowering preserves boxy return adaptations" {
         const name = result.store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "walk")) continue;
         found_walk = true;
-        try std.testing.expectEqual(LIR.TailTransform.none, result.store.getProcSpec(proc_id).tail_transform);
+        // The self-call is emitted before `walk`'s body exists, so it starts
+        // on the provisional descriptor ABI; `walk` returns no runtime
+        // descriptor, so the call is replaced by its static form before the
+        // tail-call proof runs, and nothing adapts its result on the way out.
+        try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpec(proc_id).tail_transform);
     }
     try std.testing.expect(found_walk);
 }

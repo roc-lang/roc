@@ -730,13 +730,13 @@ test "Monotype indirect calls retain graph-native function provenance" {
     );
     try expectContains(call_source, "instantiateCallNodeFromCallerAtNode");
     try expectContains(call_source, "const fn_nodes = try self.graph.functionNodes(fn_node)");
-    try expectContains(call_source, "try self.prepareExprSpanAtNodes(call.args, fn_nodes.args)");
-    try expectContains(call_source, "requestLowerChild(self, call.func, DraftTypeCell.fromGraphNode(fn_node))");
+    try expectContains(call_source, "hostedEvidenceTask(.{ .prepare_span = .{");
+    try expectContains(call_source, "requestLowerChild(self, call.func, DraftTypeCell.fromGraphNode(task.fn_node))");
     try expectContains(call_source, ".prepared_span = .{ .exprs = call.args, .nodes = task.fn_nodes.args }");
     try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(task.fn_nodes.ret)");
     try expectNotContains(lower_source, "instantiateCallTypeFromCallerAtType");
 
-    const direct_prepare = std.mem.find(u8, call_source, "try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args)").?;
+    const direct_prepare = std.mem.find(u8, call_source, "hostedEvidenceTask(.{ .prepare_direct_args = .{").?;
     const direct_specialize = std.mem.find(u8, call_source, "const callee = try self.fnTemplateForDirectCallAtNode").?;
     try std.testing.expect(direct_prepare < direct_specialize);
     const direct_complete = std.mem.find(u8, call_source, "try self.completedDirectCalleeAtNode(checked_expr, target, source_fn_ty, task.fn_node)").?;
@@ -744,7 +744,7 @@ test "Monotype indirect calls retain graph-native function provenance" {
     const prepare_source = sourceSliceBetween(lower_source, "fn stepPrepareArgs(", "fn stepRelate(");
     try expectContains(prepare_source, "if (direct_call) {");
     try expectContains(prepare_source, ".relate = .{ .expr = task.checked_exprs[task.index], .expected_node = task.nodes[task.index] }");
-    try expectContains(prepare_source, "try self.ensureNestedCallablesAtNodes(task.checked_exprs, task.nodes)");
+    try expectContains(prepare_source, ".draft_nested = .{ .ctx = self, .expr = expr, .request_fn_node = request_fn_node }");
 }
 
 test "Monotype open specialization lookup covers the complete function interface" {
@@ -985,7 +985,7 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "fn stepClosedOperandsAtNode(",
         "fn stepPreparedOperands(",
     );
-    try expectContains(graph_operands, "prepareDispatchOperandsAtNodes(task.operands, function.args, &.{})");
+    try expectContains(graph_operands, "relateDispatchOperandsAtNodes(task.operands, function.args, &.{})");
     try expectContains(graph_operands, ".prepared_operands = .{");
     try expectNotContains(graph_operands, "relateExprAtNode");
     try expectNotContains(graph_operands, "ensureNestedCallableAtNode");

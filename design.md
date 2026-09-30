@@ -7786,6 +7786,11 @@ Only an unconstrained instantiated child extension may close; constrained or
 rigid extensions remain unsupported. Before closure, the selected method's
 instantiated dispatch requirements and their transitive targets settle against
 the actual encoding and state, just as for custom nominal parsers below.
+Settling is a position of the derived-parser walk: its drain stops after any
+relation that resolves an implicit parser requirement, that requirement's
+derived parser is validated as a child position with its own encoding, state,
+and error row, and the drain resumes at the next relation. A chain of custom
+parsers over derived shapes therefore never nests validations.
 An absent-constructor empty default is committed as a closed row on that method
 instance before CheckedModule output.
 Non-row format errors, such as `Str`, retain ordinary equality through
@@ -8124,6 +8129,12 @@ pending index revisits only scheme requirements whose receivers remain flex.
 When later unification grounds one, it receives its one deferred-queue
 transition. Processing an entry may append further entries, and validation
 continues until there is no new entry or newly grounded pending requirement.
+The unification that grounds a constrained receiver queues the receiver's
+relations, and so can the receiver's instantiation dispatcher; both entries
+name the same callable variable, so the drain skips an entry whose every
+relation it has already consumed on behalf of the same failure expression
+rather than validating that use twice. An entry attributing a failure to a
+different use still runs, so that use is poisoned too.
 
 Dispatch-cycle termination is structural. An exact repeated solver state along
 its derivation lineage—the same alpha-normalized receiver plus callable digest
@@ -10231,6 +10242,14 @@ performs three jobs:
 3. Consume checked call resolutions, emitting direct calls/operations or the
    checked structural derivation before any source dispatch form can enter the
    output IR.
+
+A lambda or closure operand of a call, a method dispatch, or a constructor is
+drafted at its request node before its enclosing expression lowers its
+operands, because the drafted body constrains that node. The draft is a child
+task of the enclosing expression's lowering loop: its body lowers on the same
+frame stack, and an argument's evidence computation that reaches such an
+operand stops, lets the loop draft it, and resumes. A nested function never
+starts a lowering run of its own inside its parent's.
 
 ### Monotype Types
 

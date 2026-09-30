@@ -12933,9 +12933,34 @@ const Builder = struct {
                 arg_type.* = child.source_type;
             }
             const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
-            self.plan.roots.items[root_index].hidden_desc_args =
-                try self.materializeWorkerCallHiddenDescriptorArgs(root.worker, arg_types, arg_types, ret_type);
+            const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(root.worker, arg_types, arg_types, ret_type);
+            self.plan.roots.items[root_index].hidden_desc_args = hidden_desc_args;
+            // A root instantiates its worker's scheme at the root's own
+            // type, so a quantified variable no host type determines is
+            // instantiated by nothing: it takes its checked default, as an
+            // unquantified variable does.
+            for (self.plan.direct_call_hidden_desc_args.items[hidden_desc_args.start..][0..hidden_desc_args.len]) |*arg| {
+                arg.rep = try self.rootInstantiationRep(arg.rep);
+            }
         }
+    }
+
+    fn rootInstantiationRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind != .dynamic or rep.children.len != 0) return rep_id;
+        if (rep.sealed_default) |sealed| return sealed;
+        const source_type = rep.source_type;
+        const variable = switch (self.moduleForId(source_type.module).checked_types.payload(source_type.ty)) {
+            .flex, .rigid => |variable| variable,
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return rep_id,
+        };
+        if (variable.constraints.len != 0 or !self.quantified_variables.contains(source_type)) return rep_id;
+        const default_rep: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+        try self.plan.representations.append(self.allocator, .{
+            .source_type = source_type,
+            .kind = variableDefaultKind(variable),
+        });
+        return default_rep;
     }
 
     fn materializeConstEvalCallHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
