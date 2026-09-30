@@ -1615,6 +1615,13 @@ pub const LirProcSpec = struct {
     rc_borrowed_params: u64 = 0,
     rc_ret_borrowed: bool = false,
     rc_ret_lenders: u64 = 0,
+    /// Set by ARC on a solved base proc when a call to it may demand an
+    /// ownership variant emitted from its body (an owned field take, outcome
+    /// restitution, a same-SCC tail transfer, or, under mode specialization,
+    /// a born-unique seed or an owned return). An object-cache entry carries
+    /// only the base signature and no body, so a proc with this bit set is
+    /// never offered as one.
+    rc_variant_demandable: bool = false,
 };
 
 /// Identifier of a stored LirPattern.

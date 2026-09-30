@@ -568,6 +568,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 
     const base_proc_count = store.procSpecCount();
+    try markVariantDemandableProcs(store, &solution, &dismantles, options.specialize);
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
@@ -681,6 +682,43 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             .outcomes = solution.outcomes,
             .ret_conditions = solution.ret_conditions,
         }, options.roots);
+    }
+}
+
+/// Sets `rc_variant_demandable` on every base proc whose borrowed parameter
+/// positions admit a variant demand at a direct call: the same capabilities
+/// `callArgOwnership` consults before upgrading a borrowed position, and the
+/// outcome spans it can select.
+fn markVariantDemandableProcs(
+    store: *LirStore,
+    solution: *const arc_solve.Solution,
+    dismantles: *const arc_dismantle.Dismantles,
+    specialize: bool,
+) ResourceError!void {
+    const proc_count = store.procSpecCount();
+    var tail_targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
+    defer tail_targets.deinit(store.allocator);
+    for (0..proc_count) |proc_index| {
+        const caller: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        for (solution.tailCallsOf(caller)) |tail_call| {
+            const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
+            if (callee != caller) tail_targets.set(@intFromEnum(callee));
+        }
+    }
+    for (0..proc_count) |proc_index| {
+        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const spec = store.getProcSpecPtr(proc);
+        spec.rc_variant_demandable = false;
+        if (spec.body == null or solution.isPinnedProc(proc)) continue;
+        const sig = solution.sigOf(proc);
+        const borrowed = sig.borrowed_params;
+        const specialized_demand = specialize and
+            ((solution.uniqueSeedMaskOf(proc) & borrowed) != 0 or
+                (sig.ret_mode == .borrowed and (sig.ret_lenders & borrowed) != 0));
+        spec.rc_variant_demandable = (dismantles.ownedOnlyParamBenefits(proc) & borrowed) != 0 or
+            !solution.availableOutcomeSpanOf(proc).isEmpty() or
+            (borrowed != 0 and tail_targets.isSet(proc_index)) or
+            specialized_demand;
     }
 }
 

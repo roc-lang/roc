@@ -8935,6 +8935,13 @@ fn packFileBytes(
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@intFromEnum(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
+        // A linking program calls an entry at its base signature and cannot
+        // emit the ownership variants its callers would demand from the
+        // body, so an entry that admits such demands is not offered.
+        if (proc.rc_variant_demandable) {
+            withheld += 1;
+            continue;
+        }
         // Boxy statements index the program's own descriptor sidecar, and a
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
@@ -8953,7 +8960,7 @@ fn packFileBytes(
         });
     }
     if (std.c.getenv("ROC_PACK_TRACE") != null) {
-        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld (reach program-local symbols)\n", .{ set.artifacts.len, specs.items.len, withheld });
+        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
     }
     return try backend.dev.PackFile.write(allocator, set, specs.items);
 }
