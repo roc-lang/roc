@@ -151,24 +151,6 @@ EndOfFile,
 	(e-int (raw "0xdeadbeef"))
 	(e-int (raw "0xDeAdBeEf")))
 ~~~
-# FORMATTED
-~~~roc
-(
-	0X42,
-	0x42,
-	0B01,
-	0b01,
-	0O42,
-	0o42,
-	0.1e42,
-	0.1E42,
-	1.e42,
-	1.E42,
-	0xDEADBEEF,
-	0xdeadbeef,
-	0xDeAdBeEf,
-)
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-tuple

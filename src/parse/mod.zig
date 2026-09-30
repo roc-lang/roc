@@ -56,7 +56,11 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
     const idx = try parserCall(&parser);
 
     const tokenize_diagnostics_slice = try gpa.dupe(tokenize.Diagnostic, result.messages);
-    const tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+    var tokenize_diagnostics = std.ArrayList(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+    errdefer tokenize_diagnostics.deinit(gpa);
+    if (result.extra_messages_dropped != 0) {
+        try tokenize_diagnostics.append(gpa, .{ .tag = .TooManyTokenizationErrors, .region = base.Region.from_raw_offsets(0, 0) });
+    }
 
     // Heap-allocate AST for unified ownership model
     const ast = try gpa.create(AST);
@@ -68,6 +72,8 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
         .decl_index = parser.decl_index,
         .root_node_idx = idx,
         .tokenize_diagnostics = tokenize_diagnostics,
+        .tokenize_had_errors = result.has_errors,
+        .source_rejected = result.source_rejected,
         .parse_diagnostics = parser.diagnostics,
     };
 
@@ -1284,5 +1290,21 @@ test "a dotted upper where alias candidate without a colon is a parse error" {
     try std.testing.expectEqual(null, ast.decl_index.findTypePathBySegments(&.{e_ident}));
 
     var report = try ast.parseDiagnosticToReport(&env, ast.parse_diagnostics.items[0], gpa, "test");
+    defer report.deinit();
+}
+
+test "bidi source rejection and omitted diagnostics survive the parser boundary" {
+    const gpa = std.testing.allocator;
+    const source = "# " ++ "\u{202e}" ** 140;
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+    const ast = try file(gpa, &env);
+    defer ast.deinit();
+    try std.testing.expect(ast.source_rejected);
+    try std.testing.expect(ast.hasErrors());
+    try std.testing.expectEqual(@as(usize, 129), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(tokenize.Diagnostic.Tag.BidiControlInSource, ast.tokenize_diagnostics.items[0].tag);
+    try std.testing.expectEqual(tokenize.Diagnostic.Tag.TooManyTokenizationErrors, ast.tokenize_diagnostics.items[128].tag);
+    var report = try ast.tokenizeDiagnosticToReport(ast.tokenize_diagnostics.items[0], gpa, "Probe.roc");
     defer report.deinit();
 }

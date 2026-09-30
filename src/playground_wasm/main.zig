@@ -1339,21 +1339,23 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     };
     logDebug("compileSource: AST HTML complete\n", .{});
 
-    // Generate formatted code
-    logDebug("compileSource: Generating formatted code\n", .{});
-    var formatted_code_buffer: std.Io.Writer.Allocating = .init(temp_alloc);
-    defer formatted_code_buffer.deinit();
-    fmt.formatAst(parse_ast.*, &formatted_code_buffer.writer) catch |err| {
-        logDebug("compileSource: formatAst failed: {}\n", .{err});
-        return err;
-    };
-    logDebug("compileSource: Formatted code generated\n", .{});
+    if (!parse_ast.hasErrors()) {
+        // Generate formatted code
+        logDebug("compileSource: Generating formatted code\n", .{});
+        var formatted_code_buffer: std.Io.Writer.Allocating = .init(temp_alloc);
+        defer formatted_code_buffer.deinit();
+        fmt.formatAst(parse_ast.*, &formatted_code_buffer.writer) catch |err| {
+            logDebug("compileSource: formatAst failed: {}\n", .{err});
+            return err;
+        };
+        logDebug("compileSource: Formatted code generated\n", .{});
 
-    result.formatted_code = allocator.dupe(u8, formatted_code_buffer.written()) catch |err| {
-        logDebug("compileSource: failed to dupe formatted_code: {}\n", .{err});
-        return err;
-    };
-    logDebug("compileSource: Formatted code complete\n", .{});
+        result.formatted_code = allocator.dupe(u8, formatted_code_buffer.written()) catch |err| {
+            logDebug("compileSource: failed to dupe formatted_code: {}\n", .{err});
+            return err;
+        };
+        logDebug("compileSource: Formatted code complete\n", .{});
+    }
 
     // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
@@ -1374,6 +1376,8 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         };
         try result.parse_reports.append(report);
     }
+
+    if (parse_ast.tokenize_had_errors or parse_ast.tokenize_diagnostics.items.len != 0) return result;
 
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing

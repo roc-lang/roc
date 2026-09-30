@@ -54,6 +54,8 @@ pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 pub const CommonEnv = @import("CommonEnv.zig");
+/// Exact Unicode bidi-control source policy and visible display helpers.
+pub const bidi = @import("bidi.zig");
 pub const source_utils = @import("source_utils.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");

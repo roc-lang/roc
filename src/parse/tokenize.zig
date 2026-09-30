@@ -712,6 +712,8 @@ pub const Diagnostic = struct {
         SingleQuoteTooLong,
         SingleQuoteEmpty,
         SingleQuoteUnclosed,
+        BidiControlInSource,
+        TooManyTokenizationErrors,
     };
 };
 
@@ -1294,6 +1296,10 @@ pub const TokenOutput = struct {
     tokens: TokenizedBuffer,
     messages: []Diagnostic,
     extra_messages_dropped: usize,
+    /// Fatal status survives diagnostic buffer exhaustion.
+    has_errors: bool,
+    /// Literal bidi controls reject the whole module, independently of recovery.
+    source_rejected: bool,
 };
 
 const StringKind = enum {
@@ -1312,6 +1318,7 @@ pub const Tokenizer = struct {
     output: TokenizedBuffer,
     string_interpolation_stack: std.array_list.Managed(StringInterpolationState),
     env: *CommonEnv,
+    source_rejected: bool = false,
 
     /// Creates a new Tokenizer.
     /// Note that the caller must also provide a pre-allocated messages buffer.
@@ -1340,6 +1347,8 @@ pub const Tokenizer = struct {
             .tokens = self.output,
             .messages = self.cursor.messages[0..actual_message_count],
             .extra_messages_dropped = self.cursor.message_count - actual_message_count,
+            .has_errors = self.cursor.message_count != 0,
+            .source_rejected = self.source_rejected,
         };
     }
 
@@ -1399,6 +1408,14 @@ pub const Tokenizer = struct {
     pub fn tokenize(self: *Tokenizer, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        // Scan the complete source before recovery or a bounded diagnostic buffer
+        // can hide a control. Escaped literal values are not source characters.
+        var bidi_controls = base.bidi.Iterator{ .bytes = self.cursor.buf };
+        while (bidi_controls.next()) |occurrence| {
+            self.source_rejected = true;
+            self.cursor.pushMessage(.BidiControlInSource, @intCast(occurrence.offset), @intCast(occurrence.offset + occurrence.control.utf8.len));
+        }
 
         var sawWhitespace: bool = true;
         while (self.cursor.pos < self.cursor.buf.len) {
@@ -3370,5 +3387,74 @@ test "escape alphabet: tokenizer accepts exactly the shared table domain" {
         const accepted = if (cursor.chompEscapeSequence()) |_| true else |_| false;
 
         try std.testing.expectEqual(in_domain, accepted);
+    }
+}
+
+test "bidi controls are rejected in every lexical context" {
+    const gpa = std.testing.allocator;
+    const Context = struct { before: []const u8, after: []const u8 };
+    const contexts = [_]Context{
+        .{ .before = "# ", .after = "\nvalue = 1" },
+        .{ .before = "## ", .after = "" },
+        .{ .before = "\"", .after = "\"" },
+        .{ .before = "\"\"\"\n", .after = "\n\"\"\"" },
+        .{ .before = "'", .after = "'" },
+        .{ .before = "name", .after = " = 1" },
+        .{ .before = "\"${", .after = "1}\"" },
+        .{ .before = "app [main!] { pf: platform \"", .after = "\" }" },
+        .{ .before = "\xff\x00 # ", .after = "\r\n" },
+        .{ .before = "", .after = "" },
+    };
+    for (base.bidi.controls) |control| {
+        for (contexts) |context| {
+            const source = try std.mem.concat(gpa, u8, &.{ context.before, control.utf8, context.after });
+            defer gpa.free(source);
+            var env = try CommonEnv.init(gpa, source);
+            defer env.deinit(gpa);
+            var diagnostics: [16]Diagnostic = undefined;
+            var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+            try tokenizer.tokenize(gpa);
+            var output = tokenizer.finishAndDeinit();
+            defer output.tokens.deinit(gpa);
+            try std.testing.expect(output.has_errors);
+            try std.testing.expect(output.source_rejected);
+            try std.testing.expectEqual(Diagnostic.Tag.BidiControlInSource, output.messages[0].tag);
+            try std.testing.expectEqual(context.before.len, output.messages[0].region.start.offset);
+            try std.testing.expectEqual(context.before.len + control.utf8.len, output.messages[0].region.end.offset);
+        }
+    }
+}
+
+test "bidi errors survive zero capacity and balanced sequences are rejected" {
+    const gpa = std.testing.allocator;
+    const source = "# \u{202e}\u{2066}\u{2069}\u{202c}";
+    for (0..3) |capacity| {
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+        var diagnostics: [2]Diagnostic = undefined;
+        var tokenizer = try Tokenizer.init(&env, gpa, source, diagnostics[0..capacity]);
+        try tokenizer.tokenize(gpa);
+        var output = tokenizer.finishAndDeinit();
+        defer output.tokens.deinit(gpa);
+        try std.testing.expect(output.has_errors);
+        try std.testing.expect(output.source_rejected);
+        try std.testing.expectEqual(@as(usize, 4) - capacity, output.extra_messages_dropped);
+        for (output.messages) |message| try std.testing.expectEqual(Diagnostic.Tag.BidiControlInSource, message.tag);
+    }
+}
+
+test "bidi escapes and ordinary right to left text remain legal" {
+    const gpa = std.testing.allocator;
+    for (base.bidi.controls) |control| {
+        const source = try std.fmt.allocPrint(gpa, "\"שלום مرحبا 😀 \\u({X})\"", .{control.codepoint});
+        defer gpa.free(source);
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+        var diagnostics: [16]Diagnostic = undefined;
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        try tokenizer.tokenize(gpa);
+        var output = tokenizer.finishAndDeinit();
+        defer output.tokens.deinit(gpa);
+        try std.testing.expect(!output.has_errors);
     }
 }

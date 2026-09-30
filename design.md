@@ -1534,6 +1534,33 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
+### Bidirectional source controls
+
+Literal Unicode Bidi_Control characters (U+061C, U+200E–U+200F,
+U+202A–U+202E, U+2066–U+2069) are errors everywhere in source, including
+comments and literals. Tokenization scans the complete byte buffer before
+syntax recovery and produces explicit fatal status independently of diagnostic
+capacity. Balanced sequences have no exemption. Unicode escapes in literal
+values remain legal; ordinary right-to-left text remains legal.
+
+Consumers must honor source-policy rejection before executing source, producing
+a CheckedModule, formatting, or acting on header metadata. Formatting rejects the
+input before opening an output file. The existing explicit carriage-return
+normalization migration is the only tokenizer-error exception in formatting;
+it never permits a bidi diagnostic or omitted diagnostics. Source-policy
+rejection completes the module and its dependents with failure
+before import registration or canonicalization, so rejected source never
+produces a canonicalized or checked cache entry. Source-policy changes
+invalidate canonicalized and checked cache versions. Ordinary recoverable
+parse diagnostics retain the existing cached replay behavior.
+Backends never rescan source or runtime string values for this policy.
+
+Compiler-owned displays replace controls with visible ASCII markers while
+keeping original source offsets and machine identities intact. Display widths
+account for those markers; escaping must not emit HTML character references
+that reactivate the original controls. Program output and runtime string data
+are unchanged. Repository checks use the same exact character policy.
+
 ### Platform Dependencies
 
 An app or package header may mark at most one dependency with the `platform`

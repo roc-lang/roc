@@ -85,7 +85,13 @@ pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset:
     std.mem.reverse([]const u8, doc_lines.items);
 
     // Join all doc comment lines with newlines
-    return try std.mem.join(allocator, "\n", doc_lines.items);
+    var visible = std.Io.Writer.Allocating.init(allocator);
+    defer visible.deinit();
+    for (doc_lines.items, 0..) |line, i| {
+        if (i != 0) visible.writer.writeByte('\n') catch return error.OutOfMemory;
+        @import("base").bidi.writeVisible(&visible.writer, line) catch return error.OutOfMemory;
+    }
+    return try visible.toOwnedSlice();
 }
 
 /// Checks if a trimmed line is a type annotation (has ':' but no '=')
@@ -390,4 +396,11 @@ test "isTypeAnnotation: various cases" {
     try std.testing.expect(!isTypeAnnotation("x : I64 = 42")); // definition with type, not just annotation
     try std.testing.expect(!isTypeAnnotation("## doc comment"));
     try std.testing.expect(!isTypeAnnotation("no colon here"));
+}
+
+test "bidi doc comments display controls visibly" {
+    const source = "## documentation \u{202e}\nvalue = 1\n";
+    const doc = (try extractDocCommentBefore(std.testing.allocator, source, @intCast(std.mem.find(u8, source, "value").?))).?;
+    defer std.testing.allocator.free(doc);
+    try std.testing.expect(std.mem.find(u8, doc, "<U+202E RLO>") != null);
 }

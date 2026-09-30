@@ -445,7 +445,7 @@ pub const ModuleType = enum {
             .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .static_data, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
             .ipc => &.{},
 
-            .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy },
+            .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy, .reporting },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
