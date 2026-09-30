@@ -31783,6 +31783,15 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
         }
     }
 
+    if (scope == .module) {
+        try self.recordInspectOverrideInstances(env);
+        // A recorded instance's result requirements resolve against Str.
+        if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+            try self.checkStaticDispatchConstraints(env, true);
+            try self.checkAllConstraints(env);
+        }
+    }
+
     switch (scope) {
         .module => {
             try self.checkInspectedTopLevelValues();
@@ -31815,6 +31824,122 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // consumer reads.
     try self.defaultLiteralFieldKinds(env);
     try self.freezeBoundaryCodecDerivations(env);
+}
+
+/// Record, for each `to_inspect` method this module declares, the use
+/// inspection makes of it: an instance of its type whose result is `Str`
+/// (design.md "Inspect Overrides"). Publication decides from that instance
+/// whether inspection uses the method, and publishes the use's evidence as it
+/// does a dispatch target's. The method's own type is never changed: the
+/// instance is a fresh copy, related exactly as a call site whose result is
+/// `Str` relates one.
+fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.cir.method_defs.entries.items) |entry| {
+        if (!entry.key.methodIdent().eql(self.cir.idents.to_inspect)) continue;
+        const binding_var = ModuleEnv.varFrom(entry.value.type_node_idx);
+        const use_var = try self.inspectOverrideStrInstance(entry.value.def_idx, binding_var, env) orelse continue;
+        try self.cir.recordInspectOverrideInstance(entry.value.def_idx, use_var);
+    }
+}
+
+/// The instance of `binding_var`'s type whose result is `Str`, or null when
+/// its result cannot be `Str`. The returned use var is unified with that
+/// instance and names its dispatch-target scheme-use record. A monomorphic
+/// binding's only instance is its own type.
+fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, binding_var: Var, env: *Env) std.mem.Allocator.Error!?Var {
+    if (!self.isBindingSchemeVar(binding_var) and self.types.resolveVar(binding_var).desc.rank != .generalized) {
+        return binding_var;
+    }
+
+    var probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) probe.rollback();
+
+    const region = self.getRegionAt(binding_var);
+    const use_var = try self.fresh(env, region);
+    const instance = try self.instantiateBindingVar(binding_var, env, .use_last_var, .{ .dispatch_target = .{
+        .node_idx = @intFromEnum(self.cir.store.getDef(def_idx).pattern),
+        .constraint_fn_var = use_var,
+    } });
+    if (!(try probe.unify(use_var, instance)).isEstablished()) return null;
+    const func = self.pureFunctionThroughAliases(instance) orelse return null;
+    const ret_content = self.types.resolveVar(func.ret).desc.content;
+    if (ret_content == .err) return null;
+    const ret_constraints = contentConstraintRange(ret_content) orelse StaticDispatchConstraint.SafeList.Range.empty();
+
+    const str_var = try self.freshStr(env, region);
+    if (!(try probe.unify(str_var, func.ret)).isEstablished()) return null;
+    if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, ret_constraints, str_var, env)) return null;
+    // An interpolated result's parts become Str exactly as a call site's do.
+    var constraints = self.types.iterStaticDispatchConstraints(ret_constraints);
+    while (constraints.next()) |constraint| {
+        if (!constraint.interpolation.isPresent()) continue;
+        const parts = constraint.interpolation.interpolated_parts;
+        for (0..parts.len()) |part_i| {
+            const part = self.types.getInterpolationPartAt(parts, @intCast(part_i));
+            const part_content = self.types.resolveVar(part.var_).desc.content;
+            if (part_content == .err) return null;
+            const part_constraints = contentConstraintRange(part_content) orelse StaticDispatchConstraint.SafeList.Range.empty();
+            if (!(try probe.unify(str_var, part.var_)).isEstablished()) return null;
+            if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, part_constraints, str_var, env)) return null;
+        }
+    }
+    // Inspection calls the method at any instantiation of its owner, so the
+    // instance's argument must still be a nominal over distinct type
+    // variables that carry no requirements.
+    if (!self.isNominalOverDistinctUnconstrainedVars(func)) return null;
+
+    committed = true;
+    probe.commit();
+    return use_var;
+}
+
+/// The pure function `var_` stands for, reading through aliases.
+fn pureFunctionThroughAliases(self: *Self, var_: Var) ?types_mod.Func {
+    var current = var_;
+    var remaining = self.types.len();
+    while (remaining > 0) : (remaining -= 1) {
+        const content = self.types.resolveVar(current).desc.content;
+        switch (content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure, .flex, .rigid, .field_presence, .err => {
+                const func = content.unwrapFuncFull() orelse return null;
+                return switch (func.ext) {
+                    .pure, .unbound => func.func,
+                    .effectful => null,
+                };
+            },
+        }
+    }
+    return null;
+}
+
+/// Whether `func` takes exactly one argument, a nominal type applied to
+/// distinct type variables that carry no static-dispatch requirements.
+fn isNominalOverDistinctUnconstrainedVars(self: *Self, func: types_mod.Func) bool {
+    const args = self.types.sliceVars(func.args);
+    if (args.len != 1) return false;
+    var current = args[0];
+    var remaining = self.types.len();
+    const nominal = while (remaining > 0) : (remaining -= 1) {
+        const content = self.types.resolveVar(current).desc.content;
+        switch (content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure, .flex, .rigid, .field_presence, .err => break content.unwrapNominalType() orelse return false,
+        }
+    } else return false;
+    const type_args = self.types.sliceNominalArgs(nominal);
+    for (type_args, 0..) |type_arg, index| {
+        const resolved = self.types.resolveVar(type_arg);
+        switch (resolved.desc.content) {
+            .flex => |flex| if (!flex.constraints.isEmpty()) return false,
+            .rigid, .alias, .structure, .field_presence, .err => return false,
+        }
+        for (type_args[0..index]) |earlier| {
+            if (self.types.resolveVar(earlier).var_ == resolved.var_) return false;
+        }
+    }
+    return true;
 }
 
 /// The candidate universe `runLiteralDefaultingRounds` gathers from—the only

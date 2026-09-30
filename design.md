@@ -7952,26 +7952,50 @@ Inspection (`Str.inspect`, `dbg`, and `expect` failure reports) renders every
 value. A nominal type's `to_inspect` method replaces the default rendering only
 when it is an eligible inspect override. A method named `to_inspect` is still an
 ordinary method: it may have any type, and explicit calls and `where` clauses
-dispatch to it like any other method. It is an inspect override exactly when
-its type is `T -> Str`, where `T` is the owning nominal applied to distinct type
-variables that carry no `where` constraints. `Wrap(a) -> Str` qualifies;
-`Wrap(I64) -> Str`, `Pair(a, a) -> Str`,
+dispatch to it like any other method. Inspection calls the method as a call
+site whose result is `Str` would: the instance of its type whose result is
+`Str`. The method is an inspect override exactly when that instance exists and
+is `T -> Str`, where `T` is the owning nominal applied to distinct type
+variables that carry no `where` constraints. `Wrap(a) -> Str` qualifies, and so
+does an unannotated method whose result is a string literal: its declared result
+is a variable constrained by `from_quote` or `from_interpolation`, which `Str`
+satisfies. `Wrap(I64) -> Str`, `Pair(a, a) -> Str`,
 `Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
-extra arguments, effectful functions, and non-`Str` results do not. Inspection
-ignores an ineligible method and renders the value's default form; this is never
+extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
+a rigid variable), and results that are `Str` only when one of `T`'s variables
+is (interpolating a payload of type `a`) do not. Inspection ignores an
+ineligible method and renders the value's default form; this is never
 reported.
+
+Checking forms that instance once per `to_inspect` declaration
+(`recordInspectOverrideInstances`): it instantiates the method's scheme as a
+dispatch target, unifies the copy's result with `Str`, and satisfies the
+result's requirements with `Str` exactly as the dispatch pass does—a quote or
+interpolation conversion by `Str`, an interpolation's parts by becoming `Str`,
+any other method requirement by `Str`'s method. The method's own type is never
+changed. When the instance exists, is pure, and still takes one nominal over
+distinct type variables that carry no requirements, checking records it as
+inspection's use of the method (`ModuleEnv.inspect_override_instances`) with
+its scheme-use record,
+so CheckedModule construction derives that use's evidence like a dispatch
+target's.
 
 Eligibility is a property of the declaration alone, so it holds at every
 instantiation of the owner. Inspection therefore places no requirement on the
 inspected type: a generic function that inspects its argument carries none, and
 inspection reached through a record, list, tag payload, generic helper, or
 nominal backing can never select an override it cannot call. The checked method
-registry records the decision once per `to_inspect` entry
-(`MethodRegistryEntry.inspect_override`, computed by `MethodRegistry.fromModule`
-from the method's checked type). Monotype and Boxy planning and lowering select
-the declaring view exactly as method dispatch does and consume that decision
-through `MethodRegistry.lookupInspectOverride`; they never re-examine the
-method's type.
+registry records the decision once per `to_inspect` entry:
+`MethodRegistryEntry.inspect_override` is the instance's checked callable type
+when `MethodRegistry.fromModule` finds it `T -> Str`, and `inspect_evidence` is
+the use's evidence node, produced by the evidence pass. Monotype and Boxy
+planning and lowering select the declaring view exactly as method dispatch does
+and consume that decision through `MethodRegistry.lookupInspectOverride`; they
+never re-examine the method's type. Monotype requests the method at `T -> Str`.
+Boxy plans its worker at the instance type and supplies the worker's hidden
+descriptors and dictionaries from the use's evidence, as it does for a resolved
+dispatch. The use leaves the owner's type variables free, so each inspected
+value binds them in that substitution to its own type arguments.
 
 This is deliberately the simplest rule, adopted to see how it works in
 practice. Later versions may admit overrides with `where` clauses, with type
@@ -9488,6 +9512,16 @@ Other solved-graph mutations:
 - `omitRowLabels` (`setVarContent`)—policy: Row Union Normalization
   (above). Rewrites the row part holding an outer copy of a repeated label to
   omit it, after relating the occurrences through ordinary unification.
+- `recordInspectOverrideInstances`—policy: Inspect Overrides (above). One
+  commit-probe per `to_inspect` declaration instantiates the method's scheme as
+  a dispatch target, unifies the copy's result with `Str`, and accepts the
+  result's requirements (and an interpolated result's parts) against `Str`;
+  it is committed only when the instance is pure and takes one nominal over
+  distinct unconstrained type variables, recording inspection's use of the
+  method.
+  The method's own solved type is never written. Accepted and rejected sides
+  are pinned by test/cli/InspectUnannotatedOverride.roc and
+  test/cli/InspectIneligibleOverride.roc.
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
@@ -13079,6 +13113,23 @@ or `from_numeral` code at runtime. Ordinary explicit calls to those methods stil
 use the checked dispatch plan. Builtin descriptor-guided numeral operations
 remain ordinary Boxy representation operations.
 
+An interpolation whose target is a type variable dispatches `from_interpolation`
+through the dictionary its worker receives: interpolation constraints, like
+quote constraints, carry runtime dictionary evidence
+(`requiresRuntimeDictionary`). Every interpolated part fills the generated
+iterator's item slot, so the item type is the parts' type. The call describes
+the item from its first part rather than from the dictionary, because a
+`from_interpolation` that is generic in its item fixes it only through the
+parts; Monotype likewise relates the iterator operand's item to each part's
+type before lowering it. The conversion's result leaves are supplied by the
+selected dictionary method's requirement descriptors, and their materialization
+precedes the operands built from them. A dictionary slot reads a requirement
+descriptor from a call argument only when the descriptor describes that whole
+argument; a descriptor nested inside an argument is the method's own storage
+there, or supplied by the invocation. The generated iterator is constructed
+inside `Iter`'s formal scope, so its shared backing's item formal names the
+interpolation's item type.
+
 A literal requirement names the checked literal site, the complete conversion
 callable type, and the selected conversion evidence in the requiring worker's
 variables. Evidence retains the checked target, its complete scheme substitution,
@@ -13614,7 +13665,10 @@ initializes a fresh local with one descriptor value. A descriptor local is not
 rebound while any value refers to it; materializing a different descriptor uses
 a different local. Consequently the descriptor attached to a value is stable
 for the value's entire LIR lifetime, and ARC never scans for descriptor updates
-or releases values in anticipation of descriptor rebinding.
+or releases values in anticipation of descriptor rebinding. A procedure
+parameter refers to its descriptor local for its whole life, so a worker
+prelude that rebuilds an argument's root descriptor defines that local; the
+assignment invalidates no parameter, even one the body never reads.
 
 Runtime-created descriptors use storage whose lifetime is the complete Boxy
 runtime, independently from operation-local value or inspect scratch. This

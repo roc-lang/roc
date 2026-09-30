@@ -4909,6 +4909,11 @@ const Inserter = struct {
         return true;
     }
 
+    /// A descriptor update releases each dead value its previous binding
+    /// described. A procedure parameter refers to its descriptor local for its
+    /// whole life, and a descriptor local is never rebound while a value
+    /// refers to it, so assigning a parameter's descriptor local defines it in
+    /// the procedure's prelude and invalidates no parameter.
     fn planValuesInvalidatedByDescriptorUpdate(
         self: *Inserter,
         desc_local: LIR.LocalId,
@@ -4917,12 +4922,21 @@ const Inserter = struct {
         loop_keep: ?LoopKeep,
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
+        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_source_proc).args);
         for (self.boxy_desc_users.usersOf(desc_local)) |local| {
             if (!owned.contains(local)) continue;
+            if (localSpanContains(params, local)) continue;
             if (try self.valueUsedInPath(next, local, loop_keep)) continue;
             if (!try self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
             try releases.append(self.solve_allocator, self.releaseDecision(local));
         }
+    }
+
+    fn localSpanContains(locals: anytype, local: LIR.LocalId) bool {
+        for (0..GuardedList.borrowLen(locals)) |index| {
+            if (GuardedList.at(locals, index) == local) return true;
+        }
+        return false;
     }
 
     /// Computes which low-level argument positions in `span` (restricted to

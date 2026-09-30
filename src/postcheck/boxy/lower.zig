@@ -2910,15 +2910,20 @@ const ProcedureBuilder = struct {
         }
         const inspect = frame.inspect.?;
         const worker = self.plan.workers.items[@intFromEnum(inspect.worker)];
-        const dict_params = self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
-        if (frame.nested_dict_refs.items.len < dict_params.len) {
-            const param = dict_params[frame.nested_dict_refs.items.len];
+        const hidden_dict_args = self.plan.directCallHiddenDictionaryArgSlice(inspect.hidden_dict_args);
+        if (frame.nested_dict_refs.items.len < hidden_dict_args.len) {
+            const arg = hidden_dict_args[frame.nested_dict_refs.items.len];
+            const source_rep = switch (arg.source) {
+                .static_rep => |source_rep| source_rep,
+                .bound_dictionaries => boxyLowerInvariant("boxy inspect slot received a caller-bound dictionary source"),
+                .literal => boxyLowerInvariant("boxy inspect slot received a literal dictionary source"),
+            };
             return .{ .request = .{ .dict = .{
-                .rep = param.rep,
-                .worker_dictionaries = param.dictionaries,
-                .method_evidence = .{},
+                .rep = source_rep,
+                .worker_dictionaries = arg.worker_dictionaries,
+                .method_evidence = arg.method_evidence,
                 .template = null,
-                .env = 0,
+                .env = arg.env,
             } } };
         }
 
@@ -5988,7 +5993,10 @@ const ProcedureBuilder = struct {
         const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
         _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect lowering");
         const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-        return .{ .target = .{ .module = candidate, .target = override } };
+        // Inspection calls the method at its checked `T -> Str` instance.
+        var target = override.target;
+        target.callable_ty = override.callable_ty;
+        return .{ .target = .{ .module = candidate, .target = target } };
     }
 
     fn lookupMethodTargetInModule(
@@ -8769,6 +8777,10 @@ const ProcedureBuilder = struct {
         remaining: LIR.LocalId = undefined,
         len_rep: Plan.TypeRepId = undefined,
         item_exprs: [2]checked.CheckedExprId = undefined,
+        /// The current node's nominal wrapper formal scope: the iterator's
+        /// fields live in `Iter`'s shared backing, whose item formal names
+        /// this interpolation's item type only inside the wrapper's scope.
+        scope: ?ProcBodyBuilder.NominalBackingFormalScope = null,
     };
 
     fn beginGeneratedInterpolationIter(
@@ -8826,6 +8838,7 @@ const ProcedureBuilder = struct {
         const target = state.iter_values[index];
         const rest: ?LIR.LocalId = if (index < interpolation.parts.len) state.iter_values[index + 1] else null;
         const planned = state.planned;
+        state.scope = try proc.enterNominalWrapperFormalScopes(iter_rep);
         const len_child = proc.generatedRecordFieldChild(iter_rep, "len_if_known");
         const step_child = proc.generatedRecordFieldChild(iter_rep, "step");
         state.len = try proc.addFrameLocalForRep(len_child.rep);
@@ -8912,7 +8925,9 @@ const ProcedureBuilder = struct {
         try proc.recordAggregateLocalDescriptorEnvironment(state.iter_values[index], state.planned.iter_rep, &.{ state.len, state.step });
         var continuation = try proc.assignGeneratedIteratorLength(state.len, state.len_rep, .all, state.remaining, state.continuation);
         continuation = try proc.assignIntLiteral(state.remaining, @intCast(state.interpolation.parts.len - index), continuation);
-        state.continuation = continuation;
+        const scope = state.scope.?;
+        state.scope = null;
+        state.continuation = try proc.leaveNominalBackingFormalScope(scope, continuation);
         state.index += 1;
     }
 
@@ -17258,6 +17273,8 @@ const ProcBodyBuilder = struct {
         bind_shared_descriptor: LIR.LocalId,
         /// Restore the bindings `bind_shared_descriptor` kept.
         restore_descriptors,
+        /// Materialize descriptor initializers, owning the slice.
+        prepend_descriptor_initializers: []DescriptorArgLocal,
         runtime_error,
         /// Crash when a declaration's pattern misses.
         pattern_miss_crash: LIR.JoinPointId,
@@ -17347,6 +17364,7 @@ const ProcBodyBuilder = struct {
             .chain => |*chain| {
                 for (chain.items[chain.index..]) |item| switch (item) {
                     .record_local_env => |env| self.parent.allocator.free(env.bindings),
+                    .prepend_descriptor_initializers => |initializers| self.parent.allocator.free(initializers),
                     .lower, .propagate_desc, .prepend_field_initializers, .record_aggregate_env, .leave_scope, .str_concat, .missing_optional_slot, .record_ext_field, .call_operand, .boundary_assign, .const_list_element_box, .bind_shared_descriptor, .restore_descriptors, .runtime_error, .pattern_miss_crash, .callable_adapter => {},
                 };
                 if (chain.scope) |scope| self.dropNominalBackingFormalScope(scope);
@@ -17386,7 +17404,10 @@ const ProcBodyBuilder = struct {
                 pattern.state = null;
             },
             .interpolation_iter => |*iter| {
-                if (iter.state) |state| self.parent.freeInterpolationIterState(state);
+                if (iter.state) |state| {
+                    if (state.scope) |scope| self.dropNominalBackingFormalScope(scope);
+                    self.parent.freeInterpolationIterState(state);
+                }
                 iter.state = null;
             },
             .iter_dispatch => |*dispatch| {
@@ -17550,6 +17571,11 @@ const ProcBodyBuilder = struct {
                     break :blk chain.current;
                 },
                 .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error, self.origin),
+                .prepend_descriptor_initializers => |initializers| blk: {
+                    chain.items[chain.index - 1] = .runtime_error;
+                    defer self.parent.allocator.free(initializers);
+                    break :blk try self.prependDescriptorArgMaterializations(initializers, chain.current);
+                },
                 .record_local_env => |env| blk: {
                     chain.items[chain.index - 1] = .runtime_error;
                     defer self.parent.allocator.free(env.bindings);
@@ -24733,11 +24759,17 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
-        // A quote conversion's argument is concrete Str. Its remaining type
-        // parameters (including the conversion error) belong to the selected
-        // dictionary method, rather than to an explicit argument at this call.
-        if (self.module.checked_bodies.expr(planned.call.expr).data == .str_from_quote) {
-            try self.bindQuoteDictionaryDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
+        // A quote or interpolation conversion's leading argument is concrete
+        // Str. An interpolation's item type is its parts' type, which the
+        // parts describe. The remaining type parameters (the conversion's
+        // result and error) belong to the selected dictionary method, rather
+        // than to an explicit argument at this call.
+        const call_data = self.module.checked_bodies.expr(planned.call.expr).data;
+        if (call_data == .interpolation) {
+            try self.bindInterpolationItemDescriptorArgs(hidden_desc_args, call_data.interpolation, &pre_arg_descriptor_initializers);
+        }
+        if (call_data == .str_from_quote or call_data == .interpolation) {
+            try self.bindConversionResultDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
         }
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, lowered, arg_reps, arg_reps);
         defer self.parent.allocator.free(hidden_desc_locals);
@@ -24817,10 +24849,13 @@ const ProcBodyBuilder = struct {
         }
         continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(call_arg_descriptor_initializers.items, continuation);
-        continuation = try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
         // The operands are lowered last first, under the descriptors this
-        // call bound, which are restored once they are lowered.
-        const items = try self.parent.allocator.alloc(ExprChainItem, operands.len + 1);
+        // call bound, which are restored once they are lowered. The
+        // conversion's leaf descriptors read only the bound dictionary and the
+        // enclosing scope, and a generated interpolation iterator operand is
+        // built from them, so they are materialized before every operand.
+        const items = try self.parent.allocator.alloc(ExprChainItem, operands.len + 2);
+        errdefer self.parent.allocator.free(items);
         for (items[0..operands.len], 0..) |*item, offset| {
             const index = operands.len - 1 - offset;
             item.* = .{ .call_operand = .{
@@ -24831,12 +24866,37 @@ const ProcBodyBuilder = struct {
                 .lowered = lowered[index],
             } };
         }
-        items[operands.len] = .restore_descriptors;
+        items[operands.len] = .{ .prepend_descriptor_initializers = try self.parent.allocator.dupe(DescriptorArgLocal, pre_arg_descriptor_initializers.items) };
+        items[operands.len + 1] = .restore_descriptors;
         snapshot_moved = true;
         return .{ .tail = .{ .chain = .{ .items = items, .current = continuation, .snapshot = descriptor_snapshot } } };
     }
 
-    fn bindQuoteDictionaryDescriptorArgs(
+    /// Every part of an interpolation fills the generated iterator's item
+    /// slot, so the item type is the parts' type and the first part's type
+    /// describes it.
+    fn bindInterpolationItemDescriptorArgs(
+        self: *ProcBodyBuilder,
+        args: []const Plan.DirectCallHiddenDescriptorArg,
+        interpolation: checked.CheckedInterpolation,
+        initializers: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!void {
+        if (interpolation.parts.len == 0) boxyLowerInvariant("checked interpolation had no interpolated parts");
+        const part_rep = self.repForType(self.module.checked_bodies.expr(interpolation.parts[0].value).ty);
+        for (args) |arg| {
+            if (arg.source_arg_index == null or !self.repIsBareDynamic(arg.rep)) continue;
+            const materialization = try self.descriptorMaterializationForKnownRep(part_rep);
+            const local = try self.addFrameLocal(.opaque_ptr);
+            try initializers.append(self.parent.allocator, .{
+                .local = local,
+                .materialize = materialization.desc,
+                .captures = materialization.captures,
+            });
+            try self.bindDescriptorIdentityLocalForRep(arg.rep, local, false);
+        }
+    }
+
+    fn bindConversionResultDescriptorArgs(
         self: *ProcBodyBuilder,
         args: []const Plan.DirectCallHiddenDescriptorArg,
         dict: LIR.LocalId,
@@ -24847,7 +24907,7 @@ const ProcBodyBuilder = struct {
         for (args, 0..) |arg, index| {
             // Constructor descriptors are built by ordinary call lowering from
             // these exact leaf descriptors supplied by conversion evidence.
-            if (!self.repIsBareDynamic(arg.rep)) continue;
+            if (arg.source_arg_index != null or !self.repIsBareDynamic(arg.rep)) continue;
             const local = try self.addFrameLocal(.opaque_ptr);
             try initializers.append(self.parent.allocator, .{
                 .local = local,

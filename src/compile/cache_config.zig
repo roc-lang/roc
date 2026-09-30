@@ -264,7 +264,10 @@ pub const Constants = struct {
     ///      recursive types share one key however they are unrolled, type
     ///      variables are written as relative references, and a child is
     ///      referred to by its key plus the variables it shares.
-    pub const CACHE_VERSION = 119;
+    /// 120: Checking records each `to_inspect` method's use at result `Str`,
+    ///      and a method registry entry carries that use's instance type and
+    ///      evidence.
+    pub const CACHE_VERSION = 120;
 };
 
 /// Configuration for the Roc cache system.
