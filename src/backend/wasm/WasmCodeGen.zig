@@ -474,6 +474,7 @@ list_append_sublist_import: ?u32 = null,
 list_append_le_bytes_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
 list_reserve_import: ?u32 = null,
+list_reserve_for_append_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
 list_sort_with_import: ?u32 = null,
 list_replace_import: ?u32 = null,
@@ -823,6 +824,7 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .list_owned_unique => null,
             .list_drop_at => self.list_drop_at_import,
             .list_reserve => self.list_reserve_import,
+            .list_reserve_for_append => self.list_reserve_for_append_import,
             .list_replace => self.list_replace_import,
             .list_set => self.list_set_import,
             .list_swap => self.list_swap_import,
@@ -2203,6 +2205,7 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
 
     const list_reserve_type = try self.module.addFuncType(&.{ .i32, .i64, .i32, .i32, .i32 }, &.{});
     self.list_reserve_import = try self.module.addImport("env", "roc_list_reserve", list_reserve_type);
+    self.list_reserve_for_append_import = try self.module.addImport("env", "roc_list_reserve_for_append", list_reserve_type);
 
     const list_reverse_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
     self.list_reverse_import = try self.module.addImport("env", "roc_list_reverse", list_reverse_type);
@@ -8740,6 +8743,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_list_reverse", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_sort_with", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_reserve", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_list_reserve_for_append", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_release_excess_capacity", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
 }
 
@@ -13315,9 +13319,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .list_set_in_place_unsafe => {
             try self.generateLLListSet(args, ll.ret_layout, ll.target, ll.unique_args | 1);
         },
-        // list_reserve(list, capacity) -> list with at least that capacity
+        // list_reserve(list, spare) -> list with room for exactly spare more
         .list_reserve => {
-            try self.generateLLListReserve(args, ll.ret_layout, ll.target, ll.unique_args);
+            try self.generateLLListReserve(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_reserve)), self.list_reserve_import, "roc_boxy_list_reserve", args, ll.ret_layout, ll.target, ll.unique_args);
+        },
+        // list_reserve_for_append(list, spare) -> the same, growing geometrically
+        .list_reserve_for_append => {
+            try self.generateLLListReserve(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_reserve_for_append)), self.list_reserve_for_append_import, "roc_boxy_list_reserve_for_append", args, ll.ret_layout, ll.target, ll.unique_args);
         },
         // list_release_excess_capacity(list) -> list with capacity = length
         .list_release_excess_capacity => {
@@ -15948,6 +15956,7 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_reverse,
         .list_sort_with,
         .list_reserve,
+        .list_reserve_for_append,
         .list_release_excess_capacity,
         .list_split_first,
         .list_split_last,
@@ -21291,8 +21300,10 @@ fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, target
     try self.emitFpOffset(result_offset);
 }
 
-/// Generate list_reserve: ensure list has at least given capacity
-fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
+/// Generate list_reserve or list_reserve_for_append: ensure the list has room
+/// for the given number of additional elements, calling the builtin `kind`
+/// (through `host_import` in host-import mode) or `boxy_symbol`
+fn generateLLListReserve(self: *Self, kind: BuiltinKind, host_import: ?u32, boxy_symbol: []const u8, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReserve.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
 
@@ -21322,7 +21333,7 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx, tar
             try self.emitI32Const(@intCast(elem_size));
             try self.emitI32Const(@intCast(elem_align));
             try self.emitFpOffset(result_offset);
-            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_reserve)), self.list_reserve_import);
+            try self.emitBuiltinCall(kind, host_import);
         },
         .builtin_relocs => {
             const fields = try self.loadRocListFields(list_ptr);
@@ -21336,7 +21347,7 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx, tar
                 try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
                 try self.resolveBoxyDesc(boxy_elem.desc);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBoxyCall("roc_boxy_list_reserve");
+                try self.emitBoxyCall(boxy_symbol);
             } else {
                 const callbacks = try self.listElementCallbacks(list_abi);
                 try self.emitFpOffset(result_offset);
@@ -21348,7 +21359,7 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx, tar
                 try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
                 try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-                try self.emitBuiltinCall(.list_reserve, null);
+                try self.emitBuiltinCall(kind, null);
             }
         },
         .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_reserve", .{}),

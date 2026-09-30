@@ -467,6 +467,7 @@ pub fn runWasmOutcomeWithStats(
         env_imports.addHostFunction("roc_list_concat", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListConcat, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_drop_at", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListDropAt, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_reserve", &[_]bytebox.ValType{ .I32, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReserve, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_reserve_for_append", &[_]bytebox.ValType{ .I32, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReserveForAppend, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_replace", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReplace, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_set", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I32, .I32 }, &[_]bytebox.ValType{}, hostListSet, &run_state) catch return error.WasmExecFailed;
@@ -2263,6 +2264,16 @@ fn hostListDropAt(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
 }
 
 fn hostListReserve(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostListReserveWithGrowth(ctx, module, params, .exact);
+}
+
+fn hostListReserveForAppend(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostListReserveWithGrowth(ctx, module, params, .amortized);
+}
+
+/// `exact` grows to precisely `len + spare`, like `listReserve`; `amortized`
+/// grows to at least the next geometric step, like `listReserveForAppend`.
+fn hostListReserveWithGrowth(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime growth: enum { exact, amortized }) void {
     const state: *WasmRunState = @ptrCast(@alignCast(ctx));
     var buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
@@ -2291,7 +2302,11 @@ fn hostListReserve(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
         return;
     }
 
-    const new_data = allocWasmData(state, module, alignment, desired_cap * elem_width);
+    const new_cap = switch (growth) {
+        .exact => desired_cap,
+        .amortized => @max(desired_cap, builtins.utils.geometricGrowth(if ((encoded_cap & 1) == 0) cap else len, elem_width)),
+    };
+    const new_data = allocWasmData(state, module, alignment, new_cap * elem_width);
     buffer = module.store.getMemory(0).buffer();
     if (len != 0 and data_ptr != 0) {
         @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
@@ -2299,7 +2314,7 @@ fn hostListReserve(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
 
     writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
-    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(desired_cap));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(new_cap));
 }
 
 fn wasmListIsUnique(buffer: []const u8, data_ptr: usize, encoded_cap: usize) bool {

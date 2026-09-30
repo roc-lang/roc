@@ -215,29 +215,8 @@ pub const RocStr = extern struct {
     }
 
     // allocate space for a (big or small) RocStr, but put nothing in it yet.
-    // May have a larger capacity than the length.
+    // A big string's capacity is exactly its length.
     pub fn allocate(
-        length: usize,
-        roc_ops: *RocOps,
-    ) RocStr {
-        const element_width = 1;
-        const result_is_big = length >= SMALL_STRING_SIZE;
-
-        if (result_is_big) {
-            const capacity = utils.calculateCapacity(0, length, element_width);
-            return RocStr.allocateBig(length, capacity, roc_ops);
-        } else {
-            var string = RocStr.empty();
-
-            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = smallStrFlagByte(length);
-
-            return string;
-        }
-    }
-
-    // allocate space for a (big or small) RocStr, but put nothing in it yet.
-    // Will have the exact same capacity as length if it is not a small string.
-    pub fn allocateExact(
         length: usize,
         roc_ops: *RocOps,
     ) RocStr {
@@ -528,12 +507,10 @@ pub const RocStr = extern struct {
     ) RocStr {
         const old_length = self.len();
 
-        const element_width = 1;
         const result_is_big = new_length >= SMALL_STRING_SIZE;
 
         if (result_is_big) {
-            const capacity = @import("utils.zig").calculateCapacity(0, new_length, element_width);
-            var result = RocStr.allocateBig(new_length, capacity, roc_ops);
+            var result = RocStr.allocateBig(new_length, new_length, roc_ops);
 
             // transfer the memory
 
@@ -2698,7 +2675,7 @@ pub fn strReleaseExcessCapacity(
         string.decref(roc_ops);
         return RocStr.empty();
     } else {
-        var output = RocStr.allocateExact(old_length, roc_ops);
+        var output = RocStr.allocate(old_length, roc_ops);
         const source_ptr = string.asU8ptr();
         const dest_ptr = output.asU8ptrMut();
 

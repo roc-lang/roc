@@ -1834,6 +1834,39 @@ pub fn roc_boxy_list_reserve(
     );
 }
 
+/// Grow list capacity ahead of an append while preserving descriptor-governed
+/// elements.
+pub fn roc_boxy_list_reserve_for_append(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    spare: u64,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listReserveForAppend(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        spare,
+        element_width,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        g.runtime.roc_ops,
+    );
+}
+
 /// Shrink a list allocation to its logical length without changing elements.
 pub fn roc_boxy_list_release_excess_capacity(
     out: *RocList,

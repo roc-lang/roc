@@ -107,6 +107,7 @@ pub const BuiltinKind = enum {
     list_owned_unique,
     list_drop_at,
     list_reserve,
+    list_reserve_for_append,
     list_replace,
     list_set,
     list_swap,

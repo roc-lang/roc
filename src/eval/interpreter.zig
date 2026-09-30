@@ -6153,6 +6153,36 @@ pub const Interpreter = struct {
         return if ((unique_args & 2) != 0) .InPlace else .Immutable;
     }
 
+    /// Evaluate `list_reserve` or `list_reserve_for_append` through `reserve`,
+    /// the builtin that picks the grown capacity.
+    fn evalListReserve(self: *LirInterpreter, ll: LowLevelEvalInput, arg_layout: layout_mod.Idx, comptime reserve: anytype) Error!Value {
+        const info = self.listElemInfo(arg_layout);
+        const elems_rc = self.builtinListElemRc(arg_layout);
+        const list_val = self.valueToRocListForLayout(ll.args[0], arg_layout);
+        if (info.width == 0) {
+            return self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+        }
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
+        if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+        const result = reserve(
+            list_val,
+            info.alignment,
+            ll.args[1].read(u64),
+            info.width,
+            elems_rc,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+            updateModeForArg0(ll.unique_args),
+            &self.roc_ops,
+        );
+        return self.rocListToValue(result, ll.ret_layout);
+    }
+
     fn evalLowLevel(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
         const args = ll.args;
 
@@ -7098,33 +7128,8 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
-            .list_reserve => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
-                if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
-                }
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
-                const result = builtins.list.listReserve(
-                    list_val,
-                    info.alignment,
-                    args[1].read(u64),
-                    info.width,
-                    elems_rc,
-                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
-                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-                    updateModeForArg0(ll.unique_args),
-                    &self.roc_ops,
-                );
-                break :blk self.rocListToValue(result, ll.ret_layout);
-            },
+            .list_reserve => try self.evalListReserve(ll, arg_layout, builtins.list.listReserve),
+            .list_reserve_for_append => try self.evalListReserve(ll, arg_layout, builtins.list.listReserveForAppend),
             .list_release_excess_capacity => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
@@ -8013,7 +8018,7 @@ pub const Interpreter = struct {
 
     fn evalSimdAppend(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
         var list = self.valueToRocListForLayout(ll.args[1], try self.lowLevelArgLayout(ll, 1));
-        list = builtins.list.listReserve(
+        list = builtins.list.listReserveForAppend(
             list,
             1,
             16,
