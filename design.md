@@ -13358,6 +13358,17 @@ worker builds values of a type parameter's actual in its own storage (an open
 row it constructed, say), which the actual's hidden descriptor need not describe
 (`test/cli/JsonCustomParserOverDerived.roc` under `--specialize=no`).
 
+Checking copies a generalized variable at each use, so a variable in a
+worker's checked types that no scheme in its lexical chain quantifies is shared
+with its definition: the still-open variable of a monomorphic value, left at its
+checked default. Boxy reads such a variable at that default, as the specialized
+pipeline does for the same shared variable. A derived `is_eq`/`to_hash` compares
+the component as the closed representation (an open row's listed variants), a
+root or compile-time evaluation describes and dispatches a variable its types
+still hold at the default, and nothing reads a per-use guess
+(`test/cli/TopLevelOpenRowValues.roc`,
+`test/cli/UnresolvedPolymorphicTopLevelValue.roc`).
+
 Nominal substitution identity does not demand a runtime representation. Boxy
 interns checked type bindings separately from representations; a binding receives
 a representation only when type analysis reaches it through an explicit runtime

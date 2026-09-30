@@ -4873,6 +4873,14 @@ const ProcedureBuilder = struct {
             self.type_desc_ids[rep_index] = desc_id;
             return desc_id;
         }
+        if (source_rep.kind == .dynamic and source_rep.children.len == 0 and source_rep.tag_variants.len == 0) {
+            // A variable nothing binds where it is read is at its default.
+            if (self.plan.sharedClosedRep(rep_id)) |closed| {
+                const desc_id = try self.typeDescForRep(closed);
+                self.type_desc_ids[rep_index] = desc_id;
+                return desc_id;
+            }
+        }
         if (source_rep.nominal_backing_arg_substitutions.len != 0) {
             var descriptor_sources = StaticDescriptorSourceMap{};
             defer descriptor_sources.deinit(self.allocator);
@@ -31496,6 +31504,7 @@ const ProcBodyBuilder = struct {
             .structural => .expand,
             .call => |index| .{ .call = index },
             .scheme_dictionary => |requirement| .{ .scheme_dictionary = requirement },
+            .shared_closed => |closed| .{ .convert = closed },
         };
     }
 

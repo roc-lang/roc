@@ -1022,6 +1022,11 @@ pub const DerivedComponentDecision = union(enum) {
     structural,
     call: u32,
     scheme_dictionary: DictionaryRequirementId,
+    /// The component's variable is not quantified in the frame's lexical
+    /// chain, so it is the one shared open variable of a monomorphic value,
+    /// which checking left at its default; the component is compared as
+    /// this closed representation.
+    shared_closed: TypeRepId,
 };
 
 /// A call to a component type's own `is_eq` or `to_hash` worker, made by a
@@ -1137,6 +1142,9 @@ pub const ProgramPlan = struct {
     derived_component_calls: std.ArrayList(DerivedComponentCallPlan),
     dictionary_method_call_types: std.ArrayList(CheckedTypeIdentity),
     derived_component_decisions: std.AutoHashMap(DerivedComponentKey, DerivedComponentDecision),
+    /// The closed representation of a variable nothing binds where it is read
+    /// (or of an open row whose extension is one), at its checked default.
+    shared_closed_reps: std.AutoHashMapUnmanaged(TypeRepId, TypeRepId) = .empty,
     /// Ordered derived-method formal environments: env `n` is
     /// `derived_envs.items[n - 1]`, a span of `derived_env_bindings`; env 0 is
     /// empty.
@@ -1295,6 +1303,7 @@ pub const ProgramPlan = struct {
         self.derived_component_calls.deinit(self.allocator);
         self.dictionary_method_call_types.deinit(self.allocator);
         self.derived_component_decisions.deinit();
+        self.shared_closed_reps.deinit(self.allocator);
         self.derived_env_bindings.deinit(self.allocator);
         self.derived_envs.deinit(self.allocator);
         self.generated_parser_field_captures.deinit(self.allocator);
@@ -1324,6 +1333,12 @@ pub const ProgramPlan = struct {
 
     pub fn dictionaryMethodCallTypeSlice(self: *const ProgramPlan, span: Span) []const CheckedTypeIdentity {
         return self.dictionary_method_call_types.items[span.start .. span.start + span.len];
+    }
+
+    /// The closed representation planned for a variable nothing binds where
+    /// it is read, when one was planned.
+    pub fn sharedClosedRep(self: *const ProgramPlan, rep: TypeRepId) ?TypeRepId {
+        return self.shared_closed_reps.get(rep);
     }
 
     /// The decision a derived method recorded for one component.
@@ -3125,6 +3140,7 @@ pub fn analyzeProgram(
     builder.propagateDynamicRequirements();
     try builder.materializeDictionaryCallPlans();
     try builder.materializeGeneratedParserTagUnionPlans();
+    try builder.materializeRootSharedVariableDefaults();
     // The dictionary phases above analyze new types (static dictionary
     // workers), so representations created there need the dynamic-content
     // propagation re-run before descriptor requirements are derived from it.
@@ -9903,6 +9919,113 @@ const Builder = struct {
         }
     }
 
+    /// Whether a scheme in `frame`'s lexical chain quantifies `variable`.
+    /// Checking copies a generalized variable at every use, so a variable in
+    /// a frame's checked types that no scheme in its chain quantifies is
+    /// shared with its definition: the open variable of a monomorphic value.
+    fn frameLexicallyQuantifies(self: *Builder, frame: ?WorkerPlanId, variable: CheckedTypeIdentity) bool {
+        const worker_id = frame orelse return true;
+        const source = self.plan.workers.items[@intFromEnum(worker_id)].source;
+        switch (source) {
+            .procedure_template, .procedure_binding, .procedure_use => {
+                const own = self.workerSchemeVars(source) orelse return false;
+                return schemeVarsContain(own, variable);
+            },
+            .nested_expr => |expr_ref| {
+                if (self.workerSchemeVars(source)) |own| {
+                    if (schemeVarsContain(own, variable)) return true;
+                }
+                const view = self.moduleForId(expr_ref.module);
+                const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
+                const site = for (view.nested_proc_sites.sites) |candidate| {
+                    if (candidate.checked_expr == site_expr) break candidate;
+                } else boxyPlanInvariant("nested worker omitted its lexical site");
+                var scope = site.lexical_scope;
+                while (scope == .generalized) {
+                    const current = &view.checked_procedure_templates.dispatch_scopes[@intFromEnum(scope.generalized)];
+                    if (schemeVarsContain(.{ .view = view, .vars = view.checked_procedure_templates.scopeSchemeVars(current) }, variable)) return true;
+                    scope = if (current.parent) |parent| .{ .generalized = parent } else .root;
+                }
+                return switch (site.owner) {
+                    .template => |template| schemeVarsContain(self.templateSchemeVars(template), variable),
+                    .default_root => false,
+                };
+            },
+            // Generated workers take their types from checked contracts
+            // rather than from a lexical scheme chain.
+            .generated_codec, .generated_field_iterator, .generated_interpolation_step => return true,
+        }
+    }
+
+    fn schemeVarsContain(scheme: WorkerSchemeVars, variable: CheckedTypeIdentity) bool {
+        if (!moduleKeyEqual(scheme.view.key, variable.module)) return false;
+        for (scheme.vars) |candidate| {
+            if (candidate == variable.ty) return true;
+        }
+        return false;
+    }
+
+    /// The variable a dynamic representation stands for: its own, or for an
+    /// open row the extension variable its listed variants end in.
+    fn sharedVariableIdentity(self: *const Builder, rep_id: TypeRepId) CheckedTypeIdentity {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (!rep.is_open_tag_row) return rep.source_type;
+        return self.plan.representations.items[@intFromEnum(self.openRowExtensionRep(rep))].source_type;
+    }
+
+    fn openRowExtensionRep(self: *const Builder, rep: TypeRepresentation) TypeRepId {
+        for (self.plan.childSlice(rep.children)) |child| {
+            if (child.role == .tag_ext) return child.rep;
+        }
+        boxyPlanInvariant("open tag row representation had no extension child");
+    }
+
+    /// A shared variable at its checked default, or an open row with its
+    /// shared extension at that default: exactly the listed variants.
+    fn sharedVariableClosedRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
+        if (self.plan.shared_closed_reps.get(rep_id)) |closed| return closed;
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const closed = if (rep.is_open_tag_row) blk: {
+            const extension = try self.sharedVariableClosedRep(self.openRowExtensionRep(rep));
+            const children_start: u32 = @intCast(self.plan.children.items.len);
+            // Read by index: appending grows the child table.
+            for (0..rep.children.len) |index| {
+                var child = self.plan.children.items[rep.children.start + index];
+                if (child.role == .tag_ext) child.rep = extension;
+                try self.plan.children.append(self.allocator, child);
+            }
+            const variants_start: u32 = @intCast(self.plan.tag_variants.items.len);
+            for (0..rep.tag_variants.len) |index| {
+                var variant = self.plan.tag_variants.items[rep.tag_variants.start + index];
+                variant.payloads.start = variant.payloads.start - rep.children.start + children_start;
+                try self.plan.tag_variants.append(self.allocator, variant);
+            }
+            const closed_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+            try self.plan.representations.append(self.allocator, .{
+                .source_type = rep.source_type,
+                .kind = .tag_union,
+                .children = .{ .start = children_start, .len = rep.children.len },
+                .tag_variants = .{ .start = variants_start, .len = rep.tag_variants.len },
+            });
+            break :blk closed_id;
+        } else blk: {
+            const view = self.moduleForId(rep.source_type.module);
+            const variable = switch (view.checked_types.payload(rep.source_type.ty)) {
+                .flex => |flex| flex,
+                .rigid => boxyPlanInvariant("a rigid variable was shared outside its scheme"),
+                .pending, .err, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => boxyPlanInvariant("a shared dynamic representation was not a variable"),
+            };
+            const closed_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+            try self.plan.representations.append(self.allocator, .{
+                .source_type = rep.source_type,
+                .kind = variableDefaultKind(variable),
+            });
+            break :blk closed_id;
+        };
+        try self.plan.shared_closed_reps.put(self.allocator, rep_id, closed);
+        return closed;
+    }
+
     fn walkDerivedComponent(self: *Builder, walk: *DerivedWalk, rep_id: TypeRepId) Allocator.Error!void {
         if ((try walk.visited.getOrPut(self.allocator, .{ .rep = rep_id, .env = walk.env })).found_existing) return;
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
@@ -9913,6 +10036,11 @@ const Builder = struct {
                 // variable its sealed type.
                 if (walk.actualFor(rep_id)) |actual| return try self.walkDerivedComponent(walk, actual);
                 if (rep.sealed_default) |sealed| return try self.walkDerivedComponent(walk, sealed);
+                if (!self.frameLexicallyQuantifies(walk.root.frame, self.sharedVariableIdentity(rep_id))) {
+                    const closed = try self.sharedVariableClosedRep(rep_id);
+                    try self.recordDerivedDecision(walk, rep_id, .{ .shared_closed = closed });
+                    return try self.walkDerivedComponent(walk, closed);
+                }
                 const requirement = self.derivedSchemeRequirement(rep_id, walk.root.method) orelse
                     boxyPlanInvariant("derived method reached a type variable without its scheme requirement");
                 try self.recordDerivedDecision(walk, rep_id, .{ .scheme_dictionary = requirement });
@@ -10442,6 +10570,30 @@ const Builder = struct {
             }
         } else {
             source.* = candidate;
+        }
+    }
+
+    /// A root has no caller, so a variable its type still holds is bound by
+    /// nothing and is at its checked default, as a root's monomorphic request
+    /// makes it; plan that default for each one.
+    fn materializeRootSharedVariableDefaults(self: *Builder) Allocator.Error!void {
+        var visited = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        defer visited.deinit(self.allocator);
+        var pending = std.ArrayList(TypeRepId).empty;
+        defer pending.deinit(self.allocator);
+        for (self.plan.roots.items) |root| try pending.append(self.allocator, root.source_rep);
+        while (pending.pop()) |rep_id| {
+            if ((try visited.getOrPut(self.allocator, rep_id)).found_existing) continue;
+            const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+            if (rep.kind == .dynamic and rep.sealed_default == null and
+                rep.children.len == 0 and rep.tag_variants.len == 0)
+            {
+                _ = try self.sharedVariableClosedRep(rep_id);
+                continue;
+            }
+            for (0..rep.children.len) |index| {
+                try pending.append(self.allocator, self.plan.children.items[rep.children.start + index].rep);
+            }
         }
     }
 
@@ -11560,7 +11712,14 @@ const Builder = struct {
             // A source that is a formal of the enclosing derived backing is
             // its use's actual; one that reads such formals is instantiated
             // at them.
-            const source_rep = self.repQuery().dictionaryArgumentIdentityRep(derivedEnvActual(env_bindings, call_rep) orelse call_rep);
+            const argument_rep = self.repQuery().dictionaryArgumentIdentityRep(derivedEnvActual(env_bindings, call_rep) orelse call_rep);
+            // A call no worker makes (a root or a compile-time evaluation)
+            // has nothing to bind a variable its types still hold, so the
+            // variable is at its checked default there.
+            const source_rep = if (caller_id == null and self.repIsUnboundVariable(argument_rep))
+                try self.sharedVariableClosedRep(argument_rep)
+            else
+                argument_rep;
             const source_env: u32 = if (try self.plan.repReadsDerivedFormal(self.allocator, source_rep, env_bindings)) env else 0;
             const source_rep_dictionaries = self.plan.representations.items[@intFromEnum(source_rep)].dictionaries;
             const bound_dictionaries = if (substituted_rep == null and evidence_source.rep == null)
@@ -12877,6 +13036,11 @@ const Builder = struct {
             boxyPlanInvariant("checked evidence-edge substitution range was outside its checked module");
         }
         return table.site_substitutions[start .. start + len];
+    }
+
+    fn repIsUnboundVariable(self: *const Builder, rep_id: TypeRepId) bool {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        return rep.sealed_default == null and self.repIsBareVariable(rep_id);
     }
 
     fn repIsBareVariable(self: *const Builder, rep_id: TypeRepId) bool {
