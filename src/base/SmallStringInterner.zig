@@ -1,4 +1,4 @@
-//! An interner for short and likely repeated strings in in a Roc file.
+//! An interner for short and likely repeated strings in a Roc file.
 //!
 //! This interner deduplicates its string values because they are
 //! expected to be small and often repeated since they tend to represent
