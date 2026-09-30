@@ -10949,6 +10949,8 @@ attach witnesses retrospectively to already joined cells. Permanent-member
 history remains intact for recursive argument snapshots and alias indexes. Settled
 structure without mutable field-presence or representation evidence is interned
 directly as Monotype content, without retaining intermediate active snapshots.
+Capture records each settled type once: classes holding the same settled type,
+whichever checked occurrence each was reached through, become one leaf.
 This capture does not finalize the surrounding graph or apply variable defaults.
 Settled leaves retain only their interned identities; storage for open structure
 and producer evidence is proportional to the open portion of the interface.
@@ -10993,7 +10995,10 @@ Agreement is judged up to what a producing graph chooses arbitrarily: local
 numbering, the order in which a row's members were joined, a named-instance
 group with a single member inside the interface, and whether a class that
 finished as a settled type and carries no other evidence was captured as open
-structure or as its settled leaf. An unchanged summary stands for its input.
+structure or as its settled leaf. Recursive-slot and forced-dynamic membership
+decide only iterator representations, so they are no evidence on a class that
+finished as a type containing no iterator interface. An unchanged summary
+stands for its input.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
