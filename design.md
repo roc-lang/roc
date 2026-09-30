@@ -3958,8 +3958,12 @@ marker, say) is ordinary code that must keep compiling:
   the destructure or match is a compile error either way.
 - A guarded binding root's declaration always stays in the runtime body with its
   original right-hand side, so a failure surfaces at the declaration, in source
-  order with the procedure's effects. Only the binder's other uses restore the
-  root.
+  order with the procedure's effects. The binder's uses read that declaration's
+  local; other roots that depend on the binder read its compile-time value.
+- A guarded root that is an expression statement's whole expression lowers that
+  original expression in place. The statement discards its value, so the root
+  has nothing to restore there, and a read of it could be removed as unused
+  along with the failure it would surface.
 - Callable extraction roots are never guarded, since a callable root has no
   runtime form to leave in place.
 

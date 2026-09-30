@@ -18884,6 +18884,10 @@ const BodyContext = struct {
     /// sibling name bound by the same top-level destructure) is an ordinary
     /// constant use there, restored recursively like a top-level constant.
     in_deferred_body: bool = false,
+    /// An expression statement whose expression is a guarded hoisted root. Its
+    /// value is discarded, so the root has nothing to restore there; the
+    /// statement lowers its original expression, keeping its failure in place.
+    in_place_statement_expr: ?checked.CheckedExprId = null,
     /// Generated local for the top-level constant root currently being
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
@@ -25291,8 +25295,9 @@ const BodyContext = struct {
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
         if (hoistedConstRunsAtRuntime(self.view, entry)) return null;
         // A guarded binding root's declaration stays in the runtime body with
-        // its original right-hand side; only its other uses restore the root.
+        // its original right-hand side; the binder's uses read that local.
         if (entry.pattern != null and self.view.compile_time_roots.root(entry.root).guarded) return null;
+        if (self.in_place_statement_expr != null and self.in_place_statement_expr.? == expr_id) return null;
         return entry;
     }
 
@@ -57801,7 +57806,14 @@ const BodyContext = struct {
     fn lowerExprStatement(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftStmt {
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
-        if (merge_binders.len == 0) return .{ .expr = try self.lowerExpr(expr_id) };
+        if (merge_binders.len == 0) {
+            const saved_in_place = self.in_place_statement_expr;
+            defer self.in_place_statement_expr = saved_in_place;
+            if (self.view.hoisted_constants.lookupByExpr(expr_id)) |entry| {
+                if (self.view.compile_time_roots.root(entry.root).guarded) self.in_place_statement_expr = expr_id;
+            }
+            return .{ .expr = try self.lowerExpr(expr_id) };
+        }
 
         const state_cell = try self.stateOnlyTypeCell(merge_binders);
         const checked_expr = self.view.bodies.expr(expr_id);
