@@ -17,8 +17,15 @@ load = |x| {
     Ok(s)
 }
 
+# `seal` forwards its closed input, which closes its output row, and so the
+# row of every value built from it (design.md "Deferred: Row Subsumption").
+# This depends on that known limitation (forwarding closes the row): once
+# row subsumption lands, this fixture must close its impl row another way.
+seal : Res([IoErr]) -> Res([IoErr])
+seal = |v| v
+
 closed_try : Res([IoErr])
-closed_try = Ok("hit")
+closed_try = seal(Ok("hit"))
 
 Src := [S].{
     fetch : Src -> Res([IoErr])

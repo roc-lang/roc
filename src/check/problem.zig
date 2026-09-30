@@ -111,3 +111,4 @@ pub const ComptimeEvalError = types.ComptimeEvalError;
 
 // Generic errors
 pub const VarWithSnapshot = types.VarWithSnapshot;
+pub const PolymorphicValue = types.PolymorphicValue;

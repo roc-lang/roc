@@ -46,7 +46,7 @@ pub const Problem = union(enum) {
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     row_label_conflict: RowLabelConflict,
-    polymorphic_value: VarWithSnapshot,
+    polymorphic_value: PolymorphicValue,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_comptime_expression: EffectfulComptimeExpression,
@@ -343,6 +343,24 @@ pub const InvalidNominalDeclRecursion = struct {
 };
 
 // generic errors //
+
+/// A top-level value whose type still has an unresolved constrained variable.
+pub const PolymorphicValue = struct {
+    var_: Var,
+    snapshot: SnapshotContentIdx,
+    /// If this type was found in a top-level def, the name of that def
+    def_name: ?Ident.Idx,
+    /// The first `_` inference hole of the value's annotation whose inferred
+    /// type is (part of) the polymorphic part: writing a concrete type there
+    /// fixes the value.
+    hole: ?PolymorphicHole = null,
+
+    pub const PolymorphicHole = struct {
+        /// The hole's annotation node variable; its region is the `_`.
+        var_: Var,
+        snapshot: SnapshotContentIdx,
+    };
+};
 
 /// A problem involving a single type variable, with a snapshot for error reporting.
 /// Used for recursion errors, invalid extension types, etc.

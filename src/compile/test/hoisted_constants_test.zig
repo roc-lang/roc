@@ -888,11 +888,16 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
 test "callable binding with alias annotation is const-evaluated" {
     // Regression test: a function-typed top-level def whose annotation
     // mentions a type alias (here `MyErr`) must still be scheduled for
-    // compile-time evaluation when the alias expands to a fully concrete
-    // type. The internal type store conservatively marks any type that
-    // mentions an alias as needing instantiation; if the published checked
-    // type inherits that flag, the def is kept template-only and silently
-    // degrades to runtime construction (observed with Json.parser_camel()).
+    // compile-time evaluation. The internal type store conservatively marks
+    // any type that mentions an alias as needing instantiation; if that flag
+    // made the def ineligible, it would silently degrade to runtime
+    // construction (observed with Json.parser_camel()).
+    //
+    // `MyErr` sits in an output row, so the annotation implicitly opens it
+    // and `validate` is generalized: it is evaluated once per concrete
+    // specialization (design.md "Specialization-Owned Top-Level Values"),
+    // and the runtime program reads the completed value instead of running
+    // `make_validator`.
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -985,6 +990,15 @@ test "callable binding with alias annotation is const-evaluated" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
+    // `--opt=speed`'s Solved policy: compile-time evaluation runs inside
+    // this build's own specialized program.
+    const speed_target: lir.CheckedPipeline.TargetConfig = .{
+        .inline_mode = .wrappers,
+        .spec_constr_clone_inlining = .all_calls,
+        .inline_expects = .omit,
+        .proc_debug_names = true,
+    };
+    coord.runtime_lowering = .{ .target = speed_target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
@@ -993,9 +1007,24 @@ test "callable binding with alias annotation is const-evaluated" {
     for (app_artifact.compile_time_roots.roots) |root| {
         if (root.kind != .callable_binding) continue;
         saw_callable_binding = true;
-        if (root.payload != .fn_value) return error.CallableBindingConstFnNotStored;
+        try std.testing.expectEqual(.per_specialization, root.request_eligibility);
     }
     try std.testing.expect(saw_callable_binding);
+
+    const session = &coord.program_session.?;
+    var value_roots: usize = 0;
+    for (session.host.?.lir_result.literal_roots.items) |root| {
+        if (root.subject == .value) value_roots += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), value_roots);
+
+    var runtime = try session.takeRuntime(gpa, session.runtime_roots, speed_target);
+    defer runtime.deinit();
+    const store = &runtime.lir_result.store;
+    for (0..store.procSpecCount()) |index| {
+        const name = store.procDebugName(@enumFromInt(index)) orelse continue;
+        try std.testing.expect(std.mem.find(u8, name, "make_validator") == null);
+    }
 }
 
 test "hoisted constant crash reports original source region" {

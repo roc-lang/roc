@@ -53,10 +53,10 @@ NO CHANGE
 			(builtin)
 			(e-tag (name "False")))
 		(e-call (constraint-fn-var 255)
-			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18036") (target-def "18036"))
+			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18035") (target-def "18035"))
 			(e-tag (name "True")))
 		(e-call (constraint-fn-var 260)
-			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18036") (target-def "18036"))
+			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18035") (target-def "18035"))
 			(e-tag (name "False")))
 		(e-if
 			(if-branches
@@ -71,14 +71,14 @@ NO CHANGE
 			(if-branches
 				(if-branch
 					(e-call (constraint-fn-var 275)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18036") (target-def "18036"))
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18035") (target-def "18035"))
 						(e-tag (name "True")))
 					(e-nominal-external
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
 				(e-call (constraint-fn-var 286)
-					(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18036") (target-def "18036"))
+					(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18035") (target-def "18035"))
 					(e-tag (name "True")))))))
 ~~~
 # TYPES
