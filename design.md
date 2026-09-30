@@ -14930,6 +14930,73 @@ consume that exact result range. A wrapping operation offers no such assumption,
 because no crash justifies it. Hand-writing `_wrap` in hot code therefore forfeits
 something plain `+` provides, and doing so has measurably cost throughput.
 
+### Sums, lengths, and equalities in the prover
+
+The prover records difference constraints between roots: `a <= b + c`. A
+sum of two dynamic values gets a root of its own, identified by the operand
+pair for the round, and every use of that sum relates the root to both
+operands and to every other sum sharing an operand, since `a + y` and `a + z`
+order exactly as `y` and `z` do. A guard on `base + limit` established once
+therefore bounds every later `base + offset` whose `offset` a loop head keeps
+below `limit`, which is the shape of a word-at-a-time compare over two cursors
+into one buffer. The sum root stands for the exact sum; a wrapping addition
+takes it only when those constraints bound the sum within the type, and a surviving
+checked addition takes it unconditionally.
+
+A list's length term follows the list through `list_append_unsafe` (plus one),
+`list_reserve` (unchanged), `list_with_capacity` and `list_clear` (zero), so a
+table that grows by one per iteration keeps a provable length lower bound
+across the loop.
+
+An integer loop parameter's lower bound follows the same induction as a list
+parameter's length: a bound every entry edge proves is seeded as an
+assumption and verifies once the back edges re-derive it under it, so a
+counter that starts at three and only grows is known to stay at least three.
+Each derived bound carries the assumptions its derivation touched. At round end the
+assumptions re-derived on every edge stand together: one resting on an
+assumption that fell (not re-derived, or shed in turn) is shed and retries
+next round, and the rest verify at once, so assumptions that support one
+another promote together. An assumption that fails is not refuted, only
+unprovable under that round's proof data. Rounds that rewrite a statement or
+persist a new bound open a new epoch; once the rounds after one reach their
+fixpoint, every assumption that died under an earlier epoch's proof data is
+seeded once more, since the updated proof data may carry its verification (a
+counter's floor that needs the bound on its increment, which itself takes
+rounds to settle). Assumptions are never retried against the proof data they
+already failed under, which is what bounds the round count.
+
+Bounds persisted from round to round are widened rather than iterated: a
+persisted bound that comes back weaker three rounds in a row is being pushed
+along by the loop it describes (a cursor that advances by a constant each
+iteration bounded against a length, say) and would weaken forever, so it is
+replaced by a tombstone that later rounds skip and that keeps the widening
+from being forgotten. A bound that weakens once or twice while a loop's
+edges are still being discovered settles and is kept. Accumulated slack
+inside a query is clamped far outside any genuine bound; past that magnitude
+the ordering constraints contradict one another, which the clamp preserves
+without letting the arithmetic overflow.
+
+A loop parameter that a back edge carries back as the very value its body
+was seeded with is unchanged around the loop, so the meet keeps the entry
+edges' description of it rather than intersecting with the fresh unknown a
+first round bound it to; without this the induction on a parameter that is
+merely passed through never starts. Parameter values keep their identity
+through intermediate merges for the same reason.
+
+A constructed struct is a value whose integer fields are the values it was
+built from, and a merge meets those fields like locals of their own, so a
+loop exit that packs several values into one record and unpacks them after
+the join keeps each value's bounds. A search loop that leaves through
+`break` with its candidate length and done flag in a record is the case in
+hand: the candidate's constant range survives to the addition that consumes
+it, which is what lets the enclosing loop's counter keep its floor.
+
+Equality comparisons participate alongside orderings. A holding `==` edge
+asserts both orderings; a holding `!=` edge makes an ordering the path already
+proves non-strict strict, so a counter tested against its limit with `!=` is
+known to lie strictly inside it. `bool_not` of a modeled comparison carries the
+complementary comparison, which is how `!=` reaches the prover.
+
 ### Dec
 
 `Dec` is fixed-point over an `i128`. Its addition and subtraction are plain
