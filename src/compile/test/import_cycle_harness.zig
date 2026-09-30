@@ -10,6 +10,17 @@ const roc_target = @import("roc_target");
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
+/// Everything checking an import-cycle fixture can fail with.
+pub const ImportCycleTestError = std.mem.Allocator.Error ||
+    std.Thread.SpawnError ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    eval.BuiltinModules.InitError ||
+    Coordinator.AppDiscoveryError ||
+    @import("../coordinator.zig").CoordinatorError ||
+    error{TestUnexpectedResult};
+
 /// One source file written relative to the test's temporary directory.
 pub const SourceFile = struct {
     sub_path: []const u8,
@@ -18,7 +29,7 @@ pub const SourceFile = struct {
 
 /// Check the app at `main.roc` among `files`, finalize it with executable
 /// artifacts, and require an import-cycle report.
-pub fn expectImportCycleReport(files: []const SourceFile) !void {
+pub fn expectImportCycleReport(files: []const SourceFile) ImportCycleTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 

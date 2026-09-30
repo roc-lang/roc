@@ -25460,10 +25460,20 @@ const BodyContext = struct {
                     .segments = .{ .start = start, .len = @intCast(field.segments.len) },
                 } };
             },
-            .tuple_access => |access| .{ .tuple_access = .{
-                .tuple = try self.lowerExpr(access.tuple),
-                .elem_index = access.elem_index,
-            } },
+            .tuple_access => |access| tuple_access: {
+                // The receiver stays attached to the specialization graph
+                // through its tuple node: a receiver such as a `match` may
+                // still carry an open row that only the whole program settles,
+                // so it has no standalone Monotype to lower at yet.
+                const tuple_node = try self.lowerExprTypeNode(access.tuple);
+                const item_nodes = try self.graph.tupleItemNodes(tuple_node);
+                if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
+                try relateRequestComponent(self.graph, try self.graph.importMono(ty), item_nodes[access.elem_index]);
+                break :tuple_access .{ .tuple_access = .{
+                    .tuple = try self.lowerExprAtTypeCell(access.tuple, DraftTypeCell.fromGraphNode(tuple_node)),
+                    .elem_index = access.elem_index,
+                } };
+            },
             .match_ => |match| return try self.lowerMatchExpr(expr_id, match, ty),
             .if_ => |if_| return try self.lowerIfExpr(expr_id, if_, ty),
             .block => |block| try self.lowerBlock(block, ty),
