@@ -880,6 +880,11 @@ dispatch_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty
 /// every binding's scheme is final, which it then stays. Keys and names are
 /// interned across module identifier stores in `method_mint_names`.
 method_name_mints: collections.DenseMap(MethodNameId, []const MethodNameId),
+/// Per final method-target scheme root, the constraint names instantiating it
+/// can mint (see `appendLocalSchemeMintNames`). A scheme is final once its
+/// binding is checked outside any still-open recursive group, or when it was
+/// imported, and it then stays unchanged.
+scheme_mint_names: std.AutoHashMapUnmanaged(Var, []const MethodNameId) = .empty,
 /// Shared method-name identity domain for the reachability walk.
 method_mint_names: canonical_names.CanonicalNameStore,
 /// Every other module whose method bindings a dispatch lookup can select,
@@ -888,6 +893,7 @@ method_binding_envs: ?[]const *const ModuleEnv = null,
 scratch_method_mint_evidence: dispatch_evidence.Scratch = .{},
 scratch_method_mint_params: std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam) = .empty,
 scratch_method_mint_requirements: std.ArrayListUnmanaged(dispatch_evidence.SchemeRequirement) = .empty,
+scratch_scheme_mint_names: std.ArrayListUnmanaged(MethodNameId) = .empty,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -3294,11 +3300,15 @@ pub fn deinit(self: *Self) void {
         while (mint_names.next()) |names| self.gpa.free(names.*);
         self.method_name_mints.deinit();
         self.method_mint_names.deinit();
+        var scheme_names = self.scheme_mint_names.valueIterator();
+        while (scheme_names.next()) |names| self.gpa.free(names.*);
+        self.scheme_mint_names.deinit(self.gpa);
     }
     if (self.method_binding_envs) |envs| self.gpa.free(envs);
     self.scratch_method_mint_evidence.deinit(self.gpa);
     self.scratch_method_mint_params.deinit(self.gpa);
     self.scratch_method_mint_requirements.deinit(self.gpa);
+    self.scratch_scheme_mint_names.deinit(self.gpa);
     self.scratch_embed_active_pairs.deinit(self.gpa);
     self.scratch_embed_memo.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
@@ -34940,7 +34950,7 @@ fn dispatchEdgeCanBeSameTargetAncestor(
     var visited = collections.DenseMap(MethodNameId, void).init(self.gpa);
     defer visited.deinit();
 
-    try self.appendLocalSchemeMintNames(instantiated_scheme, &pending);
+    try pending.appendSlice(self.gpa, try self.targetSchemeMintNames(method_lookup, instantiated_scheme, predeclared_scheme_for_method));
     const target_name = try self.method_mint_names.internMethodIdent(self.cir.getIdentStoreConst(), constraint.fn_name);
     while (pending.pop()) |name| {
         if (name == target_name) return true;
@@ -35009,6 +35019,37 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
     const owned = try names.toOwnedSlice(self.gpa);
     errdefer self.gpa.free(owned);
     try self.method_name_mints.put(name, owned);
+    return owned;
+}
+
+/// The constraint names that instantiating a dispatch edge's target scheme
+/// can mint. A final scheme's names are computed once; a scheme that can
+/// still gain requirements (a local binding not yet checked, or in a
+/// still-open recursive group, or its predeclared stand-in) is walked for
+/// each edge.
+fn targetSchemeMintNames(
+    self: *Self,
+    method_lookup: StaticDispatchMethodBinding,
+    instantiated_scheme: Var,
+    predeclared_scheme_for_method: ?Var,
+) Allocator.Error![]const MethodNameId {
+    const final = if (!method_lookup.is_this_module)
+        true
+    else if (predeclared_scheme_for_method != null)
+        false
+    else if (self.topLevelPattern(self.cir.store.getDef(method_lookup.binding.def_idx).pattern)) |processing_def|
+        processing_def.status == .processed and !self.defInOnStackGroup(method_lookup.binding.def_idx)
+    else
+        false;
+    if (final) {
+        if (self.scheme_mint_names.get(instantiated_scheme)) |names| return names;
+    }
+    self.scratch_scheme_mint_names.clearRetainingCapacity();
+    try self.appendLocalSchemeMintNames(instantiated_scheme, &self.scratch_scheme_mint_names);
+    if (!final) return self.scratch_scheme_mint_names.items;
+    const owned = try self.gpa.dupe(MethodNameId, self.scratch_scheme_mint_names.items);
+    errdefer self.gpa.free(owned);
+    try self.scheme_mint_names.put(self.gpa, instantiated_scheme, owned);
     return owned;
 }
 
