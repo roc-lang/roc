@@ -29068,7 +29068,7 @@ const BodyContext = struct {
         /// runtime representation from every branch unless `select` is false.
         output: ?BranchOutput = null,
         select: bool = true,
-        stage: enum { start, guard, body, scrutinee } = .start,
+        stage: enum { start, guard, body, scrutinee, divergent } = .start,
         comptime_site: ?DraftComptimeSiteId = null,
         selection: ControlFlowResultSelection = undefined,
         scrutinee_node: NodeId = undefined,
@@ -29108,6 +29108,16 @@ const BodyContext = struct {
         const match = task.match;
         switch (task.stage) {
             .start => {
+                // A divergent scrutinee never produces a value for a branch to
+                // inspect: no pattern is observed at runtime, and the match is
+                // exactly its scrutinee's divergence. Checking relates no branch
+                // pattern to a scrutinee that always crashes, so those patterns
+                // need not even agree with each other and must not be
+                // instantiated here.
+                if (try self.divergentExprInContextStep(match.cond, .{ .type_cell = task.result_cell })) |step| {
+                    task.stage = .divergent;
+                    return step;
+                }
                 task.comptime_site = try self.matchComptimeSite(task.expr_id, match);
                 if (task.output == null) {
                     task.output = try self.beginControlFlowValueOutput(
@@ -29133,6 +29143,7 @@ const BodyContext = struct {
             },
             .body => try self.finishMatchBranchBody(task, input.?.exprValue()),
             .scrutinee => return self.finishMatch(task, input.?.exprValue()),
+            .divergent => return .{ .ret = input.? },
         }
 
         // All checked pattern evidence must reach the shared scrutinee before
@@ -31961,7 +31972,17 @@ const BodyContext = struct {
                 task.field_access_start = start;
                 return requestLowerChild(self, field.receiver, .{ .sealed = receiver_ty });
             },
-            .tuple_access => |access| return requestLowerTask(self, .{ .expr = .{ .expr = access.tuple } }),
+            .tuple_access => |access| {
+                // The receiver stays attached to the specialization graph
+                // through its tuple node: a receiver such as a `match` may
+                // still carry an open row that only the whole program settles,
+                // so it has no standalone Monotype to lower at yet.
+                const tuple_node = try self.lowerExprTypeNode(access.tuple);
+                const item_nodes = try self.graph.tupleItemNodes(tuple_node);
+                if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
+                try relateRequestComponent(self.graph, try self.graph.importMono(ty), item_nodes[access.elem_index]);
+                return requestLowerChild(self, access.tuple, DraftTypeCell.fromGraphNode(tuple_node));
+            },
             .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = .{ .sealed = ty } } }),
             .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } }),
             .block => |block| return requestLowerTask(self, .{ .block = .{

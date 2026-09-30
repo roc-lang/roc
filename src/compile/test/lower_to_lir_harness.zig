@@ -190,6 +190,10 @@ pub const LirLoweringOptions = struct {
     dump_proc_identities: bool = false,
     prove_ranges: bool = false,
     allow_user_errors: bool = false,
+    /// Require a report with this title once checking finishes. A rejected
+    /// program uses this to pin that it reports its diagnostic and still
+    /// lowers to a checked crash.
+    expected_report_title: ?[]const u8 = null,
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving, for tests that assert on post-check program growth.
     lifted_expr_count_out: ?*usize = null,
@@ -1166,6 +1170,14 @@ fn lowerAppPathToLir(
     try coord.finishCheckedProgram(.executable_artifacts);
     if (!opts.allow_user_errors) {
         try std.testing.expect(!coord.hasUserErrors());
+    }
+    if (opts.expected_report_title) |title| {
+        var found = false;
+        var reports = coord.iterReports();
+        while (reports.next()) |entry| {
+            if (std.mem.eql(u8, entry.report.title, title)) found = true;
+        }
+        try std.testing.expect(found);
     }
 
     const root = coord.executableRootCheckedArtifact();

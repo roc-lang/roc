@@ -7126,6 +7126,7 @@ pub fn build(b: *std.Build) void {
         "canonicalize",
         "typecheck",
         "build",
+        "build-errors",
     };
     for (names) |name| {
         add_fuzz_target(

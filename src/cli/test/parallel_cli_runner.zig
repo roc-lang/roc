@@ -57,6 +57,7 @@ const CliRunnerError = util.RocRunError ||
     std.Io.Dir.SelectiveWalker.Error ||
     std.Io.Dir.StatFileError ||
     std.Io.Dir.WriteFileError ||
+    std.Io.Dir.ReadFileAllocError ||
     std.Io.File.OpenError ||
     std.Io.File.Reader.Error ||
     std.Io.File.Writer.Error ||
@@ -72,6 +73,7 @@ const Suite = enum(u8) {
     subcommands,
     echo,
     glue,
+    snapshot_programs,
 
     fn cliName(self: Suite) []const u8 {
         return switch (self) {
@@ -79,6 +81,7 @@ const Suite = enum(u8) {
             .subcommands => "subcommands",
             .echo => "echo",
             .glue => "glue",
+            .snapshot_programs => "snapshot-programs",
         };
     }
 
@@ -88,12 +91,13 @@ const Suite = enum(u8) {
             .subcommands => "subcommands",
             .echo => "echo",
             .glue => "glue",
+            .snapshot_programs => "snapshot programs",
         };
     }
 };
 
 const suite_count = @typeInfo(Suite).@"enum".fields.len;
-const all_suites = [_]Suite{ .platforms, .subcommands, .echo, .glue };
+const all_suites = [_]Suite{ .platforms, .subcommands, .echo, .glue, .snapshot_programs };
 
 const SuiteSelection = struct {
     enabled: [suite_count]bool = [_]bool{false} ** suite_count,
@@ -539,12 +543,28 @@ const CliCase = struct {
         command: CommandCase,
         custom: CustomCase,
         glue_runtime: GlueRuntimeCase,
+        snapshot_program: SnapshotProgramCase,
     };
 };
+
+/// A snapshot's source, checked as a program. Most snapshot sources are
+/// rejected programs, and `roc check` lowers every program it checks, so the
+/// snapshot corpus doubles as a corpus of erroneous programs that checking
+/// must report without the compiler crashing.
+const SnapshotProgramCase = struct {
+    snapshot_path: []const u8,
+    /// The snapshot's source as a file `roc check` accepts: a `file` source
+    /// as written, a `snippet` given a `main!` when it has none, and an
+    /// `expr` bound to a top-level value that `main!` inspects.
+    source: []const u8,
+};
+
+const snapshots_dir = "test/snapshots";
 
 // Spec generation
 
 fn buildCases(
+    io: std.Io,
     allocator: Allocator,
     filters: []const []const u8,
     include_llvm: bool,
@@ -583,8 +603,93 @@ fn buildCases(
     if (suites.includes(.subcommands)) {
         try appendStaticCases(allocator, &cases, &subcommand_cases, filters, include_llvm);
     }
+    if (suites.includes(.snapshot_programs)) {
+        try appendSnapshotProgramCases(io, allocator, &cases, filters);
+    }
 
     return try cases.toOwnedSlice(allocator);
+}
+
+fn appendSnapshotProgramCases(
+    io: std.Io,
+    allocator: Allocator,
+    cases: *std.ArrayListUnmanaged(CliCase),
+    filters: []const []const u8,
+) CliRunnerError!void {
+    var dir = try std.Io.Dir.cwd().openDir(io, snapshots_dir, .{ .iterate = true });
+    defer dir.close(io);
+
+    // Sorted, so every worker process rebuilds the same case order.
+    var paths: std.ArrayListUnmanaged([]const u8) = .empty;
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".md")) continue;
+        try paths.append(allocator, try std.fs.path.join(allocator, &.{ snapshots_dir, entry.path }));
+    }
+    std.mem.sort([]const u8, paths.items, {}, stringLessThan);
+
+    for (paths.items) |path| {
+        const contents = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(16 * 1024 * 1024));
+        const source = try snapshotProgramSource(allocator, contents) orelse continue;
+        const case = CliCase{
+            .id = cases.items.len,
+            .suite = .snapshot_programs,
+            .name = try std.fmt.allocPrint(allocator, "snapshot program: {s}", .{path}),
+            .body = .{ .snapshot_program = .{ .snapshot_path = path, .source = source } },
+        };
+        if (matchesFilters(case, filters)) try cases.append(allocator, case);
+    }
+}
+
+fn stringLessThan(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+/// The program `roc check` compiles for a snapshot, or null for a snapshot
+/// kind that is not source text (REPL sessions, docs, headers, and the rest).
+fn snapshotProgramSource(allocator: Allocator, contents: []const u8) Allocator.Error!?[]const u8 {
+    const meta = snapshotSection(contents, "# META\n~~~ini\n", "~~~") orelse return null;
+    const kind = snapshotMetaType(meta) orelse return null;
+    const written_source = snapshotSection(contents, "# SOURCE\n~~~roc\n", "\n~~~\n") orelse return null;
+    // An escaped source writes each carriage return as `\r`.
+    const source = if (std.mem.find(u8, meta, "source_escapes=true") != null)
+        try std.mem.replaceOwned(u8, allocator, written_source, "\\r", "\r")
+    else
+        written_source;
+
+    if (std.mem.eql(u8, kind, "file")) return source;
+    if (std.mem.eql(u8, kind, "snippet")) {
+        if (std.mem.find(u8, source, "main!") != null) return source;
+        return try std.fmt.allocPrint(allocator, "{s}\n\nmain! = |_| Ok({{}})\n", .{source});
+    }
+    if (std.mem.eql(u8, kind, "expr")) {
+        var program: std.ArrayListUnmanaged(u8) = .empty;
+        try program.appendSlice(allocator, "snapshot_value =\n");
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        while (lines.next()) |line| {
+            try program.appendSlice(allocator, "    ");
+            try program.appendSlice(allocator, line);
+            try program.append(allocator, '\n');
+        }
+        try program.appendSlice(allocator, "\nmain! = |_| {\n    echo!(Str.inspect(snapshot_value))\n    Ok({})\n}\n");
+        return try program.toOwnedSlice(allocator);
+    }
+    return null;
+}
+
+fn snapshotSection(contents: []const u8, open: []const u8, close: []const u8) ?[]const u8 {
+    const start = (std.mem.find(u8, contents, open) orelse return null) + open.len;
+    const end = std.mem.findPos(u8, contents, start, close) orelse return null;
+    return contents[start..end];
+}
+
+fn snapshotMetaType(meta: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, meta, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "type=")) return std.mem.trim(u8, line["type=".len..], " \r");
+    }
+    return null;
 }
 
 fn appendGlueRuntimeCases(
@@ -807,6 +912,7 @@ fn caseRocFile(case: CliCase) ?[]const u8 {
         .command => |command| command.roc_file,
         .custom => null,
         .glue_runtime => |runtime| runtime.platform.dir_path,
+        .snapshot_program => |program| program.snapshot_path,
     };
 }
 
@@ -2848,7 +2954,78 @@ fn runSingleTest(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u6
         .command => |command| runCommandCase(io, allocator, command, case_timeout_ms),
         .custom => |custom| runCustomCase(io, allocator, spec, custom, case_timeout_ms),
         .glue_runtime => |runtime| runGlueRuntimeCase(io, allocator, runtime, case_timeout_ms),
+        .snapshot_program => |program| runSnapshotProgramCase(io, allocator, program, case_timeout_ms),
     };
+}
+
+fn runSnapshotProgramCase(
+    io: std.Io,
+    allocator: Allocator,
+    program: SnapshotProgramCase,
+    timeout_ms: u64,
+) TestResult {
+    var timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .setup, .message = "no clock" };
+    var env = buildCaseEnv(io, allocator) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to create test environment" };
+    defer env.deinit(allocator);
+
+    const main_path = writeSnapshotProgram(io, allocator, env.dirs.work_dir, program.source) catch
+        return addPreservedWorkDirMessage(allocator, .{
+            .status = .infra_error,
+            .phase = .setup,
+            .duration_ns = timer.read(),
+            .message = "failed to write snapshot program",
+        }, env.dirs.work_dir);
+
+    // Whether checking accepts or rejects the program, it must finish
+    // without the compiler crashing.
+    const command: CommandCase = .{
+        .args = &.{ "check", "--no-cache" },
+        .roc_file = main_path,
+        .file_path_mode = .relative,
+        .exit = .not_panic,
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "invariant violated" },
+            .{ .stream = .stderr, .text = "panic" },
+        },
+    };
+
+    var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
+    const child_timeout_ms = childCommandTimeoutMs(&timer, timeout_ms) orelse
+        return addPreservedWorkDirMessage(allocator, timeoutFailure(allocator, &timer, .run, "case timeout exhausted before command started"), env.dirs.work_dir);
+    const result = runRocInEnv(io, allocator, &env, command.args, command.roc_file, command.file_path_mode, command.app_args, command.stdin, child_timeout_ms) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "run spawn error: {}", .{err}) catch "run spawn error";
+        return addPreservedWorkDirMessage(allocator, .{
+            .status = .infra_error,
+            .phase = .run,
+            .duration_ns = timer.read(),
+            .run_ns = run_timer.read(),
+            .message = msg,
+        }, env.dirs.work_dir);
+    };
+    const run_ns = run_timer.read();
+
+    if (checkCommandExpectation(allocator, result, command)) |message| {
+        return addPreservedWorkDirMessage(allocator, .{
+            .status = if (processTimedOut(result.stderr)) .timeout else .run_failed,
+            .phase = .run,
+            .duration_ns = timer.read(),
+            .run_ns = run_ns,
+            .exit_code = exitCode(result.term),
+            .stderr_capture = result.stderr,
+            .stdout_capture = result.stdout,
+            .message = message,
+        }, env.dirs.work_dir);
+    }
+
+    util.cleanupTestWorkDir(io, env.dirs.work_dir);
+    return .{ .status = .pass, .phase = .run, .duration_ns = timer.read(), .run_ns = run_ns };
+}
+
+fn writeSnapshotProgram(io: std.Io, allocator: Allocator, work_dir: []const u8, source: []const u8) CliRunnerError![]const u8 {
+    const main_path = try std.fs.path.join(allocator, &.{ work_dir, "main.roc" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = main_path, .data = source });
+    return main_path;
 }
 
 fn runPlatformCase(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u64) TestResult {
@@ -12858,7 +13035,7 @@ fn printResults(
     var build_durations: std.ArrayListUnmanaged(u64) = .empty;
     var run_durations: std.ArrayListUnmanaged(u64) = .empty;
     var opt_durations = [_]std.ArrayListUnmanaged(u64){ .empty, .empty, .empty, .empty };
-    var suite_durations = [_]std.ArrayListUnmanaged(u64){ .empty, .empty, .empty, .empty };
+    var suite_durations = [_]std.ArrayListUnmanaged(u64){.empty} ** suite_count;
     defer durations.deinit(gpa);
     defer build_durations.deinit(gpa);
     defer run_durations.deinit(gpa);
@@ -13360,6 +13537,7 @@ test "cross target builds one build-only case per matching platform spec" {
     var suites = SuiteSelection{};
     suites.add(.platforms);
     const cases = try buildCases(
+        std.testing.io,
         arena.allocator(),
         &.{"test/fx/"},
         false,
@@ -13420,7 +13598,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     glue_execution_mode = parsed.glue_options.execution_mode;
     platform_specialization_arg = parsed.specialization_arg;
 
-    const tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options, parsed.cross_target);
+    const tests = try buildCases(init.io, spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options, parsed.cross_target);
     if (tests.len == 0) return;
     const timeout_ms = effectiveTimeoutMs(args, parsed.suites);
 
@@ -13514,7 +13692,7 @@ test "static CLI cases honor LLVM availability before name filters" {
     var suites = SuiteSelection{};
     suites.add(.subcommands);
     for ([_]bool{ false, true }) |include_llvm| {
-        const cases = try buildCases(arena.allocator(), &.{"issue 11563:"}, include_llvm, suites, .{}, null);
+        const cases = try buildCases(std.testing.io, arena.allocator(), &.{"issue 11563:"}, include_llvm, suites, .{}, null);
         var speed_count: usize = 0;
         var other_count: usize = 0;
         for (cases) |case| {

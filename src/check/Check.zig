@@ -9900,6 +9900,10 @@ const OptionalFieldAccess = struct {
     presence_var: Var,
     field_name: Ident.Idx,
     region: Region,
+    /// The expression that owns this evidence: the access chain, the record
+    /// literal, or the record update. A rejected judgment makes it a checked
+    /// runtime error, because its field-kind relation has no lowering.
+    owner: CIR.Expr.Idx,
     /// Which construct produced this presence-evidence: a `.?` access or a
     /// `x: _` unset. Both pin a still-flex kind to `optional` and reject a
     /// kind resolved `required`/`defaulted`—the marker only selects which
@@ -14956,6 +14960,7 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
             .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.expr)),
         } });
         try self.markErroneous(expr_var);
+        try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
     }
     // A platform requirement is the def's explicit expected type even when the
     // source has no annotation. Only truly unconstrained crashing defs default
@@ -14963,8 +14968,11 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     if (def.annotation == null and platform_required == null and try self.exprAlwaysCrashes(def.expr)) {
         try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
     }
-    if (def.annotation == null and self.erroneous_value_exprs.contains(def.expr)) {
-        try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    if (self.erroneous_value_exprs.contains(def.expr)) {
+        if (def.annotation == null) try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+        // Destructuring a runtime error binds nothing, so every name the
+        // pattern introduces is erroneous, annotated or not.
+        if (self.cir.store.getPattern(def.pattern) != .assign) try self.markPatternBindingsErroneous(def.pattern);
     }
     try self.closeAbsentConstructedPayloadVars(def.expr, expr_var);
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr)) and
@@ -23328,6 +23336,7 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
             .field_name = field.name,
             .region = field_region,
             .use = .unset,
+            .owner = frame.expr_idx,
         });
         const single_field_record = try self.freshFromContent(.{
             .structure = .{ .record = .{
@@ -23475,6 +23484,7 @@ fn resumeRecordCheck(self: *Self, task: *ExprTask, state: *AggregateCheck, env: 
             .field_name = field.name,
             .region = field_region,
             .use = .unset,
+            .owner = expr_idx,
         });
 
         // Append it to the scratch records array
@@ -24802,7 +24812,13 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
             // type
             for (arg_vars, 0..) |arg_var, i| {
                 const expected_arg_var = self.types.getVarAt(anno_func_args_range, @intCast(i));
-                _ = try self.unifyInContext(expected_arg_var, arg_var, env, state.anno_context);
+                // A parameter pattern the annotation rejects binds
+                // nothing, so the lambda is erroneous just as when
+                // the pattern fails its own check.
+                const arg_result = try self.unifyInContext(expected_arg_var, arg_var, env, state.anno_context);
+                if (arg_result.isProblem()) {
+                    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+                }
             }
         } else {
             // This means the expected type and the actual lambda have an
@@ -25306,6 +25322,7 @@ fn resumeFieldAccessCheck(self: *Self, task: *ExprTask, state: *SingleChildCheck
                             .field_name = access.name,
                             .region = access_region,
                             .use = .access,
+                            .owner = expr_idx,
                         });
                         saw_optional = true;
                         break :blk .unknown(presence_var, access_var);
@@ -29794,15 +29811,7 @@ fn poisonRecursiveNonFunctionProcessingDef(
     }
     try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
     try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
-    // A use of a name reads the poisoned value through that name's own
-    // binder pattern, so every name the def binds is erroneous, not only
-    // the pattern as a whole.
-    var bindings = std.ArrayList(PatternBinding).empty;
-    defer bindings.deinit(self.gpa);
-    try self.collectPatternBindings(def.pattern, &bindings);
-    for (bindings.items) |binding| {
-        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
-    }
+    try self.markPatternBindingsErroneous(def.pattern);
 
     if (use_expr) |expr_idx| {
         if (self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
@@ -29810,6 +29819,18 @@ fn poisonRecursiveNonFunctionProcessingDef(
         }
         try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
         try self.markErroneous(ModuleEnv.varFrom(expr_idx));
+    }
+}
+
+/// A use of a name reads its value through that name's own binder pattern,
+/// so when a pattern binds nothing valid, every name it introduces is
+/// erroneous, not only the pattern as a whole.
+fn markPatternBindingsErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(pattern_idx, &bindings);
+    for (bindings.items) |binding| {
+        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
     }
 }
 
@@ -30292,6 +30313,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
                             .field_name = access.field_name,
                         } },
                     });
+                    try self.erroneous_value_exprs.put(self.gpa, access.owner, {});
                 },
                 .defaulted => {
                     _ = try self.problems.appendProblem(self.gpa, switch (access.use) {
@@ -30304,6 +30326,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
                             .field_name = access.field_name,
                         } },
                     });
+                    try self.erroneous_value_exprs.put(self.gpa, access.owner, {});
                 },
                 .optional => {},
             },
