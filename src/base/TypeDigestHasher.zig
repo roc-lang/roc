@@ -31,7 +31,7 @@
 //! width, and one place to document the requirement above.
 
 const std = @import("std");
-const Sha256 = @import("Sha256.zig");
+const Sha256 = @import("sha256.zig").Sha256;
 const TypeDigestHasher = @This();
 
 /// Width of canonical type and evidence digest outputs in bytes.

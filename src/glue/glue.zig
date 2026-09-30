@@ -845,6 +845,9 @@ fn glueLlvmCompileOptions(opt: GlueOpt) llvm_compile.CompileOptions {
         },
         .debug = opt == .dev,
         .target_ptr_width_bits = targetPtrWidthBits(base.target.TargetUsize.native),
+        // The target machine names no CPU features, so LLVM assumes only its
+        // default CPU for the triple, which has no SHA-256 instructions.
+        .sha256_rounds = .portable,
     };
 }
 
@@ -3345,7 +3348,7 @@ const TypeTable = struct {
                 // Preserve the nominal application and open its declaration
                 // below so the generated representation retains its backing
                 // tag union instantiated with these arguments.
-                .try_, .iter => {},
+                .try_, .iter, .stream => {},
                 .dict,
                 .set,
                 .crypto_sha256_digest,

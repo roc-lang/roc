@@ -209,6 +209,11 @@ pub const CompileOptions = struct {
     /// Target pointer width in bits. Used to select the matching embedded
     /// builtin bitcode payload before retargeting the merged LLVM module.
     target_ptr_width_bits: u8,
+    /// The SHA-256 rounds the target machine's CPU features select
+    /// (`builtins.sha256.Rounds.forCpu` of the CPU that `cpu` and `features`
+    /// name). The 64-bit builtin payload links the compression function built
+    /// for them.
+    sha256_rounds: builtins.sha256.Rounds,
     /// Treat the target as freestanding for LLVM object emission: optimization
     /// cannot assume target library functions.
     no_target_libcalls: bool = false,
@@ -289,6 +294,20 @@ fn selectBuiltinBitcode(ptr_width: u8, app_decls: *const std.StringHashMap(void)
         32 => if (use_core) llvm_embedded.builtins32_core_bc else llvm_embedded.builtins32_bc,
         64 => if (use_core) llvm_embedded.builtins64_core_bc else llvm_embedded.builtins64_bc,
         else => "",
+    };
+}
+
+/// The payload defining the 64-bit builtin bitcode's SHA-256 compression for
+/// `rounds`. The 32-bit payload carries its portable rounds inline, since no
+/// 32-bit target has SHA-256 instructions Roc uses.
+fn selectSha256RoundsBitcode(ptr_width: u8, rounds: builtins.sha256.Rounds) ?[]const u8 {
+    return switch (ptr_width) {
+        64 => switch (rounds) {
+            .portable => llvm_embedded.sha256_portable_bc,
+            .x86_sha => llvm_embedded.sha256_x86_sha_bc,
+            .aarch64_sha2 => llvm_embedded.sha256_aarch64_sha2_bc,
+        },
+        else => null,
     };
 }
 
@@ -557,6 +576,27 @@ fn emitMergedBitcodeModulesToObjectFile(
             module.setDataLayout(builtin_module.getDataLayout());
         } else {
             builtin_module.setDataLayout(module_data_layout);
+        }
+
+        if (selectSha256RoundsBitcode(options.target_ptr_width_bits, options.sha256_rounds)) |rounds_bitcode| {
+            const rounds_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+                rounds_bitcode.ptr,
+                rounds_bitcode.len,
+                "roc_sha256_rounds",
+                bindings.Bool.False,
+            );
+            var rounds_module: *bindings.Module = undefined;
+            if (context.parseBitcodeInContext2(rounds_mem_buf, &rounds_module).toBool()) {
+                rounds_mem_buf.dispose();
+                return Error.BitcodeParseError;
+            }
+            rounds_module.setTargetTriple(triple);
+            rounds_module.setDataLayout(builtin_module.getDataLayout());
+            // Linking destroys rounds_module; its definition then prunes and
+            // merges with the rest of the builtins.
+            if (builtin_module.link(rounds_module).toBool()) {
+                return Error.ModuleLinkFailed;
+            }
         }
         pruneBuiltinModule(builtin_module, &app_decls);
         bindings.runGlobalDCE(builtin_module);
