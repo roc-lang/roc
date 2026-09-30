@@ -16404,7 +16404,7 @@ the local as the resource the refinement restores for that position, exactly
 as an ownership-complete field read registers its root, so the call's outcome
 admission sees the root receipt and selects the outcome convention. Admission
 is atomic over every restitutable position, and a moved unit cannot be taken
-back once the alias is bound; with one restitutable position every fact the
+back once the alias is bound; with one restitutable position every condition the
 admission checks is already proven at the alias bind. Without
 this, the retained alias would be the call's only argument unit and the callee
 would find its input shared on every call, so an append in a loop would copy

@@ -533,8 +533,8 @@ pub const InterfaceConstraints = struct {
     pub fn equivalenceIdentityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error![]const u8 {
         var arena = std.heap.ArenaAllocator.init(graph.allocator);
         defer arena.deinit();
-        var canonical = Canonicalizer{ .source = self, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
-        const constraints = try canonical.run();
+        var renumberer = EquivalenceRenumberer{ .source = self, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
+        const constraints = try renumberer.run();
         var writer = IdentityWriter{ .graph = graph };
         defer {
             writer.bytes.deinit(graph.allocator);
@@ -552,7 +552,7 @@ pub const InterfaceConstraints = struct {
     /// Recursive-slot and forced-dynamic membership only decide iterator
     /// representations, so they are no evidence on a class that finished as a
     /// type containing no iterator interface.
-    const Canonicalizer = struct {
+    const EquivalenceRenumberer = struct {
         source: InterfaceConstraints,
         types: *Type.Store,
         name_store: *const names.NameStore,
@@ -566,7 +566,7 @@ pub const InterfaceConstraints = struct {
         group_sizes: std.AutoHashMapUnmanaged(u32, u32) = .empty,
         numbered: bool = false,
 
-        fn run(self: *Canonicalizer) Allocator.Error!InterfaceConstraints {
+        fn run(self: *EquivalenceRenumberer) Allocator.Error!InterfaceConstraints {
             try self.collapseSettled();
             for (self.source.roots) |root| _ = try self.node(root);
             var next: usize = 0;
@@ -633,7 +633,7 @@ pub const InterfaceConstraints = struct {
         /// The greatest set of open nodes that finished as settled types, carry
         /// no evidence beyond their content and refer only to settled leaves
         /// or other members of the set.
-        fn collapseSettled(self: *Canonicalizer) Allocator.Error!void {
+        fn collapseSettled(self: *EquivalenceRenumberer) Allocator.Error!void {
             for (self.source.open_nodes) |open| if (open.related_group) |group| {
                 const entry = try self.group_sizes.getOrPut(self.allocator, group);
                 entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
@@ -674,7 +674,7 @@ pub const InterfaceConstraints = struct {
         /// Whether a finished type reaches an iterator interface, following the
         /// same positions as `Type.Store.containsIteratorInterface` without
         /// writing its cache.
-        fn containsIterator(self: *Canonicalizer, root: Type.TypeId) Allocator.Error!bool {
+        fn containsIterator(self: *EquivalenceRenumberer, root: Type.TypeId) Allocator.Error!bool {
             var pending: std.ArrayList(Type.TypeId) = .empty;
             var visited: std.AutoHashMapUnmanaged(Type.TypeId, void) = .empty;
             try pending.append(self.allocator, root);
@@ -723,7 +723,7 @@ pub const InterfaceConstraints = struct {
             return false;
         }
 
-        fn sortedRows(self: *Canonicalizer, open: OpenNode) Allocator.Error!OpenNode {
+        fn sortedRows(self: *EquivalenceRenumberer, open: OpenNode) Allocator.Error!OpenNode {
             var result = open;
             switch (open.content) {
                 .record => |record| {
@@ -741,7 +741,7 @@ pub const InterfaceConstraints = struct {
             return result;
         }
 
-        fn node(self: *Canonicalizer, id: NodeId) Allocator.Error!NodeId {
+        fn node(self: *EquivalenceRenumberer, id: NodeId) Allocator.Error!NodeId {
             if (self.numbered) return self.node_ids.get(id).?;
             const entry = try self.node_ids.getOrPut(self.allocator, id);
             if (!entry.found_existing) {
@@ -751,7 +751,7 @@ pub const InterfaceConstraints = struct {
             return id;
         }
 
-        fn kind(self: *Canonicalizer, id: FieldKindId) Allocator.Error!FieldKindId {
+        fn kind(self: *EquivalenceRenumberer, id: FieldKindId) Allocator.Error!FieldKindId {
             if (self.numbered) return self.kind_ids.get(id).?;
             const entry = try self.kind_ids.getOrPut(self.allocator, id);
             if (!entry.found_existing) {
@@ -762,7 +762,7 @@ pub const InterfaceConstraints = struct {
             return id;
         }
 
-        fn scalar(_: *Canonicalizer, comptime T: type, value: T) Allocator.Error!T {
+        fn scalar(_: *EquivalenceRenumberer, comptime T: type, value: T) Allocator.Error!T {
             return value;
         }
     };
