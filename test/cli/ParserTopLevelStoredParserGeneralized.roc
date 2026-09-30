@@ -1,5 +1,5 @@
-# ParserTopLevelStoredParser.roc with `..` written in the stored parser's
-# error row: the generalized value is compile-time evaluated at the one
+# ParserTopLevelStoredParser.roc with the stored parser's implicitly open
+# error row (design.md "Polarity"): the generalized value is compile-time evaluated at the one
 # specialization its use closes (design.md "Specialization-Owned Top-Level
 # Values") instead of being built at runtime.
 ParserTopLevelStoredParserGeneralized :: [].{}
@@ -45,7 +45,7 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str), ..])
+parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
 parse_stored = {
 	Shape : { foo : Str }
 	Shape.parser_for(Format.Default)

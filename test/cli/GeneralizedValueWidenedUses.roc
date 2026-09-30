@@ -1,10 +1,10 @@
-# Generalized top-level values are compile-time evaluated once per concrete
-# specialization (design.md "Specialization-Owned Top-Level Values"). `boom`
-# and `missing` have an implicitly open output row, so each use instantiates
-# the row fresh and every specialization is its own compile-time value at its own
-# layout: `Boom` has a different discriminant in `[Boom, Zed]` and in
-# `[Aa, Ab, Boom]`. `made` is used at two element types.
-GeneralizedValueSpecializations := {}
+# A top-level annotated value whose annotation opens an output row implicitly
+# generalizes that row (design.md "Polarity"), so each use instantiates it
+# fresh. `boom` is used at its own row and at two different wider rows in which
+# `Boom` has a different discriminant (`[Boom, Zed]`, `[Aa, Ab, Boom]`), and
+# `missing` is used at a wider error row whose other tag carries a payload.
+# Every specialization must lower the value at its own layout.
+GeneralizedValueWidenedUses := {}
 
 boom : [Boom]
 boom = Boom
@@ -12,11 +12,10 @@ boom = Boom
 missing : Try(U64, [Missing])
 missing = Err(Missing)
 
-grow : U64, List(a) -> List(a)
-grow = |n, acc| if n == 0 { acc } else { grow(n - 1, acc) }
-
-made : List(a)
-made = grow(3, [])
+own : [Boom] -> Str
+own = |tag| match tag {
+    Boom => "boom"
+}
 
 first : Bool -> [Boom, Zed]
 first = |flag| if flag Zed else boom
@@ -47,19 +46,12 @@ describe_lookup = |result| match result {
     Err(Missing) => "missing"
 }
 
-with_number : U64 -> List(U64)
-with_number = |n| List.append(made, n)
-
-with_word : Str -> List(Str)
-with_word = |w| List.append(made, w)
-
 expect {
-    describe_first(first(Bool.False)) == "boom-first"
+    own(boom) == "boom"
+    and describe_first(first(Bool.False)) == "boom-first"
     and describe_first(first(Bool.True)) == "zed"
     and describe_last(last(Bool.False)) == "boom-last"
     and describe_last(last(Bool.True)) == "ab"
     and describe_lookup(lookup(Bool.False)) == "missing"
     and describe_lookup(lookup(Bool.True)) == "bad"
-    and with_number(7) == [7]
-    and with_word("w") == ["w"]
 }

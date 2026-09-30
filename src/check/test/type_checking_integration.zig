@@ -2862,19 +2862,22 @@ test "check type - tag union - tag typo hint on an inline output union" {
 
 test "check type - tag union - tag typo hint on an explicit open ext" {
     // An anonymous `..` in an output position is generated like absence, so
-    // it carries the same hint. On a value binding it never warns redundant,
-    // so this is the only problem.
+    // it carries the same hint. On a local value binding it never warns
+    // redundant, so this is the only problem.
     const source =
-        \\color : [Red, Green, Blue, ..]
-        \\color = Greeen
+        \\main = |_| {
+        \\    color : [Red, Green, Blue, ..]
+        \\    color = Greeen
+        \\    color
+        \\}
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression produces the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
-        \\color = Greeen
+        \\    color = Greeen
         \\```
-        \\        ^^^^^^
+        \\            ^^^^^^
         \\
         \\It has the type:
         \\
@@ -9782,13 +9785,11 @@ test "check type - polarity - annotated value body is bounded" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - annotated value shares one weak row across uses" {
-    // A value binding's implicitly opened row is one weak variable shared by
-    // every use. The first use widens it to `[A, Boom]`; the second use then
-    // sees a value whose row carries `A`, which its own annotation does not
-    // list. (Exactly how an inferred `e = Boom` already behaves; on main the
-    // closed `[Boom]` rejected both uses.) Write `..` on the value to
-    // generalize it instead—see the next test.
+test "check type - polarity - annotated value generalizes its implicitly opened row" {
+    // An implicitly opened row counts as a type variable for value
+    // generalization, so `e : [Boom]` generalizes exactly as `e : [Boom, ..]`
+    // does: each use instantiates the row fresh, two uses may widen it
+    // independently, and neither use changes the value's own type.
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -9799,14 +9800,134 @@ test "check type - polarity - annotated value shares one weak row across uses" {
         \\use_b : Str -> [B, Boom]
         \\use_b = |_| e
     ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "e", .expected = "[Boom]" },
+        .{ .def = "use_a", .expected = "Str -> [A, Boom]" },
+        .{ .def = "use_b", .expected = "Str -> [B, Boom]" },
+    });
+}
+
+test "check type - polarity - an annotated value with an inference hole generalizes its opened row" {
+    // An annotation with a `_` hole is not predeclared, so whether it opens a
+    // row is recorded by a speculative generation; the value generalizes all
+    // the same, exactly as `Try(_, [Boom, ..])` does.
+    const source =
+        \\e : Try(_, [Boom])
+        \\e = Ok(Bool.True)
+        \\
+        \\use_a : Try(Bool, [A, Boom])
+        \\use_a = e
+        \\
+        \\use_b : Try(Bool, [B, Boom])
+        \\use_b = e
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "e", .expected = "Try(Bool, [Boom])" },
+        .{ .def = "use_a", .expected = "Try(Bool, [A, Boom])" },
+        .{ .def = "use_b", .expected = "Try(Bool, [B, Boom])" },
+    });
+}
+
+test "check type - polarity - a hole filled only by a string literal makes the value polymorphic" {
+    // A string literal is constrained (`from_quote`) like a numeric one, so
+    // a hole it alone fills is a constrained quantified variable too; the
+    // concrete `Ok(Bool.True)` above is what an accepted hole looks like.
+    var test_env = try TestEnv.init("Test",
+        \\e : Try(_, [Boom])
+        \\e = Ok("ok")
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Polymorphic Value");
+    try expectPolymorphicValueHole(&test_env);
+}
+
+test "check type - polarity - a hole filled only by a numeric literal makes the value polymorphic" {
+    // design.md "Polarity": a `_` hole in a generalizing value annotation is
+    // a body-inferred variable generalized at the definition's boundary, so a
+    // hole the body fills only with a numeric literal is a constrained
+    // quantified variable and the value is rejected like any constrained
+    // top-level value. The report points at the hole.
+    var test_env = try TestEnv.init("Test",
+        \\e : Try(_, [Boom])
+        \\e = Ok(1)
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Polymorphic Value");
+    try expectPolymorphicValueHole(&test_env);
+}
+
+test "check type - polarity - a tuple hole filled only by a numeric literal makes the value polymorphic" {
+    var test_env = try TestEnv.init("Test",
+        \\t : (_, [A])
+        \\t = (1, A)
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Polymorphic Value");
+    try expectPolymorphicValueHole(&test_env);
+}
+
+/// The one Polymorphic Value problem names the annotation's `_` hole.
+fn expectPolymorphicValueHole(test_env: *TestEnv) TestEnv.TestEnvError!void {
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem != .polymorphic_value) continue;
+        const hole = problem.polymorphic_value.hole orelse return error.TestUnexpectedResult;
+        const region = test_env.module_env.store.getRegionAt(@enumFromInt(@intFromEnum(hole.var_)));
+        const source = test_env.module_env.common.source;
+        try testing.expectEqual(@as(u8, '_'), source[region.start.offset]);
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "check type - polarity - a local annotated value shares its row across uses" {
+    // KNOWN GAP, not the intended language rule: local value bindings are not yet
+    // generalized by their implicitly opened rows, because a generalized
+    // local value lowers to a single Monotype cell and would need "evaluate
+    // once at the annotated width, widen at each use", which awaits row
+    // subsumption's `row_widen` lowering primitive (design.md "Deferred: Row
+    // Subsumption"). Until then the row behaves like an inferred local row,
+    // one variable shared by every use (sealed later by Monotype's row
+    // defaults): the first use widens it with `A`, which the second use's
+    // annotation does not list. This pins the gap; locals follow the
+    // top-level rule once that primitive exists.
+    const source =
+        \\f : Str -> ([A, Boom], [B, Boom])
+        \\f = |_| {
+        \\    e : [Boom]
+        \\    e = Boom
+        \\    a : [A, Boom]
+        \\    a = e
+        \\    b : [B, Boom]
+        \\    b = e
+        \\    (a, b)
+        \\}
+    ;
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - a weak value row widened by a use is grounded at its tail" {
-    // `choice` widens `e`'s shared weak row to `[A, Boom]`, so after solving
-    // the annotation's extension is a tag row whose own tail is still open.
-    // The module grounds that tail, so importers see the closed row
-    // `[A, Boom]` and cannot widen it further.
+test "check type - polarity - an unannotated use of a generalized value does not widen it" {
+    // `choice` instantiates `e`'s row and widens only its own copy to
+    // `[A, Boom]`; `e`'s published row stays the annotated one.
+    const source =
+        \\e : [Boom]
+        \\e = Boom
+        \\
+        \\choice = if Bool.True e else A
+        \\
+        \\only_boom : [Boom]
+        \\only_boom = e
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "e", .expected = "[Boom]" },
+        .{ .def = "choice", .expected = "[A, Boom]" },
+        .{ .def = "only_boom", .expected = "[Boom]" },
+    });
+}
+
+test "check type - polarity - an importer may widen an annotated value's row" {
+    // The published scheme quantifies the implicitly opened row, so an
+    // importer instantiates it fresh, whatever the defining module's own uses
+    // did with their copies.
     const source_lib =
         \\module [e, choice]
         \\
@@ -9824,20 +9945,59 @@ test "check type - polarity - a weak value row widened by a use is grounded at i
         \\
         \\wider : [A, Boom, C]
         \\wider = Lib.e
+        \\
+        \\other : [Boom, D]
+        \\other = Lib.e
     ;
     var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
     defer main_env.deinit();
-    try main_env.assertOneTypeError("Type Mismatch");
+    try main_env.assertNoErrors();
 }
 
-test "check type - polarity - a defaulted field use may widen a weak value row" {
+test "check type - polarity - a value forwarding a closed row still closes it" {
+    // Known limitation, pending row subsumption (design.md "Deferred: Row
+    // Subsumption"): `first` forwards its input, so its annotated output row
+    // is closed by its body, and `e` forwarding that result closes `e`'s row
+    // too. There is nothing left to quantify, and a wider use is rejected.
+    const source =
+        \\first : [A, B] -> [A, B]
+        \\first = |x| x
+        \\
+        \\e : [A, B]
+        \\e = first(A)
+        \\
+        \\wider : [A, B, C]
+        \\wider = e
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a value alias of a closed value still closes its row" {
+    // The same limitation through a value alias: `e` is `closed`, whose row
+    // the forwarding call closed.
+    const source =
+        \\first : [A, B] -> [A, B]
+        \\first = |x| x
+        \\
+        \\closed = first(A)
+        \\
+        \\e : [A, B]
+        \\e = closed
+        \\
+        \\wider : [A, B, C]
+        \\wider = e
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - a defaulted field use may widen a generalized value row" {
     // A defaulted record field's default expression is an ordinary USE SITE,
-    // so it may widen the weak row of the value it names—exactly like the
-    // accepted first use in the test above. It is checked later than every
-    // other use (`checkPendingDefaults` is the first pass of `finalizeTypes`,
-    // after the whole def pass), and the late implicit-open-ext replay
-    // (`Check.runLateImplicitOpenExtAudit`) used to read the row after that
-    // widening and blame `e` for producing `A`, which `e = Boom` cannot.
+    // so it instantiates the value's row and may widen its copy—exactly like
+    // the uses in the tests above. It is checked later than every other use
+    // (`checkPendingDefaults` is the first pass of `finalizeTypes`, after the
+    // whole def pass), and the late implicit-open-ext replay
+    // (`Check.runLateImplicitOpenExtAudit`) must not blame `e` for producing
+    // `A`, which `e = Boom` cannot.
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -9865,8 +10025,9 @@ test "check type - polarity - a defaulted field use at the annotated width is cl
 }
 
 test "check type - polarity - value with explicit open ext generalizes" {
-    // `..` on a value annotation is the opt-in to a quantified row (as on
-    // main): each use instantiates it fresh.
+    // A written `..` on a value annotation quantifies the row exactly as its
+    // absence does (and is therefore redundant): each use instantiates it
+    // fresh.
     const source =
         \\e : [Boom, ..]
         \\e = Boom
@@ -9877,10 +10038,10 @@ test "check type - polarity - value with explicit open ext generalizes" {
         \\use_b : Str -> [B, Boom]
         \\use_b = |_| e
     ;
-    try checkTypesModuleDefs(source, &.{
-        .{ .def = "use_a", .expected = "Str -> [A, Boom]" },
-        .{ .def = "use_b", .expected = "Str -> [B, Boom]" },
-    });
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"Redundant Open Tag Union"},
+    } }, "Str -> [B, Boom]");
 }
 
 test "check type - polarity - where-method return stays closed inside the body" {
@@ -10221,14 +10382,31 @@ test "check type - polarity - named ext in output position does not warn" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str -> [Fail, Ok, ..others]");
 }
 
-test "check type - polarity - explicit anonymous ext on a value does not warn" {
-    // On a value binding `..` is the opt-in to a quantified row (it is what
-    // makes the value generalize), so it is not redundant.
+test "check type - polarity - explicit anonymous ext on a top-level value warns redundant" {
+    // A top-level value's implicitly opened row already makes it generalize,
+    // so the `..` adds nothing, exactly as on a function.
     const source =
         \\e : [Boom, ..]
         \\e = Boom
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[Boom]");
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"Redundant Open Tag Union"},
+    } }, "[Boom]");
+}
+
+test "check type - polarity - explicit anonymous ext on a local value does not warn" {
+    // A local value's implicitly opened row does not generalize it; there
+    // `..` is the opt-in to a quantified row, so it is not redundant.
+    const source =
+        \\f : Str -> [A, B, Boom]
+        \\f = |_| {
+        \\    e : [Boom, ..]
+        \\    e = Boom
+        \\    e
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> [A, B, Boom]");
 }
 
 test "check type - polarity - explicit anonymous ext in an input position does not warn" {

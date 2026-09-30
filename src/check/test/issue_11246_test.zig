@@ -220,7 +220,11 @@ test "issue 11246: a binding that owns a writer is not blamed for a caller's wid
 }
 
 test "issue 11246: only the row the owned writer reaches is blamed" {
+    // `v` generalizes its implicitly opened rows, so its rows stay bounded and
+    // the caller's use widens a fresh copy. The codec demand its own writer
+    // adds is refused at the bounded row, exactly as for a parent that
+    // excludes a format error.
     var env = try TestEnv.init("Test", owned_writer_widens_one_row_caller_widens_the_other);
     defer env.deinit();
-    try env.assertOneTypeError("Type Mismatch");
+    try env.assertOneTypeError("Parser Error Row Missing Tag");
 }

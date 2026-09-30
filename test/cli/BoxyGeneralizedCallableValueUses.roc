@@ -3,13 +3,13 @@
 # instantiation of the binding's scheme (design.md "`.boxy` Runtime Lowering").
 BoxyGeneralizedCallableValueUses :: [].{}
 
-make_err : U64 -> Try(U64, [Oops(U64), ..])
+make_err : U64 -> Try(U64, [Oops(U64)])
 make_err = {
 	offset = 1
 	|n| if n > 10 { Err(Oops(n + offset)) } else { Ok(n) }
 }
 
-wrap : a -> (U64 -> Try(a, [Oops(U64), ..]))
+wrap : a -> (U64 -> Try(a, [Oops(U64)]))
 wrap = {
 	scale = 2
 	|value| |n| if n > 10 { Err(Oops(n * scale)) } else { Ok(value) }
@@ -17,14 +17,14 @@ wrap = {
 
 # Uses `make_err` inside its own producer, so the inner use's caller type is
 # written in `make_err2`'s quantified row.
-make_err2 : U64 -> Try(U64, [Oops(U64), ..])
+make_err2 : U64 -> Try(U64, [Oops(U64)])
 make_err2 = {
 	base = make_err(50)
 	|n| if n > 10 { base } else { Ok(n) }
 }
 
 # Calls `make_err` from the closure its producer returns.
-make_err3 : U64 -> Try(U64, [Oops(U64), ..])
+make_err3 : U64 -> Try(U64, [Oops(U64)])
 make_err3 = {
 	k = 2
 	|n| make_err(n * k)

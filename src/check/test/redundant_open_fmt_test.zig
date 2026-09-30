@@ -102,7 +102,9 @@ test "redundant open rows - retained phantom callback arguments" {
     , .exact);
 }
 
-test "redundant open rows - values and non-lambda bodies" {
+test "redundant open rows - top-level values and non-lambda bodies" {
+    // Every top-level definition generalizes regardless of a written `..`:
+    // a value's implicitly opened row counts as a type variable.
     try expectFormatterMatchesChecker(
         \\boom : [Boom, ..]
         \\boom = Boom
@@ -115,7 +117,7 @@ test "redundant open rows - values and non-lambda bodies" {
         \\
         \\made : Str -> [Fail, Ok, ..]
         \\made = if Bool.True parse else parse
-    , .formatter_subset);
+    , .exact);
 }
 
 test "redundant open rows - nested output and input positions" {
@@ -192,8 +194,13 @@ test "redundant open rows - same-named declarations that disagree" {
 }
 
 test "redundant open rows - associated and block-local annotations" {
+    // An associated value is a top-level definition and generalizes; a
+    // block-local value keeps `..` as its opt-in to a quantified row.
     try expectFormatterMatchesChecker(
         \\Thing := [T].{
+        \\    fallback : [Bad, ..]
+        \\    fallback = Bad
+        \\
         \\    parse : Str -> [Bad, ..]
         \\    parse = |s| {
         \\        helper : Str -> [Worse, ..]
@@ -246,9 +253,8 @@ test "redundant open rows - annotation-only definition outside an app" {
 
 test "redundant open rows - destructured top-level literals in an app" {
     // Can attaches a top-level annotation to the def a destructured literal
-    // splits off for that name. A value keeps its `..`; the formatter keeps
-    // a function's too, since it does not decide which literal field a name
-    // binds.
+    // splits off for that name: a top-level definition, value or function,
+    // which generalizes regardless of its `..`.
     try expectFormatterMatchesChecker(
         \\app [main] { pf: platform "platform.roc" }
         \\
@@ -259,7 +265,7 @@ test "redundant open rows - destructured top-level literals in an app" {
         \\{ f, m } = { f: |_| A, m: 2 }
         \\
         \\main = (e, n, f, m)
-    , .formatter_subset);
+    , .exact);
 }
 
 test "redundant open rows - destructuring that does not bind the name in an app" {

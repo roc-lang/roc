@@ -285,7 +285,9 @@ pub const Constants = struct {
     /// 129: Compile-time roots of specialization-owned top-level values are
     ///      marked `per_specialization`, and stored compile-time debug
     ///      observations carry an optional value site.
-    pub const CACHE_VERSION = 129;
+    /// 130: Top-level annotated values quantify their implicitly opened rows
+    ///      instead of grounding them to `[]`.
+    pub const CACHE_VERSION = 130;
 };
 
 /// Configuration for the Roc cache system.

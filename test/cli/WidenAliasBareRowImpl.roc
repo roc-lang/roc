@@ -9,8 +9,15 @@ Status : [Ok(Str), Err(Str)]
 describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> Status]
 describe = |x| x.status()
 
+# `seal` forwards its closed input, which closes its output row, and so the
+# row of every value built from it (design.md "Deferred: Row Subsumption").
+# This depends on that known limitation (forwarding closes the row): once
+# row subsumption lands, this fixture must close its impl row another way.
+seal : Status -> Status
+seal = |v| v
+
 closed_value : Status
-closed_value = Ok("cv")
+closed_value = seal(Ok("cv"))
 
 Job := [Pending].{
     status : Job -> Status
