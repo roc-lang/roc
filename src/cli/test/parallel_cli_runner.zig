@@ -1823,6 +1823,7 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/11530: two independent
     // callable relations share one static-dispatch target and its nested evidence.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11530: repeated static dispatch to Json.parse runs", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11530RepeatedStaticDispatchJsonParse.roc", .exit = .success, .stdout_exact = "(Ok(0), Ok(0))", .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11853: repeated static dispatch to a derived parser runs", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11853RepeatedStaticDispatchDerivedParser.roc", .exit = .success, .stdout_exact = "({ n: 1 }, { c: 2 })", .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/11439: an expect that
     // fails to type check never runs, so the summary must account for it
     // instead of reporting that every test in the module passed.

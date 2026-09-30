@@ -7268,7 +7268,11 @@ a fallback. An independent callable also retains a slot's nested vector when
 that vector is made entirely of pathless `scheme_requirement` entries. Those
 requirements belong to the selected target instantiation and cannot vary with
 the requesting callable relation. Mixed vectors remain per-use records;
-callable-derived vectors are synthesized from the independent relation.
+callable-derived vectors are synthesized from the independent relation,
+except when the target declares a parser or encoder requirement. A structural
+codec resolution names a checked generated-codec derivation, which lowering
+cannot derive from a callable, so every independent callable of such a target
+carries its own checked callable contract.
 An implementation whose checked scheme result row is CLOSED (its body returns a
 closed-source value: a top-level constant, an input-position parameter, a
 nominal field) still serves a widened use: the Result-Row Widening Adapter
