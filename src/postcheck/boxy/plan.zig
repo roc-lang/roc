@@ -12562,13 +12562,17 @@ const Builder = struct {
         boxyPlanInvariant("open tag row representation had no extension child");
     }
 
+    /// What leaves a variable unbound: a worker frame whose lexical chain
+    /// does not quantify it, or the absence of any caller at all.
+    const SharedVariableBinder = enum { frame, no_caller };
+
     /// A shared variable at its checked default, or an open row with its
     /// shared extension at that default: exactly the listed variants.
-    fn sharedVariableClosedRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
+    fn sharedVariableClosedRep(self: *Builder, rep_id: TypeRepId, binder: SharedVariableBinder) Allocator.Error!TypeRepId {
         if (self.plan.shared_closed_reps.get(rep_id)) |closed| return closed;
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         const closed = if (rep.is_open_tag_row) blk: {
-            const extension = try self.sharedVariableClosedRep(self.openRowExtensionRep(rep));
+            const extension = try self.sharedVariableClosedRep(self.openRowExtensionRep(rep), binder);
             const children_start: u32 = @intCast(self.plan.children.items.len);
             // Read by index: appending grows the child table.
             for (0..rep.children.len) |index| {
@@ -12594,7 +12598,13 @@ const Builder = struct {
             const view = self.moduleForId(rep.source_type.module);
             const variable = switch (view.checked_types.payload(rep.source_type.ty)) {
                 .flex => |flex| flex,
-                .rigid => boxyPlanInvariant("a rigid variable was shared outside its scheme"),
+                .rigid => |rigid| switch (binder) {
+                    // No caller binds a variable a root or a caller-less call
+                    // still holds, whether flexible or rigid; it is at its
+                    // checked default there.
+                    .no_caller => rigid,
+                    .frame => boxyPlanInvariant("a rigid variable was shared outside its scheme"),
+                },
                 .pending, .err, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => boxyPlanInvariant("a shared dynamic representation was not a variable"),
             };
             const closed_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
@@ -12640,7 +12650,7 @@ const Builder = struct {
                 if (walk.actualFor(rep_id)) |actual| return try actions.append(self.allocator, .{ .visit = actual });
                 if (rep.sealed_default) |sealed| return try actions.append(self.allocator, .{ .visit = sealed });
                 if (!self.frameLexicallyQuantifies(walk.root.frame, self.sharedVariableIdentity(rep_id))) {
-                    const closed = try self.sharedVariableClosedRep(rep_id);
+                    const closed = try self.sharedVariableClosedRep(rep_id, .frame);
                     try self.recordDerivedDecision(walk, rep_id, .{ .shared_closed = closed });
                     return try actions.append(self.allocator, .{ .visit = closed });
                 }
@@ -13154,7 +13164,7 @@ const Builder = struct {
             if (rep.kind == .dynamic and rep.sealed_default == null and
                 rep.children.len == 0 and rep.tag_variants.len == 0)
             {
-                _ = try self.sharedVariableClosedRep(rep_id);
+                _ = try self.sharedVariableClosedRep(rep_id, .no_caller);
                 continue;
             }
             for (0..rep.children.len) |index| {
@@ -14606,7 +14616,7 @@ const Builder = struct {
         // has nothing to bind a variable its types still hold, so the
         // variable is at its checked default there.
         const source_rep = if (caller_id == null and self.repIsUnboundVariable(argument_rep))
-            try self.sharedVariableClosedRep(argument_rep)
+            try self.sharedVariableClosedRep(argument_rep, .no_caller)
         else
             argument_rep;
         const source_env: u32 = if (try self.plan.repReadsDerivedFormal(self.allocator, source_rep, env_bindings)) state.env else 0;

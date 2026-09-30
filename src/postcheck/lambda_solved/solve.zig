@@ -3379,7 +3379,10 @@ const TypeCloner = struct {
             for (frames.items) |*frame| frame.build.deinit(allocator);
             frames.deinit(allocator);
         }
-        try frames.append(allocator, try self.beginClone(ty));
+        // Stack space is reserved before a clone begins, so a begun frame's
+        // build is always owned by the stack.
+        try frames.ensureUnusedCapacity(allocator, 1);
+        frames.appendAssumeCapacity(try self.beginClone(ty));
         var input: ?Type.TypeVarId = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
@@ -3396,7 +3399,8 @@ const TypeCloner = struct {
                 break child_ty;
             } else null;
             if (child) |child_ty| {
-                try frames.append(allocator, try self.beginClone(child_ty));
+                try frames.ensureUnusedCapacity(allocator, 1);
+                frames.appendAssumeCapacity(try self.beginClone(child_ty));
                 continue;
             }
             var finished = frames.pop().?;
