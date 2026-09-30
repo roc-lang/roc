@@ -12,6 +12,7 @@ const core = @import("lir_core");
 const layout = @import("layout");
 const BodyClone = @import("body_clone.zig");
 const Trmc = @import("trmc.zig");
+const PruneJoinParams = @import("prune_join_params.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
@@ -31,6 +32,7 @@ pub const Phase = enum {
     trmc,
     forwarding_join,
     tag_fusion,
+    prune_join_params,
     scalarize,
     loop_append,
     range,
@@ -109,7 +111,7 @@ const TaskContext = struct {
     fn executeOnLane(self: *TaskContext, worker: TaskExecutor.Worker) Allocator.Error!void {
         const analysis = switch (self.phase) {
             .tag_fusion, .loop_append, .range, .box_reuse => try analysisForLane(worker.lane_state),
-            .branch_expectation, .trmc, .forwarding_join, .scalarize => null,
+            .branch_expectation, .trmc, .forwarding_join, .prune_join_params, .scalarize => null,
         };
         try self.execute(worker.allocator, worker.scratch, analysis);
     }
@@ -131,6 +133,7 @@ const TaskContext = struct {
                 }
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
+            .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator),
             .scalarize => try ScalarizeJoins.runProc(&shard, self.layouts, self.proc, scratch_allocator),
             .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
             .range => try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
@@ -154,7 +157,7 @@ pub fn run(
     switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
         .box_reuse => try BoxReuse.prepareLayouts(store, layouts),
-        .branch_expectation, .forwarding_join, .tag_fusion, .scalarize, .loop_append, .range => {},
+        .branch_expectation, .forwarding_join, .tag_fusion, .prune_join_params, .scalarize, .loop_append, .range => {},
     }
     var contexts = std.ArrayList(TaskContext).empty;
     defer {
@@ -167,7 +170,7 @@ pub fn run(
             .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
             .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
             .scalarize => ScalarizeJoins.rewritableProcBody(store, proc),
-            .branch_expectation, .trmc, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
+            .branch_expectation, .trmc, .prune_join_params, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
         };
         if (body == null) continue;
         const admitted = phaseAdmits(store, phase, proc);
@@ -186,7 +189,7 @@ pub fn run(
     // fresh joins above this boundary; ordered commit rebases only those IDs.
     const first_fresh_join = switch (phase) {
         .forwarding_join, .tag_fusion => BodyClone.firstFreshJoinPoint(store),
-        .branch_expectation, .trmc, .scalarize, .loop_append, .range, .box_reuse => 0,
+        .branch_expectation, .trmc, .prune_join_params, .scalarize, .loop_append, .range, .box_reuse => 0,
     };
     for (contexts.items) |*context| context.first_fresh_join = first_fresh_join;
     const prefix = store.captureBodyPrefix();
@@ -287,6 +290,7 @@ fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bo
         .loop_append => shapes.loop,
         .forwarding_join => shapes.join_param,
         .tag_fusion => shapes.join_param and shapes.switch_stmt,
+        .prune_join_params => shapes.join_param,
         .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
         .range => shapes.checked_arithmetic or shapes.switch_stmt,
         .box_reuse => shapes.box_box,

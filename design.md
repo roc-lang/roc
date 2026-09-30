@@ -14976,6 +14976,32 @@ scalarization. Rewrites invalidate this per-round inventory before the next
 collection. Neither propagation nor root lookup repeatedly walks the same long
 chain.
 
+### Unread Join-Parameter Pruning
+
+Monotype lowering carries every `var` an `if` or `match` reassigns out of the
+construct, whether or not anything reads the variable afterwards. In LIR each
+such variable is a join parameter written by `set_local` on every entry. A
+write is a use of its value, so when an entry passes the same value to a
+consuming call first, ARC must retain it for the call and the call copies a
+value that is never read again.
+
+Between direct LIR lowering and ARC insertion, in every optimization mode, one
+normalization removes each join parameter that no reachable statement reads
+and whose only writes are explicit `set_local` statements. The parameter
+leaves its join, and each of its writes is deleted by routing the write's
+incoming edges to its successor; copying a successor over a deleted statement
+would duplicate any join it copied. Deleting a write can leave its value
+unread, so the pass repeats to a fixed point. Reads outside operand positions
+keep a parameter: a join's retained or maybe-uninitialized lists, another
+local's descriptor, and the implicit carry of `loop_continue` or `loop_break`,
+which keeps every current definition live, so a procedure containing either
+is left unchanged. A join parameter that is also a procedure argument is
+defined by the call as well, and is never removed.
+
+Where lowering carries the variables and the construct's result together in
+one struct-typed join parameter, the unread variable is a struct field rather
+than a parameter, and this pass does not remove it.
+
 ## Integer Arithmetic Operations
 
 Integer addition, subtraction, and multiplication each exist as a family of

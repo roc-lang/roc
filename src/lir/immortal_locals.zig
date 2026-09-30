@@ -29,6 +29,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const core = @import("lir_core");
+const BodyClone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -321,83 +322,7 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
     }.call;
 
     for (0..count) |index| {
-        const id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(index)));
-        const stmt = store.getCFStmtPtr(id);
-        switch (stmt.*) {
-            inline .init_uninitialized,
-            .assign_ref,
-            .assign_literal,
-            .assign_call,
-            .assign_call_erased,
-            .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
-            .assign_low_level,
-            .assign_list,
-            .assign_struct,
-            .assign_tag,
-            .store_struct,
-            .store_tag,
-            .set_local,
-            .debug,
-            .expect,
-            .comptime_branch_taken,
-            .incref,
-            .decref,
-            .decref_if_initialized,
-            .free,
-            => |*s| s.next = resolve(successor, s.next),
-            .boxy_tag_match => |*s| {
-                s.on_match = resolve(successor, s.on_match);
-                s.on_miss = resolve(successor, s.on_miss);
-            },
-            .str_match => |*s| {
-                s.on_match = resolve(successor, s.on_match);
-                s.on_miss = resolve(successor, s.on_miss);
-            },
-            .str_match_set => |*s| {
-                s.on_miss = resolve(successor, s.on_miss);
-                const arms = store.getStrMatchArmsMut(s.arms);
-                for (0..arms.len) |arm_index| {
-                    const arm = GuardedList.atPtr(arms, arm_index);
-                    arm.on_match = resolve(successor, arm.on_match);
-                }
-            },
-            .switch_stmt => |*s| {
-                s.default_branch = resolve(successor, s.default_branch);
-                if (s.continuation) |continuation| s.continuation = resolve(successor, continuation);
-                const branches = store.getCFSwitchBranchesMut(s.branches);
-                for (0..branches.len) |branch_index| {
-                    const branch = GuardedList.atPtr(branches, branch_index);
-                    branch.body = resolve(successor, branch.body);
-                }
-            },
-            .switch_initialized_payload => |*s| {
-                s.initialized_branch = resolve(successor, s.initialized_branch);
-                s.uninitialized_branch = resolve(successor, s.uninitialized_branch);
-            },
-            .join => |*s| {
-                s.body = resolve(successor, s.body);
-                s.remainder = resolve(successor, s.remainder);
-            },
-            .jump,
-            .ret,
-            .crash,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
-            => {},
-        }
+        BodyClone.redirectSuccessors(store, @enumFromInt(@as(u32, @intCast(index))), successor, resolve);
     }
 
     for (0..store.procSpecCount()) |proc_index| {
