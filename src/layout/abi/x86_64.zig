@@ -356,15 +356,15 @@ test "x86_64 SysV: zero-sized members contribute no eightbyte class" {
 
     // { {}, U8 } -> the zero-sized field adds nothing; one INTEGER eightbyte.
     const pair = try testStruct(&store, &.{ .zst, .u8 });
-    try testing.expectEqual(Class.one_integer, classifySystemV(&store, pair, .arg));
+    try testing.expectEqual(Class.one_integer, try classifySystemV(testing.allocator, &store, pair, .arg));
 
     // [Pair({}, U8), Nothing] -> the payload struct nests a zero-sized field.
     const union_idx = try store.putTagUnion(&.{ pair, .zst });
-    try testing.expectEqual(Class.one_integer, classifySystemV(&store, union_idx, .arg));
+    try testing.expectEqual(Class.one_integer, try classifySystemV(testing.allocator, &store, union_idx, .arg));
 
     // { {}, F64 } -> the zero-sized field does not disturb the SSE eightbyte.
     const float_pair = try testStruct(&store, &.{ .zst, .f64 });
-    try testing.expectEqual(Class.f64, classifySystemV(&store, float_pair, .arg));
+    try testing.expectEqual(Class.f64, try classifySystemV(testing.allocator, &store, float_pair, .arg));
 }
 
 test "x86_64 SysV: large aggregates go to memory" {

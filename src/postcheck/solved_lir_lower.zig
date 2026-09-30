@@ -280,6 +280,7 @@ pub fn runBorrowed(
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.lowerReachableFns();
+    lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
     if (builtin.mode == .Debug) {
@@ -1193,6 +1194,22 @@ const Lowerer = struct {
         self.types.deinit();
         self.runtime_schemas.deinit();
         self.result.deinit();
+    }
+
+    /// A keyed specialization is offered to the object cache only when this
+    /// program has its code. Worker preparation creates a placeholder, key
+    /// included, for every procedure a prepared body names without making it
+    /// reachable; a placeholder no emitted reference reached has no body and
+    /// is not this program's to offer.
+    fn keepLoweredSpecProcs(self: *Lowerer) void {
+        var kept: usize = 0;
+        for (self.result.spec_procs.items) |spec_proc| {
+            const proc = self.result.store.getProcSpec(spec_proc.proc);
+            if (proc.body == null and proc.hosted == null and !proc.external) continue;
+            self.result.spec_procs.items[kept] = spec_proc;
+            kept += 1;
+        }
+        self.result.spec_procs.shrinkRetainingCapacity(kept);
     }
 
     fn finish(self: *Lowerer) Output {
