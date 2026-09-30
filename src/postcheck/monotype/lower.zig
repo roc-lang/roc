@@ -40432,7 +40432,7 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const u64_ty = try self.primitiveType(.u64);
-        const reserved = try self.lowLevelExpr(.list_reserve, &.{ list_expr, try self.intLiteralExpr(1, u64_ty) }, list_ty);
+        const reserved = try self.lowLevelExpr(.list_reserve_for_append, &.{ list_expr, try self.intLiteralExpr(1, u64_ty) }, list_ty);
         return try self.lowLevelExpr(.list_append_unsafe, &.{ reserved, elem_expr }, list_ty);
     }
 

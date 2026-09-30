@@ -250,6 +250,7 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_replace_unsafe, BuiltinFn.list_replace },
         .{ LowLevel.list_set_in_place_unsafe, BuiltinFn.list_replace },
         .{ LowLevel.list_reserve, BuiltinFn.list_reserve },
+        .{ LowLevel.list_reserve_for_append, BuiltinFn.list_reserve_for_append },
         .{ LowLevel.list_release_excess_capacity, BuiltinFn.list_release_excess_capacity },
         .{ LowLevel.list_clear, BuiltinFn.list_sublist },
         .{ LowLevel.list_reverse, BuiltinFn.list_reverse },

@@ -1591,6 +1591,7 @@ pub const Evaluator = struct {
             .list_take_last,
             .list_reverse,
             .list_reserve,
+            .list_reserve_for_append,
             .list_release_excess_capacity,
             .list_clear,
             .list_split_first,
@@ -2825,6 +2826,7 @@ pub const Evaluator = struct {
             list_concat,
             list_with_capacity,
             list_reserve,
+            list_reserve_for_append,
             list_release_excess_capacity,
             list_clear,
             list_reverse,
@@ -2878,7 +2880,7 @@ pub const Evaluator = struct {
                 return .{ .list = out };
             },
             .list_with_capacity => return .{ .list = &.{} },
-            .list_reserve, .list_release_excess_capacity => return .{ .list = args[0].list },
+            .list_reserve, .list_reserve_for_append, .list_release_excess_capacity => return .{ .list = args[0].list },
             .list_clear => return .{ .list = &.{} },
             .list_reverse => {
                 const list = args[0].list;

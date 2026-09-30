@@ -78,6 +78,7 @@ const list = @import("list.zig");
 comptime {
     exportListFn(list.listAppendUnsafe, "append_unsafe");
     exportListFn(list.listReserve, "reserve");
+    exportListFn(list.listReserveForAppend, "reserve_for_append");
     exportListFn(list.listPrepend, "prepend");
     exportListFn(list.listWithCapacity, "with_capacity");
     exportListFn(list.listConcat, "concat");

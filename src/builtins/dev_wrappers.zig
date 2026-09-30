@@ -127,7 +127,7 @@ pub fn roc_builtins_simd_store_16(out: *RocList, vector_low: u64, vector_high: u
 pub fn roc_builtins_simd_append_16(out: *RocList, vector_low: u64, vector_high: u64, bytes: ?[*]u8, length: usize, capacity_or_alloc_ptr: usize, update_mode: utils.UpdateMode) callconv(.c) void {
     const roc_ops = in_process_host.ops();
     var result = RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = capacity_or_alloc_ptr };
-    result = list.listReserve(result, 1, 16, 1, false, null, utils.rcNone, null, utils.rcNone, update_mode, roc_ops);
+    result = list.listReserveForAppend(result, 1, 16, 1, false, null, utils.rcNone, null, utils.rcNone, update_mode, roc_ops);
     const vector = @as(u128, vector_low) | (@as(u128, vector_high) << 64);
     for (std.mem.asBytes(&vector)) |*byte| {
         result = list.listAppendUnsafe(result, @ptrCast(@constCast(byte)), 1, &list.copy_fallback);
@@ -252,6 +252,7 @@ const listReplace = list.listReplace;
 const listSet = list.listSet;
 const listSwap = list.listSwap;
 const listReserve = list.listReserve;
+const listReserveForAppend = list.listReserveForAppend;
 const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
 const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
@@ -1114,6 +1115,24 @@ pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: us
         out.* = listReserve(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listReserve(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
+    }
+}
+
+/// Wrapper: listReserveForAppend. The update mode is forwarded to the
+/// builtin's uniqueness check; `.InPlace` skips it.
+pub fn roc_builtins_list_reserve_for_append(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+        };
+        out.* = listReserveForAppend(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+    } else {
+        out.* = listReserveForAppend(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
 }
 

@@ -205,6 +205,7 @@ const Solver = struct {
         list_append_unsafe,
         list_concat,
         list_reserve,
+        list_reserve_for_append,
         list_drop_at,
         list_sublist,
         list_take_first,
@@ -1783,6 +1784,7 @@ const Solver = struct {
                 try self.unify(expected, args[1]);
             },
             .list_reserve,
+            .list_reserve_for_append,
             .list_drop_at,
             .list_sublist,
             .list_take_first,

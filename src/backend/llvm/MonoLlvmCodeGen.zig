@@ -4884,7 +4884,8 @@ pub const MonoLlvmCodeGen = struct {
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
             .list_map_write_unsafe => try self.emitListMapWriteUnsafe(target, arg_locals),
             .list_reverse => try self.emitListReverse(target, arg_locals, unique_args),
-            .list_reserve => try self.emitListReserve(target, arg_locals, unique_args),
+            .list_reserve => try self.emitListReserve(target, "roc_boxy_list_reserve", builtinSymbol(LowLevelBuiltins.listOp(.list_reserve)), arg_locals, unique_args),
+            .list_reserve_for_append => try self.emitListReserve(target, "roc_boxy_list_reserve_for_append", builtinSymbol(LowLevelBuiltins.listOp(.list_reserve_for_append)), arg_locals, unique_args),
             .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
             .list_first, .list_last => try self.emitListFirstLast(target, op, arg_locals),
             .str_is_eq => try self.emitStrIsEq(target, arg_locals),
@@ -10808,7 +10809,11 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeIntToLayout(self.slot(target).ptr, owned, self.localLayout(target));
     }
 
-    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+    /// Emit `list_reserve` or `list_reserve_for_append`. Both leave a list that
+    /// already has the requested spare untouched; they differ only in the
+    /// capacity their builtin (`boxy_symbol` or `builtin_symbol`) picks when
+    /// the list has to grow.
+    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_symbol: []const u8, args: anytype, unique_args: u64) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         // A list of zero-sized elements owns no allocation, so it carries a
         // length and nothing else and a reserve cannot change anything
@@ -10830,8 +10835,8 @@ pub const MonoLlvmCodeGen = struct {
 
         // The no-growth outcome is the hot one, so its checks are emitted
         // inline where this backend controls their shape; growth and shared
-        // lists fall through to the builtin. This mirrors listReserve's fast
-        // path exactly: exclusive ownership and spare <= capacity - length,
+        // lists fall through to the builtin. This mirrors the builtins' shared
+        // fast path exactly: exclusive ownership and spare <= capacity - length,
         // where a seamless slice's capacity is its visible window length.
         const list_ptr = self.slot(GuardedList.at(args, 0)).ptr;
         const bytes = try self.loadPointer(list_ptr);
@@ -10894,13 +10899,13 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = slow_block };
-        try self.emitListReserveCall(target, args, unique_args);
+        try self.emitListReserveCall(target, boxy_symbol, builtin_symbol, args, unique_args);
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = merge_block };
     }
 
-    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_symbol: []const u8, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
         const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
@@ -10918,9 +10923,9 @@ pub const MonoLlvmCodeGen = struct {
         }
         try self.appendUpdateModeArg(&call_args, unique_args);
         if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_reserve", call_args.types.items, call_args.values.items);
+            try self.callBoxyVoid(boxy_symbol, call_args.types.items, call_args.values.items);
         } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_reserve)), call_args.types.items, call_args.values.items);
+            try self.callBuiltinOut(builtin_symbol, call_args.types.items, call_args.values.items);
         }
     }
 

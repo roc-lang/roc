@@ -443,6 +443,7 @@ pub const BoxyBuiltinFn = enum {
     list_reverse,
     list_sort_with,
     list_reserve,
+    list_reserve_for_append,
     list_release_excess_capacity,
 
     /// Get the exported symbol name for shim relocation resolution. Each name
@@ -495,6 +496,7 @@ pub const BoxyBuiltinFn = enum {
             .list_reverse => "roc_boxy_list_reverse",
             .list_sort_with => "roc_boxy_list_sort_with",
             .list_reserve => "roc_boxy_list_reserve",
+            .list_reserve_for_append => "roc_boxy_list_reserve_for_append",
             .list_release_excess_capacity => "roc_boxy_list_release_excess_capacity",
         };
     }
@@ -524,7 +526,7 @@ pub const BoxyBuiltinFn = enum {
             .list_swap => &.{ p, p, p, p, 4, p, p, p, 4, p, 1 },
             .list_reverse => &.{ p, p, p, p, 4, p, 4, p, 1 },
             .list_sort_with => &.{ p, p, p, p, p, 4, p, 1, p, p, 4, p, 1 },
-            .list_reserve => &.{ p, p, p, p, 4, p, p, 4, p, 1 },
+            .list_reserve, .list_reserve_for_append => &.{ p, p, p, p, 4, p, p, 4, p, 1 },
             .list_release_excess_capacity => &.{ p, p, p, p, 4, p, 4, p, 1 },
             .static_desc,
             .static_dict,
@@ -4760,7 +4762,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_local = GuardedList.at(args, 0);
                     const list_loc = try self.emitValueLocal(list_local);
                     const spare_loc = try self.emitValueLocal(GuardedList.at(args, 1));
-                    return try self.callListReserveOp(list_local, list_loc, spare_loc, ll);
+                    return try self.callListReserveOp(list_local, list_loc, spare_loc, ll, .list_reserve, LowLevelBuiltins.listOp(.list_reserve));
+                },
+                .list_reserve_for_append => {
+                    // list_reserve_for_append(list, spare) -> List
+                    if (args.len != 2) unreachable;
+                    const list_local = GuardedList.at(args, 0);
+                    const list_loc = try self.emitValueLocal(list_local);
+                    const spare_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    return try self.callListReserveOp(list_local, list_loc, spare_loc, ll, .list_reserve_for_append, LowLevelBuiltins.listOp(.list_reserve_for_append));
                 },
                 .list_release_excess_capacity => {
                     // list_release_excess_capacity(list) -> List
@@ -7542,6 +7552,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_clear,
                 .list_replace_unsafe,
                 .list_reserve,
+                .list_reserve_for_append,
                 .list_reverse,
                 .list_sort_with,
                 .list_owned_unique,
@@ -9534,8 +9545,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
-        /// Call list_reserve wrapper
-        fn callListReserveOp(self: *Self, list_local: LocalId, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
+        /// Call a list reserve wrapper: `boxy_fn` for descriptor-governed
+        /// elements, `builtin_fn` otherwise.
+        fn callListReserveOp(self: *Self, list_local: LocalId, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype, boxy_fn: BoxyBuiltinFn, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const list_abi = builtinInternalListAbi(ls, "dev.callListReserveOp.builtin_list_abi", ll.ret_layout);
 
@@ -9562,7 +9574,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
-                try self.callBoxyBuiltin(&builder, .list_reserve);
+                try self.callBoxyBuiltin(&builder, boxy_fn);
             } else {
                 const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                 defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
@@ -9584,7 +9596,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
-                try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_reserve));
+                try self.callBuiltin(&builder, builtin_fn);
             }
 
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -10180,7 +10192,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 op != .list_swap and op != .list_drop_first and op != .list_drop_last and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
                 op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
-                op != .list_reserve and op != .list_release_excess_capacity and op != .list_clear) return null;
+                op != .list_reserve and op != .list_reserve_for_append and op != .list_release_excess_capacity and op != .list_clear) return null;
             const abi = builtinInternalListAbi(self.layout_store, "dev.stack_plan.list_abi", self.localLayout(s.target));
             if (abi.elem_size_align.size == 0) return null;
             const args = self.store.getLocalSpan(s.args);

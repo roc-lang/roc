@@ -15,7 +15,7 @@
 //! uniquifies. Each matched checked-append call is rewritten to
 //!
 //! ```text
-//! if List.len(list) == limit { list = list_reserve(list, 1); limit = List.len(list) + list_slack_unique(list) }
+//! if List.len(list) == limit { list = list_reserve_for_append(list, 1); limit = List.len(list) + list_slack_unique(list) }
 //! list = list_append_unsafe(list, elem)
 //! ```
 //!
@@ -206,11 +206,11 @@ const TripBound = struct {
 
 /// What a helper proc's linear body reduces to.
 const ProcKind = enum {
-    /// `list_reserve(arg0, arg1)`.
+    /// `list_reserve_for_append(arg0, arg1)`.
     reserve,
     /// `list_append_unsafe(arg0, arg1)`.
     append_unsafe,
-    /// `list_append_unsafe(list_reserve(arg0, <literal >= 1>), arg1)`.
+    /// `list_append_unsafe(list_reserve_for_append(arg0, <literal >= 1>), arg1)`.
     checked_append,
 };
 
@@ -392,9 +392,9 @@ const Pass = struct {
         const Abstract = union(enum) {
             arg: u32,
             literal: u64,
-            /// `list_reserve(arg0, arg1)`: the spare is forwarded.
+            /// `list_reserve_for_append(arg0, arg1)`: the spare is forwarded.
             reserve_forward,
-            /// `list_reserve(arg0, <literal >= 1>)`.
+            /// `list_reserve_for_append(arg0, <literal >= 1>)`.
             reserve_lit,
             /// `list_append_unsafe(arg0, arg1)`.
             unsafe_of_args,
@@ -608,7 +608,9 @@ const Pass = struct {
 
             const step: enum { reserve, append_unsafe, checked_append, other } = blk: {
                 if (op) |low_level| {
-                    if (low_level == .list_reserve) break :blk .reserve;
+                    // An exact `list_reserve` is an explicit request, not the
+                    // growth step of an append, so it never forms one.
+                    if (low_level == .list_reserve_for_append) break :blk .reserve;
                     if (low_level == .list_append_unsafe) break :blk .append_unsafe;
                     break :blk .other;
                 }
@@ -791,7 +793,7 @@ const Pass = struct {
                     const args = self.store.getLocalSpan(assign.args);
                     const arg_count = GuardedList.borrowLen(args);
                     const list_arg0 = arg_count > 0 and self.isListLocal(GuardedList.at(args, 0));
-                    const rebinds = assign.op == .list_reserve or assign.op == .list_append_unsafe or assign.op == .list_append_range_within or assign.op == .list_copy_range_within or assign.op == .list_append_sublist or assign.op == .list_append_le_bytes or assign.op == .list_set or assign.op == .list_clear;
+                    const rebinds = assign.op == .list_reserve or assign.op == .list_reserve_for_append or assign.op == .list_append_unsafe or assign.op == .list_append_range_within or assign.op == .list_copy_range_within or assign.op == .list_append_sublist or assign.op == .list_append_le_bytes or assign.op == .list_set or assign.op == .list_clear;
                     const read_ok = assign.op == .list_len or assign.op == .list_get_unsafe or assign.op == .list_slack_unique;
                     if (rebinds and list_arg0 and self.isListLocal(assign.target)) {
                         // Range-within appends promote to a slack-guarded
@@ -1902,8 +1904,8 @@ const Pass = struct {
         const grow_measure = try self.seedLimit(grown, grown_slack, grow_set_list, new_locals, origin);
         const grow_reserve = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = grown,
-            .op = .list_reserve,
-            .rc_effect = LowLevelOp.list_reserve.rcEffect(),
+            .op = .list_reserve_for_append,
+            .rc_effect = LowLevelOp.list_reserve_for_append.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ list_arg, grow_spare }),
             .next = grow_measure,
         } }, origin);
@@ -3394,7 +3396,7 @@ const PromoteTest = struct {
     }
 
     /// A checked-append helper in the fully lowered direct form:
-    /// `append(list, elem) = list_append_unsafe(list_reserve(list, 1), elem)`.
+    /// `append(list, elem) = list_append_unsafe(list_reserve_for_append(list, 1), elem)`.
     fn addAppendHelper(self: *PromoteTest) Allocator.Error!LIR.LirProcSpecId {
         const store = &self.store;
         const list_arg = try store.addLocal(.{ .layout_idx = self.list });
@@ -3413,8 +3415,8 @@ const PromoteTest = struct {
         } }, .test_fixture);
         const reserve = try store.addCFStmt(.{ .assign_low_level = .{
             .target = reserved,
-            .op = .list_reserve,
-            .rc_effect = LowLevelOp.list_reserve.rcEffect(),
+            .op = .list_reserve_for_append,
+            .rc_effect = LowLevelOp.list_reserve_for_append.rcEffect(),
             .args = try store.addLocalSpan(&.{ list_arg, spare }),
             .next = unsafe_append,
         } }, .test_fixture);
@@ -3521,7 +3523,7 @@ test "promote summaries reject ignored recursive calls in either procedure order
 }
 
 test "promote summaries reject discarded operations before checked append" {
-    for ([_]?LowLevelOp{ null, .list_len, .list_reserve, .list_append_unsafe }) |op| {
+    for ([_]?LowLevelOp{ null, .list_len, .list_reserve, .list_reserve_for_append, .list_append_unsafe }) |op| {
         var f = try PromoteTest.init(testing.allocator);
         defer f.deinit();
         const helper = try f.addAppendHelper();
@@ -3562,8 +3564,22 @@ test "promote summaries reject discarded operations before checked append" {
     }
 }
 
+test "promote summaries do not treat an exact reserve as an append's growth step" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const helper = try f.addAppendHelper();
+    const literal = f.store.getCFStmt(f.store.getProcSpec(helper).body.?).assign_literal;
+    const reserve = f.store.getCFStmtPtr(literal.next);
+    try testing.expectEqual(LowLevelOp.list_reserve_for_append, reserve.assign_low_level.op);
+    reserve.assign_low_level.op = .list_reserve;
+    reserve.assign_low_level.rc_effect = LowLevelOp.list_reserve.rcEffect();
+    var prepared = try prepareCallees(&f.store, testing.allocator);
+    defer prepared.deinit();
+    try testing.expectEqual(@as(?ProcKind, null), prepared.kinds.get(helper).?);
+}
+
 test "promote summaries preserve direct reserve and unsafe append wrappers" {
-    for ([_]LowLevelOp{ .list_reserve, .list_append_unsafe }) |op| {
+    for ([_]LowLevelOp{ .list_reserve_for_append, .list_append_unsafe }) |op| {
         var f = try PromoteTest.init(testing.allocator);
         defer f.deinit();
         const helper = try f.addAppendHelper();
@@ -3593,7 +3609,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
         }, .none);
         var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
-        const expected: ProcKind = if (op == .list_reserve) .reserve else .append_unsafe;
+        const expected: ProcKind = if (op == .list_reserve_for_append) .reserve else .append_unsafe;
         try testing.expectEqual(expected, prepared.kinds.get(helper).?.?);
         try testing.expectEqual(expected, prepared.kinds.get(wrapper).?.?);
     }
@@ -3616,8 +3632,8 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
             const sibling = try f.store.addLocal(.{ .layout_idx = f.list });
             next = try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = sibling,
-                .op = .list_reserve,
-                .rc_effect = LowLevelOp.list_reserve.rcEffect(),
+                .op = .list_reserve_for_append,
+                .rc_effect = LowLevelOp.list_reserve_for_append.rcEffect(),
                 .args = reserve.args,
                 .next = next,
             } }, .test_fixture);
@@ -3889,7 +3905,7 @@ test "promote threads slack through an append-only loop" {
                     switch (store.getCFStmt(grow)) {
                         .assign_literal => |lit| grow = lit.next,
                         .assign_low_level => |op| {
-                            if (op.op == .list_reserve) saw_reserve = true;
+                            if (op.op == .list_reserve_for_append) saw_reserve = true;
                             if (op.op == .list_slack_unique) saw_measure = true;
                             grow = op.next;
                         },

@@ -746,7 +746,7 @@ Builtin :: [].{
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len)
+				var $out = u8_list_reserve_for_append(out, len)
 				var $index = 0
 
 				while $index < len {
@@ -760,7 +760,7 @@ Builtin :: [].{
 			append_json_quoted_string : List(U8), Str -> List(U8)
 			append_json_quoted_string = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len + 2)
+				var $out = u8_list_reserve_for_append(out, len + 2)
 				var $index = 0
 
 				$out = u8_append($out, 34)
@@ -3973,13 +3973,10 @@ Builtin :: [].{
 		## }
 		## ```
 		##
-		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
-		## trusts the request rather than rounding it up. If the list is not shared and
-		## already has room for `spare` more items, it does nothing. Otherwise it asks
-		## the allocator to grow the list to that size. The one exception is reserving
-		## a single item beyond the current capacity: that is indistinguishable from an
-		## ordinary [List.append] outgrowing the list, so the capacity grows
-		## geometrically instead of by one.
+		## `reserve(spare)` aims for a capacity of exactly `List.len(list) + spare`
+		## items; it trusts the request rather than rounding it up. If the list is not
+		## shared and already has room for `spare` more items, it does nothing.
+		## Otherwise it asks the allocator to grow the list to that size.
 		##
 		## Note that the reserve above sits before the loop. Because [List.reserve] aims
 		## for the exact size requested, it is a poor fit for use inside one: a reserve
@@ -4111,7 +4108,7 @@ Builtin :: [].{
 		## ```
 		append : List(a), a -> List(a)
 		append = |list, item| {
-			reserved = List.reserve(list, 1)
+			reserved = list_reserve_for_append(list, 1)
 			list_append_unsafe(reserved, item)
 		}
 
@@ -23246,12 +23243,12 @@ u8_repeat = |byte, count| {
 }
 
 u8_append : List(U8), U8 -> List(U8)
-u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve(list, 1), byte)
+u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve_for_append(list, 1), byte)
 
 u8_concat : List(U8), List(U8) -> List(U8)
 u8_concat = |left, right| {
 	len = u8_list_len(right)
-	var $out = u8_list_reserve(left, len)
+	var $out = u8_list_reserve_for_append(left, len)
 	var $index = 0
 
 	while $index < len {
@@ -23404,6 +23401,8 @@ i128_from_le_bytes_unchecked : List(U8), U64 -> I128
 u8_list_append_unsafe : List(U8), U8 -> List(U8)
 
 u8_list_reserve : List(U8), U64 -> List(U8)
+
+u8_list_reserve_for_append : List(U8), U64 -> List(U8)
 
 dec_sqrt_unsafe : Dec -> Dec
 
@@ -24695,6 +24694,11 @@ list_map_write_unsafe : List(output), U64, output -> List(output)
 
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
+
+# Implemented by the compiler, ensures at least spare additional items of
+# capacity ahead of appending them. Unlike list_reserve, growth takes at least
+# the next geometric capacity step, so a run of appends stays amortized-linear.
+list_reserve_for_append : List(item), U64 -> List(item)
 
 # Implemented by the compiler. Appends count items copied from the list
 # itself beginning at start, reading through freshly appended items. The
