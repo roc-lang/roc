@@ -1410,6 +1410,30 @@ pub fn listPrepend(
     copy: CopyFallbackFn,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
+    // An exclusive seamless slice whose window starts after the start of its
+    // backing allocation owns the slot just before the window, so the new
+    // element can go there without moving the window's elements. For
+    // refcounted elements that slot still holds a live element which the
+    // slice's whole-allocation teardown would otherwise release, so it is
+    // released here before being overwritten.
+    if (list.isSeamlessSlice() and element_width > 0 and list.isExclusive(update_mode, roc_ops)) {
+        const window_ptr = list.bytes orelse unreachable;
+        const alloc_ptr = list.getAllocationDataPtr(roc_ops) orelse unreachable;
+        if (@intFromPtr(window_ptr) - @intFromPtr(alloc_ptr) >= element_width) {
+            const target = window_ptr - element_width;
+            if (elements_refcounted) {
+                dec(dec_context, target);
+            }
+            if (element) |source| {
+                copy(target, source, element_width);
+            }
+            var result = list;
+            result.bytes = target;
+            result.length += 1;
+            return result;
+        }
+    }
+
     const old_length = list.len();
     var with_capacity = listReserve(
         list,
@@ -4950,6 +4974,85 @@ test "listPrepend Immutable copies a shared allocation" {
     try std.testing.expectEqual(@as(usize, 4), result.len());
     const shared_elements = list.elements(u8).?[0..list.len()];
     try std.testing.expectEqual(@as(u8, 2), shared_elements[0]);
+}
+
+test "listPrepend writes into the open slot before a unique seamless slice" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]u16{ 10, 20, 30, 40 };
+    var list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
+    const alloc_ptr = list.bytes;
+
+    // Repeatedly pop the front and push a new front, as a stack would.
+    var i: u16 = 0;
+    while (i < 100) : (i += 1) {
+        list = listDropAt(list, @alignOf(u16), @sizeOf(u16), false, 0, null, rcNone, null, rcNone, .Immutable, test_env.getOps());
+        try std.testing.expect(list.isSeamlessSlice());
+        const element: u16 = i;
+        list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u16), false, null, rcNone, null, rcNone, .Immutable, &copy_fallback, test_env.getOps());
+        try std.testing.expectEqual(alloc_ptr, list.bytes);
+        try std.testing.expectEqual(@as(usize, 4), list.len());
+    }
+    defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
+
+    const elements = list.elements(u16).?[0..list.len()];
+    try std.testing.expectEqual(@as(u16, 99), elements[0]);
+    try std.testing.expectEqual(@as(u16, 20), elements[1]);
+    try std.testing.expectEqual(@as(u16, 30), elements[2]);
+    try std.testing.expectEqual(@as(u16, 40), elements[3]);
+}
+
+test "listPrepend into a unique seamless slice releases the overwritten refcounted element" {
+    const Counter = struct {
+        fn dec(ctx: ?*anyopaque, elem: ?[*]u8) callconv(.c) void {
+            const seen: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx.?));
+            seen.append(std.testing.allocator, elem.?[0]) catch unreachable;
+        }
+    };
+
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var decremented: std.ArrayList(u8) = .empty;
+    defer decremented.deinit(std.testing.allocator);
+
+    const data = [_]u8{ 1, 2, 3 };
+    const list = RocList.fromSlice(u8, data[0..], true, test_env.getOps());
+    const alloc_ptr = list.bytes;
+
+    const slice = listDropAt(list, @alignOf(u8), @sizeOf(u8), true, 0, null, rcNone, &decremented, Counter.dec, .Immutable, test_env.getOps());
+    try std.testing.expect(slice.isSeamlessSlice());
+    try std.testing.expectEqual(@as(usize, 0), decremented.items.len);
+
+    const element: u8 = 9;
+    const result = listPrepend(slice, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), true, null, rcNone, &decremented, Counter.dec, .Immutable, &copy_fallback, test_env.getOps());
+    try std.testing.expectEqual(alloc_ptr, result.bytes);
+    try std.testing.expectEqualSlices(u8, &.{1}, decremented.items);
+
+    result.decref(@alignOf(u8), @sizeOf(u8), true, &decremented, Counter.dec, test_env.getOps());
+    try std.testing.expectEqualSlices(u8, &.{ 1, 9, 2, 3 }, decremented.items);
+}
+
+test "listPrepend copies a shared seamless slice" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const data = [_]u8{ 1, 2, 3 };
+    const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+    const slice = listDropAt(list, @alignOf(u8), @sizeOf(u8), false, 0, null, rcNone, null, rcNone, .Immutable, test_env.getOps());
+
+    // Hold a second reference so the front slot is not the slice's to reuse.
+    slice.incref(1, false, test_env.getOps());
+    defer slice.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+
+    const element: u8 = 9;
+    const result = listPrepend(slice, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, null, rcNone, .Immutable, &copy_fallback, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+
+    try std.testing.expect(!result.isSeamlessSlice());
+    try std.testing.expectEqualSlices(u8, &.{ 9, 2, 3 }, result.elements(u8).?[0..result.len()]);
+    try std.testing.expectEqual(@as(u8, 1), (slice.bytes.? - 1)[0]);
 }
 
 test "listReverse InPlace reverses the unique allocation without a uniqueness check" {

@@ -1856,6 +1856,51 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(4, 0)" },
     },
     .{
+        .name = "low_level - prepend after drop_first pops and pushes at the front",
+        .source =
+        \\{
+        \\var $xs = [10.U64, 20, 30, 40]
+        \\for i in 0..<5.U64 {
+        \\    $xs = $xs.drop_first(1).prepend(i)
+        \\}
+        \\$xs
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[4, 20, 30, 40]" },
+    },
+    .{
+        .name = "low_level - prepend after drop_first releases popped heap strings",
+        .source =
+        \\{
+        \\var $xs = [
+        \\    Str.concat("first string long enough to live on the heap ", "a"),
+        \\    Str.concat("second string long enough to live on the heap ", "b"),
+        \\    Str.concat("third string long enough to live on the heap ", "c"),
+        \\]
+        \\for i in 0..<3.U64 {
+        \\    $xs = $xs.drop_first(1).prepend(Str.concat("pushed string long enough to live on the heap ", i.to_str()))
+        \\}
+        \\$xs
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[\"pushed string long enough to live on the heap 2\", \"second string long enough to live on the heap b\", \"third string long enough to live on the heap c\"]" },
+    },
+    .{
+        .name = "low_level - prepend after drop_first leaves a shared list unchanged",
+        .source =
+        \\{
+        \\xs = [
+        \\    Str.concat("first string long enough to live on the heap ", "a"),
+        \\    Str.concat("second string long enough to live on the heap ", "b"),
+        \\]
+        \\ys = xs.drop_first(1)
+        \\zs = ys.prepend(Str.concat("pushed string long enough to live on the heap ", "z"))
+        \\(xs, ys, zs)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([\"first string long enough to live on the heap a\", \"second string long enough to live on the heap b\"], [\"second string long enough to live on the heap b\"], [\"pushed string long enough to live on the heap z\", \"second string long enough to live on the heap b\"])" },
+    },
+    .{
         .name = "low_level - zero-sized list append reports zero capacity",
         .source =
         \\{
