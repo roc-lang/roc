@@ -218,6 +218,9 @@ ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 /// Ground instances of type declarations referenced from annotations. See
 /// `instantiateVarPolarized`.
 ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) = .empty,
+/// Ground subtrees of the latest instance of a type declaration at each
+/// position whose instance is not ground. See `instantiateVarPolarized`.
+polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, []Instantiator.SharedSubtree) = .empty,
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
 /// Solved variances of local type declarations' formals, by declaration.
@@ -3332,6 +3335,9 @@ pub fn deinit(self: *Self) void {
     self.var_map.deinit();
     self.ground_expected_backups.deinit(self.gpa);
     self.ground_polarized_instances.deinit(self.gpa);
+    var subtree_entries = self.polarized_instance_subtrees.valueIterator();
+    while (subtree_entries.next()) |entry| self.gpa.free(entry.*);
+    self.polarized_instance_subtrees.deinit(self.gpa);
     self.constraints.deinit(self.gpa);
     self.return_constraints.deinit(self.gpa);
     self.return_value_exprs.deinit(self.gpa);
@@ -7685,6 +7691,17 @@ fn instantiateVarPolarized(
             if (try self.varIsGround(cached)) return cached;
         }
     }
+    // An instance that is not ground still has ground subtrees, identical in
+    // every instance at this position: the declaration's own ground subtrees,
+    // copied. The latest instance's ground subtrees that are still ground are
+    // read by the next instance instead of being copied again.
+    var shared_subtrees: []Instantiator.SharedSubtree = &.{};
+    if (evidence == .none) {
+        if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
+            shared_subtrees = try self.groundSubtreeEntries(entries);
+        }
+    }
+    defer self.gpa.free(shared_subtrees);
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
@@ -7701,13 +7718,157 @@ fn instantiateVarPolarized(
         .current_reach = reach,
         .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
+        .shared_subtrees = shared_subtrees,
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
-    if (opened_marker_exts.items.len == 0 and evidence == .none and try self.varIsGround(instantiated)) {
-        try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
+    if (evidence == .none) {
+        if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
+            try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
+        } else {
+            const entries = try self.maximalGroundSubtreeCopies(instantiated);
+            const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
+            if (slot.found_existing) self.gpa.free(slot.value_ptr.*);
+            slot.value_ptr.* = entries;
+        }
     }
     return instantiated;
+}
+
+/// The ground status of every var reachable from `roots`: a var is ground
+/// when no flex, rigid, presence or error leaf and no invalid nominal is
+/// reachable from it. Non-ground status flows from leaves to every var that
+/// reaches them, so a cycle is ground exactly when nothing on it reaches a
+/// leaf. The map is keyed by resolved var.
+const GroundMarks = struct {
+    /// Resolved vars in discovery order.
+    order: std.ArrayListUnmanaged(Var) = .empty,
+    /// Index into `order` by resolved var.
+    index_of: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+    /// Parent indexes of each var.
+    parents: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u32)) = .empty,
+    ground: std.ArrayListUnmanaged(bool) = .empty,
+
+    fn deinit(self: *GroundMarks, gpa: Allocator) void {
+        for (self.parents.items) |*list| list.deinit(gpa);
+        self.parents.deinit(gpa);
+        self.index_of.deinit(gpa);
+        self.order.deinit(gpa);
+        self.ground.deinit(gpa);
+    }
+
+    fn isGround(self: *const GroundMarks, resolved_var: Var) bool {
+        const index = self.index_of.get(resolved_var) orelse return false;
+        return self.ground.items[index];
+    }
+};
+
+fn computeGroundMarks(self: *Self, roots: []const Var) Allocator.Error!GroundMarks {
+    var marks: GroundMarks = .{};
+    errdefer marks.deinit(self.gpa);
+    const Pending = struct { var_: Var, parent: ?u32 };
+    var pending: std.ArrayListUnmanaged(Pending) = .empty;
+    defer pending.deinit(self.gpa);
+    for (roots) |root| try pending.append(self.gpa, .{ .var_ = root, .parent = null });
+    while (pending.pop()) |item| {
+        const resolved = self.types.resolveVar(item.var_);
+        const entry = try marks.index_of.getOrPut(self.gpa, resolved.var_);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = @intCast(marks.order.items.len);
+            try marks.order.append(self.gpa, resolved.var_);
+            try marks.parents.append(self.gpa, .empty);
+            try marks.ground.append(self.gpa, true);
+        }
+        const index = entry.value_ptr.*;
+        if (item.parent) |parent| try marks.parents.items[index].append(self.gpa, parent);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => marks.ground.items[index] = false,
+            .alias => |alias| {
+                try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .parent = index });
+                for (self.types.sliceAliasArgs(alias)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .parent = index });
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |elem| try pending.append(self.gpa, .{ .var_ = elem, .parent = index }),
+                .nominal_type => |nominal| {
+                    if (self.types.nominalDeclIsInvalid(nominal)) marks.ground.items[index] = false;
+                    for (self.types.sliceNominalArgs(nominal)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .parent = index });
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .parent = index });
+                    try pending.append(self.gpa, .{ .var_ = func.ret, .parent = index });
+                },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .parent = index });
+                        if (presence.presenceVar()) |presence_var| try pending.append(self.gpa, .{ .var_ = presence_var, .parent = index });
+                    }
+                    try pending.append(self.gpa, .{ .var_ = record.ext, .parent = index });
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        for (self.types.sliceVars(tag_args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .parent = index });
+                    }
+                    try pending.append(self.gpa, .{ .var_ = tag_union.ext, .parent = index });
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+    var spread: std.ArrayListUnmanaged(u32) = .empty;
+    defer spread.deinit(self.gpa);
+    for (marks.ground.items, 0..) |is_ground, index| {
+        if (!is_ground) try spread.append(self.gpa, @intCast(index));
+    }
+    while (spread.pop()) |index| {
+        for (marks.parents.items[index].items) |parent| {
+            if (!marks.ground.items[parent]) continue;
+            marks.ground.items[parent] = false;
+            try spread.append(self.gpa, parent);
+        }
+    }
+    return marks;
+}
+
+/// The copies `instantiateVarPolarized`'s last instantiation made of the
+/// declaration's subtrees that are ground and maximal: their instance var is
+/// ground and reached from a var that is not. Sharing those roots shares
+/// everything below them.
+fn maximalGroundSubtreeCopies(self: *Self, instance_root: Var) Allocator.Error![]Instantiator.SharedSubtree {
+    var marks = try self.computeGroundMarks(&.{instance_root});
+    defer marks.deinit(self.gpa);
+    var entries: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty;
+    errdefer entries.deinit(self.gpa);
+    var copies = self.var_map.iterator();
+    while (copies.next()) |copy| {
+        const resolved_copy = self.types.resolveVar(copy.value_ptr.*).var_;
+        const index = marks.index_of.get(resolved_copy) orelse continue;
+        if (!marks.ground.items[index]) continue;
+        var maximal = marks.parents.items[index].items.len == 0;
+        for (marks.parents.items[index].items) |parent| {
+            if (!marks.ground.items[parent]) maximal = true;
+        }
+        if (!maximal) continue;
+        try entries.append(self.gpa, .{ .source = copy.key_ptr.*, .copy = resolved_copy });
+    }
+    return entries.toOwnedSlice(self.gpa);
+}
+
+/// The entries whose copies are still ground types.
+fn groundSubtreeEntries(self: *Self, entries: []const Instantiator.SharedSubtree) Allocator.Error![]Instantiator.SharedSubtree {
+    const roots = try self.gpa.alloc(Var, entries.len);
+    defer self.gpa.free(roots);
+    for (entries, roots) |entry, *root| root.* = entry.copy;
+    var marks = try self.computeGroundMarks(roots);
+    defer marks.deinit(self.gpa);
+    var kept: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty;
+    errdefer kept.deinit(self.gpa);
+    for (entries) |entry| {
+        if (marks.isGround(self.types.resolveVar(entry.copy).var_)) try kept.append(self.gpa, entry);
+    }
+    return kept.toOwnedSlice(self.gpa);
 }
 
 const PolarizedInstanceKey = struct {
@@ -8233,6 +8394,9 @@ fn instantiateVarHelp(
     for (instantiator.share_vars) |shared_var| {
         const resolved_shared = self.types.resolveVar(shared_var);
         try instantiator.var_map.put(resolved_shared.var_, resolved_shared.var_);
+    }
+    for (instantiator.shared_subtrees) |subtree| {
+        try instantiator.var_map.put(self.types.resolveVar(subtree.source).var_, subtree.copy);
     }
 
     // Then, instantiate the variable with the provided context
