@@ -30,8 +30,8 @@ symbols: RootSymbols,
 methods: [max_methods]Method,
 method_count: usize,
 /// How many expressions may still be generated at a deliberately wrong type.
-/// Zero (the default) generates only well-typed programs and consumes no
-/// extra input, so well-typed fuzz inputs keep generating the same program.
+/// Zero (the default) generates only well-typed programs, and the budget
+/// check consumes no input.
 type_error_budget: u8,
 /// How many expressions were generated at a deliberately wrong type.
 type_errors_written: u8,

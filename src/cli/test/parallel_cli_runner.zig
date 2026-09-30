@@ -647,10 +647,13 @@ fn stringLessThan(_: void, a: []const u8, b: []const u8) bool {
 /// kind that is not source text (REPL sessions, docs, headers, and the rest).
 fn snapshotProgramSource(allocator: Allocator, contents: []const u8) Allocator.Error!?[]const u8 {
     const meta = snapshotSection(contents, "# META\n~~~ini\n", "~~~") orelse return null;
-    // Escaped sources hold bytes the snapshot tool decodes first.
-    if (std.mem.find(u8, meta, "source_escapes=true") != null) return null;
     const kind = snapshotMetaType(meta) orelse return null;
-    const source = snapshotSection(contents, "# SOURCE\n~~~roc\n", "\n~~~\n") orelse return null;
+    const written_source = snapshotSection(contents, "# SOURCE\n~~~roc\n", "\n~~~\n") orelse return null;
+    // An escaped source writes each carriage return as `\r`.
+    const source = if (std.mem.find(u8, meta, "source_escapes=true") != null)
+        try std.mem.replaceOwned(u8, allocator, written_source, "\\r", "\r")
+    else
+        written_source;
 
     if (std.mem.eql(u8, kind, "file")) return source;
     if (std.mem.eql(u8, kind, "snippet")) {
