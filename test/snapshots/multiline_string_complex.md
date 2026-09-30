@@ -247,7 +247,7 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 289) (dispatcher-var 15)
+			(e-interpolation (constraint-fn-var 286) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -263,7 +263,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 307) (dispatcher-var 25)
+			(e-interpolation (constraint-fn-var 304) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -292,13 +292,13 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 358)
+					(e-dispatch-call (method "minus") (constraint-fn-var 355)
 						(receiver
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(args
 							(e-string))))
 				(field (name "e")
-					(e-call (constraint-fn-var 373)
+					(e-call (constraint-fn-var 370)
 						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17615") (target-def "17615"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let

@@ -10678,6 +10678,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         args.synthetic_default_platform,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
+    build_env.setDetailedLoweringTiming(args.timings);
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
         reporter.fail();
@@ -11098,6 +11099,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     }
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
+    build_env.setDetailedLoweringTiming(args.timings);
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
         reporter.fail();
@@ -11263,7 +11265,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
     }
 
-    reporter.begin("Linking");
+    reporter.begin("Preparing Link Inputs");
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filenameExtern(target) });
@@ -11494,6 +11496,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         false,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
+    build_env.setDetailedLoweringTiming(args.timings);
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
         reporter.fail();
@@ -16994,11 +16997,14 @@ fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress
 
 /// Split the front-end's accumulated timing into the user-facing phases shown
 /// in the breakdown once type checking completes.
-fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
+/// Module-level work runs on several worker threads at once, so each row is
+/// that work's time summed across threads rather than a slice of wall time.
+fn frontEndBreakdown(timing: anytype) [4]progress.SubTiming {
     return .{
-        .{ .name = "Parsing", .ns = timing.tokenize_parse_ns },
-        .{ .name = "Name Resolution", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
-        .{ .name = "Type Inference", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
+        .{ .name = "Parsing (summed across threads)", .ns = timing.tokenize_parse_ns },
+        .{ .name = "Name Resolution (summed)", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
+        .{ .name = "Type Inference (summed)", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
+        .{ .name = "Module Compile-Time Eval (summed)", .ns = timing.module_compile_time_evaluation_ns },
     };
 }
 
@@ -17076,9 +17082,10 @@ fn finishPostCheckLowering(
         reporter.end();
         return;
     }
+    var subs_buf: [25]progress.SubTiming = undefined;
     switch (strategy) {
-        .lss => reporter.endWithParentBreakdown(&postCheckLoweringBreakdown(snapshot)),
-        .boxy => reporter.endWithParentBreakdown(&boxyPostCheckLoweringBreakdown(snapshot)),
+        .lss => reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot))),
+        .boxy => reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &boxyPostCheckLoweringBreakdown(snapshot))),
     }
     recordLoweringCounters(reporter, snapshot, strategy, "");
 }
@@ -17433,7 +17440,7 @@ fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics)
 
 fn monotypeParallelCounters(parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot) [13]progress.Counter {
     return .{
-        .{ .name = "Aggregate worker work (ns)", .count = parallel.worker_work_ns },
+        .{ .name = "Worker task wall time, summed (ns)", .count = parallel.worker_work_ns },
         .{ .name = "Coordinator post-batch work (ns)", .count = parallel.coordinator_post_batch_work_ns },
         .{ .name = "Root tasks submitted", .count = parallel.root_tasks_submitted },
         .{ .name = "Root tasks committed", .count = parallel.root_tasks_committed },
@@ -17650,7 +17657,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
         .peak_worker_lanes_used = 4,
         .within_lowering_lane_reuse_tasks = 405,
     });
-    try std.testing.expectEqualStrings("Aggregate worker work (ns)", parallel[0].name);
+    try std.testing.expectEqualStrings("Worker task wall time, summed (ns)", parallel[0].name);
     try std.testing.expectEqual(@as(u64, 401), parallel[0].count);
     try std.testing.expectEqualStrings("Coordinator post-batch work (ns)", parallel[1].name);
     try std.testing.expectEqual(@as(u64, 402), parallel[1].count);
@@ -17686,24 +17693,40 @@ test "timings display every Monotype graph counter" {
     }
 }
 
+/// End the front-end phase. Whole-program finalization runs after every
+/// module is checked, inside the same call, so its wall time is reported as
+/// its own phase and excluded from Type Checking.
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
-    reporter.endWithBreakdown(&frontEndBreakdown(timing));
+    reporter.endWithBreakdownExcluding(&frontEndBreakdown(timing), timing.program_finalization_ns);
     const compile_time = timing.compile_time_evaluation;
-    if (compile_time.total_ns == 0 and
-        std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{}) and
-        std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) return;
-    reporter.recordCompletedWithBreakdown(
-        "Shared Lowering and Compile-Time Evaluation",
-        compile_time.total_ns,
-        .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
-        &compileTimeEvaluationBreakdown(compile_time),
-    );
-    if (!std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) {
-        recordLoweringCounters(reporter, compile_time.lowering, .lss, "Shared ");
+    if (timing.program_finalization_ns != 0) {
+        var subs_buf: [12]progress.SubTiming = undefined;
+        reporter.recordCompletedWithBreakdown(
+            "Shared Lowering and Compile-Time Evaluation",
+            timing.program_finalization_ns,
+            .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
+            measuredSubTimings(&subs_buf, &compileTimeEvaluationBreakdown(compile_time)),
+        );
     }
-    if (!std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
-        reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(compile_time.native_emission));
+    const counters = timing.compile_time_counters;
+    if (!std.meta.eql(counters.lowering, lir.CheckedPipeline.TimingSnapshot{})) {
+        recordLoweringCounters(reporter, counters.lowering, .lss, "Shared ");
     }
+    if (!std.meta.eql(counters.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
+        reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(counters.native_emission));
+    }
+}
+
+/// The sub-timings of stages that ran. A stage this phase reused from shared
+/// lowering records no time at all and is left out rather than shown as 0ms.
+fn measuredSubTimings(buf: []progress.SubTiming, subs: []const progress.SubTiming) []const progress.SubTiming {
+    var len: usize = 0;
+    for (subs) |sub| {
+        if (sub.ns == 0) continue;
+        buf[len] = sub;
+        len += 1;
+    }
+    return buf[0..len];
 }
 
 test "shared lowering reporting preserves counters for runtime reuse and continuation" {
@@ -17771,7 +17794,10 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .canonicalize_diagnostics_ns = @as(u64, 0),
             .type_checking_ns = @as(u64, 0),
             .check_diagnostics_ns = @as(u64, 0),
+            .module_compile_time_evaluation_ns = @as(u64, 0),
+            .program_finalization_ns = shared_input.total_ns,
             .compile_time_evaluation = shared_input,
+            .compile_time_counters = shared_input,
         });
         var runtime = lir.CheckedPipeline.Timing.init(std.testing.io);
         if (case.runtime_continuation) runtime.addSnapshot(.{

@@ -423,10 +423,14 @@ pub const InterfaceConstraints = struct {
         }
         for (self.nodes, instance.nodes, 0..) |node, *id, index| {
             id.* = switch (node) {
+                // A summary is replayed into graphs with different histories.
+                // Each settled leaf enters as its own occurrence, so marks a
+                // graph accumulated on its shared import of the same type
+                // cannot reach what the summary relates.
                 .mono => |ty| if (owned_backings.bit_length != 0 and owned_backings.isSet(index))
                     try graph.importOwnedBacking(ty)
                 else
-                    try graph.importMono(ty),
+                    try graph.importMonoIndependent(ty),
                 .open => try graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
             };
         }
@@ -515,6 +519,190 @@ pub const InterfaceConstraints = struct {
         return .{ .bytes = bytes, .leaves = try allocator.dupe(Type.TypeId, writer.leaves.items) };
     }
 
+    /// Identity of these constraints up to what a producing graph chooses
+    /// arbitrarily: local numbering and the order in which a row's members
+    /// were joined. Two expansions of one request constrain its interface
+    /// identically exactly when these bytes agree.
+    pub fn equivalenceIdentityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error![]const u8 {
+        var arena = std.heap.ArenaAllocator.init(graph.allocator);
+        defer arena.deinit();
+        var canonical = Canonicalizer{ .source = self, .name_store = graph.name_store, .allocator = arena.allocator() };
+        const constraints = try canonical.run();
+        var writer = IdentityWriter{ .graph = graph };
+        defer {
+            writer.bytes.deinit(graph.allocator);
+            writer.leaves.deinit(graph.allocator);
+        }
+        try writer.write(InterfaceConstraints, constraints);
+        return try allocator.dupe(u8, writer.bytes.items);
+    }
+
+    /// Renumbers captured nodes and field kinds in breadth-first order from
+    /// the roots, visiting each row's members in label order. A related group
+    /// with one member relates nothing within the interface and is dropped,
+    /// and an open node that finished as a settled type and carries no other
+    /// evidence is that settled leaf, whichever form its capture chose.
+    const Canonicalizer = struct {
+        source: InterfaceConstraints,
+        name_store: *const names.NameStore,
+        allocator: Allocator,
+        settled: std.AutoHashMapUnmanaged(NodeId, Type.TypeId) = .empty,
+        node_ids: std.AutoHashMapUnmanaged(NodeId, NodeId) = .empty,
+        node_order: std.ArrayList(NodeId) = .empty,
+        kind_ids: std.AutoHashMapUnmanaged(FieldKindId, FieldKindId) = .empty,
+        kind_order: std.ArrayList(FieldKindId) = .empty,
+        group_ids: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+        group_sizes: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+        numbered: bool = false,
+
+        fn run(self: *Canonicalizer) Allocator.Error!InterfaceConstraints {
+            try self.collapseSettled();
+            for (self.source.roots) |root| _ = try self.node(root);
+            var next: usize = 0;
+            while (next < self.node_order.items.len) : (next += 1) {
+                const id = self.node_order.items[next];
+                if (self.settled.contains(id)) continue;
+                switch (self.source.nodes[@intFromEnum(id)]) {
+                    .mono => {},
+                    .open => |index| _ = try mapValue(self, OpenNode, try self.sortedRows(self.source.open_nodes[index])),
+                }
+            }
+            self.numbered = true;
+
+            const roots = try self.allocator.alloc(NodeId, self.source.roots.len);
+            for (self.source.roots, roots) |root, *out| out.* = try self.node(root);
+            const nodes = try self.allocator.alloc(Node, self.node_order.items.len);
+            var open_nodes = std.ArrayList(OpenNode).empty;
+            for (self.node_order.items, nodes) |id, *out| switch (self.source.nodes[@intFromEnum(id)]) {
+                .mono => |ty| out.* = .{ .mono = ty },
+                .open => |index| {
+                    if (self.settled.get(id)) |ty| {
+                        out.* = .{ .mono = ty };
+                        continue;
+                    }
+                    var open = try mapValue(self, OpenNode, try self.sortedRows(self.source.open_nodes[index]));
+                    if (open.related_group) |group| if (self.group_sizes.get(group).? == 1) {
+                        open.related_group = null;
+                    };
+                    if (open.related_group) |group| {
+                        const entry = try self.group_ids.getOrPut(self.allocator, group);
+                        if (!entry.found_existing) entry.value_ptr.* = self.group_ids.count() - 1;
+                        open.related_group = entry.value_ptr.*;
+                    }
+                    out.* = .{ .open = @intCast(open_nodes.items.len) };
+                    try open_nodes.append(self.allocator, open);
+                },
+            };
+            const kinds = try self.allocator.alloc(Kind, self.kind_order.items.len);
+            for (self.kind_order.items, kinds) |id, *out| out.* = try mapValue(self, Kind, self.source.kinds[@intFromEnum(id)]);
+            return .{ .roots = roots, .nodes = nodes, .open_nodes = open_nodes.items, .kinds = kinds };
+        }
+
+        /// Collects the nodes and field kinds one open node refers to.
+        const Children = struct {
+            allocator: Allocator,
+            nodes: std.ArrayList(NodeId) = .empty,
+            kinds: usize = 0,
+
+            fn node(self: *Children, id: NodeId) Allocator.Error!NodeId {
+                try self.nodes.append(self.allocator, id);
+                return id;
+            }
+
+            fn kind(self: *Children, id: FieldKindId) Allocator.Error!FieldKindId {
+                self.kinds += 1;
+                return id;
+            }
+
+            fn scalar(_: *Children, comptime T: type, value: T) Allocator.Error!T {
+                return value;
+            }
+        };
+
+        /// The greatest set of open nodes that finished as settled types, carry
+        /// no evidence beyond their content and refer only to settled leaves
+        /// or other members of the set.
+        fn collapseSettled(self: *Canonicalizer) Allocator.Error!void {
+            for (self.source.open_nodes) |open| if (open.related_group) |group| {
+                const entry = try self.group_sizes.getOrPut(self.allocator, group);
+                entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
+            };
+            const children = try self.allocator.alloc([]const NodeId, self.source.nodes.len);
+            for (self.source.nodes, children, 0..) |captured, *out, index| {
+                out.* = &.{};
+                const open = switch (captured) {
+                    .mono => continue,
+                    .open => |open_index| self.source.open_nodes[open_index],
+                };
+                const ty = open.finished orelse continue;
+                const vacuous_group = if (open.related_group) |group| self.group_sizes.get(group).? == 1 else true;
+                if (open.source != null or open.recursive_slot or open.forced_dynamic or open.constructor_evidence or open.private_backing or !vacuous_group) continue;
+                var collected = Children{ .allocator = self.allocator };
+                _ = try mapValue(&collected, InstNode, open.content);
+                if (collected.kinds != 0) continue;
+                out.* = collected.nodes.items;
+                try self.settled.put(self.allocator, @enumFromInt(index), ty);
+            }
+            var changed = true;
+            while (changed) {
+                changed = false;
+                var it = self.settled.keyIterator();
+                while (it.next()) |id| {
+                    for (children[@intFromEnum(id.*)]) |child| {
+                        if (self.source.nodes[@intFromEnum(child)] == .mono or self.settled.contains(child)) continue;
+                        _ = self.settled.remove(id.*);
+                        changed = true;
+                        break;
+                    }
+                    if (changed) break;
+                }
+            }
+        }
+
+        fn sortedRows(self: *Canonicalizer, open: OpenNode) Allocator.Error!OpenNode {
+            var result = open;
+            switch (open.content) {
+                .record => |record| {
+                    const fields = try self.allocator.dupe(InstField, record.fields);
+                    std.mem.sortUnstable(InstField, fields, self.name_store, instFieldLessThan);
+                    result.content = .{ .record = .{ .fields = fields, .ext = record.ext } };
+                },
+                .tag_union => |row| {
+                    const tags = try self.allocator.dupe(InstTag, row.tags);
+                    std.mem.sortUnstable(InstTag, tags, self.name_store, instTagLessThan);
+                    result.content = .{ .tag_union = .{ .tags = tags, .ext = row.ext, .tags_sorted = true } };
+                },
+                else => {},
+            }
+            return result;
+        }
+
+        fn node(self: *Canonicalizer, id: NodeId) Allocator.Error!NodeId {
+            if (self.numbered) return self.node_ids.get(id).?;
+            const entry = try self.node_ids.getOrPut(self.allocator, id);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @enumFromInt(self.node_order.items.len);
+                try self.node_order.append(self.allocator, id);
+            }
+            return id;
+        }
+
+        fn kind(self: *Canonicalizer, id: FieldKindId) Allocator.Error!FieldKindId {
+            if (self.numbered) return self.kind_ids.get(id).?;
+            const entry = try self.kind_ids.getOrPut(self.allocator, id);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @enumFromInt(self.kind_order.items.len);
+                try self.kind_order.append(self.allocator, id);
+                _ = try mapValue(self, Kind, self.source.kinds[@intFromEnum(id)]);
+            }
+            return id;
+        }
+
+        fn scalar(_: *Canonicalizer, comptime T: type, value: T) Allocator.Error!T {
+            return value;
+        }
+    };
+
     const IdentityWriter = struct {
         graph: *InstGraph,
         bytes: std.ArrayList(u8) = .empty,
@@ -534,11 +722,14 @@ pub const InterfaceConstraints = struct {
             const ns = self.graph.name_store;
             // Applied checked-type ids are provenance, not nominal identity.
             // Match Type.Store.typeEql; the declaration, arguments, backing
-            // authority and all open constraints are encoded separately.
+            // authority and all open constraints are encoded separately. A
+            // settled leaf is identified the same way, by its representation
+            // digest, so requests that differ only in the checked occurrence
+            // through which a named type was reached share one interface.
             if (T == Type.NamedType) return self.write(names.CheckedModuleDigest, value.module);
             if (T == Type.TypeId) {
                 try self.leaves.append(self.graph.allocator, value);
-                const digest = self.graph.types.specializationDigestCached(ns, value, null);
+                const digest = self.graph.types.representationDigestCached(ns, value, null);
                 return self.raw(&digest.bytes);
             }
             if (T == names.ModuleIdentityId) return self.raw(ns.moduleIdentityBytes(value));
@@ -1113,6 +1304,22 @@ const NodePair = struct {
     row_width: RowWidthRelation = .exact,
 };
 
+/// Unification visits one pair set entry per structural step, so the pair set
+/// hashes its three small integers directly instead of streaming them through
+/// a general-purpose byte hasher.
+const NodePairContext = struct {
+    pub fn hash(_: NodePairContext, pair: NodePair) u64 {
+        const ids = (@as(u64, @intFromEnum(pair.left)) << 32) | @intFromEnum(pair.right);
+        return std.hash.int(ids ^ (@as(u64, @intFromEnum(pair.row_width)) *% 0x9e37_79b9_7f4a_7c15));
+    }
+
+    pub fn eql(_: NodePairContext, a: NodePair, b: NodePair) bool {
+        return a.left == b.left and a.right == b.right and a.row_width == b.row_width;
+    }
+};
+
+const NodePairSet = std.HashMap(NodePair, void, NodePairContext, std.hash_map.default_max_load_percentage);
+
 const NominalBackingDeclaration = struct {
     module_bytes: [32]u8,
     declaration_id: u32,
@@ -1285,7 +1492,7 @@ const UnifyScratch = struct {
     const retained_capacity = 256;
 
     pending: std.ArrayList(NodePair) = .empty,
-    related: std.AutoHashMap(NodePair, void),
+    related: NodePairSet,
 
     fn deinit(self: *UnifyScratch, allocator: Allocator) void {
         self.pending.deinit(allocator);
@@ -3925,7 +4132,7 @@ pub const InstGraph = struct {
         self.requireRelationProduction();
         var pending = std.ArrayList(NodePair).empty;
         defer pending.deinit(self.allocator);
-        var related = std.AutoHashMap(NodePair, void).init(self.allocator);
+        var related = NodePairSet.init(self.allocator);
         defer related.deinit();
         try pending.append(self.allocator, .{ .left = public_node, .right = private_node, .row_width = row_width });
         while (pending.pop()) |pair| {
@@ -3976,7 +4183,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         raw_pair: NodePair,
         pending: *std.ArrayList(NodePair),
-        related: *std.AutoHashMap(NodePair, void),
+        related: *NodePairSet,
     ) Allocator.Error!void {
         const public_node = self.find(raw_pair.left);
         const private_node = self.find(raw_pair.right);
@@ -5349,7 +5556,7 @@ pub const InstGraph = struct {
     ) Allocator.Error!void {
         self.requireRelationProduction();
         self.countDiagnostic("unify_requests");
-        var scratch = self.unify_scratch_pool.pop() orelse UnifyScratch{ .related = std.AutoHashMap(NodePair, void).init(self.allocator) };
+        var scratch = self.unify_scratch_pool.pop() orelse UnifyScratch{ .related = NodePairSet.init(self.allocator) };
         defer {
             // Pooled scratch keeps only the capacity an ordinary call needs:
             // clearing touches a map's whole capacity.
@@ -5377,7 +5584,7 @@ pub const InstGraph = struct {
         raw_right: NodeId,
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
-        related: *std.AutoHashMap(NodePair, void),
+        related: *NodePairSet,
         allow_private_selection: bool,
     ) Allocator.Error!void {
         const left = self.find(raw_left);
@@ -7764,6 +7971,10 @@ pub fn recordFieldLessThan(name_store: *const names.NameStore, lhs: Type.Field, 
 /// Orders tag union tags by label text for layout-stable sorting.
 pub fn tagLessThan(name_store: *const names.NameStore, lhs: Type.Tag, rhs: Type.Tag) bool {
     return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
+}
+
+fn instFieldLessThan(name_store: *const names.NameStore, lhs: InstField, rhs: InstField) bool {
+    return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
 }
 
 fn instTagLessThan(name_store: *const names.NameStore, lhs: InstTag, rhs: InstTag) bool {

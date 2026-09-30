@@ -1063,18 +1063,55 @@ fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedP
 /// `List` and `Box` are not value positions.
 fn parametricSchemeVarMask(
     allocator: Allocator,
+    builder: *Builder,
     view: ModuleView,
     template: *const checked.CheckedProcedureTemplate,
 ) Allocator.Error![]const bool {
     const scheme_vars = view.templates.templateSchemeVars(template);
-    const mask = try allocator.alloc(bool, scheme_vars.len);
+    if (template.target != .roc or template.evidence_params.len != 0 or scheme_vars.len == 0) {
+        const mask = try allocator.alloc(bool, scheme_vars.len);
+        @memset(mask, false);
+        return mask;
+    }
+    return try valuePositionMask(allocator, builder, view, template.checked_fn_root, scheme_vars, null);
+}
+
+/// A checked nominal declaration, identified across modules.
+const NominalDeclarationKey = struct {
+    module: [32]u8,
+    declaration: u32,
+};
+
+/// The declaration whose backing is being analyzed, and which of its
+/// parameters the current fixpoint iteration assumes occur only as values.
+const SelfDeclarationAssumption = struct {
+    key: NominalDeclarationKey,
+    assumed: []const bool,
+};
+
+/// Whether each of `targets` occurs reachable from `root` only as a value:
+/// through function arguments and results, tuple items, record fields, tag
+/// payloads, aliases, and the arguments of container nominals. A target also
+/// reached as a row extension, a padding field, or the argument of a nominal
+/// whose own parameters are not all values is excluded, as is a target that
+/// never occurs. `self_declaration` names the nominal whose backing is being
+/// walked; a recursive use of it passes each argument on as a value exactly
+/// when the current fixpoint iteration assumes that parameter is one.
+fn valuePositionMask(
+    allocator: Allocator,
+    builder: *Builder,
+    view: ModuleView,
+    root: checked.CheckedTypeId,
+    targets: []const checked.CheckedTypeId,
+    self_declaration: ?SelfDeclarationAssumption,
+) Allocator.Error![]bool {
+    const mask = try allocator.alloc(bool, targets.len);
     errdefer allocator.free(mask);
     @memset(mask, false);
-    if (template.target != .roc or template.evidence_params.len != 0 or scheme_vars.len == 0) return mask;
     var scratch = std.heap.ArenaAllocator.init(allocator);
     defer scratch.deinit();
     const arena = scratch.allocator();
-    const excluded = try arena.alloc(bool, scheme_vars.len);
+    const excluded = try arena.alloc(bool, targets.len);
     @memset(excluded, false);
     const Visit = struct { ty: checked.CheckedTypeId, value_position: bool };
     var pending = std.ArrayList(Visit).empty;
@@ -1082,13 +1119,13 @@ fn parametricSchemeVarMask(
         collections.DenseMap(checked.CheckedTypeId, void).init(arena),
         collections.DenseMap(checked.CheckedTypeId, void).init(arena),
     };
-    try pending.append(arena, .{ .ty = template.checked_fn_root, .value_position = true });
+    try pending.append(arena, .{ .ty = root, .value_position = true });
     while (pending.pop()) |visit| {
         if ((try visited[@intFromBool(visit.value_position)].getOrPut(visit.ty)).found_existing) continue;
-        const scheme_index = for (scheme_vars, 0..) |scheme_var, index| {
-            if (scheme_var == visit.ty) break index;
+        const target_index = for (targets, 0..) |target, index| {
+            if (target == visit.ty) break index;
         } else null;
-        if (scheme_index) |index| {
+        if (target_index) |index| {
             if (visit.value_position) mask[index] = true else excluded[index] = true;
             continue;
         }
@@ -1109,9 +1146,29 @@ fn parametricSchemeVarMask(
                 try pending.append(arena, .{ .ty = tag_union.ext, .value_position = false });
             },
             .nominal => |nominal| {
-                const container = if (nominal.builtin) |builtin_nominal| builtin_nominal == .list or builtin_nominal == .box else false;
-                for (nominal.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position and container });
                 for (nominal.padding_field_types) |padding| try pending.append(arena, .{ .ty = padding, .value_position = false });
+                if (nominal.builtin) |builtin_nominal| {
+                    const container = builtin_nominal == .list or builtin_nominal == .box or builtin_nominal == .try_;
+                    for (nominal.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position and container });
+                    continue;
+                }
+                const source = builder.nominalDeclarationSource(view, nominal) orelse {
+                    for (nominal.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = false });
+                    continue;
+                };
+                const key = NominalDeclarationKey{ .module = source.view.key.bytes, .declaration = @intFromEnum(source.declaration.id) };
+                if (self_declaration) |current| if (std.meta.eql(current.key, key)) {
+                    if (current.assumed.len != nominal.args.len) Common.invariant("checked nominal declaration arity differed from nominal type use");
+                    for (nominal.args, current.assumed) |arg, is_value| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position and is_value });
+                    continue;
+                };
+                const arg_values = try builder.nominalParameterValueMask(source.view, source.declaration, key);
+                if (arg_values) |values| {
+                    if (values.len != nominal.args.len) Common.invariant("checked nominal declaration arity differed from nominal type use");
+                    for (nominal.args, values) |arg, is_value| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position and is_value });
+                } else {
+                    for (nominal.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = false });
+                }
             },
             .alias => |alias| try pending.append(arena, .{ .ty = alias.backing, .value_position = visit.value_position }),
             .pending,
@@ -1123,8 +1180,8 @@ fn parametricSchemeVarMask(
             => {},
         }
     }
-    for (mask, excluded) |*is_parametric, is_excluded| {
-        if (is_excluded) is_parametric.* = false;
+    for (mask, excluded) |*is_value, is_excluded| {
+        if (is_excluded) is_value.* = false;
     }
     return mask;
 }
@@ -3395,6 +3452,10 @@ const SpecJobTaskContext = struct {
     shard: ?CompletedSpecJobShard = null,
     failed: bool = false,
     completed: bool = false,
+    /// The entry completes on the coordinator when its acceptance turn comes.
+    /// It holds its place in dispatch order without occupying a worker lane,
+    /// so later entries can reach free lanes before it runs.
+    coordinator_only: bool = false,
     worker_work_ns: u64 = 0,
     lane_task_started: bool = false,
     first_task_on_lane: bool = false,
@@ -3768,6 +3829,9 @@ const Builder = struct {
     /// Per template, which quantified variables its interface relates only
     /// by unification (see `parametricSchemeVarMask`).
     parametric_scheme_vars: std.AutoHashMapUnmanaged(names.ProcTemplate, []const bool) = .empty,
+    /// Per nominal declaration, whether each parameter occurs in its backing only
+    /// as a value; null while the declaration is being analyzed or when it cannot be.
+    nominal_parameter_value_masks: std.AutoHashMapUnmanaged(NominalDeclarationKey, ?[]const bool) = .empty,
     coordinator_interface_summaries: ?*const SharedSummaries = null,
     coordinator_interface_summary_end: usize = 0,
     interface_summary_checks: u32 = 0,
@@ -4158,6 +4222,9 @@ const Builder = struct {
         var parametric_masks = self.parametric_scheme_vars.valueIterator();
         while (parametric_masks.next()) |mask| self.allocator.free(mask.*);
         self.parametric_scheme_vars.deinit(self.allocator);
+        var nominal_masks = self.nominal_parameter_value_masks.valueIterator();
+        while (nominal_masks.next()) |mask| if (mask.*) |values| self.allocator.free(values);
+        self.nominal_parameter_value_masks.deinit(self.allocator);
         self.source_file_ids.deinit();
         self.lowering_module_ids.deinit();
         self.declared_comptime_root_functions.deinit();
@@ -6516,11 +6583,20 @@ const Builder = struct {
                 if (self.spec_store.recordStatus(job.spec) == .ready or try self.specJobCompletesOnCoordinator(view, template, job)) {
                     // Coordinator-only entries still wait their exact acceptance
                     // turn, but need not wait for any later worker task.
+                    _ = self.pending_spec_jobs.pop();
                     if (accepted == submitted) {
-                        _ = self.pending_spec_jobs.pop();
                         try self.executePendingSpecJob(job);
                         continue;
                     }
+                    contexts[submitted % capacity] = .{
+                        .inputs = undefined,
+                        .snapshot = undefined,
+                        .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
+                        .completed = true,
+                        .coordinator_only = true,
+                    };
+                    submitted += 1;
+                    continue;
                 } else {
                     const slot = submitted % capacity;
                     const context = &contexts[slot];
@@ -6564,7 +6640,12 @@ const Builder = struct {
                 const context = &contexts[accepted % capacity];
                 var commit_scope = ParallelCoordinatorTimingScope.begin(self.timing);
                 defer commit_scope.end();
-                try self.acceptCompletedSpecJob(context);
+                if (context.coordinator_only) {
+                    context.coordinator_only = false;
+                    try self.executePendingSpecJob(context.prepared.job);
+                } else {
+                    try self.acceptCompletedSpecJob(context);
+                }
                 accepted += 1;
                 continue;
             }
@@ -8880,6 +8961,61 @@ const Builder = struct {
             },
             .opaque_without_backing => null,
         };
+    }
+
+    const NominalDeclarationSource = struct {
+        view: ModuleView,
+        declaration: checked.CheckedNominalDeclaration,
+    };
+
+    /// The declaration behind a user nominal, including one reached as a box
+    /// payload. Builtin nominals are decided by their builtin kind instead.
+    fn nominalDeclarationSource(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclarationSource {
+        return switch (nominal.representation) {
+            .builtin, .opaque_without_backing => null,
+            .local_declaration,
+            .imported_declaration,
+            .local_box_payload_capability,
+            .imported_box_payload_capability,
+            => blk: {
+                const lookup = self.nominalDeclarationFor(view, nominal) orelse break :blk null;
+                break :blk .{ .view = lookup.view, .declaration = lookup.declaration };
+            },
+        };
+    }
+
+    /// Whether each parameter of a nominal declaration occurs in its backing
+    /// only as a value. A declaration still under analysis, as in mutually
+    /// recursive nominals, reports null, which callers treat as not a value.
+    fn nominalParameterValueMask(
+        self: *Builder,
+        view: ModuleView,
+        declaration: checked.CheckedNominalDeclaration,
+        key: NominalDeclarationKey,
+    ) Allocator.Error!?[]const bool {
+        const entry = try self.nominal_parameter_value_masks.getOrPut(self.allocator, key);
+        if (entry.found_existing) return entry.value_ptr.*;
+        entry.value_ptr.* = null;
+        errdefer _ = self.nominal_parameter_value_masks.remove(key);
+        // A recursive use of the declaration inside its own backing refers to
+        // the parameters being decided. Start from every parameter being a
+        // value and drop the ones the backing contradicts until nothing
+        // changes: the greatest mask consistent with its own recursive uses.
+        const formal_args = declaration.formalArgs(view.types);
+        var assumed = try self.allocator.alloc(bool, formal_args.len);
+        errdefer self.allocator.free(assumed);
+        @memset(assumed, true);
+        while (true) {
+            const next = try valuePositionMask(self.allocator, self, view, declaration.backing, formal_args, .{ .key = key, .assumed = assumed });
+            if (std.mem.eql(bool, next, assumed)) {
+                self.allocator.free(next);
+                break;
+            }
+            self.allocator.free(assumed);
+            assumed = next;
+        }
+        self.nominal_parameter_value_masks.getPtr(key).?.* = assumed;
+        return assumed;
     }
 
     /// Builds the declared-field span for a nominal/opaque record backing from
@@ -18460,18 +18596,19 @@ const InterfaceSummary = union(enum) {
         };
     }
 
-    fn eql(self: InterfaceSummary, other: InterfaceSummary, graph: *InstGraph, allocator: Allocator, types_: *Type.Store, name_store: *const names.NameStore) Allocator.Error!bool {
-        return switch (self) {
-            .unchanged => other == .unchanged,
-            .constraints => |constraints| switch (other) {
-                .unchanged => false,
-                .constraints => |other_constraints| try (try constraints.identityInto(graph, allocator)).eql(
-                    try other_constraints.identityInto(graph, allocator),
-                    types_,
-                    name_store,
-                ),
-            },
+    /// Whether two expansions of the request whose input was `input`
+    /// constrain its interface identically. An unchanged summary stands for
+    /// that input itself.
+    fn equivalent(self: InterfaceSummary, other: InterfaceSummary, input: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error!bool {
+        const left = switch (self) {
+            .unchanged => input,
+            .constraints => |constraints| constraints,
         };
+        const right = switch (other) {
+            .unchanged => input,
+            .constraints => |constraints| constraints,
+        };
+        return std.mem.eql(u8, try left.equivalenceIdentityInto(graph, allocator), try right.equivalenceIdentityInto(graph, allocator));
     }
 };
 
@@ -18566,6 +18703,8 @@ const InterfaceReplayEntry = struct {
     roots: []const NodeId,
     summary: ?InterfaceSummary = null,
     verify_summary: ?InterfaceSummary = null,
+    /// The request's input, kept while `verify_summary` awaits comparison.
+    verify_input: ?InterfaceConstraints = null,
     status: InterfaceReplayStatus = .expanding,
     lowlink: usize,
 };
@@ -23344,7 +23483,7 @@ const BodyContext = struct {
         if (subst.len == 0) return .{};
         const cached = try self.builder.parametric_scheme_vars.getOrPut(self.builder.allocator, template_ref);
         if (!cached.found_existing) {
-            cached.value_ptr.* = parametricSchemeVarMask(self.builder.allocator, view, template) catch |err| {
+            cached.value_ptr.* = parametricSchemeVarMask(self.builder.allocator, self.builder, view, template) catch |err| {
                 _ = self.builder.parametric_scheme_vars.remove(template_ref);
                 return err;
             };
@@ -23379,9 +23518,13 @@ const BodyContext = struct {
 
     /// An unfinished expansion is joined only by the instantiation it expands:
     /// each hole slot names the class the expansion's request supplied or
-    /// the expansion's own hole cell.
+    /// the expansion's own hole cell. Inside mutually recursive expansions a
+    /// slot can instead name another unfinished expansion's hole cell, which
+    /// stands for the class that expansion's request supplied; the slot is
+    /// followed through those cells to what it stands for.
     fn joinsUnfinishedExpansion(
         self: *BodyContext,
+        replay_state: *const InterfaceReplayState,
         entry: InterfaceReplayEntry,
         holes: []const NodeId,
         hole_classes: []const ?NodeId,
@@ -23392,9 +23535,28 @@ const BodyContext = struct {
                 if (hole_class != null) return false;
                 continue;
             };
-            if (!self.graph.sameClass(hole, expanded) and !self.graph.sameClass(hole, expanded_cell)) return false;
+            var current = hole;
+            var steps: usize = 0;
+            while (!self.graph.sameClass(current, expanded) and !self.graph.sameClass(current, expanded_cell)) {
+                if (steps == replay_state.stack.items.len) return false;
+                current = self.unfinishedHoleCellClass(replay_state, current) orelse return false;
+                steps += 1;
+            }
         }
         return true;
+    }
+
+    /// The class an unfinished expansion's hole cell stands for, when `node`
+    /// is such a cell.
+    fn unfinishedHoleCellClass(self: *BodyContext, replay_state: *const InterfaceReplayState, node: NodeId) ?NodeId {
+        for (replay_state.stack.items) |index| {
+            const unfinished = replay_state.entries.items[index];
+            for (unfinished.hole_cells, unfinished.hole_classes) |cell, class| {
+                const stands_for = class orelse continue;
+                if (self.graph.sameClass(node, cell)) return stands_for;
+            }
+        }
+        return null;
     }
 
     fn relateInterfaceRoots(self: *BodyContext, produced: []const NodeId, requested: []const NodeId) Allocator.Error!void {
@@ -23497,7 +23659,7 @@ const BodyContext = struct {
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
             // An unfinished expansion is joined only by the exact request it
             // expands; parametric holes generalize completed summaries.
-            if (entry.status != .ready and !self.joinsUnfinishedExpansion(entry, holes.nodes, hole_classes)) continue;
+            if (entry.status != .ready and !self.joinsUnfinishedExpansion(replay_state, entry, holes.nodes, hole_classes)) continue;
             self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding, .expanded => {
@@ -23562,6 +23724,7 @@ const BodyContext = struct {
             .roots = roots,
             .lowlink = replay_index,
             .verify_summary = verify_summary,
+            .verify_input = if (verify_summary != null) try input.copy(self.graph.arena(), InterfaceSummaryCopy{}) else null,
         });
         try replay_state.stack.append(self.allocator, replay_index);
         const parent = replay_state.current;
@@ -23672,7 +23835,7 @@ const BodyContext = struct {
                     .{ .constraints = constraints };
                 entry.status = .ready;
                 if (entry.verify_summary) |expected| {
-                    if (!try expected.eql(summary, self.graph, scratch.allocator(), self.typeStore(), self.nameStore())) {
+                    if (!try expected.equivalent(summary, entry.verify_input.?, self.graph, scratch.allocator())) {
                         Common.compilerBug("cached interface constraints disagreed with fresh checked relation expansion");
                     }
                 }

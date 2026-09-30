@@ -16,6 +16,11 @@ const Allocator = std.mem.Allocator;
 const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
 
+const UninhabitedAnswer = struct {
+    epoch: u64,
+    uninhabited: bool,
+};
+
 const UnifyPair = struct {
     first: Type.TypeVarId,
     second: Type.TypeVarId,
@@ -27,6 +32,20 @@ const UnifyPair = struct {
             .{ .first = lhs, .second = rhs };
     }
 };
+
+/// Unification checks one pair set entry per structural step, so the pair
+/// sets hash the two variable ids directly.
+const UnifyPairContext = struct {
+    pub fn hash(_: UnifyPairContext, pair: UnifyPair) u64 {
+        return std.hash.int((@as(u64, @intFromEnum(pair.first)) << 32) | @intFromEnum(pair.second));
+    }
+
+    pub fn eql(_: UnifyPairContext, a: UnifyPair, b: UnifyPair) bool {
+        return a.first == b.first and a.second == b.second;
+    }
+};
+
+const UnifyPairSet = std.HashMap(UnifyPair, void, UnifyPairContext, std.hash_map.default_max_load_percentage);
 
 /// The store writes a unification defers until every type it pushed onto the
 /// unify stack has been processed.
@@ -114,9 +133,9 @@ const Solver = struct {
     loop_params: std.ArrayList(Type.Span),
     join_points: std.ArrayList(ActiveJoinPoint),
     return_contexts: std.ArrayList(ReturnContext),
-    active_unifications: std.AutoHashMap(UnifyPair, void),
+    active_unifications: UnifyPairSet,
     unify_stack: std.ArrayList(UnifyFrame),
-    active_private_evidence_relations: std.AutoHashMap(UnifyPair, void),
+    active_private_evidence_relations: UnifyPairSet,
     /// Per lifted Monotype: whether any `func` or `erased` node is reachable
     /// from it. Clones of callable-free types carry no unbound slots and no
     /// mutable lambda-set state, so one shared clone serves every use, and
@@ -155,6 +174,11 @@ const Solver = struct {
     /// Path stops seen by the Monotype uninhabitedness walk currently
     /// running; a result is recorded only when its subtree added none.
     mono_uninhabited_path_stops: u32 = 0,
+    /// Proven-uninhabited answers for solved variables, valid while the type
+    /// store's mutation epoch is unchanged. Answers that depended on a cycle
+    /// being cut are provisional and never stored.
+    uninhabited_memo: collections.DenseMap(Type.TypeVarId, UninhabitedAnswer),
+    uninhabited_answer_provisional: bool = false,
     /// Types on the current uninhabitedness walk's path, indexed by id.
     uninhabited_path: std.DynamicBitSetUnmanaged = .{},
     mono_uninhabited_path: std.DynamicBitSetUnmanaged = .{},
@@ -267,9 +291,9 @@ const Solver = struct {
             .loop_params = .empty,
             .join_points = .empty,
             .return_contexts = .empty,
-            .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
+            .active_unifications = UnifyPairSet.init(allocator),
             .unify_stack = .empty,
-            .active_private_evidence_relations = std.AutoHashMap(UnifyPair, void).init(allocator),
+            .active_private_evidence_relations = UnifyPairSet.init(allocator),
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
@@ -280,6 +304,7 @@ const Solver = struct {
             .shared_leaf_context = null,
             .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
             .mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator),
+            .uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(allocator),
             .clone_map_pool = collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId).init(allocator),
         };
     }
@@ -291,6 +316,7 @@ const Solver = struct {
         self.clone_map_pool.deinit();
         self.mono_set_pool.deinit();
         self.mono_uninhabited.deinit();
+        self.uninhabited_memo.deinit();
         self.uninhabited_path.deinit(self.allocator);
         self.mono_uninhabited_path.deinit(self.allocator);
         self.solved_position_pool.deinit();
@@ -1092,7 +1118,7 @@ const Solver = struct {
     fn relateReturn(self: *Solver, source: Type.TypeVarId, target: Type.TypeVarId) Allocator.Error!void {
         var work = std.ArrayList(UnifyPair).empty;
         defer work.deinit(self.allocator);
-        var visited = std.AutoHashMap(UnifyPair, void).init(self.allocator);
+        var visited = UnifyPairSet.init(self.allocator);
         defer visited.deinit();
         // These pairs are directed, unlike ordinary unification pairs.
         try work.append(self.allocator, .{ .first = source, .second = target });
@@ -2311,11 +2337,31 @@ const Solver = struct {
 
     fn typeIsProvenUninhabitedInner(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
         const root = self.program.types.rootCompressed(ty);
+        const epoch = self.program.types.mutation_epoch;
+        if (self.uninhabited_memo.get(root)) |answer| {
+            if (answer.epoch == epoch) return answer.uninhabited;
+        }
         const path_index: usize = @intFromEnum(root);
-        if (self.uninhabited_path.isSet(path_index)) return false;
+        if (self.uninhabited_path.isSet(path_index)) {
+            self.uninhabited_answer_provisional = true;
+            return false;
+        }
         self.uninhabited_path.set(path_index);
         defer self.uninhabited_path.unset(path_index);
 
+        const enclosing_provisional = self.uninhabited_answer_provisional;
+        self.uninhabited_answer_provisional = false;
+        const mono_stops = self.mono_uninhabited_path_stops;
+        const uninhabited = try self.typeIsProvenUninhabitedContent(root);
+        const provisional = self.uninhabited_answer_provisional or mono_stops != self.mono_uninhabited_path_stops;
+        if (!provisional and epoch == self.program.types.mutation_epoch) {
+            try self.uninhabited_memo.put(root, .{ .epoch = epoch, .uninhabited = uninhabited });
+        }
+        self.uninhabited_answer_provisional = enclosing_provisional or provisional;
+        return uninhabited;
+    }
+
+    fn typeIsProvenUninhabitedContent(self: *Solver, root: Type.TypeVarId) Allocator.Error!bool {
         return switch (self.program.types.get(root)) {
             // Probe leaves against the lifted store instead of materializing:
             // uninhabitedness is a pure function of the Monotype.
@@ -3443,6 +3489,9 @@ fn solvedTypeDigestTestSolver(
     solver.allocator = allocator;
     solver.mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator);
     defer solver.mono_uninhabited.deinit();
+    solver.uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(allocator);
+    defer solver.uninhabited_memo.deinit();
+    solver.uninhabited_answer_provisional = false;
     solver.mono_uninhabited_path_stops = 0;
     solver.uninhabited_path = .{};
     defer solver.uninhabited_path.deinit(allocator);
@@ -3558,6 +3607,9 @@ test "lambda solved erased callable digest includes record field default identit
     solver.allocator = gpa;
     solver.mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(gpa);
     defer solver.mono_uninhabited.deinit();
+    solver.uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(gpa);
+    defer solver.uninhabited_memo.deinit();
+    solver.uninhabited_answer_provisional = false;
     solver.mono_uninhabited_path_stops = 0;
     solver.uninhabited_path = .{};
     defer solver.uninhabited_path.deinit(gpa);
@@ -3600,13 +3652,16 @@ test "inspectable backing unification isolates the structural type variable once
     solver.allocator = allocator;
     solver.mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator);
     defer solver.mono_uninhabited.deinit();
+    solver.uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(allocator);
+    defer solver.uninhabited_memo.deinit();
+    solver.uninhabited_answer_provisional = false;
     solver.mono_uninhabited_path_stops = 0;
     solver.uninhabited_path = .{};
     defer solver.uninhabited_path.deinit(allocator);
     solver.mono_uninhabited_path = .{};
     defer solver.mono_uninhabited_path.deinit(allocator);
     solver.program = &program;
-    solver.active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator);
+    solver.active_unifications = UnifyPairSet.init(allocator);
     defer solver.active_unifications.deinit();
     solver.unify_stack = .empty;
     defer solver.unify_stack.deinit(allocator);
@@ -3643,6 +3698,9 @@ test "inspectable backing unification never redirects an owned backing to its no
     solver.allocator = allocator;
     solver.mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator);
     defer solver.mono_uninhabited.deinit();
+    solver.uninhabited_memo = collections.DenseMap(Type.TypeVarId, UninhabitedAnswer).init(allocator);
+    defer solver.uninhabited_memo.deinit();
+    solver.uninhabited_answer_provisional = false;
     solver.mono_uninhabited_path_stops = 0;
     solver.uninhabited_path = .{};
     defer solver.uninhabited_path.deinit(allocator);
@@ -3650,7 +3708,7 @@ test "inspectable backing unification never redirects an owned backing to its no
     defer solver.mono_uninhabited_path.deinit(allocator);
     solver.program = &program;
     solver.lifted = undefined;
-    solver.active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator);
+    solver.active_unifications = UnifyPairSet.init(allocator);
     defer solver.active_unifications.deinit();
     solver.unify_stack = .empty;
     defer solver.unify_stack.deinit(allocator);

@@ -374,7 +374,7 @@ top_level = {
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$total"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 388)
+							(e-dispatch-call (method "plus") (constraint-fn-var 385)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$total"))))
@@ -431,7 +431,7 @@ top_level = {
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$total"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 527)
+							(e-dispatch-call (method "plus") (constraint-fn-var 519)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$total"))))
@@ -454,7 +454,7 @@ top_level = {
 				(e-num (value "0")))
 			(s-for-bang
 				(p-assign (ident "n"))
-				(e-dispatch-call (method "iter") (constraint-fn-var 554)
+				(e-dispatch-call (method "iter") (constraint-fn-var 546)
 					(receiver
 						(e-list
 							(elems
@@ -464,7 +464,7 @@ top_level = {
 				(e-block
 					(s-reassign
 						(p-var-assign (ident "$total"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 597)
+						(e-dispatch-call (method "plus") (constraint-fn-var 589)
 							(receiver
 								(e-runtime-error (tag "erroneous_value_use")))
 							(args

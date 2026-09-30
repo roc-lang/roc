@@ -210,6 +210,12 @@ try_row_fixpoint_scratch: TryRowFixpointScratch = .{},
 try_row_open_tails: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: collections.DenseMap(Var, Var),
+/// Pristine copies of ground expected types, by structural hash.
+/// See `expectedTypeBackup`.
+ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
+/// Ground instances of type declarations referenced from annotations. See
+/// `instantiateVarPolarized`.
+ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) = .empty,
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
 /// Reusable visited set for validating the concrete content of values passed
@@ -3196,6 +3202,8 @@ pub fn deinit(self: *Self) void {
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
+    self.ground_expected_backups.deinit(self.gpa);
+    self.ground_polarized_instances.deinit(self.gpa);
     self.constraints.deinit(self.gpa);
     self.return_constraints.deinit(self.gpa);
     self.return_value_exprs.deinit(self.gpa);
@@ -7636,6 +7644,24 @@ fn instantiateVarPolarized(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // A declaration whose instance at this position resolved to a ground type
+    // is shared by every later reference at the same position. Instantiating
+    // it again would copy the same variable-free structure, and a large record
+    // alias referenced from many annotations is copied once per reference.
+    // A shared instance is unified with every annotation that refers to it,
+    // so a mismatch against one of them can merge it into `.err`; it is then
+    // no longer ground and the next reference instantiates a fresh copy.
+    const instance_key: PolarizedInstanceKey = .{
+        .declaration = var_to_instantiate,
+        .polarity_behavior = polarity_behavior,
+        .polarity = polarity,
+        .reach = reach,
+    };
+    if (evidence == .none) {
+        if (self.ground_polarized_instances.get(instance_key)) |cached| {
+            if (try self.varIsGround(cached)) return cached;
+        }
+    }
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
@@ -7655,8 +7681,18 @@ fn instantiateVarPolarized(
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
+    if (opened_marker_exts.items.len == 0 and evidence == .none and try self.varIsGround(instantiated)) {
+        try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
+    }
     return instantiated;
 }
+
+const PolarizedInstanceKey = struct {
+    declaration: Var,
+    polarity_behavior: PolarityVarBehavior,
+    polarity: Polarity,
+    reach: Instantiator.AdapterReach,
+};
 
 /// Record alias markers an annotation-position instantiation resolved open,
 /// so the post-body audit covers rows opened through an alias exactly like
@@ -7768,6 +7804,220 @@ fn instantiateVarOrphan(
         .polarity_var_behavior = .preserve,
     };
     return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
+const ExpectedTypeBackup = struct {
+    var_: Var,
+    shared: bool,
+};
+
+/// A pristine copy of an expected type, for an expression whose check may
+/// later need the type as it was before its own errors reached it.
+///
+/// A ground type (no flex, rigid, presence or error leaf anywhere in it) can
+/// only change through an explicit write, so a copy taken earlier is still
+/// exactly the copy that would be taken now while the two remain structurally
+/// identical. Such copies are kept and handed to every later expression
+/// expecting the same type, which is checked again on each reuse. Consumers
+/// never unify with a shared copy directly (see `AnnoVars.backup_shared`), so
+/// it stays pristine.
+fn expectedTypeBackup(self: *Self, expected_var: Var, env: *Env) std.mem.Allocator.Error!ExpectedTypeBackup {
+    const hash = try self.groundTypeHash(expected_var);
+    if (hash) |key| {
+        if (self.ground_expected_backups.get(key)) |cached| {
+            if (try self.groundTypesIdentical(expected_var, cached)) return .{ .var_ = cached, .shared = true };
+        }
+    }
+    const copy = try self.instantiateVarOrphan(expected_var, env, env.rank(), .use_last_var);
+    if (hash) |key| try self.ground_expected_backups.put(self.gpa, key, copy);
+    return .{ .var_ = copy, .shared = false };
+}
+
+/// A structural hash of a ground type, or null when any variable leaf is
+/// reachable. Equal ground types hash equally; `groundTypesIdentical`
+/// decides equality.
+fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var seen = std.AutoHashMap(Var, u32).init(self.gpa);
+    defer seen.deinit();
+    try pending.append(self.gpa, var_);
+    while (pending.pop()) |raw| {
+        const resolved = self.types.resolveVar(raw);
+        const visit = try seen.getOrPut(resolved.var_);
+        if (visit.found_existing) {
+            std.hash.autoHash(&hasher, @as(u8, 0xfe));
+            std.hash.autoHash(&hasher, visit.value_ptr.*);
+            continue;
+        }
+        visit.value_ptr.* = @intCast(seen.count() - 1);
+        std.hash.autoHash(&hasher, @as(u8, @bitCast(resolved.desc.flags)));
+        std.hash.autoHash(&hasher, std.meta.activeTag(resolved.desc.content));
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => return null,
+            .alias => |alias| {
+                std.hash.autoHash(&hasher, @as(u32, @bitCast(alias.ident.ident_idx)));
+                try pending.append(self.gpa, self.types.getAliasBackingVar(alias));
+                const args = self.types.sliceAliasArgs(alias);
+                std.hash.autoHash(&hasher, args.len);
+                for (args) |arg| try pending.append(self.gpa, arg);
+            },
+            .structure => |flat| {
+                std.hash.autoHash(&hasher, std.meta.activeTag(flat));
+                switch (flat) {
+                    .empty_record, .empty_tag_union => {},
+                    .tuple => |tuple| {
+                        const elems = self.types.sliceVars(tuple.elems);
+                        std.hash.autoHash(&hasher, elems.len);
+                        for (elems) |elem| try pending.append(self.gpa, elem);
+                    },
+                    .nominal_type => |nominal| {
+                        std.hash.autoHash(&hasher, @as(u32, @bitCast(nominal.ident.ident_idx)));
+                        const args = self.types.sliceNominalArgs(nominal);
+                        std.hash.autoHash(&hasher, args.len);
+                        for (args) |arg| try pending.append(self.gpa, arg);
+                    },
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try pending.append(self.gpa, func.ret);
+                        const args = self.types.sliceVars(func.args);
+                        std.hash.autoHash(&hasher, args.len);
+                        for (args) |arg| try pending.append(self.gpa, arg);
+                    },
+                    .record => |record| {
+                        const fields = self.types.getRecordFieldsSlice(record.fields);
+                        std.hash.autoHash(&hasher, fields.len);
+                        for (fields.items(.name), fields.items(.presence)) |name, presence| {
+                            std.hash.autoHash(&hasher, @as(u32, @bitCast(name)));
+                            switch (presence.decode()) {
+                                .required => |field_var| try pending.append(self.gpa, field_var),
+                                .unknown => return null,
+                            }
+                        }
+                        try pending.append(self.gpa, record.ext);
+                    },
+                    .tag_union => |tag_union| {
+                        const tags = self.types.getTagsSlice(tag_union.tags);
+                        std.hash.autoHash(&hasher, tags.len);
+                        for (tags.items(.name), tags.items(.args)) |name, args_range| {
+                            std.hash.autoHash(&hasher, @as(u32, @bitCast(name)));
+                            const args = self.types.sliceVars(args_range);
+                            std.hash.autoHash(&hasher, args.len);
+                            for (args) |arg| try pending.append(self.gpa, arg);
+                        }
+                        try pending.append(self.gpa, tag_union.ext);
+                    },
+                }
+            },
+        }
+    }
+    return hasher.final();
+}
+
+/// Whether `left` and `right` are ground types with identical structure and
+/// descriptor flags, compared node by node. Any variable leaf makes the
+/// answer false.
+fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Error!bool {
+    const Pair = struct { left: Var, right: Var };
+    var pending: std.ArrayListUnmanaged(Pair) = .empty;
+    defer pending.deinit(self.gpa);
+    var seen = std.AutoHashMap(Pair, void).init(self.gpa);
+    defer seen.deinit();
+    try pending.append(self.gpa, .{ .left = left, .right = right });
+    while (pending.pop()) |pair| {
+        const l = self.types.resolveVar(pair.left);
+        const r = self.types.resolveVar(pair.right);
+        if ((try seen.getOrPut(.{ .left = l.var_, .right = r.var_ })).found_existing) continue;
+        if (@as(u8, @bitCast(l.desc.flags)) != @as(u8, @bitCast(r.desc.flags))) return false;
+        switch (l.desc.content) {
+            .flex, .rigid, .field_presence, .err => return false,
+            .alias => |la| {
+                const ra = switch (r.desc.content) {
+                    .alias => |alias| alias,
+                    else => return false,
+                };
+                if (!la.ident.ident_idx.eql(ra.ident.ident_idx) or la.origin_module != ra.origin_module or
+                    @as(u32, @bitCast(la.source_decl)) != @as(u32, @bitCast(ra.source_decl))) return false;
+                try pending.append(self.gpa, .{ .left = self.types.getAliasBackingVar(la), .right = self.types.getAliasBackingVar(ra) });
+                const largs = self.types.sliceAliasArgs(la);
+                const rargs = self.types.sliceAliasArgs(ra);
+                if (largs.len != rargs.len) return false;
+                for (largs, rargs) |a, b| try pending.append(self.gpa, .{ .left = a, .right = b });
+            },
+            .structure => |lflat| {
+                const rflat = switch (r.desc.content) {
+                    .structure => |flat| flat,
+                    else => return false,
+                };
+                if (std.meta.activeTag(lflat) != std.meta.activeTag(rflat)) return false;
+                switch (lflat) {
+                    .empty_record, .empty_tag_union => {},
+                    .tuple => |lt| {
+                        const le = self.types.sliceVars(lt.elems);
+                        const re = self.types.sliceVars(rflat.tuple.elems);
+                        if (le.len != re.len) return false;
+                        for (le, re) |a, b| try pending.append(self.gpa, .{ .left = a, .right = b });
+                    },
+                    .nominal_type => |ln| {
+                        const rn = rflat.nominal_type;
+                        if (!ln.ident.ident_idx.eql(rn.ident.ident_idx) or ln.origin_module != rn.origin_module or
+                            !std.meta.eql(ln.source, rn.source)) return false;
+                        const la = self.types.sliceNominalArgs(ln);
+                        const ra = self.types.sliceNominalArgs(rn);
+                        if (la.len != ra.len) return false;
+                        for (la, ra) |a, b| try pending.append(self.gpa, .{ .left = a, .right = b });
+                    },
+                    .fn_pure, .fn_effectful, .fn_unbound => |lf| {
+                        const rf = switch (rflat) {
+                            .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                            else => unreachable,
+                        };
+                        try pending.append(self.gpa, .{ .left = lf.ret, .right = rf.ret });
+                        const la = self.types.sliceVars(lf.args);
+                        const ra = self.types.sliceVars(rf.args);
+                        if (la.len != ra.len) return false;
+                        for (la, ra) |a, b| try pending.append(self.gpa, .{ .left = a, .right = b });
+                        const ld = self.types.sliceVars(lf.effect_deps);
+                        const rd = self.types.sliceVars(rf.effect_deps);
+                        if (ld.len != rd.len) return false;
+                        for (ld, rd) |a, b| try pending.append(self.gpa, .{ .left = a, .right = b });
+                    },
+                    .record => |lr| {
+                        const rr = rflat.record;
+                        const lfields = self.types.getRecordFieldsSlice(lr.fields);
+                        const rfields = self.types.getRecordFieldsSlice(rr.fields);
+                        if (lfields.len != rfields.len) return false;
+                        for (lfields.items(.name), rfields.items(.name), lfields.items(.presence), rfields.items(.presence)) |ln, rn, lp, rp| {
+                            if (!ln.eql(rn)) return false;
+                            switch (lp.decode()) {
+                                .required => |lv| switch (rp.decode()) {
+                                    .required => |rv| try pending.append(self.gpa, .{ .left = lv, .right = rv }),
+                                    .unknown => return false,
+                                },
+                                .unknown => return false,
+                            }
+                        }
+                        try pending.append(self.gpa, .{ .left = lr.ext, .right = rr.ext });
+                    },
+                    .tag_union => |lu| {
+                        const ru = rflat.tag_union;
+                        const ltags = self.types.getTagsSlice(lu.tags);
+                        const rtags = self.types.getTagsSlice(ru.tags);
+                        if (ltags.len != rtags.len) return false;
+                        for (ltags.items(.name), rtags.items(.name), ltags.items(.args), rtags.items(.args)) |ln, rn, largs_range, rargs_range| {
+                            if (!ln.eql(rn)) return false;
+                            const largs = self.types.sliceVars(largs_range);
+                            const rargs = self.types.sliceVars(rargs_range);
+                            if (largs.len != rargs.len) return false;
+                            for (largs, rargs) |a, b| try pending.append(self.gpa, .{ .left = a, .right = b });
+                        }
+                        try pending.append(self.gpa, .{ .left = lu.ext, .right = ru.ext });
+                    },
+                }
+            },
+        }
+    }
+    return true;
 }
 
 /// Like `instantiateVarOrphan`, but the listed source vars are SHARED into the
@@ -21358,7 +21608,11 @@ const ExprCheckFrame = struct {
                 }
                 // If there was an annotation AND the expr contains errors, then unify the
                 // raw expr var against the annotation
-                _ = try checker.unify(self.expr_var_raw, anno_vars.anno_var_backup, env);
+                const backup = if (anno_vars.backup_shared)
+                    try checker.instantiateVarOrphan(anno_vars.anno_var_backup, env, env.rank(), .use_last_var)
+                else
+                    anno_vars.anno_var_backup;
+                _ = try checker.unify(self.expr_var_raw, backup, env);
             } else {
                 // Otherwise, make the explicit annotation the checked root for
                 // this expression. The body has already constrained the
@@ -21527,12 +21781,13 @@ fn beginExprCheckFrame(
             try self.generateAnnotationType(annotation_idx, env);
             try self.recordPredeclaredBodySlots(annotation_idx);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
-            const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var);
+            const anno_backup = try self.expectedTypeBackup(anno_var, env);
             break :blk .{
                 try self.fresh(env, expr_region),
                 AnnoVars{
                     .anno_var = anno_var,
-                    .anno_var_backup = anno_var_backup,
+                    .anno_var_backup = anno_backup.var_,
+                    .backup_shared = anno_backup.shared,
                     .context = .type_annotation,
                 },
                 expected.withMaterializedAnnotation(.{
@@ -21541,12 +21796,13 @@ fn beginExprCheckFrame(
                 }).withBranchResult(anno_var),
             };
         } else if (expected.expected_type) |expected_type| {
-            const expected_var_backup = try self.instantiateVarOrphan(expected_type.var_, env, env.rank(), .use_last_var);
+            const expected_backup = try self.expectedTypeBackup(expected_type.var_, env);
             break :blk .{
                 try self.fresh(env, expr_region),
                 AnnoVars{
                     .anno_var = expected_type.var_,
-                    .anno_var_backup = expected_var_backup,
+                    .anno_var_backup = expected_backup.var_,
+                    .backup_shared = expected_backup.shared,
                     .context = expected_type.context,
                 },
                 expected.withBranchResult(expected_type.var_),
@@ -24333,6 +24589,9 @@ fn isPatternNodeTag(tag: CIR.Node.Tag) bool {
 const AnnoVars = struct {
     anno_var: Var,
     anno_var_backup: Var,
+    /// The backup is a cached pristine copy shared with other frames, so a
+    /// consumer must take its own copy before unifying with it.
+    backup_shared: bool = false,
     context: problem.Context,
 };
 
