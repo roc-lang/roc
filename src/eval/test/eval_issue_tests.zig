@@ -4148,6 +4148,53 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/11861
+        // A derived encoder_for called with a generic format belongs to the
+        // caller's scheme even when a numeric-default drain runs first, so an
+        // unused caller that feeds it the wrong value type still checks.
+        .name = "issue 11861: unused generic caller of a derived encoder_for with a mismatched value",
+        .source_kind = .module,
+        .source =
+        \\A := { x : U64 }.{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\B := [W].{
+        \\    encoder_for = |e| {
+        \\        i = A.encoder_for(e)
+        \\        |W, s| i({ x: 1 }, s)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = "ok"
+        ,
+        .expected = .{ .inspect_str = "\"ok\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11861
+        // Using that caller with a concrete format validates the derived
+        // encoder relation there and reports the mismatched value.
+        .name = "issue 11861: using a generic caller of a derived encoder_for reports a mismatched value",
+        .source_kind = .module,
+        .source =
+        \\A := { x : U64 }.{
+        \\    encoder_for : _
+        \\}
+        \\
+        \\B := [W].{
+        \\    encoder_for = |e| {
+        \\        i = A.encoder_for(e)
+        \\        |W, s| i({ x: 1 }, s)
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = Json.to_str(B.W)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
         // repro for https://github.com/roc-lang/roc/issues/11770
         // A method annotated `_` whose body is erroneous has no declared
         // callable type, so its declaration is rejected like an unannotated
