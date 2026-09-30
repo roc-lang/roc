@@ -777,6 +777,25 @@ pub fn run(
 /// rediscover it. Whoever materializes completed values materializes exactly
 /// these: a root nothing reads is still evaluated for its diagnostics, and its
 /// value is retained only by the checked module data that asked for it.
+/// Find `name` in a record row. Rows are normalized with fields in sorted
+/// label order (design.md "Rows are normalized once"), so the lookup is a
+/// binary search by label text.
+fn sortedRecordField(fields: anytype, name_store: *const names.NameStore, name: names.RecordFieldNameId) Type.Field {
+    var low: usize = 0;
+    var high: usize = GuardedList.borrowLen(fields);
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const field = GuardedList.at(fields, mid);
+        if (field.name == name) return field;
+        if (name_store.recordFieldLabelTextLessThan(field.name, name)) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    Common.invariant("record pattern field was absent from checked record type");
+}
+
 fn recordComptimeValueReads(allocator: Allocator, program: *Ast.Program) Allocator.Error!void {
     var recorded = std.AutoHashMap(EntryRoot, void).init(allocator);
     defer recorded.deinit();
@@ -1812,33 +1831,45 @@ fn deferredTemplateTypeArgumentsStep(
         },
         .record => |checked_record| switch (request_content) {
             .record => |request_record| {
+                var request_index: std.AutoHashMapUnmanaged(names.RecordFieldNameId, usize) = .empty;
+                defer request_index.deinit(graph.allocator);
+                try request_index.ensureTotalCapacity(graph.allocator, @intCast(request_record.fields.len));
+                for (request_record.fields, 0..) |request_field, index| {
+                    request_index.putAssumeCapacity(request_field.name, index);
+                }
                 for (checked_record.fields) |checked_field| {
-                    for (request_record.fields) |request_field| {
-                        if (!graph.name_store.recordFieldLabelTextEql(checked_field.name, request_field.name)) continue;
-                        try pending.append(gpa, .{ .field_kind = .{ .checked = checked_field, .request = request_field } });
-                        try pending.append(gpa, .{ .argument = .{
-                            .checked_node = checked_field.value_ty orelse checked_field.ty,
-                            .request_node = request_field.value_ty orelse request_field.ty,
-                        } });
-                        try pending.append(gpa, .{ .argument = .{ .checked_node = checked_field.ty, .request_node = request_field.ty } });
-                        break;
-                    }
+                    const index = request_index.get(checked_field.name) orelse continue;
+                    const request_field = request_record.fields[index];
+                    try pending.append(gpa, .{ .field_kind = .{ .checked = checked_field, .request = request_field } });
+                    try pending.append(gpa, .{ .argument = .{
+                        .checked_node = checked_field.value_ty orelse checked_field.ty,
+                        .request_node = request_field.value_ty orelse request_field.ty,
+                    } });
+                    try pending.append(gpa, .{ .argument = .{ .checked_node = checked_field.ty, .request_node = request_field.ty } });
                 }
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .tag_union => |checked_union| switch (request_content) {
             .tag_union => |request_union| {
+                // Sorted heads pair their shared labels in one merge pass.
+                graph.sortTagHead(checked_root);
+                graph.sortTagHead(request_root);
+                var request_pos: usize = 0;
                 for (checked_union.tags) |checked_tag| {
-                    for (request_union.tags) |request_tag| {
-                        if (!graph.name_store.tagLabelTextEql(checked_tag.name, request_tag.name)) continue;
-                        if (checked_tag.payloads.len != request_tag.payloads.len) {
-                            Common.invariant("deferred procedure tag traversal changed payload arity");
-                        }
-                        for (checked_tag.payloads, request_tag.payloads) |checked_payload, request_payload| {
-                            try pending.append(gpa, .{ .at = .{ .checked_node = checked_payload, .request_node = request_payload } });
-                        }
-                        break;
+                    while (request_pos < request_union.tags.len and
+                        graph.name_store.tagLabelTextLessThan(request_union.tags[request_pos].name, checked_tag.name))
+                    {
+                        request_pos += 1;
+                    }
+                    if (request_pos == request_union.tags.len) break;
+                    const request_tag = request_union.tags[request_pos];
+                    if (request_tag.name != checked_tag.name) continue;
+                    if (checked_tag.payloads.len != request_tag.payloads.len) {
+                        Common.invariant("deferred procedure tag traversal changed payload arity");
+                    }
+                    for (checked_tag.payloads, request_tag.payloads) |checked_payload, request_payload| {
+                        try pending.append(gpa, .{ .at = .{ .checked_node = checked_payload, .request_node = request_payload } });
                     }
                 }
             },
@@ -9018,12 +9049,7 @@ const Builder = struct {
     }
 
     fn recordField(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
-        const fields = self.activeTypeStore().fieldSpan(self.recordFieldsSpan(ty));
-        for (0..GuardedList.borrowLen(fields)) |index| {
-            const field = GuardedList.at(fields, index);
-            if (self.activeNameStore().recordFieldLabelTextEql(field.name, name)) return field;
-        }
-        Common.invariant("record pattern field was absent from checked record type");
+        return sortedRecordField(self.activeTypeStore().fieldSpan(self.recordFieldsSpan(ty)), self.activeNameStore(), name);
     }
 
     fn recordFieldType(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
@@ -19721,12 +19747,7 @@ const BodyContext = struct {
     }
 
     fn recordField(self: *const BodyContext, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
-        const fields = self.typeStore().fieldSpan(self.recordFieldsSpan(ty));
-        for (0..GuardedList.borrowLen(fields)) |index| {
-            const field = GuardedList.at(fields, index);
-            if (self.nameStore().recordFieldLabelTextEql(field.name, name)) return field;
-        }
-        Common.invariant("record pattern field was absent from checked record type");
+        return sortedRecordField(self.typeStore().fieldSpan(self.recordFieldsSpan(ty)), self.nameStore(), name);
     }
 
     fn tagUnionTags(self: *const BodyContext, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Tag, "tags") {
@@ -26407,7 +26428,12 @@ const BodyContext = struct {
         child_nodes: []const NodeId = &.{},
         produced_nodes: []NodeId = &.{},
         produced_fields: []InstField = &.{},
+        /// A record constructor's supplied values and unset labels.
+        record_labels: ?RecordExprLabels = null,
         base_node: ?NodeId = null,
+        /// The base's fields, indexed on the first field the update leaves
+        /// to it.
+        base_construction: ?ConstructionFields = null,
         produced_element: ?NodeId = null,
         current_child_node: NodeId = undefined,
         name: names.TagNameId = undefined,
@@ -26495,6 +26521,8 @@ const BodyContext = struct {
         fn_node: NodeId = undefined,
         call_ctx: ?*BodyContext = null,
         name: names.TagNameId = undefined,
+        /// A record constructor's runtime fields by name.
+        construction: ?ConstructionFields = null,
     };
 
     const EvidenceFrame = struct {
@@ -26550,6 +26578,8 @@ const BodyContext = struct {
             .relate => |*task| {
                 if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
                 task.call_ctx = null;
+                if (task.construction) |*construction| construction.deinit(self.allocator);
+                task.construction = null;
                 task.timing.end();
             },
             .dispatch_result, .callable_dispatch_result => |*task| {
@@ -26569,6 +26599,10 @@ const BodyContext = struct {
                 task.produced_nodes = &.{};
                 self.allocator.free(task.produced_fields);
                 task.produced_fields = &.{};
+                if (task.record_labels) |*labels| labels.deinit(self.allocator);
+                task.record_labels = null;
+                if (task.base_construction) |*base_fields| base_fields.deinit(self.allocator);
+                task.base_construction = null;
             },
             .call_evidence,
             .argument_evidence,
@@ -26828,6 +26862,7 @@ const BodyContext = struct {
                         task.produced_nodes = try self.allocator.alloc(NodeId, tag.args.len);
                     },
                     .record => |record| {
+                        task.record_labels = try self.recordExprLabels(record);
                         const target_fields = (try self.graph.recordConstructionNodes(request_node)).fields;
                         task.produced_fields = try self.allocator.dupe(InstField, target_fields);
                         if (record.ext) |base_expr| {
@@ -26887,7 +26922,7 @@ const BodyContext = struct {
                     .record => {
                         const field = task.produced_fields[task.index];
                         const produced_value = input.?.maybeNodeValue() orelse task.current_child_node;
-                        const produced_slot = switch (try self.graph.recordConstructionFieldKind(request_node, field.name)) {
+                        const produced_slot = switch (try self.graph.recordConstructionFieldKindOf(field)) {
                             .required, .defaulted => produced_value,
                             .optional => optional: {
                                 const present = try self.nameStoreMut().internTagLabel(Builder.optional_slot_present_tag);
@@ -26962,20 +26997,15 @@ const BodyContext = struct {
                 const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
                 return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, witness) } };
             },
-            .record => |record| {
+            .record => {
                 while (task.index < task.produced_fields.len) : (task.index += 1) {
                     const field = task.produced_fields[task.index];
-                    const field_value = (try self.recordUpdateFieldValue(record.fields, field.name)) orelse {
+                    const labels = &task.record_labels.?;
+                    const field_value = labels.values.get(field.name) orelse {
                         const base_witness = task.base_node orelse continue;
-                        var is_unset = false;
-                        for (record.unsets) |label| {
-                            if (try self.recordFieldName(self.view, label) == field.name) {
-                                is_unset = true;
-                                break;
-                            }
-                        }
-                        if (is_unset) continue;
-                        const produced_slot = try self.graph.recordConstructionFieldNode(base_witness, field.name);
+                        if (labels.unsets.contains(field.name)) continue;
+                        if (task.base_construction == null) task.base_construction = try self.constructionFields(base_witness);
+                        const produced_slot = self.graph.rootNode(task.base_construction.?.get(field.name).ty);
                         const witness = try self.constructorChildWitness(
                             field.ty,
                             produced_slot,
@@ -26985,7 +27015,7 @@ const BodyContext = struct {
                         if (witness.requires_witness) task.requires_distinct_witness = true;
                         continue;
                     };
-                    task.current_child_node = try self.graph.recordConstructionFieldValueNode(request_node, field.name);
+                    task.current_child_node = self.graph.rootNode(field.value_ty orelse field.ty);
                     return evidenceCall(self, .{ .produced_value = .{ .expr = field_value, .request_node = task.current_child_node } });
                 }
                 if (!task.requires_distinct_witness) return .{ .ret = .{ .maybe_node = null } };
@@ -27644,7 +27674,7 @@ const BodyContext = struct {
                 .empty_list => _ = try self.graph.listElementNode(expected_node),
                 .empty_record => _ = try self.graph.recordConstructionNodes(expected_node),
                 .record => {
-                    _ = try self.graph.recordConstructionNodes(expected_node);
+                    task.construction = try self.constructionFields(expected_node);
                     return try self.nextRelateChild(task, expr);
                 },
                 // These forms propagate the exact result cell while their own
@@ -27708,10 +27738,10 @@ const BodyContext = struct {
             .record => |record| {
                 if (task.index < record.fields.len) {
                     const field = record.fields[task.index];
-                    const mono_field_name = try self.recordFieldName(self.view, field.label);
+                    const construction_field = task.construction.?.get(try self.recordFieldName(self.view, field.label));
                     return evidenceCall(self, .{ .relate = .{
                         .expr = field.value,
-                        .expected_node = try self.graph.recordConstructionFieldValueNode(expected_node, mono_field_name),
+                        .expected_node = self.graph.rootNode(construction_field.value_ty orelse construction_field.ty),
                     } });
                 }
             },
@@ -30394,9 +30424,11 @@ const BodyContext = struct {
                     task.slots[slot_index] = try self.instNode(self.view.bodies.expr(ext).ty);
                     slot_index += 1;
                 }
+                var construction = try self.constructionFields(task.node);
+                defer construction.deinit(self.allocator);
                 for (record.record.fields) |field| {
-                    const mono_field_name = try self.recordFieldName(self.view, field.label);
-                    task.slots[slot_index] = try self.graph.recordConstructionFieldValueNode(task.node, mono_field_name);
+                    const construction_field = construction.get(try self.recordFieldName(self.view, field.label));
+                    task.slots[slot_index] = self.graph.rootNode(construction_field.value_ty orelse construction_field.ty);
                     slot_index += 1;
                 }
             },
@@ -45278,11 +45310,74 @@ const BodyContext = struct {
         expr: DraftExprId,
     };
 
-    fn preLoweredChildAt(_: *BodyContext, children: []const PreLoweredChild, checked_expr: checked.CheckedExprId) ?DraftExprId {
-        for (children) |child| {
-            if (child.checked_expr == checked_expr) return child.expr;
+    /// Pre-lowered constructor children by their checked expression.
+    const PreLoweredIndex = std.AutoHashMapUnmanaged(checked.CheckedExprId, DraftExprId);
+
+    fn preLoweredIndex(self: *BodyContext, children: []const PreLoweredChild) Allocator.Error!PreLoweredIndex {
+        var index: PreLoweredIndex = .empty;
+        errdefer index.deinit(self.allocator);
+        try index.ensureTotalCapacity(self.allocator, @intCast(children.len));
+        for (children) |child| index.putAssumeCapacity(child.checked_expr, child.expr);
+        return index;
+    }
+
+    /// A record constructor's runtime fields by name, read once so a record of
+    /// any width resolves each field in constant time.
+    const ConstructionFields = struct {
+        fields: []const InstField,
+        by_name: std.AutoHashMapUnmanaged(names.RecordFieldNameId, u32),
+
+        fn deinit(self: *ConstructionFields, allocator: Allocator) void {
+            self.by_name.deinit(allocator);
         }
-        return null;
+
+        fn get(self: *const ConstructionFields, name: names.RecordFieldNameId) InstField {
+            const index = self.by_name.get(name) orelse
+                Common.invariant("instantiation record constructor requested an absent field");
+            return self.fields[index];
+        }
+    };
+
+    fn constructionFields(self: *BodyContext, record_node: NodeId) Allocator.Error!ConstructionFields {
+        const fields = (try self.graph.recordConstructionNodes(record_node)).fields;
+        var by_name: std.AutoHashMapUnmanaged(names.RecordFieldNameId, u32) = .empty;
+        errdefer by_name.deinit(self.allocator);
+        try by_name.ensureTotalCapacity(self.allocator, @intCast(fields.len));
+        for (fields, 0..) |field, index| by_name.putAssumeCapacity(field.name, @intCast(index));
+        return .{ .fields = fields, .by_name = by_name };
+    }
+
+    /// A checked record expression's supplied values and unset labels by their
+    /// graph-owned name, each label imported once.
+    const RecordExprLabels = struct {
+        /// The graph-owned name of each supplied field, in `record.fields` order.
+        field_names: []names.RecordFieldNameId,
+        values: std.AutoHashMapUnmanaged(names.RecordFieldNameId, checked.CheckedExprId),
+        unsets: std.AutoHashMapUnmanaged(names.RecordFieldNameId, void),
+
+        fn deinit(self: *RecordExprLabels, allocator: Allocator) void {
+            allocator.free(self.field_names);
+            self.values.deinit(allocator);
+            self.unsets.deinit(allocator);
+        }
+    };
+
+    fn recordExprLabels(self: *BodyContext, record: anytype) Allocator.Error!RecordExprLabels {
+        const field_names = try self.allocator.alloc(names.RecordFieldNameId, record.fields.len);
+        errdefer self.allocator.free(field_names);
+        var values: std.AutoHashMapUnmanaged(names.RecordFieldNameId, checked.CheckedExprId) = .empty;
+        errdefer values.deinit(self.allocator);
+        var unsets: std.AutoHashMapUnmanaged(names.RecordFieldNameId, void) = .empty;
+        errdefer unsets.deinit(self.allocator);
+        try values.ensureTotalCapacity(self.allocator, @intCast(record.fields.len));
+        for (record.fields, field_names) |field, *name| {
+            name.* = try self.recordFieldName(self.view, field.label);
+            const entry = values.getOrPutAssumeCapacity(name.*);
+            if (!entry.found_existing) entry.value_ptr.* = field.value;
+        }
+        try unsets.ensureTotalCapacity(self.allocator, @intCast(record.unsets.len));
+        for (record.unsets) |label| unsets.putAssumeCapacity(try self.recordFieldName(self.view, label), {});
+        return .{ .field_names = field_names, .values = values, .unsets = unsets };
     }
 
     fn preLoweredOperandAt(_: *BodyContext, operands: []const PreLoweredOperand, index: usize) ?DraftExprId {
@@ -46628,8 +46723,10 @@ const BodyContext = struct {
             };
             const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(target_fields));
             defer self.allocator.free(target_field_list);
+            var labels = try self.recordExprLabels(record);
+            defer labels.deinit(self.allocator);
             for (target_field_list) |field| {
-                const field_value = (try self.recordUpdateFieldValue(record.fields, field.name)) orelse continue;
+                const field_value = labels.values.get(field.name) orelse continue;
                 if (self.monotypeFieldKindTag(field) == .optional) {
                     try requests.append(self.allocator, .{ .expr = field_value, .target = .{ .at_type = (try self.optionalSlotInfo(field.ty)).payload_ty } });
                 } else if (try self.typeIsProvenUninhabited(field.ty)) {
@@ -46680,13 +46777,17 @@ const BodyContext = struct {
         ty: Type.TypeId,
         pre_lowered: []const PreLoweredChild,
     ) Allocator.Error!DraftExprId {
+        var labels = try self.recordExprLabels(record);
+        defer labels.deinit(self.allocator);
+        var pre_by_expr = try self.preLoweredIndex(pre_lowered);
+        defer pre_by_expr.deinit(self.allocator);
         if (record.ext) |ext| {
-            const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse
+            const base_expr = pre_by_expr.get(ext) orelse
                 Common.invariant("record update lost its pre-lowered base child");
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
-                const name = try self.recordFieldName(self.view, field.label);
+                const name = labels.field_names[index];
                 const target_field = self.recordField(ty, name);
                 const slot_ty = target_field.ty;
                 const field_kind: checked.CheckedFieldKind.Tag =
@@ -46697,7 +46798,7 @@ const BodyContext = struct {
                         // Supplied optional values enter the slot through #Present.
                         if (field_kind == .optional) {
                             const slot = try self.optionalSlotInfo(slot_ty);
-                            const payload = if (self.preLoweredChildAt(pre_lowered, field.value)) |pre| pre_blk: {
+                            const payload = if (pre_by_expr.get(field.value)) |pre| pre_blk: {
                                 if (!self.sameType(slot.payload_ty, try self.exprType(pre))) {
                                     Common.invariant("record update child lowered at a type different from its finalized field type");
                                 }
@@ -46705,7 +46806,7 @@ const BodyContext = struct {
                             } else Common.invariant("record update lost its pre-lowered field child");
                             break :value try self.optionalSlotPresentExpr(slot_ty, slot, payload);
                         }
-                        break :value self.preLoweredChildAt(pre_lowered, field.value) orelse
+                        break :value pre_by_expr.get(field.value) orelse
                             Common.invariant("record update lost its pre-lowered field child");
                     },
                 };
@@ -46754,7 +46855,7 @@ const BodyContext = struct {
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_field_count);
         defer self.allocator.free(lowered);
         const base_record = if (record.ext) |ext|
-            self.preLoweredChildAt(pre_lowered, ext) orelse
+            pre_by_expr.get(ext) orelse
                 Common.invariant("record constructor lost its pre-lowered base child")
         else
             null;
@@ -46776,13 +46877,13 @@ const BodyContext = struct {
             const field = target_field_list[i];
             const field_kind: checked.CheckedFieldKind.Tag =
                 self.monotypeFieldKindTag(field);
-            const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| supplied: {
+            const value = if (labels.values.get(field.name)) |field_value| supplied: {
                 // A SUPPLIED OPTIONAL field wraps its value in the slot's
                 // Present tag (design.md "Field Kinds"); the checked field
                 // expression's type is the VALUE type, never the slot.
                 if (field_kind == .optional) {
                     const slot = try self.optionalSlotInfo(field.ty);
-                    const payload = if (self.preLoweredChildAt(pre_lowered, field_value)) |pre| pre_blk: {
+                    const payload = if (pre_by_expr.get(field_value)) |pre| pre_blk: {
                         if (!self.sameType(slot.payload_ty, try self.exprType(pre))) {
                             Common.invariant("record constructor child lowered at a type different from its finalized field type");
                         }
@@ -46790,7 +46891,7 @@ const BodyContext = struct {
                     } else Common.invariant("record constructor lost its pre-lowered field child");
                     break :supplied try self.optionalSlotPresentExpr(field.ty, slot, payload);
                 }
-                if (self.preLoweredChildAt(pre_lowered, field_value)) |pre| {
+                if (pre_by_expr.get(field_value)) |pre| {
                     if (!self.sameType(field.ty, try self.exprType(pre))) {
                         Common.invariant("record constructor child lowered at a type different from its finalized field type");
                     }
@@ -46853,16 +46954,22 @@ const BodyContext = struct {
         record_node: NodeId,
         pre_lowered: []const PreLoweredChild,
     ) Allocator.Error!DraftExprId {
+        var labels = try self.recordExprLabels(record);
+        defer labels.deinit(self.allocator);
+        var pre_by_expr = try self.preLoweredIndex(pre_lowered);
+        defer pre_by_expr.deinit(self.allocator);
+        var construction = try self.constructionFields(record_node);
+        defer construction.deinit(self.allocator);
         if (record.ext) |ext| {
-            const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse
+            const base_expr = pre_by_expr.get(ext) orelse
                 Common.invariant("record graph update lost its pre-lowered base child");
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
-                const name = try self.recordFieldName(self.view, field.label);
-                const pre = self.preLoweredChildAt(pre_lowered, field.value) orelse
+                const name = labels.field_names[index];
+                const pre = pre_by_expr.get(field.value) orelse
                     Common.invariant("record graph update lost its pre-lowered field child");
-                const field_kind = try self.graph.recordConstructionFieldKind(record_node, name);
+                const field_kind = try self.graph.recordConstructionFieldKindOf(construction.get(name));
                 // A SUPPLIED OPTIONAL field's child was lowered at the slot's
                 // Present payload; wrap it into the tagged slot at the slot's
                 // graph node (design.md "Field Kinds (All-Dynamic Optional
@@ -46870,7 +46977,7 @@ const BodyContext = struct {
                 // verbatim.
                 const value = if (field_kind == .optional)
                     try self.optionalSlotPresentExprAtNode(
-                        try self.graph.recordConstructionFieldNode(record_node, name),
+                        self.graph.rootNode(construction.get(name).ty),
                         pre,
                     )
                 else
@@ -46886,14 +46993,14 @@ const BodyContext = struct {
             // representation and take no part in witness selection below.
             for (record.unsets, 0..) |label, unset_index| {
                 const name = try self.recordFieldName(self.view, label);
-                const field_kind = try self.graph.recordConstructionFieldKind(record_node, name);
+                const field_kind = try self.graph.recordConstructionFieldKindOf(construction.get(name));
                 if (field_kind != .optional) {
                     Common.invariant("record graph update unset field was not optional after checking");
                 }
                 fields[record.fields.len + unset_index] = .{
                     .name = name,
                     .value = try self.optionalSlotMissingExprAtNode(
-                        try self.graph.recordConstructionFieldNode(record_node, name),
+                        self.graph.rootNode(construction.get(name).ty),
                     ),
                 };
             }
@@ -46908,12 +47015,12 @@ const BodyContext = struct {
             for (0..target_fields.len) |index| {
                 const field = target_fields[index];
                 produced_fields[index] = field;
-                const field_value = (try self.recordUpdateFieldValue(record.fields, field.name)) orelse continue;
+                const field_value = labels.values.get(field.name) orelse continue;
                 // A supplied optional field's child is the slot's Present
                 // payload, not the tagged slot itself, and it was already
                 // wrapped above; its slot keeps the checked representation.
-                if ((try self.graph.recordConstructionFieldKind(record_node, field.name)) == .optional) continue;
-                const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
+                if ((try self.graph.recordConstructionFieldKindOf(field)) == .optional) continue;
+                const pre = pre_by_expr.get(field_value) orelse
                     Common.invariant("record graph update lost its pre-lowered field child");
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
                 const witness = try self.constructorChildWitness(
@@ -46952,7 +47059,7 @@ const BodyContext = struct {
         // a defaulted field would silently materialize the default.
         for (record.unsets) |label| {
             const name = try self.recordFieldName(self.view, label);
-            if ((try self.graph.recordConstructionFieldKind(record_node, name)) != .optional) {
+            if ((try self.graph.recordConstructionFieldKindOf(construction.get(name))) != .optional) {
                 Common.invariant("record graph constructor unset field was not optional after checking");
             }
         }
@@ -46965,7 +47072,7 @@ const BodyContext = struct {
         var requires_distinct_witness = false;
 
         const base_record = if (record.ext) |ext|
-            self.preLoweredChildAt(pre_lowered, ext) orelse
+            pre_by_expr.get(ext) orelse
                 Common.invariant("record constructor lost its pre-lowered base child")
         else
             null;
@@ -46997,9 +47104,9 @@ const BodyContext = struct {
 
         for (0..target_fields.len) |index| {
             const field = target_fields[index];
-            const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| blk: {
-                const field_kind = try self.graph.recordConstructionFieldKind(record_node, field.name);
-                const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
+            const value = if (labels.values.get(field.name)) |field_value| blk: {
+                const field_kind = try self.graph.recordConstructionFieldKindOf(field);
+                const pre = pre_by_expr.get(field_value) orelse
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 // A SUPPLIED OPTIONAL field's child was lowered at the slot's
                 // Present payload; wrap it into the tagged slot (design.md
@@ -47052,7 +47159,7 @@ const BodyContext = struct {
                     )) orelse
                         Common.invariant("checker-selected omitted default had no archived default value");
                 }
-                const field_kind = try self.graph.recordOmittedFieldKind(record_node, field.name);
+                const field_kind = self.graph.recordOmittedFieldKindOf(field);
                 break :omitted switch (field_kind) {
                     .defaulted => |default| blk: {
                         const value_node = field.value_ty orelse field.ty;
@@ -47115,16 +47222,26 @@ const BodyContext = struct {
         return null;
     }
 
-    fn recordUpdateFieldValue(
+    fn lowerClosureAtNode(
         self: *BodyContext,
-        fields: []const checked.CheckedRecordExprField,
-        name: names.RecordFieldNameId,
-    ) Allocator.Error!?checked.CheckedExprId {
-        for (fields) |field| {
-            const lowered_name = try self.recordFieldName(self.view, field.label);
-            if (self.nameStore().recordFieldLabelTextEql(lowered_name, name)) return field.value;
+        expr_id: checked.CheckedExprId,
+        closure: anytype,
+        request_fn_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
+        const capture_nodes = try self.graph.arena().alloc(NodeId, capture_span.len);
+        for (self.fnDefCaptureSpan(capture_span), capture_nodes) |capture, *node| {
+            node.* = try self.exprTypeCell(capture.value).toGraphNode(self.graph);
         }
-        return null;
+        const fn_id = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, capture_nodes);
+        const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
+        return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(fn_node),
+            .{ .fn_def = .{
+                .fn_id = fn_id,
+                .captures = capture_span,
+            } },
+        );
     }
 
     fn ensureClosureAtNode(

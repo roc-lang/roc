@@ -57,7 +57,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v35: statements carry an explicit origin kind (`LIR.OriginKind`).
 /// v36: removing `num_round` changes the numeric IDs of later LowLevel ops.
 /// v37: numeric `*_from_str_prefix`/`*_from_utf8_prefix` ops renumber later LowLevel ops.
-pub const FORMAT_VERSION: u32 = 37;
+pub const FORMAT_VERSION: u32 = 38;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -348,6 +348,8 @@ pub const LayoutStoreImage = extern struct {
     resolved_list_layouts: ArrayRef,
     tuple_elems: ArrayRef,
     struct_fields: StructFieldsImage,
+    struct_field_offsets: ArrayRef,
+    struct_field_original_order: ArrayRef,
     struct_data: ArrayRef,
     tag_union_variants: TagUnionVariantsImage,
     tag_union_data: ArrayRef,
@@ -358,6 +360,8 @@ pub const LayoutStoreImage = extern struct {
             .resolved_list_layouts = try arrayRef(base_ptr, image_size, store.resolved_list_layouts.items),
             .tuple_elems = try arrayRef(base_ptr, image_size, store.tuple_elems.items.items),
             .struct_fields = try StructFieldsImage.fromStore(base_ptr, image_size, &store.struct_fields),
+            .struct_field_offsets = try arrayRef(base_ptr, image_size, store.struct_field_offsets.items.items),
+            .struct_field_original_order = try arrayRef(base_ptr, image_size, store.struct_field_original_order.items.items),
             .struct_data = try arrayRef(base_ptr, image_size, store.struct_data.items.items),
             .tag_union_variants = try TagUnionVariantsImage.fromStore(base_ptr, image_size, &store.tag_union_variants),
             .tag_union_data = try arrayRef(base_ptr, image_size, store.tag_union_data.items.items),
@@ -375,6 +379,8 @@ pub const LayoutStoreImage = extern struct {
             .resolved_list_layouts = try copyArrayRef(allocator, base_ptr, image_capacity, store.resolved_list_layouts.items),
             .tuple_elems = try copyArrayRef(allocator, base_ptr, image_capacity, store.tuple_elems.items.items),
             .struct_fields = try StructFieldsImage.copyFromStore(allocator, base_ptr, image_capacity, &store.struct_fields),
+            .struct_field_offsets = try copyArrayRef(allocator, base_ptr, image_capacity, store.struct_field_offsets.items.items),
+            .struct_field_original_order = try copyArrayRef(allocator, base_ptr, image_capacity, store.struct_field_original_order.items.items),
             .struct_data = try copyArrayRef(allocator, base_ptr, image_capacity, store.struct_data.items.items),
             .tag_union_variants = try TagUnionVariantsImage.copyFromStore(allocator, base_ptr, image_capacity, &store.tag_union_variants),
             .tag_union_data = try copyArrayRef(allocator, base_ptr, image_capacity, store.tag_union_data.items.items),
@@ -398,6 +404,8 @@ pub const LayoutStoreImage = extern struct {
             .resolved_list_layouts = try arrayListFromRef(?layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
             .tuple_elems = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems),
             .struct_fields = struct_fields,
+            .struct_field_offsets = try safeListFromRef(layout_mod.WidthValues(u32), base_ptr, image_size, self.struct_field_offsets),
+            .struct_field_original_order = try safeListFromRef(u32, base_ptr, image_size, self.struct_field_original_order),
             .struct_data = try safeListFromRef(layout_mod.StructData, base_ptr, image_size, self.struct_data),
             .tag_union_variants = tag_union_variants,
             .tag_union_data = try safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
@@ -451,7 +459,7 @@ pub const StructFieldsImage = extern struct {
         image_size: usize,
         allocator: std.mem.Allocator,
     ) ViewError!layout_mod.StructField.SafeMultiList {
-        const indices = try sliceFromRef(u16, base_ptr, image_size, self.indices);
+        const indices = try sliceFromRef(u32, base_ptr, image_size, self.indices);
         const layouts = try sliceFromRef(layout_mod.Idx, base_ptr, image_size, self.layouts);
         const padding = try sliceFromRef(bool, base_ptr, image_size, self.is_padding);
         if (indices.len != layouts.len or indices.len != padding.len) return error.InvalidLirImage;
@@ -813,6 +821,8 @@ fn serializeSidecarInto(
         .resolved_list_layouts = try cloneStdArrayList(?layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts),
         .tuple_elems = try cloneSafeList(layout_mod.Idx, gpa, lowered.layouts.tuple_elems),
         .struct_fields = try cloneStructFields(gpa, &lowered.layouts.struct_fields),
+        .struct_field_offsets = try cloneSafeList(layout_mod.WidthValues(u32), gpa, lowered.layouts.struct_field_offsets),
+        .struct_field_original_order = try cloneSafeList(u32, gpa, lowered.layouts.struct_field_original_order),
         .struct_data = try cloneSafeList(layout_mod.StructData, gpa, lowered.layouts.struct_data),
         .tag_union_variants = try cloneTagUnionVariants(gpa, &lowered.layouts.tag_union_variants),
         .tag_union_data = try cloneSafeList(layout_mod.TagUnionData, gpa, lowered.layouts.tag_union_data),
@@ -910,7 +920,7 @@ comptime {
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 36);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 14);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 16);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
 
@@ -1368,9 +1378,9 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_hidden_desc_sources.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_erased_arg_layouts.len);
     try std.testing.expect(populated_view.boxy_type_descs[0].contains_refcounted);
-    try std.testing.expectEqual(@as(?u16, 1), populated_view.boxy_type_descs[0].presence_slot_present_discriminant);
+    try std.testing.expectEqual(@as(?u32, 1), populated_view.boxy_type_descs[0].presence_slot_present_discriminant);
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(populated_view.boxy_type_descs[0].inspect_method.?));
-    try std.testing.expectEqual(@as(u16, 0), populated_view.boxy_tag_variants[0].discriminant);
+    try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_tag_variants[0].discriminant);
     try std.testing.expectEqualStrings("Ok", populated_view.store.getBoxyName(populated_view.boxy_tag_variants[0].name));
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_tag_payload_descs[0].payload_index);
     try std.testing.expectEqual(Program.BoxyAdapterKind.host_to_boxy, populated_view.boxy_adapters[0].kind);
@@ -1381,7 +1391,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(Program.BoxySpan{ .start = 0, .len = 1 }, populated_view.boxy_method_slots[0].adapter.call_descs);
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(populated_view.boxy_worker_procs[0]));
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_method_hidden_desc_sources[0].slot);
-    try std.testing.expectEqual(@as(u16, 7), populated_view.layouts.struct_fields.fieldItem(.index, struct_field_idx));
+    try std.testing.expectEqual(@as(u32, 7), populated_view.layouts.struct_fields.fieldItem(.index, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.str, populated_view.layouts.struct_fields.fieldItem(.layout, struct_field_idx));
     try std.testing.expect(populated_view.layouts.struct_fields.fieldItem(.is_padding, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.layouts.tag_union_variants.fieldItem(.payload_layout, tag_variant_idx));
@@ -1662,7 +1672,7 @@ test "LIR image copies and round-trips every populated store field" {
     const empty_name = try store.insertBoxyName("");
 
     // A layout Store with every serialized list populated distinctively. Only
-    // the seven array-backed fields are serialized; the interning caches are not
+    // the nine array-backed fields are serialized; the interning caches are not
     // read by `fromStore`, so they are left undefined here.
     var layouts = layout_mod.Store{
         .allocator = gpa,
@@ -1670,6 +1680,8 @@ test "LIR image copies and round-trips every populated store field" {
         .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4 },
         .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
         .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
+        .struct_field_offsets = try h.safeList(layout_mod.WidthValues(u32), source_allocator, 6, 0x74),
+        .struct_field_original_order = try h.safeList(u32, source_allocator, 6, 0x78),
         .struct_data = try h.safeList(layout_mod.StructData, source_allocator, 7, 0x80),
         .tag_union_variants = try h.multiList(layout_mod.TagUnionVariant, source_allocator, 8, 0x88),
         .tag_union_data = try h.safeList(layout_mod.TagUnionData, source_allocator, 9, 0xa0),
@@ -1747,6 +1759,14 @@ test "LIR image copies and round-trips every populated store field" {
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.struct_data.items.items),
         std.mem.sliceAsBytes(view.layouts.struct_data.items.items),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.struct_field_offsets.items.items),
+        std.mem.sliceAsBytes(view.layouts.struct_field_offsets.items.items),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.struct_field_original_order.items.items),
+        std.mem.sliceAsBytes(view.layouts.struct_field_original_order.items.items),
     );
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.tag_union_data.items.items),

@@ -380,10 +380,10 @@ qualified_ident_bytes: base.Scratch(u8),
 scratch_type_paths: base.Scratch(AST.DeclIndex.TypePathIdx),
 /// Scratch associated alias sinks for nested associated source-order walks.
 scratch_assoc_alias_sinks: base.Scratch(AssociatedAliasSink),
-/// Scratch ident
-scratch_seen_record_fields: base.Scratch(SeenRecordField),
-/// Scratch tag names for duplicate detection in type annotations.
-scratch_seen_tags: base.Scratch(SeenTag),
+/// Record field names for duplicate detection.
+scratch_seen_record_fields: SeenLabels,
+/// Tag names for duplicate detection in type annotations.
+scratch_seen_tags: SeenLabels,
 /// Scratch expression ids for short-lived dynamic lists.
 scratch_expr_ids: base.Scratch(Expr.Idx),
 /// Scratch pattern ids for short-lived dynamic lists.
@@ -515,9 +515,45 @@ const Diagnostic = CIR.Diagnostic;
 const DependencyGraph = @import("DependencyGraph.zig");
 const RecordField = CIR.RecordField;
 
-/// Struct to track fields that have been seen before during canonicalization
-const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
-const SeenTag = struct { ident: base.Ident.Idx, region: base.Region };
+/// Record field or tag labels seen so far, one contiguous run per record or
+/// tag union in flight. Each run is indexed, so a duplicate check is a single
+/// lookup however wide the record or union is.
+const SeenLabels = struct {
+    entries: std.ArrayListUnmanaged(Entry) = .empty,
+    positions: std.AutoHashMapUnmanaged(Key, u32) = .empty,
+
+    const Entry = struct { run_top: u32, ident: base.Ident.Idx, region: base.Region };
+    const Key = struct { run_top: u32, ident: base.Ident.Idx };
+
+    fn deinit(self: *SeenLabels, gpa: Allocator) void {
+        self.entries.deinit(gpa);
+        self.positions.deinit(gpa);
+    }
+
+    /// Where the next run starts.
+    fn top(self: *const SeenLabels) u32 {
+        return @intCast(self.entries.items.len);
+    }
+
+    /// Drop every label from `run_top` on.
+    fn clearFrom(self: *SeenLabels, run_top: u32) void {
+        for (self.entries.items[run_top..]) |entry| {
+            _ = self.positions.remove(.{ .run_top = entry.run_top, .ident = entry.ident });
+        }
+        self.entries.items.len = run_top;
+    }
+
+    /// Record `ident` in the run starting at `run_top`, or return the region
+    /// of the run's earlier occurrence of it.
+    fn addOrFind(self: *SeenLabels, gpa: Allocator, run_top: u32, ident: base.Ident.Idx, region: base.Region) Allocator.Error!?base.Region {
+        try self.entries.ensureUnusedCapacity(gpa, 1);
+        const gop = try self.positions.getOrPut(gpa, .{ .run_top = run_top, .ident = ident });
+        if (gop.found_existing) return self.entries.items[gop.value_ptr.*].region;
+        gop.value_ptr.* = self.top();
+        self.entries.appendAssumeCapacity(.{ .run_top = run_top, .ident = ident, .region = region });
+        return null;
+    }
+};
 const SeenTypeParameter = struct { ident: base.Ident.Idx, region: base.Region };
 
 /// The type a type name refers to, and the name the reference is recorded under.
@@ -771,8 +807,8 @@ pub fn deinit(
     self.qualified_ident_bytes.deinit();
     self.scratch_type_paths.deinit();
     self.scratch_assoc_alias_sinks.deinit();
-    self.scratch_seen_record_fields.deinit();
-    self.scratch_seen_tags.deinit();
+    self.scratch_seen_record_fields.deinit(gpa);
+    self.scratch_seen_tags.deinit(gpa);
     self.scratch_expr_ids.deinit();
     self.scratch_pattern_ids.deinit();
     self.import_indices.deinit(gpa);
@@ -845,8 +881,8 @@ fn initInternal(
         .qualified_ident_bytes = try base.Scratch(u8).init(gpa),
         .scratch_type_paths = try base.Scratch(AST.DeclIndex.TypePathIdx).init(gpa),
         .scratch_assoc_alias_sinks = try base.Scratch(AssociatedAliasSink).init(gpa),
-        .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
-        .scratch_seen_tags = try base.Scratch(SeenTag).init(gpa),
+        .scratch_seen_record_fields = .{},
+        .scratch_seen_tags = .{},
         .scratch_expr_ids = try base.Scratch(Expr.Idx).init(gpa),
         .scratch_pattern_ids = try base.Scratch(Pattern.Idx).init(gpa),
         .type_var_scopes = .{},
@@ -11556,24 +11592,14 @@ fn runExprKernel(
                         const field_name_ident = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse continue;
                         const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
 
-                        var found_duplicate = false;
-                        for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
-                            if (field_name_ident.eql(seen_field.ident)) {
-                                try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
-                                    .field_name = field_name_ident,
-                                    .duplicate_region = field_name_region,
-                                    .original_region = seen_field.region,
-                                } });
-                                found_duplicate = true;
-                                break;
-                            }
+                        if (try self.scratch_seen_record_fields.addOrFind(self.env.gpa, seen_fields_top, field_name_ident, field_name_region)) |original_region| {
+                            try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                                .field_name = field_name_ident,
+                                .duplicate_region = field_name_region,
+                                .original_region = original_region,
+                            } });
+                            continue;
                         }
-                        if (found_duplicate) continue;
-
-                        try self.scratch_seen_record_fields.append(SeenRecordField{
-                            .ident = field_name_ident,
-                            .region = field_name_region,
-                        });
 
                         const value_expr_idx = switch (ast_field.value) {
                             .supplied => |value_idx| value_idx,
@@ -18217,19 +18243,12 @@ pub fn canonicalizePattern(
             };
 
             const field_name_region = self.parse_ir.tokens.resolve(field.name.?);
-            var found_duplicate = false;
-            for (self.scratch_seen_record_fields.sliceFromStart(state.scratch_seen_record_fields_top)) |seen_field| {
-                if (field_name_ident.eql(seen_field.ident)) {
-                    try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
-                        .field_name = field_name_ident,
-                        .duplicate_region = field_name_region,
-                        .original_region = seen_field.region,
-                    } });
-                    found_duplicate = true;
-                    break;
-                }
-            }
-            if (found_duplicate) {
+            if (try self.scratch_seen_record_fields.addOrFind(self.env.gpa, state.scratch_seen_record_fields_top, field_name_ident, field_name_region)) |original_region| {
+                try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                    .field_name = field_name_ident,
+                    .duplicate_region = field_name_region,
+                    .original_region = original_region,
+                } });
                 try stacks.pushRecordNext(frame_allocator, .{
                     .fields = state.fields,
                     .region = state.region,
@@ -18239,10 +18258,6 @@ pub fn canonicalizePattern(
                 });
                 continue :patternkernel_loop .dispatch;
             }
-            try self.scratch_seen_record_fields.append(.{
-                .ident = field_name_ident,
-                .region = field_name_region,
-            });
 
             if (field.value) |sub_pattern_idx| {
                 // Handle patterns like `{ name: x }` or `{ address: { city } }` where there's a sub-pattern
@@ -19582,19 +19597,12 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse try self.env.insertIdent(Ident.for_text("malformed_field"));
                 const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
                 if (!is_unnamed) {
-                    var found_duplicate = false;
-                    for (self.scratch_seen_record_fields.sliceFromStart(state.scratch_seen_record_fields_top)) |seen_field| {
-                        if (field_name.eql(seen_field.ident)) {
-                            try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
-                                .field_name = field_name,
-                                .duplicate_region = field_name_region,
-                                .original_region = seen_field.region,
-                            } });
-                            found_duplicate = true;
-                            break;
-                        }
-                    }
-                    if (found_duplicate) {
+                    if (try self.scratch_seen_record_fields.addOrFind(self.env.gpa, state.scratch_seen_record_fields_top, field_name, field_name_region)) |original_region| {
+                        try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                            .field_name = field_name,
+                            .duplicate_region = field_name_region,
+                            .original_region = original_region,
+                        } });
                         try stacks.pushRecordNext(frame_allocator, .{
                             .record = state.record,
                             .region = state.region,
@@ -19605,10 +19613,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         });
                         continue :typeannokernel_loop .dispatch;
                     }
-                    try self.scratch_seen_record_fields.append(SeenRecordField{
-                        .ident = field_name,
-                        .region = field_name_region,
-                    });
                 }
                 // A default combines with neither `?:` (a default makes the
                 // field never missing, so the tagged slot and `.?` would be
@@ -19763,22 +19767,13 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             if (tag_anno == .tag) {
                 const tag = tag_anno.tag;
                 const tag_region = self.env.store.getTypeAnnoRegion(tag_idx);
-                for (self.scratch_seen_tags.sliceFromStart(state.scratch_seen_tags_top)) |seen_tag| {
-                    if (tag.name.eql(seen_tag.ident)) {
-                        try self.env.pushDiagnostic(Diagnostic{ .duplicate_tag = .{
-                            .tag_name = tag.name,
-                            .duplicate_region = tag_region,
-                            .original_region = seen_tag.region,
-                        } });
-                        found_duplicate = true;
-                        break;
-                    }
-                }
-                if (!found_duplicate) {
-                    try self.scratch_seen_tags.append(SeenTag{
-                        .ident = tag.name,
-                        .region = tag_region,
-                    });
+                if (try self.scratch_seen_tags.addOrFind(self.env.gpa, state.scratch_seen_tags_top, tag.name, tag_region)) |original_region| {
+                    try self.env.pushDiagnostic(Diagnostic{ .duplicate_tag = .{
+                        .tag_name = tag.name,
+                        .duplicate_region = tag_region,
+                        .original_region = original_region,
+                    } });
+                    found_duplicate = true;
                 }
             }
             if (!found_duplicate) {

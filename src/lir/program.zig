@@ -182,8 +182,8 @@ pub const CaptureSlotStorage = enum(u8) {
 /// One runtime tag variant for a finite callable value.
 pub const FnVariant = struct {
     id: FnVariantId,
-    discriminant: u16,
-    variant_index: u16,
+    discriminant: u32,
+    variant_index: u32,
     payload_layout: layout.Idx,
     template: FnTemplate,
     captures: []const CaptureSlot = &.{},
@@ -288,7 +288,7 @@ pub const BoxyPayloadStep = LIR.BoxyPayloadStep;
 /// Runtime metadata for one tag in a boxy tag-union descriptor.
 pub const BoxyTagVariant = struct {
     name: LIR.BoxyNameId,
-    discriminant: u16,
+    discriminant: u32,
     /// Number of source-language payloads carried by this tag. A single
     /// aggregate payload is distinct from a multi-payload tag whose runtime
     /// payload is also a struct.
@@ -397,7 +397,7 @@ pub const BoxyTypeDesc = struct {
     /// Present-variant discriminant when these bytes use the canonical
     /// optional-field slot convention. This is compiler-produced semantic
     /// data, not a runtime inference from tags or layouts.
-    presence_slot_present_discriminant: ?u16 = null,
+    presence_slot_present_discriminant: ?u32 = null,
     /// The described value is an opaque nominal type: inspect must not
     /// reveal its backing structure.
     inspect_opaque: bool = false,
@@ -467,7 +467,7 @@ pub const BoxyDict = struct {
 pub const ConstTagVariant = struct {
     name: []const u8,
     checked_name: names.TagNameId,
-    discriminant: u16,
+    discriminant: u32,
     payloads: []const ConstPlanId = &.{},
 };
 

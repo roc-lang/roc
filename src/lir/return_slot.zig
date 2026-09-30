@@ -430,8 +430,8 @@ test "return slot lowers direct tag return into destination store" {
     const variant_store = store.getCFStmt(variant.body.?).store_tag;
     try std.testing.expectEqual(GuardedList.at(variant_args, 0), variant_store.dest);
     try std.testing.expectEqual(aggregate, variant_store.tag_layout);
-    try std.testing.expectEqual(@as(u16, 0), variant_store.variant_index);
-    try std.testing.expectEqual(@as(u16, 0), variant_store.discriminant);
+    try std.testing.expectEqual(@as(u32, 0), variant_store.variant_index);
+    try std.testing.expectEqual(@as(u32, 0), variant_store.discriminant);
     try std.testing.expectEqual(GuardedList.at(variant_args, 1), variant_store.payload.?);
     try std.testing.expectEqual(layout_mod.Idx.zst, store.getLocal(store.getCFStmt(variant_store.next).ret.value).layout_idx);
 }

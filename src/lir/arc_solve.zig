@@ -1355,7 +1355,7 @@ fn computeOutcomeRestitution(
             entry.value_ptr.* = join_point.body;
         }
 
-        var accum = std.AutoHashMap(u16, OutcomeAccum).init(allocator);
+        var accum = std.AutoHashMap(u32, OutcomeAccum).init(allocator);
         defer accum.deinit();
         var valid = true;
         var solved_param_count: usize = 0;
@@ -1366,7 +1366,7 @@ fn computeOutcomeRestitution(
             @memset(bit_escape_discriminants, no_local);
             @memset(bit_escape_present, false);
             if (@import("builtin").mode == .Debug) outcome_scratch_entries += bit_escape_discriminants.len + bit_escape_present.len;
-            var bit_accum = std.AutoHashMap(u16, OutcomeBitAccum).init(allocator);
+            var bit_accum = std.AutoHashMap(u32, OutcomeBitAccum).init(allocator);
             defer bit_accum.deinit();
             var stack = std.ArrayList(OutcomeWalkState).empty;
             defer stack.deinit(allocator);
@@ -1646,7 +1646,7 @@ fn computeOutcomeRestitution(
                             valid = false;
                             break;
                         }
-                        const discriminant: u16 = @intCast(next_state.discriminant);
+                        const discriminant: u32 = @intCast(next_state.discriminant);
                         const entry = try bit_accum.getOrPut(discriminant);
                         if (entry.found_existing) {
                             entry.value_ptr.present_on_all_paths = entry.value_ptr.present_on_all_paths and next_state.present;

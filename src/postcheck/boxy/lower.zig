@@ -805,6 +805,48 @@ fn procedureModuleByKey(modules: Common.CheckedModules, key: checked.CheckedModu
     boxyLowerInvariant("boxy worker referenced a checked checked_module that was not available to lowering");
 }
 
+/// Positions of a record expression's labels. Labels from the expression's
+/// own module match by id; labels from another module match by text.
+const RecordLabelPositions = struct {
+    same_module: bool,
+    by_id: std.AutoHashMapUnmanaged(names.RecordFieldLabelId, usize) = .empty,
+    by_text: std.StringHashMapUnmanaged(usize) = .empty,
+
+    fn init(same_module: bool) RecordLabelPositions {
+        return .{ .same_module = same_module };
+    }
+
+    fn deinit(self: *RecordLabelPositions, allocator: Allocator) void {
+        self.by_id.deinit(allocator);
+        self.by_text.deinit(allocator);
+    }
+
+    /// Record `label`'s position; true when the label was already present.
+    fn put(
+        self: *RecordLabelPositions,
+        allocator: Allocator,
+        label_names: *const names.CanonicalNameStore,
+        label: names.RecordFieldLabelId,
+        position: usize,
+    ) Allocator.Error!bool {
+        if (self.same_module) {
+            const entry = try self.by_id.getOrPut(allocator, label);
+            if (entry.found_existing) return true;
+            entry.value_ptr.* = position;
+        } else {
+            const entry = try self.by_text.getOrPut(allocator, label_names.recordFieldLabelText(label));
+            if (entry.found_existing) return true;
+            entry.value_ptr.* = position;
+        }
+        return false;
+    }
+
+    fn get(self: *const RecordLabelPositions, label_names: *const names.CanonicalNameStore, label: names.RecordFieldLabelId) ?usize {
+        if (self.same_module) return self.by_id.get(label);
+        return self.by_text.get(label_names.recordFieldLabelText(label));
+    }
+};
+
 fn checked_moduleKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.CheckedModuleArtifactKey) bool {
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
@@ -5163,9 +5205,9 @@ const ProcedureBuilder = struct {
     fn matchingRecordChildByDeclaredFieldIndex(
         _: *ProcedureBuilder,
         children: []const Plan.RepChild,
-        declared_index: u16,
+        declared_index: u32,
     ) ?Plan.RepChild {
-        var field_index: u16 = 0;
+        var field_index: u32 = 0;
         for (children) |child| {
             if (child.role == .record_field) {
                 if (field_index == declared_index) return child;
@@ -8236,7 +8278,7 @@ const ProcedureBuilder = struct {
         while (true) {
             const rep = self.plan.representations.items[@intFromEnum(current)];
             for (self.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
-                if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated tag-union variant index exceeded LIR range");
+                if (index > std.math.maxInt(u32)) boxyLowerInvariant("generated tag-union variant index exceeded LIR range");
                 try variants.append(self.allocator, .{
                     .boundary_rep = shape_rep,
                     .tag_rep = root,
@@ -10058,7 +10100,7 @@ const ProcedureBuilder = struct {
         var out_index: usize = 0;
         for (planned, 0..) |variant, index| {
             if (payload_only and self.plan.childSlice(variant.payloads).len == 0) continue;
-            if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated tag encoder variant index exceeded LIR range");
+            if (index > std.math.maxInt(u32)) boxyLowerInvariant("generated tag encoder variant index exceeded LIR range");
             variants[out_index] = .{
                 .boundary_rep = proc.repForTypeRef(shape_type),
                 .tag_rep = tag_rep,
@@ -10794,7 +10836,7 @@ const ProcedureBuilder = struct {
             const frame = frames.items[offset];
             const continuation = try self.finishGeneratedEncoderElement(proc, frame, element_writer, element_writer_rep, target_rep, target, next, encoded);
             const item_index = first_item_index + offset;
-            if (item_index > std.math.maxInt(u16)) {
+            if (item_index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("generated encoder tuple element index exceeded LIR range");
             }
             encoded = try proc.lowerTupleFieldReadInto(
@@ -13726,7 +13768,7 @@ const ProcedureBuilder = struct {
         tag_rep: Plan.TypeRepId,
         /// The row node that explicitly declares this variant.
         owner_rep: Plan.TypeRepId,
-        index: u16,
+        index: u32,
         variant: Plan.TagVariant,
     };
 
@@ -15338,6 +15380,8 @@ const ProcBodyBuilder = struct {
     adapter_descriptor_entries: std.ArrayList(AdapterDescriptorEntry),
     runtime_initialized_descriptor_locals: std.ArrayList(LIR.LocalId),
     descriptor_local_templates: std.ArrayList(DescriptorLocalTemplate),
+    /// Each templated local's position in `descriptor_local_templates`.
+    descriptor_local_template_positions: std.AutoHashMapUnmanaged(LIR.LocalId, u32) = .empty,
     nominal_formal_bindings: std.ArrayList(NominalFormalBinding) = .empty,
     scoped_descriptor_locals: std.ArrayList(ScopedDescriptorLocal) = .empty,
     /// First scoped descriptor local of the innermost active scope.
@@ -15401,13 +15445,13 @@ const ProcBodyBuilder = struct {
         literal: []const u8,
         field: struct {
             source: LIR.LocalId,
-            field_index: u16,
+            field_index: u32,
             rep: Plan.TypeRepId,
         },
         tag_payload: struct {
             source: LIR.LocalId,
-            variant_index: u16,
-            payload_index: ?u16,
+            variant_index: u32,
+            payload_index: ?u32,
             rep: Plan.TypeRepId,
         },
     };
@@ -15866,6 +15910,7 @@ const ProcBodyBuilder = struct {
         for (self.template_dict_cache.items) |entry| self.parent.allocator.free(entry.captures);
         self.template_dict_cache.deinit(self.parent.allocator);
         self.descriptor_local_templates.deinit(self.parent.allocator);
+        self.descriptor_local_template_positions.deinit(self.parent.allocator);
         self.nominal_formal_bindings.deinit(self.parent.allocator);
         self.scoped_descriptor_locals.deinit(self.parent.allocator);
         self.runtime_initialized_descriptor_locals.deinit(self.parent.allocator);
@@ -16511,15 +16556,15 @@ const ProcBodyBuilder = struct {
         for (args, 0..) |_, arg_index| {
             const arg_params = params.items[param_starts[arg_index]..param_starts[arg_index + 1]];
             for (arg_params, 0..) |param, descriptor_index| {
-                if (arg_index > std.math.maxInt(u16)) {
+                if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor key exceeded its index range");
                 }
-                if (descriptor_index > std.math.maxInt(u16)) {
+                if (descriptor_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor index exceeded its key range");
                 }
                 const source = try self.erasedArgumentDescriptorParamSource(arg_params, descriptor_index);
                 if (source.read != .call_key) continue;
-                var capture_index: ?u16 = null;
+                var capture_index: ?u32 = null;
                 for (captures, 0..) |capture, index| {
                     if (capture.kind != .hidden_desc or
                         capture.desc != param.desc or
@@ -16583,13 +16628,13 @@ const ProcBodyBuilder = struct {
             defer bindings.deinit(self.parent.allocator);
             try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
             for (params.items, 0..) |param, param_index| {
-                if (arg_index > std.math.maxInt(u16)) {
+                if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor parameter key exceeded its index range");
                 }
-                if (param_index > std.math.maxInt(u16)) {
+                if (param_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor parameter index exceeded its key range");
                 }
-                const descriptor_index: u16 = @intCast(param_index);
+                const descriptor_index: u32 = @intCast(param_index);
                 const descriptor_source = try self.erasedArgumentDescriptorParamSource(params.items, param_index);
                 const is_root_descriptor = self.repOwnsShapeDescriptor(param.rep, param.desc) and
                     arg_identity_rep == self.descriptorShapeIdentityRep(param.rep);
@@ -16720,8 +16765,8 @@ const ProcBodyBuilder = struct {
     const no_tag_payload_read: LIR.BoxyNameId = @enumFromInt(std.math.maxInt(u32));
 
     const ErasedArgumentDescriptorParamSource = struct {
-        descriptor_index: u16,
-        nested_index: u16,
+        descriptor_index: u32,
+        nested_index: u32,
         tag_name: LIR.BoxyNameId,
         read: LIR.ErasedArgDescRead,
     };
@@ -16734,12 +16779,12 @@ const ProcBodyBuilder = struct {
         params: []const Plan.HiddenDescriptorParam,
         param_index: usize,
     ) Allocator.Error!ErasedArgumentDescriptorParamSource {
-        if (param_index > std.math.maxInt(u16)) {
+        if (param_index > std.math.maxInt(u32)) {
             boxyLowerInvariant("boxy erased argument descriptor source index exceeded its key range");
         }
         const direct = ErasedArgumentDescriptorParamSource{
             .descriptor_index = @intCast(param_index),
-            .nested_index = std.math.maxInt(u16),
+            .nested_index = std.math.maxInt(u32),
             .tag_name = no_tag_payload_read,
             .read = .call_key,
         };
@@ -16750,7 +16795,7 @@ const ProcBodyBuilder = struct {
         for (params[0..param_index], 0..) |candidate, candidate_index| {
             const parent_rep = self.descriptorStorageRep(candidate.rep);
             const projected: ErasedArgumentDescriptorParamSource = if (try self.immediateNestedDescriptorIndexForRep(parent_rep, target_rep)) |nested_index| nested: {
-                if (nested_index > std.math.maxInt(u16)) {
+                if (nested_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument nested descriptor index exceeded its ABI range");
                 }
                 break :nested .{
@@ -16787,7 +16832,7 @@ const ProcBodyBuilder = struct {
             .tag_payload => |payload| payload,
             .nested, .tag_ext, .box_payload => return null,
         };
-        if (payload.payload_index > std.math.maxInt(u16)) {
+        if (payload.payload_index > std.math.maxInt(u32)) {
             boxyLowerInvariant("boxy erased argument tag payload descriptor index exceeded its ABI range");
         }
         return .{
@@ -16917,7 +16962,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         capture_value: LIR.LocalId,
-        field_index: u16,
+        field_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         if (self.isZstLocal(target)) return try self.assignZst(target, next);
@@ -17097,7 +17142,7 @@ const ProcBodyBuilder = struct {
             for_: ForLoop,
             step: IteratorStepShape,
             step_local: LIR.LocalId,
-            variant_index: ?u16,
+            variant_index: ?u32,
             iterator_param: LIR.LocalId,
             join_id: LIR.JoinPointId,
             next: LIR.CFStmtId,
@@ -18395,7 +18440,7 @@ const ProcBodyBuilder = struct {
         elem_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        if (elem_index > std.math.maxInt(u16)) {
+        if (elem_index > std.math.maxInt(u32)) {
             boxyLowerInvariant("tuple access element index exceeded LIR field index range");
         }
         const tuple = self.module.checked_bodies.expr(tuple_id);
@@ -18648,6 +18693,24 @@ const ProcBodyBuilder = struct {
 
         var layout_index: usize = 0;
         const rep_field_view = procedureModuleById(self.parent.modules, rep.source_type.module);
+        // Supplied and unset labels, so each representation field finds its
+        // source in constant time. They match as `Plan.recordFieldNameMatches`
+        // does: by id within the expression's module, by text across modules.
+        var expr_field_positions = RecordLabelPositions.init(checked_moduleKeyEqual(self.module.key, rep_field_view.key));
+        defer expr_field_positions.deinit(self.parent.allocator);
+        for (expr_fields, 0..) |field, index| {
+            if (try expr_field_positions.put(self.parent.allocator, self.module.canonical_names, field.label, index)) {
+                boxyLowerInvariant("record expression contained the same field label more than once");
+            }
+        }
+        var unset_positions = RecordLabelPositions.init(expr_field_positions.same_module);
+        defer unset_positions.deinit(self.parent.allocator);
+        for (unset_fields, 0..) |unset_label, index| {
+            if (try unset_positions.put(self.parent.allocator, self.module.canonical_names, unset_label, index)) {
+                boxyLowerInvariant("record expression contained the same unset field label more than once");
+            }
+        }
+
         for (children) |child| {
             switch (child.role) {
                 .record_field => |label| {
@@ -18655,7 +18718,7 @@ const ProcBodyBuilder = struct {
                         self.parent.result.store.getLocal(target).layout_idx,
                         layout_index,
                     );
-                    if (self.recordExprFieldIndex(expr_fields, rep_field_view, label)) |source_index| {
+                    if (expr_field_positions.get(rep_field_view.canonical_names, label)) |source_index| {
                         const local = try self.addFrameLocal(field_layout);
                         field_locals[layout_index] = local;
                         const expr = self.module.checked_bodies.expr(expr_fields[source_index].value);
@@ -18674,7 +18737,7 @@ const ProcBodyBuilder = struct {
                         source_field_target_reps[source_index] = child.rep;
                         source_field_kinds[source_index] = child.record_field_kind.tag;
                         field_sources[layout_index] = .expr;
-                    } else if (self.recordUnsetFieldIndex(unset_fields, rep_field_view, label)) |unset_index| {
+                    } else if (unset_positions.get(rep_field_view.canonical_names, label)) |unset_index| {
                         // An UNSET field (`label: _`) constructs the slot's
                         // Missing tag even under an update—never copied from
                         // the extension (design.md "In Progress: Unsetting an
@@ -19708,7 +19771,7 @@ const ProcBodyBuilder = struct {
 
             const skip_body = try self.lowerIteratorSkipBranch(step, step_local, task.skip_variant.index, task.iterator_param, task.join_id);
 
-            const discriminant = try self.addFrameLocal(.u16);
+            const discriminant = try self.addFrameLocal(.u32);
             const branches = [_]LIR.CFSwitchBranch{
                 .{ .value = task.done_variant.index, .body = task.done_body },
                 .{ .value = task.one_variant.index, .body = one_body },
@@ -20443,10 +20506,10 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("literal conversion result did not have a tag-union representation");
         const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
         var ok_variant: ?Plan.TagVariant = null;
-        var ok_index: u16 = 0;
+        var ok_index: u32 = 0;
         for (self.parent.plan.tagVariantSlice(tag_rep.tag_variants), 0..) |variant, index| {
             if (!std.mem.eql(u8, self.tagVariantNameText(variant), "Ok")) continue;
-            if (index > std.math.maxInt(u16)) {
+            if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("literal conversion Ok variant index exceeded LIR range");
             }
             ok_variant = variant;
@@ -20509,7 +20572,7 @@ const ProcBodyBuilder = struct {
             } }, self.origin);
         }
 
-        const discriminant = try self.addFrameLocal(.u16);
+        const discriminant = try self.addFrameLocal(.u32);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = ok_index, .body = read_ok }};
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
@@ -20563,7 +20626,7 @@ const ProcBodyBuilder = struct {
             try branches.append(self.parent.allocator, .{ .value = @intCast(index), .body = read_message });
         }
         const impossible = try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
-        const discriminant = try self.addFrameLocal(.u16);
+        const discriminant = try self.addFrameLocal(.u32);
         const select = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(branches.items),
@@ -20937,12 +21000,12 @@ const ProcBodyBuilder = struct {
     /// selected by the slot's explicit Present discriminant.
     fn presenceSlotVariants(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?PresenceSlotVariants {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        const present: u16 = rep.presence_slot_present_discriminant orelse return null;
+        const present: u32 = rep.presence_slot_present_discriminant orelse return null;
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         if (variants.len != 2 or present >= variants.len) {
             boxyLowerInvariant("presence slot did not have exactly two variants");
         }
-        const missing: u16 = if (present == 0) 1 else 0;
+        const missing: u32 = if (present == 0) 1 else 0;
         if (variants[missing].payloads.len != 0) boxyLowerInvariant("presence slot Missing variant carried a payload");
         return .{
             .present = .{ .boundary_rep = rep_id, .tag_rep = rep_id, .owner_rep = rep_id, .index = present, .variant = variants[present] },
@@ -20962,7 +21025,7 @@ const ProcBodyBuilder = struct {
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             for (self.parent.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
                 if (!std.mem.eql(u8, self.tagVariantNameText(variant), tag_text)) continue;
-                if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated parser tag index exceeded LIR range");
+                if (index > std.math.maxInt(u32)) boxyLowerInvariant("generated parser tag index exceeded LIR range");
                 return .{
                     .boundary_rep = rep_id,
                     .tag_rep = root_rep,
@@ -21009,7 +21072,7 @@ const ProcBodyBuilder = struct {
                     }
                     branch.* = .{ .value = variant.index, .body = body };
                 }
-                const discriminant = try self.addFrameLocal(.u16);
+                const discriminant = try self.addFrameLocal(.u32);
                 const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
                     .cond = discriminant,
                     .branches = try self.parent.result.store.addCFSwitchBranches(branches),
@@ -21238,7 +21301,7 @@ const ProcBodyBuilder = struct {
     fn lowerGeneratedFieldNamesBoundInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        field_index: u16,
+        field_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         if (self.arg_locals.items.len < 1) {
@@ -22026,7 +22089,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("stored tag node had a non-tag-union exact representation");
         }
         const names_store = store_module.canonical_names;
-        var variant: ?struct { plan: Plan.TagVariant, index: u16 } = null;
+        var variant: ?struct { plan: Plan.TagVariant, index: u32 } = null;
         for (self.parent.plan.tagVariantSlice(rep.tag_variants), 0..) |candidate, index| {
             if (std.mem.eql(u8, tag.tag_name, names_store.tagLabelText(candidate.name))) {
                 variant = .{ .plan = candidate, .index = @intCast(index) };
@@ -23914,7 +23977,7 @@ const ProcBodyBuilder = struct {
         base_layout: layout.Idx,
         desc_field_index: usize,
     ) Allocator.Error!layout.Idx {
-        if (desc_field_index > std.math.maxInt(u16)) {
+        if (desc_field_index > std.math.maxInt(u32)) {
             boxyLowerInvariant("boxy erased capture descriptor field index exceeded layout range");
         }
 
@@ -24346,7 +24409,7 @@ const ProcBodyBuilder = struct {
         defer seen_descs.deinit();
 
         for (arg_reps, arg_locals, 0..) |arg, source, arg_index| {
-            if (arg_index > std.math.maxInt(u16)) {
+            if (arg_index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("boxy erased-call argument index exceeded descriptor key range");
             }
             try self.bindLocalDescriptorEnvironment(source);
@@ -24375,7 +24438,7 @@ const ProcBodyBuilder = struct {
             defer overrides.deinit(self.parent.allocator);
 
             for (params.items, 0..) |param, param_index| {
-                if (param_index > std.math.maxInt(u16)) {
+                if (param_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased-call descriptor index exceeded key range");
                 }
                 const is_root = self.repOwnsShapeDescriptor(param.rep, param.desc) and
@@ -25517,13 +25580,16 @@ const ProcBodyBuilder = struct {
         local: LIR.LocalId,
         template: DescriptorMaterialization,
     ) Allocator.Error!void {
-        for (self.descriptor_local_templates.items) |*entry| {
-            if (entry.local != local) continue;
+        try self.descriptor_local_templates.ensureUnusedCapacity(self.parent.allocator, 1);
+        const position = try self.descriptor_local_template_positions.getOrPut(self.parent.allocator, local);
+        if (position.found_existing) {
+            const entry = &self.descriptor_local_templates.items[position.value_ptr.*];
             const existing = entry.template orelse return;
             if (!std.meta.eql(existing, template)) entry.template = null;
             return;
         }
-        try self.descriptor_local_templates.append(self.parent.allocator, .{
+        position.value_ptr.* = @intCast(self.descriptor_local_templates.items.len);
+        self.descriptor_local_templates.appendAssumeCapacity(.{
             .local = local,
             .template = template,
         });
@@ -25533,10 +25599,8 @@ const ProcBodyBuilder = struct {
         self: *const ProcBodyBuilder,
         local: LIR.LocalId,
     ) ?DescriptorMaterialization {
-        for (self.descriptor_local_templates.items) |entry| {
-            if (entry.local == local) return entry.template;
-        }
-        return null;
+        const position = self.descriptor_local_template_positions.get(local) orelse return null;
+        return self.descriptor_local_templates.items[position].template;
     }
 
     /// Whether two uses of one nominal declaration, along their backing
@@ -25854,7 +25918,7 @@ const ProcBodyBuilder = struct {
         /// The declared aggregate's fields in layout order; empty for a record.
         declared_fields: []Plan.DeclaredField = &.{},
         index: usize = 0,
-        target_field_index: u16 = 0,
+        target_field_index: u32 = 0,
         /// The nested descriptor slot waiting on its adapted descriptor.
         pending_nested_index: usize = 0,
 
@@ -27443,7 +27507,7 @@ const ProcBodyBuilder = struct {
         const fields = try self.parent.allocator.alloc(layout.StructField, args.len);
         defer self.parent.allocator.free(fields);
         for (payloads, fields, 0..) |payload, *field, index| {
-            if (index > std.math.maxInt(u16)) {
+            if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("dynamic tag payload index exceeded layout struct field range");
             }
             field.* = .{
@@ -27475,7 +27539,7 @@ const ProcBodyBuilder = struct {
         const fields = try self.parent.allocator.alloc(layout.StructField, payloads.len);
         defer self.parent.allocator.free(fields);
         for (payloads, fields, 0..) |payload, *field, index| {
-            if (index > std.math.maxInt(u16)) {
+            if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("dynamic tag payload index exceeded layout struct field range");
             }
             field.* = .{
@@ -27784,7 +27848,7 @@ const ProcBodyBuilder = struct {
             err_body,
         );
 
-        const discriminant = try self.addFrameLocal(.u16);
+        const discriminant = try self.addFrameLocal(.u32);
         const branches = [_]LIR.CFSwitchBranch{.{
             .value = present.index,
             .body = present_body,
@@ -27959,7 +28023,7 @@ const ProcBodyBuilder = struct {
         target: LIR.LocalId,
         source: LIR.LocalId,
         record_rep: Plan.TypeRepId,
-        field_idx: u16,
+        field_idx: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         if (!self.payloadFieldCarriesRuntimeDesc(record_rep, field_idx)) return next;
@@ -27983,7 +28047,7 @@ const ProcBodyBuilder = struct {
         target: LIR.LocalId,
         source: LIR.LocalId,
         source_rep: Plan.TypeRepId,
-        elem_index: u16,
+        elem_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         if (self.isZstLocal(target)) return try self.assignZst(target, next);
@@ -28240,7 +28304,7 @@ const ProcBodyBuilder = struct {
         }
         for (self.parent.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
             if (!std.mem.eql(u8, self.tagVariantNameText(variant), text)) continue;
-            if (index > std.math.maxInt(u16)) {
+            if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("compiler-generated optional slot variant index exceeded LIR range");
             }
             return .{
@@ -28376,7 +28440,7 @@ const ProcBodyBuilder = struct {
     const TagPayloadPatterns = struct {
         source_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: ?u16,
+        variant_index: ?u32,
         args: []const checked.CheckedPatternId,
         source: LIR.LocalId,
         source_tag_rep: Plan.TypeRepId,
@@ -28418,14 +28482,14 @@ const ProcBodyBuilder = struct {
             },
         },
         /// Test a concrete tag's discriminant unless the union has one variant.
-        tag_discriminant: struct { source: LIR.LocalId, variant_index: u16, single_variant: bool, context: PatternContext },
+        tag_discriminant: struct { source: LIR.LocalId, variant_index: u32, single_variant: bool, context: PatternContext },
         /// Test a dynamic tag's name unless the contextual union has one
         /// closed variant.
         dynamic_tag_match: struct { source: LIR.LocalId, source_rep: Plan.TypeRepId, name: names.TagNameId, cannot_miss: bool, context: PatternContext },
         match_binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId, remaps: []const checked.CheckedAlternativeBinderRemap },
         assign_binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId },
-        tuple_field: struct { tuple_ty: checked.CheckedTypeId, pattern: checked.CheckedPatternId, source: LIR.LocalId, field_index: u16, mode: PatternMode },
-        tuple_read: struct { field_local: LIR.LocalId, source: LIR.LocalId, tuple_rep: Plan.TypeRepId, field_index: u16 },
+        tuple_field: struct { tuple_ty: checked.CheckedTypeId, pattern: checked.CheckedPatternId, source: LIR.LocalId, field_index: u32, mode: PatternMode },
+        tuple_read: struct { field_local: LIR.LocalId, source: LIR.LocalId, tuple_rep: Plan.TypeRepId, field_index: u32 },
         record_field: struct { pattern: checked.CheckedPatternId, field_read: RecordFieldReadSource, access: RecordFieldAccessInfo, mode: PatternMode },
         record_read: struct { field_local: LIR.LocalId, field_rep: Plan.TypeRepId, field_read: RecordFieldReadSource, access: RecordFieldAccessInfo },
         record_rest: struct { pattern: checked.CheckedPatternId, field_read: RecordFieldReadSource, record_ty: checked.CheckedTypeId, mode: PatternMode },
@@ -28530,7 +28594,7 @@ const ProcBodyBuilder = struct {
             .tag_payload_next => |item| {
                 if (item.index == 0) return null;
                 const index = item.index - 1;
-                if (index > std.math.maxInt(u16)) {
+                if (index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("tag match pattern payload index exceeded LIR payload index range");
                 }
                 const payloads = item.payloads;
@@ -28915,7 +28979,7 @@ const ProcBodyBuilder = struct {
         try self.pushPatternScope(state, scope, null);
         // Fields bind last first.
         for (items, 0..) |item, index| {
-            if (index > std.math.maxInt(u16)) {
+            if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("tuple pattern index exceeded LIR field index range");
             }
             try state.actions.append(self.parent.allocator, .{ .tuple_field = .{ .tuple_ty = tuple_ty, .pattern = item, .source = source, .field_index = @intCast(index), .mode = mode } });
@@ -29184,7 +29248,7 @@ const ProcBodyBuilder = struct {
         pattern_tag_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: ?u16,
+        variant_index: ?u32,
         args: []const checked.CheckedPatternId,
         source: LIR.LocalId,
         context: PatternContext,
@@ -29505,7 +29569,7 @@ const ProcBodyBuilder = struct {
     fn lowerTagDiscriminantSwitch(
         self: *ProcBodyBuilder,
         source: LIR.LocalId,
-        variant_index: u16,
+        variant_index: u32,
         on_match: LIR.CFStmtId,
         miss: ?PatternMiss,
     ) Allocator.Error!LIR.CFStmtId {
@@ -29516,7 +29580,7 @@ const ProcBodyBuilder = struct {
             return on_match;
         }
 
-        const discriminant = try self.addFrameLocal(.u16);
+        const discriminant = try self.addFrameLocal(.u32);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = variant_index, .body = on_match }};
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
@@ -29784,8 +29848,8 @@ const ProcBodyBuilder = struct {
     const ReassignAction = union(enum) {
         pattern: struct { pattern_id: checked.CheckedPatternId, source: LIR.LocalId },
         binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId },
-        tuple_field: struct { tuple_ty: checked.CheckedTypeId, pattern_id: checked.CheckedPatternId, source: LIR.LocalId, field_index: u16 },
-        tuple_read: struct { field_local: LIR.LocalId, source: LIR.LocalId, tuple_rep: Plan.TypeRepId, field_index: u16 },
+        tuple_field: struct { tuple_ty: checked.CheckedTypeId, pattern_id: checked.CheckedPatternId, source: LIR.LocalId, field_index: u32 },
+        tuple_read: struct { field_local: LIR.LocalId, source: LIR.LocalId, tuple_rep: Plan.TypeRepId, field_index: u32 },
         record_field: struct { pattern_id: checked.CheckedPatternId, field_read: RecordFieldReadSource, access: RecordFieldAccessInfo },
         record_read: struct { field_local: LIR.LocalId, field_rep: Plan.TypeRepId, field_read: RecordFieldReadSource, access: RecordFieldAccessInfo },
         record_rest: struct { pattern_id: checked.CheckedPatternId, field_read: RecordFieldReadSource, record_ty: checked.CheckedTypeId },
@@ -29837,7 +29901,7 @@ const ProcBodyBuilder = struct {
                             return err;
                         };
                         for (items, 0..) |tuple_item, index| {
-                            if (index > std.math.maxInt(u16)) {
+                            if (index > std.math.maxInt(u32)) {
                                 boxyLowerInvariant("tuple reassign pattern index exceeded LIR field index range");
                             }
                             try actions.append(allocator, .{ .tuple_field = .{ .tuple_ty = pattern.ty, .pattern_id = tuple_item, .source = source, .field_index = @intCast(index) } });
@@ -30123,7 +30187,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         step: IteratorStepShape,
         step_local: LIR.LocalId,
-        variant_index: ?u16,
+        variant_index: ?u32,
         iterator_param: LIR.LocalId,
         join_id: LIR.JoinPointId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -30146,7 +30210,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: ?u16,
+        variant_index: ?u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse
@@ -33454,10 +33518,21 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(visit);
         @memset(visit, .pending);
 
+        // Each materialized descriptor local's first argument position, so
+        // dependencies resolve in constant time.
+        var positions: std.AutoHashMapUnmanaged(LIR.LocalId, usize) = .empty;
+        defer positions.deinit(self.parent.allocator);
+        try positions.ensureTotalCapacity(self.parent.allocator, @intCast(hidden_args.len));
+        for (hidden_args, 0..) |hidden, index| {
+            if (hidden.materialize == null) continue;
+            const entry = positions.getOrPutAssumeCapacity(hidden.local);
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+
         var order = std.ArrayList(usize).empty;
         defer order.deinit(self.parent.allocator);
         for (hidden_args, 0..) |_, index| {
-            try self.appendHiddenDescriptorMaterializationOrder(hidden_args, index, visit, &order);
+            try self.appendHiddenDescriptorMaterializationOrder(hidden_args, &positions, index, visit, &order);
         }
 
         var continuation = next;
@@ -33570,6 +33645,7 @@ const ProcBodyBuilder = struct {
     fn appendHiddenDescriptorMaterializationOrder(
         self: *ProcBodyBuilder,
         hidden_args: []const DescriptorArgLocal,
+        positions: *const std.AutoHashMapUnmanaged(LIR.LocalId, usize),
         root: usize,
         visit: []DescriptorMaterializationVisit,
         order: *std.ArrayList(usize),
@@ -33620,19 +33696,8 @@ const ProcBodyBuilder = struct {
                 (if (stage < 2 and local == hidden.local) null else local)
             else
                 null;
-            if (dependency_local) |local| request = self.hiddenDescriptorMaterializationIndexForLocal(hidden_args, local);
+            if (dependency_local) |local| request = positions.get(local);
         }
-    }
-
-    fn hiddenDescriptorMaterializationIndexForLocal(
-        _: *ProcBodyBuilder,
-        hidden_args: []const DescriptorArgLocal,
-        local: LIR.LocalId,
-    ) ?usize {
-        for (hidden_args, 0..) |hidden, index| {
-            if (hidden.local == local and hidden.materialize != null) return index;
-        }
-        return null;
     }
 
     fn prependHiddenDictionaryArgMaterialization(
@@ -33746,8 +33811,8 @@ const ProcBodyBuilder = struct {
             presence: struct {
                 request: InspectRequest,
                 done: LIR.JoinPointId,
-                present_discriminant: u16,
-                missing_discriminant: u16,
+                present_discriminant: u32,
+                missing_discriminant: u32,
                 value: LIR.LocalId,
             },
             box: struct {
@@ -34007,7 +34072,7 @@ const ProcBodyBuilder = struct {
         defer parts.deinit(self.parent.allocator);
         try parts.append(self.parent.allocator, .{ .literal = "{ " });
 
-        var field_index: u16 = 0;
+        var field_index: u32 = 0;
         for (children) |child| {
             switch (child.role) {
                 .record_field => |label| {
@@ -34041,7 +34106,7 @@ const ProcBodyBuilder = struct {
             switch (child.role) {
                 .tuple_elem => |index| {
                     if (ordinal != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-                    if (index > std.math.maxInt(u16)) {
+                    if (index > std.math.maxInt(u32)) {
                         boxyLowerInvariant("tuple inspect element index exceeded LIR field index range");
                     }
                     try parts.append(self.parent.allocator, .{ .field = .{
@@ -34064,7 +34129,7 @@ const ProcBodyBuilder = struct {
         target: LIR.LocalId,
         source: LIR.LocalId,
         variant: Plan.TagVariant,
-        variant_index: u16,
+        variant_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!union(enum) { done: LIR.CFStmtId, parts: InspectPartsState } {
         const payloads = self.parent.plan.childSlice(variant.payloads);
@@ -34086,13 +34151,13 @@ const ProcBodyBuilder = struct {
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag inspect variant payload span included a non-payload child"),
             }
             if (index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-            if (index > std.math.maxInt(u16)) {
+            if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("tag inspect payload index exceeded LIR payload index range");
             }
             try parts.append(self.parent.allocator, .{ .tag_payload = .{
                 .source = source,
                 .variant_index = variant_index,
-                .payload_index = if (payloads.len == 1) null else @as(u16, @intCast(index)),
+                .payload_index = if (payloads.len == 1) null else @as(u32, @intCast(index)),
                 .rep = child.rep,
             } });
         }
@@ -34115,7 +34180,7 @@ const ProcBodyBuilder = struct {
             };
         }
 
-        const discriminant = try self.addFrameLocal(.u16);
+        const discriminant = try self.addFrameLocal(.u32);
         const done = self.freshJoinPointId();
         const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
         return try self.pushInspectFrame(frames, .{ .tag = .{
@@ -34147,7 +34212,7 @@ const ProcBodyBuilder = struct {
             .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("presence-slot inspect Present arm had a non-payload child"),
         }
 
-        const missing_discriminant: u16 = if (present_discriminant == 0) 1 else 0;
+        const missing_discriminant: u32 = if (present_discriminant == 0) 1 else 0;
         if (variants[missing_discriminant].payloads.len != 0) {
             boxyLowerInvariant("presence-slot inspect Missing arm carried a payload");
         }
@@ -34259,7 +34324,7 @@ const ProcBodyBuilder = struct {
                     }
                     delivered_part = null;
                     if (tag.index == variants.len) break;
-                    if (tag.index > std.math.maxInt(u16)) {
+                    if (tag.index > std.math.maxInt(u32)) {
                         boxyLowerInvariant("tag inspect variant index exceeded LIR variant range");
                     }
                     switch (try self.beginTagInspectVariant(request.target, request.source, variants[tag.index], @intCast(tag.index), try self.joinJump(tag.done))) {
@@ -34303,7 +34368,7 @@ const ProcBodyBuilder = struct {
                     .{ .value = presence.missing_discriminant, .body = missing_body },
                     .{ .value = presence.present_discriminant, .body = present_body },
                 };
-                const discriminant = try self.addFrameLocal(.u16);
+                const discriminant = try self.addFrameLocal(.u32);
                 const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
                     .cond = discriminant,
                     .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
@@ -34467,7 +34532,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const false_body = try self.assignStringBytesLiteral(target, "False", next);
         const true_body = try self.assignStringBytesLiteral(target, "True", next);
-        const discriminant = try self.addFrameLocal(.u16);
+        const discriminant = try self.addFrameLocal(.u32);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
@@ -34589,8 +34654,8 @@ const ProcBodyBuilder = struct {
                 current: LIR.CFStmtId,
                 failed: LIR.CFStmtId,
                 remaining: usize,
-                field_index: u16,
-                pending: struct { lhs_field: LIR.LocalId, rhs_field: LIR.LocalId, field_index: u16 } = undefined,
+                field_index: u32,
+                pending: struct { lhs_field: LIR.LocalId, rhs_field: LIR.LocalId, field_index: u32 } = undefined,
             },
             tag: *EqTagState,
         },
@@ -34750,8 +34815,8 @@ const ProcBodyBuilder = struct {
                     const done = self.freshJoinPointId();
                     const success = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
                     const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-                    const lhs_disc = try self.addFrameLocal(.u16);
-                    const rhs_disc = try self.addFrameLocal(.u16);
+                    const lhs_disc = try self.addFrameLocal(.u32);
+                    const rhs_disc = try self.addFrameLocal(.u32);
                     const same_disc = try self.addFrameLocal(.bool);
                     const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
                     const state = try self.parent.allocator.create(EqTagState);
@@ -34863,7 +34928,7 @@ const ProcBodyBuilder = struct {
                 while (fields.remaining > 0) {
                     fields.remaining -= 1;
                     const field = children[fields.remaining];
-                    const field_index: u16 = switch (fields.kind) {
+                    const field_index: u32 = switch (fields.kind) {
                         .record => switch (field.role) {
                             .record_field => field_index: {
                                 fields.field_index -= 1;
@@ -34877,7 +34942,7 @@ const ProcBodyBuilder = struct {
                         },
                         .tuple => switch (field.role) {
                             .tuple_elem => |index| field_index: {
-                                if (index > std.math.maxInt(u16)) {
+                                if (index > std.math.maxInt(u32)) {
                                     boxyLowerInvariant("tuple equality element index exceeded LIR field index range");
                                 }
                                 break :field_index @intCast(index);
@@ -34916,7 +34981,7 @@ const ProcBodyBuilder = struct {
             const variant = variants[state.variant];
             const payloads = self.parent.plan.childSlice(variant.payloads);
             if (!state.started) {
-                if (state.variant > std.math.maxInt(u16)) {
+                if (state.variant > std.math.maxInt(u32)) {
                     boxyLowerInvariant("tag-union equality variant index exceeded LIR variant range");
                 }
                 state.started = true;
@@ -34963,7 +35028,7 @@ const ProcBodyBuilder = struct {
         const variant = self.parent.plan.tagVariantSlice(rep.tag_variants)[state.variant];
         const payloads = self.parent.plan.childSlice(variant.payloads);
         const pending = state.pending;
-        if (pending.index > std.math.maxInt(u16)) {
+        if (pending.index > std.math.maxInt(u32)) {
             boxyLowerInvariant("tag equality payload index exceeded LIR payload index range");
         }
         var current = try self.assignConcreteTagPayloadRead(
@@ -35284,8 +35349,8 @@ const ProcBodyBuilder = struct {
         negated: bool,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const lhs_disc = try self.addFrameLocal(.u16);
-        const rhs_disc = try self.addFrameLocal(.u16);
+        const lhs_disc = try self.addFrameLocal(.u32);
+        const rhs_disc = try self.addFrameLocal(.u32);
         const compare = try self.lowerScalarEqLocalsInto(target, lhs_disc, rhs_disc, .num_is_eq, negated, next);
         const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = rhs_disc,
@@ -35530,7 +35595,7 @@ const ProcBodyBuilder = struct {
 
     const HashComponent = struct {
         rep: Plan.TypeRepId,
-        field_index: u16,
+        field_index: u32,
     };
 
     /// One tag variant's hash: its discriminant, then its payloads last
@@ -35538,7 +35603,7 @@ const ProcBodyBuilder = struct {
     const HashVariantState = struct {
         request: HashRequest,
         variant: Plan.TagVariant,
-        variant_index: u16,
+        variant_index: u32,
         after_discriminant: LIR.LocalId,
         intermediate_hashers: []LIR.LocalId = &.{},
         source_has_payload_desc: bool = false,
@@ -35730,7 +35795,7 @@ const ProcBodyBuilder = struct {
                     if (variants.len == 1 and self.isZstLocal(value)) {
                         return try self.pushHashFrame(frames, .{ .variant = try self.beginHashVariant(request, variants[0], 0) });
                     }
-                    const discriminant = try self.addFrameLocal(.u16);
+                    const discriminant = try self.addFrameLocal(.u32);
                     const done = self.freshJoinPointId();
                     const branches = try allocator.alloc(LIR.CFSwitchBranch, variants.len);
                     return try self.pushHashFrame(frames, .{ .tag = .{
@@ -35758,7 +35823,7 @@ const ProcBodyBuilder = struct {
 
     fn recordHashComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]HashComponent {
         const components = try self.parent.allocator.alloc(HashComponent, recordEqualityFieldCount(children));
-        var field_index: u16 = 0;
+        var field_index: u32 = 0;
         for (children) |child| {
             switch (child.role) {
                 .record_field => {
@@ -35780,7 +35845,7 @@ const ProcBodyBuilder = struct {
         for (children, components) |child, *component| {
             switch (child.role) {
                 .tuple_elem => |index| {
-                    if (index > std.math.maxInt(u16)) {
+                    if (index > std.math.maxInt(u32)) {
                         boxyLowerInvariant("tuple hash element index exceeded LIR field index range");
                     }
                     component.* = .{
@@ -35890,7 +35955,7 @@ const ProcBodyBuilder = struct {
                         tag.index += 1;
                     }
                     if (tag.index == variants.len) break;
-                    if (tag.index > std.math.maxInt(u16)) {
+                    if (tag.index > std.math.maxInt(u32)) {
                         boxyLowerInvariant("tag-union hash variant index exceeded LIR variant range");
                     }
                     tag.variant = try self.beginHashVariant(.{
@@ -35919,7 +35984,7 @@ const ProcBodyBuilder = struct {
     }
 
     /// Begin one tag variant's hash, which `request.next` follows.
-    fn beginHashVariant(self: *ProcBodyBuilder, request: HashRequest, variant: Plan.TagVariant, variant_index: u16) Allocator.Error!HashVariantState {
+    fn beginHashVariant(self: *ProcBodyBuilder, request: HashRequest, variant: Plan.TagVariant, variant_index: u32) Allocator.Error!HashVariantState {
         const payloads = self.parent.plan.childSlice(variant.payloads);
         const hasher_layout = self.parent.result.store.getLocal(request.hasher).layout_idx;
         const after_discriminant = if (payloads.len == 0) request.target else try self.addFrameLocal(hasher_layout);
@@ -35968,7 +36033,7 @@ const ProcBodyBuilder = struct {
         const payloads = self.parent.plan.childSlice(state.variant.payloads);
         const i = state.remaining;
         const payload = payloads[i];
-        if (i > std.math.maxInt(u16)) {
+        if (i > std.math.maxInt(u32)) {
             boxyLowerInvariant("tag hash payload index exceeded LIR payload index range");
         }
         state.current = try self.assignConcreteTagPayloadRead(
@@ -36651,7 +36716,7 @@ const ProcBodyBuilder = struct {
         value: bool,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const variant: u16 = if (value) 1 else 0;
+        const variant: u32 = if (value) 1 else 0;
         return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = variant,
@@ -37213,15 +37278,15 @@ const ProcBodyBuilder = struct {
             defer params.deinit(self.parent.allocator);
             try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
             for (params.items, 0..) |param, descriptor_index| {
-                if (arg_index > std.math.maxInt(u16)) {
+                if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy callable adapter argument descriptor key exceeded its index range");
                 }
-                if (descriptor_index > std.math.maxInt(u16)) {
+                if (descriptor_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy callable adapter argument descriptor index exceeded its key range");
                 }
                 const source = try self.erasedArgumentDescriptorParamSource(params.items, descriptor_index);
                 if (source.read != .call_key) continue;
-                var capture_index: ?u16 = null;
+                var capture_index: ?u32 = null;
                 for (descriptor_captures, 0..) |capture, index| {
                     if (capture.desc != param.desc) continue;
                     if (self.descriptorStorageRep(capture.rep) != self.descriptorStorageRep(param.rep) and
@@ -37309,7 +37374,7 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(fields);
         fields[0] = .{ .index = 0, .layout = source_closure_layout };
         for (fields[1..], 0..) |*field, index| {
-            if (index + 1 > std.math.maxInt(u16)) {
+            if (index + 1 > std.math.maxInt(u32)) {
                 boxyLowerInvariant("boxy callable adapter capture field index exceeded layout range");
             }
             field.* = .{
@@ -38139,7 +38204,7 @@ const ProcBodyBuilder = struct {
         source_fields: []LIR.LocalId = &.{},
         target_field_reps: []Plan.TypeRepId = &.{},
         source_field_reps: []Plan.TypeRepId = &.{},
-        source_field_indices: []u16 = &.{},
+        source_field_indices: []u32 = &.{},
         aggregate_desc: ConstructedAggregateDescriptor = .{},
         /// The field being converted; the fields after it are done.
         remaining: usize = 0,
@@ -38210,7 +38275,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_tag_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: u16,
+        variant_index: u32,
         /// The payload being converted; the payloads after it are done.
         remaining: usize,
         current: LIR.CFStmtId,
@@ -38902,7 +38967,7 @@ const ProcBodyBuilder = struct {
         state.source_fields = try allocator.alloc(LIR.LocalId, target_field_count);
         state.target_field_reps = try allocator.alloc(Plan.TypeRepId, target_field_count);
         state.source_field_reps = try allocator.alloc(Plan.TypeRepId, target_field_count);
-        state.source_field_indices = try allocator.alloc(u16, target_field_count);
+        state.source_field_indices = try allocator.alloc(u32, target_field_count);
 
         var field_index: usize = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
@@ -39238,15 +39303,15 @@ const ProcBodyBuilder = struct {
     fn beginConcreteTagVariantToConcrete(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), state: *TagUnionBoundaryState) Allocator.Error!BoundaryStep {
         const source_index = state.variant;
         const source_variant = state.source_variants[source_index];
-        if (source_index > std.math.maxInt(u16)) {
+        if (source_index > std.math.maxInt(u32)) {
             boxyLowerInvariant("boxy concrete-to-concrete tag adapter variant index exceeded LIR variant range");
         }
         state.branches[source_index].value = @intCast(source_index);
-        const target_match: ?struct { variant: Plan.TagVariant, index: u16 } = blk: {
+        const target_match: ?struct { variant: Plan.TagVariant, index: u32 } = blk: {
             const source_name = self.tagVariantNameText(source_variant);
             for (state.target_variants, 0..) |target_candidate, candidate_index| {
                 if (!std.mem.eql(u8, source_name, self.tagVariantNameText(target_candidate))) continue;
-                if (candidate_index > std.math.maxInt(u16)) {
+                if (candidate_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy concrete-to-concrete tag adapter target variant index exceeded LIR variant range");
                 }
                 break :blk .{ .variant = target_candidate, .index = @intCast(candidate_index) };
@@ -39442,12 +39507,12 @@ const ProcBodyBuilder = struct {
     /// Begin the current source variant's branch of a dynamic target.
     fn beginConcreteTagVariantToDynamic(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), state: *TagUnionBoundaryState) Allocator.Error!BoundaryStep {
         const variant_position = state.variant;
-        if (variant_position > std.math.maxInt(u16)) {
+        if (variant_position > std.math.maxInt(u32)) {
             boxyLowerInvariant("boxy concrete-to-dynamic tag adapter variant index exceeded LIR variant range");
         }
         state.branches[variant_position].value = @intCast(variant_position);
         const variant = state.source_variants[variant_position];
-        const variant_index: u16 = @intCast(variant_position);
+        const variant_index: u32 = @intCast(variant_position);
         const target = state.request.target;
         const target_rep = state.request.target_rep;
         const source = state.request.source;
@@ -39532,7 +39597,7 @@ const ProcBodyBuilder = struct {
             .concrete => state.unreachable_source_variant,
             .dynamic => try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin()),
         };
-        const discriminant = try self.addFrameLocal(.u16);
+        const discriminant = try self.addFrameLocal(.u32);
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(state.branches),
@@ -39785,7 +39850,7 @@ const ProcBodyBuilder = struct {
 
         for (target_variants, 0..) |target_variant, index| {
             if (!std.mem.eql(u8, source_name, self.tagVariantNameText(target_variant))) continue;
-            if (index > std.math.maxInt(u16)) {
+            if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("singleton tag widening target variant index exceeded LIR variant range");
             }
             if (self.parent.plan.childSlice(target_variant.payloads).len != 0) return null;
@@ -39859,7 +39924,7 @@ const ProcBodyBuilder = struct {
         }
 
         const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
-        const discriminant = try self.addFrameLocal(.u16);
+        const discriminant = try self.addFrameLocal(.u32);
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
@@ -40184,7 +40249,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_tag_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: u16,
+        variant_index: u32,
         payload_index: u32,
         payload_count: usize,
         next: LIR.CFStmtId,
@@ -40237,7 +40302,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
-        variant_index: u16,
+        variant_index: u32,
         payload_index: u32,
         payload_count: usize,
         after_read: LIR.CFStmtId,
@@ -42346,41 +42411,7 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn recordExprFieldIndex(
-        self: *const ProcBodyBuilder,
-        fields: []const checked.CheckedRecordExprField,
-        label_view: ProcedureModuleView,
-        label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
-    ) ?usize {
-        var found: ?usize = null;
-        for (fields, 0..) |field, index| {
-            if (!Plan.recordFieldNameMatches(viewNames(self.module), field.label, viewNames(label_view), label)) continue;
-            if (found != null) {
-                boxyLowerInvariant("record expression contained the same field label more than once");
-            }
-            found = index;
-        }
-        return found;
-    }
-
-    fn recordUnsetFieldIndex(
-        self: *const ProcBodyBuilder,
-        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
-        label_view: ProcedureModuleView,
-        label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
-    ) ?usize {
-        var found: ?usize = null;
-        for (unset_fields, 0..) |unset_label, index| {
-            if (!Plan.recordFieldNameMatches(viewNames(self.module), unset_label, viewNames(label_view), label)) continue;
-            if (found != null) {
-                boxyLowerInvariant("record expression contained the same unset field label more than once");
-            }
-            found = index;
-        }
-        return found;
-    }
-
-    fn recordEqualityFieldCount(children: []const Plan.RepChild) u16 {
+    fn recordEqualityFieldCount(children: []const Plan.RepChild) u32 {
         var count: usize = 0;
         for (children) |child| {
             switch (child.role) {
@@ -42389,7 +42420,7 @@ const ProcBodyBuilder = struct {
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record equality representation had a non-record child role"),
             }
         }
-        if (count > std.math.maxInt(u16)) {
+        if (count > std.math.maxInt(u32)) {
             boxyLowerInvariant("record equality field count exceeded LIR field index range");
         }
         return @intCast(count);
@@ -42397,13 +42428,13 @@ const ProcBodyBuilder = struct {
 
     const RecordFieldAccessInfo = struct {
         record_rep: Plan.TypeRepId,
-        field_idx: u16,
+        field_idx: u32,
         field_rep: Plan.TypeRepId,
         field_kind: checked.CheckedFieldKind.Tag,
     };
 
     const MatchedRecordField = struct {
-        index: u16,
+        index: u32,
         rep: Plan.TypeRepId,
     };
 
@@ -42446,7 +42477,7 @@ const ProcBodyBuilder = struct {
         target_label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
     ) ?MatchedRecordField {
         const rep = self.parent.plan.representations.items[@intFromEnum(record_rep_id)];
-        var index: u16 = 0;
+        var index: u32 = 0;
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |source_label| {
@@ -42515,7 +42546,7 @@ const ProcBodyBuilder = struct {
             }
         };
 
-        var index: u16 = 0;
+        var index: u32 = 0;
         const source_view = procedureModuleById(self.parent.modules, rep.source_type.module);
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
@@ -42542,7 +42573,7 @@ const ProcBodyBuilder = struct {
     fn recordFieldNestedDescriptorIndex(
         self: *const ProcBodyBuilder,
         record_rep_id: Plan.TypeRepId,
-        field_idx: u16,
+        field_idx: u32,
     ) u32 {
         const rep = self.parent.plan.representations.items[@intFromEnum(record_rep_id)];
         if (rep.declared_fields.len != 0) {
@@ -42552,7 +42583,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("record field descriptor lookup referenced a field outside declared field order");
         }
 
-        var index: u16 = 0;
+        var index: u32 = 0;
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => {
@@ -42610,7 +42641,7 @@ const ProcBodyBuilder = struct {
     }
 
     const TagVariantLookup = struct {
-        index: u16,
+        index: u32,
         name: names.TagNameId,
         name_module: checked.ModuleId,
         payloads: Plan.Span,
@@ -42656,7 +42687,7 @@ const ProcBodyBuilder = struct {
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         for (variants, 0..) |variant, index| {
             if (!self.tagVariantNameMatches(variant, requested_module, name)) continue;
-            if (index > std.math.maxInt(u16)) {
+            if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("tag variant index exceeded LIR variant range");
             }
             return .{
@@ -42719,14 +42750,14 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.insertBoxyName(module.canonical_names.tagLabelText(variant.name));
     }
 
-    fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u16 {
+    fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u32 {
         const tag_name = self.module.canonical_names.tagLabelText(name);
         if (std.mem.eql(u8, tag_name, "False")) return 0;
         if (std.mem.eql(u8, tag_name, "True")) return 1;
         boxyLowerInvariant("builtin Bool tag expression referenced a non-Bool tag");
     }
 
-    fn tagUnionPayloadLayout(self: *const ProcBodyBuilder, tag_union_layout_idx: layout.Idx, variant_index: u16) layout.Idx {
+    fn tagUnionPayloadLayout(self: *const ProcBodyBuilder, tag_union_layout_idx: layout.Idx, variant_index: u32) layout.Idx {
         const tag_union_layout = self.parent.result.layouts.getLayout(tag_union_layout_idx);
         return switch (tag_union_layout.tag) {
             .tag_union => blk: {
@@ -43610,7 +43641,7 @@ const ConstPlanBuilder = struct {
                 boxyLowerInvariant("Bool checked tag carried a payload");
             }
             const name_text = module.canonical_names.tagLabelText(tag.name);
-            const discriminant: u16 = if (std.mem.eql(u8, name_text, "False"))
+            const discriminant: u32 = if (std.mem.eql(u8, name_text, "False"))
                 0
             else if (std.mem.eql(u8, name_text, "True"))
                 1
@@ -45793,7 +45824,7 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = loop_join.id } }, out.lir_result.store.getCFStmt(loop_join.remainder));
 
     const cond = out.lir_result.store.getCFStmt(loop_join.body).assign_tag;
-    try std.testing.expectEqual(@as(u16, 0), cond.variant_index);
+    try std.testing.expectEqual(@as(u32, 0), cond.variant_index);
     const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
     try std.testing.expectEqual(cond.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
@@ -45924,7 +45955,7 @@ test "boxy lowerer emits checked break as the active loop exit" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const loop_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
     const cond = out.lir_result.store.getCFStmt(loop_join.body).assign_tag;
-    try std.testing.expectEqual(@as(u16, 1), cond.variant_index);
+    try std.testing.expectEqual(@as(u32, 1), cond.variant_index);
     const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
@@ -46053,8 +46084,8 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = GuardedList.at(join_params, 0) } }, out.lir_result.store.getCFStmt(join.body));
 
     const cond = out.lir_result.store.getCFStmt(join.remainder).assign_tag;
-    try std.testing.expectEqual(@as(u16, 1), cond.variant_index);
-    try std.testing.expectEqual(@as(u16, 1), cond.discriminant);
+    try std.testing.expectEqual(@as(u32, 1), cond.variant_index);
+    try std.testing.expectEqual(@as(u32, 1), cond.discriminant);
 
     const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
     try std.testing.expectEqual(cond.target, switch_stmt.cond);
@@ -46205,7 +46236,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
     const cond_tag = out.lir_result.store.getCFStmt(outer_join.remainder).assign_tag;
-    try std.testing.expectEqual(@as(u16, 1), cond_tag.variant_index);
+    try std.testing.expectEqual(@as(u32, 1), cond_tag.variant_index);
 
     const first_join = out.lir_result.store.getCFStmt(cond_tag.next).join;
     const first_disc = out.lir_result.store.getCFStmt(first_join.remainder).assign_ref;
@@ -46409,8 +46440,8 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     switch (payload_read.op) {
         .tag_payload_struct => |payload| {
             try std.testing.expectEqual(cond_tag.target, payload.source);
-            try std.testing.expectEqual(@as(u16, 0), payload.variant_index);
-            try std.testing.expectEqual(@as(u16, 0), payload.tag_discriminant);
+            try std.testing.expectEqual(@as(u32, 0), payload.variant_index);
+            try std.testing.expectEqual(@as(u32, 0), payload.tag_discriminant);
         },
         .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
@@ -46950,7 +46981,7 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     const outer_join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
     const payload_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
     const cond_tag = out.lir_result.store.getCFStmt(payload_literal.next).assign_tag;
-    try std.testing.expectEqual(@as(u16, 1), cond_tag.variant_index);
+    try std.testing.expectEqual(@as(u32, 1), cond_tag.variant_index);
 
     const first_alt_join = out.lir_result.store.getCFStmt(cond_tag.next).join;
     const second_alt_join = out.lir_result.store.getCFStmt(first_alt_join.body).join;
@@ -47489,8 +47520,8 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
-    try std.testing.expectEqual(@as(u16, 1), literal.variant_index);
-    try std.testing.expectEqual(@as(u16, 1), literal.discriminant);
+    try std.testing.expectEqual(@as(u32, 1), literal.variant_index);
+    try std.testing.expectEqual(@as(u32, 1), literal.discriminant);
 
     const not = out.lir_result.store.getCFStmt(literal.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .bool_not), not.op);
@@ -47596,7 +47627,7 @@ test "boxy lowerer emits short-circuit checked boolean and" {
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
-    try std.testing.expectEqual(@as(u16, 0), lhs.variant_index);
+    try std.testing.expectEqual(@as(u32, 0), lhs.variant_index);
 
     const switch_stmt = out.lir_result.store.getCFStmt(lhs.next).switch_stmt;
     try std.testing.expectEqual(lhs.target, switch_stmt.cond);
@@ -47605,11 +47636,11 @@ test "boxy lowerer emits short-circuit checked boolean and" {
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
     const true_branch = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_tag;
-    try std.testing.expectEqual(@as(u16, 1), true_branch.variant_index);
+    try std.testing.expectEqual(@as(u32, 1), true_branch.variant_index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = true_branch.target } }, out.lir_result.store.getCFStmt(true_branch.next));
 
     const false_branch = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_tag;
-    try std.testing.expectEqual(@as(u16, 0), false_branch.variant_index);
+    try std.testing.expectEqual(@as(u32, 0), false_branch.variant_index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = false_branch.target } }, out.lir_result.store.getCFStmt(false_branch.next));
 }
 
@@ -47863,10 +47894,10 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
 
     const read_lhs_field0 = out.lir_result.store.getCFStmt(result_join.remainder).assign_ref;
     try std.testing.expectEqual(lhs_tuple.target, read_lhs_field0.op.field.source);
-    try std.testing.expectEqual(@as(u16, 0), read_lhs_field0.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 0), read_lhs_field0.op.field.field_idx);
     const read_rhs_field0 = out.lir_result.store.getCFStmt(read_lhs_field0.next).assign_ref;
     try std.testing.expectEqual(rhs_tuple.target, read_rhs_field0.op.field.source);
-    try std.testing.expectEqual(@as(u16, 0), read_rhs_field0.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 0), read_rhs_field0.op.field.field_idx);
 
     const compare_field0 = out.lir_result.store.getCFStmt(read_rhs_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), compare_field0.op);
@@ -47877,13 +47908,13 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
     const failed = out.lir_result.store.getCFStmt(switch_field0.default_branch).assign_tag;
-    try std.testing.expectEqual(@as(u16, 0), failed.variant_index);
+    try std.testing.expectEqual(@as(u32, 0), failed.variant_index);
     try std.testing.expectEqual(result, failed.target);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = result_join.id } }, out.lir_result.store.getCFStmt(failed.next));
 
     const read_lhs_field1 = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_ref;
     try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.field.source);
-    try std.testing.expectEqual(@as(u16, 1), read_lhs_field1.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 1), read_lhs_field1.op.field.field_idx);
 }
 
 test "boxy lowerer emits primitive structural hash as hasher low-level" {
@@ -48102,7 +48133,7 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
 
     const read_field0 = out.lir_result.store.getCFStmt(seed.next).assign_ref;
     try std.testing.expectEqual(tuple.target, read_field0.op.field.source);
-    try std.testing.expectEqual(@as(u16, 0), read_field0.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 0), read_field0.op.field.field_idx);
     const hash_field0 = out.lir_result.store.getCFStmt(read_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field0.op);
     const first_args = out.lir_result.store.getLocalSpan(hash_field0.args);
@@ -48111,7 +48142,7 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
 
     const read_field1 = out.lir_result.store.getCFStmt(hash_field0.next).assign_ref;
     try std.testing.expectEqual(tuple.target, read_field1.op.field.source);
-    try std.testing.expectEqual(@as(u16, 1), read_field1.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 1), read_field1.op.field.field_idx);
     const hash_field1 = out.lir_result.store.getCFStmt(read_field1.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field1.op);
     const second_args = out.lir_result.store.getLocalSpan(hash_field1.args);
@@ -48589,7 +48620,7 @@ test "boxy lowerer emits checked expect expressions before unit result" {
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const cond = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
-    try std.testing.expectEqual(@as(u16, 1), cond.variant_index);
+    try std.testing.expectEqual(@as(u32, 1), cond.variant_index);
     const expect = out.lir_result.store.getCFStmt(cond.next).expect;
     try std.testing.expectEqual(cond.target, expect.condition);
     const unit = out.lir_result.store.getCFStmt(expect.next).assign_struct;
@@ -49388,10 +49419,10 @@ test "boxy lowerer destructures tuple declaration patterns" {
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(tuple.target, read_first.op.field.source);
-    try std.testing.expectEqual(@as(u16, 0), read_first.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 0), read_first.op.field.field_idx);
     try std.testing.expectEqual(read_first.target, bind_first.op.local);
     try std.testing.expectEqual(tuple.target, read_second.op.field.source);
-    try std.testing.expectEqual(@as(u16, 1), read_second.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 1), read_second.op.field.field_idx);
     try std.testing.expectEqual(read_second.target, bind_second.op.local);
     try std.testing.expectEqual(bind_second.target, final_copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
@@ -49590,12 +49621,12 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(source_record.target, read_rest_field.op.field.source);
-    try std.testing.expectEqual(@as(u16, 1), read_rest_field.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 1), read_rest_field.op.field.field_idx);
     try std.testing.expectEqual(read_rest_field.target, GuardedList.at(out.lir_result.store.getLocalSpan(rest_record.fields), 0));
     try std.testing.expectEqual(rest_record.target, bind_rest.op.local);
     try std.testing.expectEqual(bind_rest.target, final_receiver.op.local);
     try std.testing.expectEqual(final_receiver.target, final_read.op.field.source);
-    try std.testing.expectEqual(@as(u16, 0), final_read.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 0), final_read.op.field.field_idx);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_read.target } }, out.lir_result.store.getCFStmt(final_read.next));
 }
 
@@ -49975,7 +50006,7 @@ test "boxy lowerer emits tuple access as field_read" {
     switch (read.op) {
         .field => |field| {
             try std.testing.expectEqual(build.target, field.source);
-            try std.testing.expectEqual(@as(u16, 1), field.field_idx);
+            try std.testing.expectEqual(@as(u32, 1), field.field_idx);
         },
         .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
@@ -50355,7 +50386,7 @@ test "boxy lowerer emits record field access using layout field index" {
     switch (read.op) {
         .field => |field| {
             try std.testing.expectEqual(build.target, field.source);
-            try std.testing.expectEqual(@as(u16, 1), field.field_idx);
+            try std.testing.expectEqual(@as(u32, 1), field.field_idx);
         },
         .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
@@ -50493,7 +50524,7 @@ fn expectDeclaredNominalRecordBoundary(
 ) error{ TestExpectedEqual, TestUnexpectedResult }!DeclaredNominalBoundary {
     var cursor = start;
     var field_locals: [2]LIR.LocalId = undefined;
-    var idx: u16 = 0;
+    var idx: u32 = 0;
     while (idx < 2) : (idx += 1) {
         const read = store.getCFStmt(cursor).assign_ref;
         try std.testing.expectEqual(source, read.op.field.source);
@@ -50746,7 +50777,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     const final_copy = out.lir_result.store.getCFStmt(bind_field.next).assign_ref;
 
     try std.testing.expectEqual(destruct_backing.target, read_field.op.field.source);
-    try std.testing.expectEqual(@as(u16, 0), read_field.op.field.field_idx);
+    try std.testing.expectEqual(@as(u32, 0), read_field.op.field.field_idx);
     try std.testing.expectEqual(read_field.target, bind_field.op.local);
     try std.testing.expectEqual(bind_field.target, final_copy.op.local);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
@@ -50916,7 +50947,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     const destruct_backing = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, construct_nominal.next, construct_nominal.target);
 
     var cursor = destruct_backing.next;
-    var reads: [2]u16 = undefined;
+    var reads: [2]u32 = undefined;
     var read_count: usize = 0;
     var guard: usize = 0;
     while (guard < 100) : (guard += 1) {
@@ -50937,8 +50968,8 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
             .assign_low_level => |assign| cursor = assign.next,
             .debug => |debug| {
                 try std.testing.expectEqual(@as(usize, 2), read_count);
-                try std.testing.expectEqual(@as(u16, 0), reads[0]);
-                try std.testing.expectEqual(@as(u16, 1), reads[1]);
+                try std.testing.expectEqual(@as(u32, 0), reads[0]);
+                try std.testing.expectEqual(@as(u32, 1), reads[1]);
                 try std.testing.expect(debug.message != construct_nominal.target);
                 break;
             },
@@ -51124,7 +51155,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     const destruct_backing = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, seed.next, construct_nominal.target);
 
     var cursor = destruct_backing.next;
-    var reads: [2]u16 = undefined;
+    var reads: [2]u32 = undefined;
     var read_count: usize = 0;
     var guard: usize = 0;
     while (guard < 32) : (guard += 1) {
@@ -51144,8 +51175,8 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
             .assign_low_level => |assign| cursor = assign.next,
             .ret => |ret| {
                 try std.testing.expectEqual(@as(usize, 2), read_count);
-                try std.testing.expectEqual(@as(u16, 0), reads[0]);
-                try std.testing.expectEqual(@as(u16, 1), reads[1]);
+                try std.testing.expectEqual(@as(u32, 0), reads[0]);
+                try std.testing.expectEqual(@as(u32, 1), reads[1]);
                 try std.testing.expect(ret.value != seed.target);
                 break;
             },
@@ -51230,8 +51261,8 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const tag = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_tag;
-    try std.testing.expectEqual(@as(u16, 1), tag.variant_index);
-    try std.testing.expectEqual(@as(u16, 1), tag.discriminant);
+    try std.testing.expectEqual(@as(u32, 1), tag.variant_index);
+    try std.testing.expectEqual(@as(u32, 1), tag.discriminant);
     try std.testing.expect(tag.payload == null);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = tag.target } }, out.lir_result.store.getCFStmt(tag.next));
 }
@@ -51349,8 +51380,8 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 0));
     try std.testing.expectEqual(second.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 1));
-    try std.testing.expectEqual(@as(u16, 0), tag.variant_index);
-    try std.testing.expectEqual(@as(u16, 0), tag.discriminant);
+    try std.testing.expectEqual(@as(u32, 0), tag.variant_index);
+    try std.testing.expectEqual(@as(u32, 0), tag.discriminant);
     try std.testing.expectEqual(payload.target, tag.payload.?);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = tag.target } }, out.lir_result.store.getCFStmt(tag.next));
 }
@@ -52877,11 +52908,11 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
             try std.testing.expectEqual(@as(usize, 2), variants.len);
             try std.testing.expectEqualStrings("A", variants[0].name);
             try std.testing.expectEqual(tag_a, variants[0].checked_name);
-            try std.testing.expectEqual(@as(u16, 0), variants[0].discriminant);
+            try std.testing.expectEqual(@as(u32, 0), variants[0].discriminant);
             try std.testing.expectEqual(@as(usize, 0), variants[0].payloads.len);
             try std.testing.expectEqualStrings("B", variants[1].name);
             try std.testing.expectEqual(tag_b, variants[1].checked_name);
-            try std.testing.expectEqual(@as(u16, 1), variants[1].discriminant);
+            try std.testing.expectEqual(@as(u32, 1), variants[1].discriminant);
             try std.testing.expectEqual(@as(usize, 1), variants[1].payloads.len);
         },
         .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxy_box, .tuple, .record, .named, .fn_value, .erased_fn => return error.TestUnexpectedResult,

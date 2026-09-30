@@ -327,7 +327,7 @@ const Pass = struct {
 
         /// Symbolic value of a local inside a linear helper body.
         const Abstract = union(enum) {
-            arg: u16,
+            arg: u32,
             literal: u64,
             /// `list_reserve(arg0, arg1)`: the spare is forwarded.
             reserve_forward,

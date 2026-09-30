@@ -96,12 +96,12 @@ pub const Step = union(enum) {
     /// The scrutinee itself.
     root,
     /// Record field or tuple item by committed index.
-    field: u16,
+    field: u32,
     /// Tag payload `index` of `variant`; `single` payloads extract through
     /// `tag_payload_struct` rather than `tag_payload`.
-    tag_payload: struct { variant: u16, index: u16, single: bool },
+    tag_payload: struct { variant: u32, index: u32, single: bool },
     /// Callable payload of `variant` (Lambda Mono only).
-    callable_payload: struct { variant: u16 },
+    callable_payload: struct { variant: u32 },
     /// List element at a fixed index from the front.
     list_elem_front: u32,
     /// List element at `n` from the back (index `len - n` at runtime).
@@ -112,7 +112,7 @@ pub const Step = union(enum) {
     /// The backing value of a nominal pattern (PR 9849 boundary rules).
     nominal_backing,
     /// Capture `index` of a string-set arm with the given shape key.
-    str_capture: struct { shape: u32, index: u16 },
+    str_capture: struct { shape: u32, index: u32 },
 };
 
 /// Interned occurrence id; `root` is always index 0.
@@ -134,16 +134,16 @@ pub const OccId = enum(u32) {
 /// patKind(pat) PatKind
 /// bindLocal(pat) LocalId                                  // .bind
 /// asInfo(pat) struct { pattern: PatId, local: LocalId }   // .as_pattern
-/// recordDestructCount(pat) u16
+/// recordDestructCount(pat) u32
 /// recordDestruct(pat, ty, i) LowerError!SubPat            // committed field index
-/// tupleItemCount(pat) u16
+/// tupleItemCount(pat) u32
 /// tupleItem(pat, ty, i) LowerError!SubPat
 /// nominalInner(pat, ty) LowerError!SubPat                 // backing pattern + type
-/// tagVariant(pat, ty) u16
-/// tagPayloadCount(pat) u16
+/// tagVariant(pat, ty) u32
+/// tagPayloadCount(pat) u32
 /// tagPayload(pat, ty, i) LowerError!SubPat
 /// tagVariantCount(ty) ?u32                                // null: unknown, never exhaustive
-/// callableVariant(pat, ty) u16                            // Lambda Mono only
+/// callableVariant(pat, ty) u32                            // Lambda Mono only
 /// callablePayload(pat, ty) LowerError!?SubPat
 /// callableVariantCount(ty) ?u32
 /// listView(pat) ListPatView
@@ -154,11 +154,11 @@ pub const OccId = enum(u32) {
 /// const LowerError               // error set including OutOfMemory
 /// intSwitchValue(pat, ty) ?u64 // null: integer literal must use eq_chain
 /// strLitIsSetArm() bool        // whether str_lit unifies with str_pattern arms
-/// strCaptureCount(pat) u16     // .str_pattern capture steps
+/// strCaptureCount(pat) u32     // .str_pattern capture steps
 /// strCapturePat(pat, i) ?PatId
 /// ```
 ///
-/// where `SubPat = struct { index: u16, ty: TypeId, pat: PatId }` (field
+/// where `SubPat = struct { index: u32, ty: TypeId, pat: PatId }` (field
 /// names, not the concrete type, are what matters).
 pub fn Compiler(comptime Ctx: type) type {
     return struct {
@@ -367,7 +367,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     pattern: struct { occ: OccId, ty: TypeId, pat: PatId },
                     /// The next field of a record or tuple pattern, whose
                     /// occurrence is interned when it is reached.
-                    field: struct { occ: OccId, ty: TypeId, pat: PatId, index: u16 },
+                    field: struct { occ: OccId, ty: TypeId, pat: PatId, index: u32 },
                 };
                 var pending: std.ArrayList(Pending) = .empty;
                 try pending.append(self.arena, .{ .pattern = .{ .occ = occ, .ty = ty, .pat = pat } });
@@ -530,7 +530,7 @@ pub fn Compiler(comptime Ctx: type) type {
                         const variant = self.ctx.tagVariant(col.pat, col.ty);
                         const count = self.ctx.tagPayloadCount(col.pat);
                         const single = count == 1;
-                        var i: u16 = 0;
+                        var i: u32 = 0;
                         while (i < count) : (i += 1) {
                             const sub = try self.ctx.tagPayload(col.pat, col.ty, i);
                             const child = try self.intern(col.occ, .{ .tag_payload = .{
@@ -574,7 +574,7 @@ pub fn Compiler(comptime Ctx: type) type {
 
                 if (self.ctx.patKind(col.pat) == .str_pattern) {
                     const count = self.ctx.strCaptureCount(col.pat);
-                    var i: u16 = 0;
+                    var i: u32 = 0;
                     while (i < count) : (i += 1) {
                         if (self.ctx.strCapturePat(col.pat, i)) |capture| {
                             const child = try self.intern(col.occ, .{ .str_capture = .{ .shape = shape, .index = i } }, col.ty);
@@ -1076,7 +1076,7 @@ pub fn Compiler(comptime Ctx: type) type {
         /// addExitJoin(id, body, remainder) CFStmtId      // empty params
         /// failTerminal() CFStmtId                        // per checker verdict
         /// lirLocalForOcc(step: Step, ty, parent: ?LirLocal) LirLocal
-        /// lirLocalU16/lirLocalU64() LirLocal
+        /// lirLocalDiscriminant/lirLocalU64() LirLocal
         /// isZstLirLocal(LirLocal) bool
         /// readDiscriminant(target, source, next) CFStmtId
         /// readField(target, ty, source, index, next) CFStmtId
@@ -1138,8 +1138,8 @@ pub fn Compiler(comptime Ctx: type) type {
             /// derived reads).
             top,
             /// Inside the arm for `variant` of the tag test on `occ`.
-            tag_arm: struct { occ: OccId, variant: u16 },
-            callable_arm: struct { occ: OccId, variant: u16 },
+            tag_arm: struct { occ: OccId, variant: u32 },
+            callable_arm: struct { occ: OccId, variant: u32 },
             /// Inside a list-length scope on `occ` that guarantees at least
             /// `min_len` elements.
             list_len: struct { occ: OccId, min_len: u64 },
@@ -1493,7 +1493,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     try extractions.append(self.arena, .{ .occ = occ, .what = .value });
                 }
                 if (use.disc and gop.value_ptr.disc == null) {
-                    gop.value_ptr.disc = try self.ctx.lirLocalU16();
+                    gop.value_ptr.disc = try self.ctx.lirLocalDiscriminant();
                     try extractions.append(self.arena, .{ .occ = occ, .what = .disc });
                 }
                 if (use.len and gop.value_ptr.len == null) {
@@ -1810,7 +1810,7 @@ const MockPat = union(enum) {
     record: []const MockSub,
     tuple: []const MockSub,
     nominal: MockSub,
-    tag: struct { variant: u16, payloads: []const MockSub },
+    tag: struct { variant: u32, payloads: []const MockSub },
     int_lit: struct { value: i64, switchable: bool = true },
     dec_lit: i128,
     str_lit: u32,
@@ -1818,7 +1818,7 @@ const MockPat = union(enum) {
     list: struct { elems: []const u32, rest: ?struct { index: u32, pattern: ?u32 } },
 };
 
-const MockSub = struct { index: u16, ty: u32, pat: u32 };
+const MockSub = struct { index: u32, ty: u32, pat: u32 };
 
 const MockCtx = struct {
     pats: []const MockPat,
@@ -1868,19 +1868,19 @@ const MockCtx = struct {
         return .{ .pattern = info.pattern, .local = info.local };
     }
 
-    pub fn recordDestructCount(self: MockCtx, pat: u32) u16 {
+    pub fn recordDestructCount(self: MockCtx, pat: u32) u32 {
         return @intCast(self.get(pat).record.len);
     }
 
-    pub fn recordDestruct(self: MockCtx, pat: u32, _: u32, i: u16) LowerError!MockSub {
+    pub fn recordDestruct(self: MockCtx, pat: u32, _: u32, i: u32) LowerError!MockSub {
         return self.get(pat).record[i];
     }
 
-    pub fn tupleItemCount(self: MockCtx, pat: u32) u16 {
+    pub fn tupleItemCount(self: MockCtx, pat: u32) u32 {
         return @intCast(self.get(pat).tuple.len);
     }
 
-    pub fn tupleItem(self: MockCtx, pat: u32, _: u32, i: u16) LowerError!MockSub {
+    pub fn tupleItem(self: MockCtx, pat: u32, _: u32, i: u32) LowerError!MockSub {
         return self.get(pat).tuple[i];
     }
 
@@ -1888,15 +1888,15 @@ const MockCtx = struct {
         return self.get(pat).nominal;
     }
 
-    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) u16 {
+    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) u32 {
         return self.get(pat).tag.variant;
     }
 
-    pub fn tagPayloadCount(self: MockCtx, pat: u32) u16 {
+    pub fn tagPayloadCount(self: MockCtx, pat: u32) u32 {
         return @intCast(self.get(pat).tag.payloads.len);
     }
 
-    pub fn tagPayload(self: MockCtx, pat: u32, _: u32, i: u16) LowerError!MockSub {
+    pub fn tagPayload(self: MockCtx, pat: u32, _: u32, i: u32) LowerError!MockSub {
         return self.get(pat).tag.payloads[i];
     }
 
@@ -1905,7 +1905,7 @@ const MockCtx = struct {
         return null;
     }
 
-    pub fn callableVariant(_: MockCtx, _: u32, _: u32) u16 {
+    pub fn callableVariant(_: MockCtx, _: u32, _: u32) u32 {
         unreachable;
     }
 
@@ -1957,13 +1957,13 @@ const MockCtx = struct {
         return true;
     }
 
-    pub fn strCaptureCount(self: MockCtx, pat: u32) u16 {
+    pub fn strCaptureCount(self: MockCtx, pat: u32) u32 {
         const pattern = self.get(pat);
         if (std.meta.activeTag(pattern) != .str_pattern) return 0;
         return @intCast(pattern.str_pattern.captures.len);
     }
 
-    pub fn strCapturePat(self: MockCtx, pat: u32, i: u16) ?u32 {
+    pub fn strCapturePat(self: MockCtx, pat: u32, i: u32) ?u32 {
         return self.get(pat).str_pattern.captures[i];
     }
 };
@@ -2157,7 +2157,7 @@ test "tag payloads specialize into payload occurrence columns" {
     // The payload occurrence was interned under the scrutinee root.
     const payload_occ = result.occs[fallback.binds[0].occ.idx()];
     try std.testing.expectEqual(OccId.root, payload_occ.parent);
-    try std.testing.expectEqual(@as(u16, 0), payload_occ.step.tag_payload.variant);
+    try std.testing.expectEqual(@as(u32, 0), payload_occ.step.tag_payload.variant);
     try std.testing.expect(payload_occ.step.tag_payload.single);
 }
 
@@ -2353,12 +2353,12 @@ test "records and tuples destructure without tests" {
     const x_test = result.tree.test_;
     try std.testing.expectEqual(TestKind.int_switch, x_test.kind);
     const x_occ = result.occs[x_test.occ.idx()];
-    try std.testing.expectEqual(@as(u16, 0), x_occ.step.field);
+    try std.testing.expectEqual(@as(u32, 0), x_occ.step.field);
     try std.testing.expectEqual(@as(u32, 0), x_test.arms[0].subtree.leaf.branch_index);
 
     const y_test = x_test.default.?.test_;
     const y_occ = result.occs[y_test.occ.idx()];
-    try std.testing.expectEqual(@as(u16, 1), y_occ.step.field);
+    try std.testing.expectEqual(@as(u32, 1), y_occ.step.field);
     try std.testing.expectEqual(@as(u32, 1), y_test.arms[0].subtree.leaf.branch_index);
     try std.testing.expectEqual(@as(u32, 2), y_test.default.?.leaf.branch_index);
     try std.testing.expectEqual(@as(u32, 0), result.stats.fail_refs);
@@ -2393,7 +2393,7 @@ test "column selection prefers the longer run" {
     const node = result.tree.test_;
     try std.testing.expectEqual(TestKind.tag, node.kind);
     const occ = result.occs[node.occ.idx()];
-    try std.testing.expectEqual(@as(u16, 0), occ.step.field);
+    try std.testing.expectEqual(@as(u32, 0), occ.step.field);
     // Arm B contains rows 1 and 2, distinguished by the int column inside.
     const arm_b = node.arms[1].subtree.test_;
     try std.testing.expectEqual(TestKind.int_switch, arm_b.kind);

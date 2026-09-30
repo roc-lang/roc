@@ -1498,8 +1498,8 @@ pub const EvidenceNodeId = enum(u32) { _ };
 /// callables outward from the reference (0 = the innermost generalized
 /// callable the reference appears in).
 pub const EvidenceChainIndex = struct {
-    depth: u16,
-    index: u16,
+    depth: u32,
+    index: u32,
 };
 
 /// Reference to an enclosing evidence slot. Explicit per-use callable

@@ -517,6 +517,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     };
     const boxy_rc_descs = try computeBoxyRcDescs(store);
     defer store.allocator.free(boxy_rc_descs);
+    var boxy_desc_users = try BoxyDescUsers.init(store.allocator, boxy_rc_descs);
+    defer boxy_desc_users.deinit(store.allocator);
 
     const borrow_anchor_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
     defer store.allocator.free(borrow_anchor_refcounted);
@@ -525,6 +527,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     const local_contains_refcounted = emission_refcounted.slice();
     inserter.local_contains_refcounted = local_contains_refcounted;
     inserter.boxy_rc_descs = boxy_rc_descs;
+    inserter.boxy_desc_users = boxy_desc_users;
 
     const uniqueness_options: arc_solve.UniquenessOptions = .{
         .executor = options.post_check_executor,
@@ -972,6 +975,51 @@ fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
     return descs;
 }
 
+/// The locals whose Boxy descriptor is each descriptor local, in ascending
+/// local order, so a descriptor update visits only the values it invalidates.
+const BoxyDescUsers = struct {
+    /// `locals[starts[d]..starts[d + 1]]` are the users of descriptor local `d`.
+    starts: []u32 = &.{},
+    locals: []LIR.LocalId = &.{},
+
+    fn init(allocator: Allocator, descs: []const ?LIR.BoxyDescRef) Allocator.Error!BoxyDescUsers {
+        const starts = try allocator.alloc(u32, descs.len + 1);
+        errdefer allocator.free(starts);
+        @memset(starts, 0);
+        var user_count: usize = 0;
+        for (descs) |maybe_desc| {
+            const desc = maybe_desc orelse continue;
+            const desc_local = desc.localOrNull() orelse continue;
+            starts[@intFromEnum(desc_local) + 1] += 1;
+            user_count += 1;
+        }
+        for (1..starts.len) |index| starts[index] += starts[index - 1];
+        const locals = try allocator.alloc(LIR.LocalId, user_count);
+        errdefer allocator.free(locals);
+        const cursors = try allocator.dupe(u32, starts[0..descs.len]);
+        defer allocator.free(cursors);
+        for (descs, 0..) |maybe_desc, index| {
+            const desc = maybe_desc orelse continue;
+            const desc_local = desc.localOrNull() orelse continue;
+            const cursor = &cursors[@intFromEnum(desc_local)];
+            locals[cursor.*] = @enumFromInt(@as(u32, @intCast(index)));
+            cursor.* += 1;
+        }
+        return .{ .starts = starts, .locals = locals };
+    }
+
+    fn deinit(self: *BoxyDescUsers, allocator: Allocator) void {
+        allocator.free(self.starts);
+        allocator.free(self.locals);
+    }
+
+    fn usersOf(self: BoxyDescUsers, desc_local: LIR.LocalId) []const LIR.LocalId {
+        const index: usize = @intFromEnum(desc_local);
+        if (index + 1 >= self.starts.len) return &.{};
+        return self.locals[self.starts[index]..self.starts[index + 1]];
+    }
+};
+
 fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
     const index = @intFromEnum(local);
     if (index >= descs.len) return null;
@@ -1086,13 +1134,13 @@ const QueuedVariant = struct {
 /// and outcome rows, which are exactly what selects the variant.
 fn variantIdentity(allocator: std.mem.Allocator, sig_table: arc_sig.SigTable, source: LIR.ProcIdentity, demanded: arc_sig.RcSig) ResourceError!LIR.ProcIdentity {
     const outcomes = sig_table.outcomesOf(demanded);
-    var key = try std.ArrayList(u8).initCapacity(allocator, 8 + outcomes.len * 4);
+    var key = try std.ArrayList(u8).initCapacity(allocator, 8 + outcomes.len * 6);
     defer key.deinit(allocator);
     key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.borrowed_params)));
     key.appendAssumeCapacity(@intFromEnum(demanded.ret_mode));
     key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.unique_params)));
     for (outcomes) |outcome| {
-        key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, outcome.discriminant)));
+        key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u32, outcome.discriminant)));
         key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, outcome.restituted_params)));
     }
     return source.derived("arc-variant", key.items);
@@ -1647,7 +1695,7 @@ const ArcPlanTerminal = union(enum) {
         stmt: LIR.CFStmtId,
         match_plan: u32,
         miss_plan: u32,
-        capture_retain_count: u16,
+        capture_retain_count: u32,
     },
     boxy_tag_match: struct {
         stmt: LIR.CFStmtId,
@@ -1658,7 +1706,7 @@ const ArcPlanTerminal = union(enum) {
         stmt: LIR.CFStmtId,
         match_plans: []u32,
         miss_plan: u32,
-        capture_retain_counts: []u16,
+        capture_retain_counts: []u32,
     },
     jump: struct {
         stmt: LIR.CFStmtId,
@@ -1712,6 +1760,7 @@ const Inserter = struct {
     options: InsertOptions,
     local_contains_refcounted: []const bool = &.{},
     boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
+    boxy_desc_users: BoxyDescUsers = .{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
     /// statement id, so base and variant emissions share one solve.
@@ -3840,7 +3889,7 @@ const Inserter = struct {
         const previous_terminal = self.arcPlan(plan_index).previous_terminal;
         var match_plans: []u32 = undefined;
         var miss_plan: u32 = undefined;
-        var retain_counts: []u16 = undefined;
+        var retain_counts: []u32 = undefined;
         switch (previous_terminal) {
             .str_match_set => |previous| {
                 if (previous.stmt != stmt or previous.match_plans.len != arms.len) {
@@ -3861,7 +3910,7 @@ const Inserter = struct {
             .terminal,
             => {
                 match_plans = try self.solve_allocator.alloc(u32, arms.len);
-                retain_counts = try self.solve_allocator.alloc(u16, arms.len);
+                retain_counts = try self.solve_allocator.alloc(u32, arms.len);
                 for (0..arms.len) |index| match_plans[index] = try self.newArcPlan(GuardedList.at(arms, index).on_match);
                 miss_plan = try self.newArcPlan(miss_start);
             },
@@ -4868,18 +4917,12 @@ const Inserter = struct {
         loop_keep: ?LoopKeep,
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
-        for (owned.domain.frame_locals) |local| {
+        for (self.boxy_desc_users.usersOf(desc_local)) |local| {
             if (!owned.contains(local)) continue;
-            if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
             if (try self.valueUsedInPath(next, local, loop_keep)) continue;
             if (!try self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
             try releases.append(self.solve_allocator, self.releaseDecision(local));
         }
-    }
-
-    fn localUsesDescriptorLocal(self: *const Inserter, local: LIR.LocalId, desc_local: LIR.LocalId) bool {
-        const desc = boxyDescForLocal(self.boxy_rc_descs, local) orelse return false;
-        return if (desc.localOrNull()) |local_desc| local_desc == desc_local else false;
     }
 
     /// Computes which low-level argument positions in `span` (restricted to
@@ -5271,9 +5314,9 @@ const Inserter = struct {
     }
 
     fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
-        if (value > std.math.maxInt(u16)) return null;
+        if (value > std.math.maxInt(u32)) return null;
         for (outcomes) |outcome| {
-            if (outcome.discriminant == @as(u16, @intCast(value))) return outcome.restituted_params;
+            if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
         }
         return null;
     }
@@ -7269,7 +7312,7 @@ const Inserter = struct {
         return try self.retainLocalIfRcCount(local, 1, cause, next);
     }
 
-    fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u16, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u32, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
         const rc = self.rcHelperForLocal(.incref, local);
@@ -7277,8 +7320,8 @@ const Inserter = struct {
         return try addCanonicalRetain(self.store, local, rc, atomicity, count, self.rcOrigin(cause, .incref, local), next);
     }
 
-    fn strMatchCaptureRetainCount(self: *const Inserter, steps: LIR.StrMatchStepSpan) u16 {
-        var count: u16 = 0;
+    fn strMatchCaptureRetainCount(self: *const Inserter, steps: LIR.StrMatchStepSpan) u32 {
+        var count: u32 = 0;
         const step_borrow = self.store.getStrMatchSteps(steps);
         for (0..GuardedList.borrowLen(step_borrow)) |step_index| {
             const step = GuardedList.at(step_borrow, step_index);
@@ -7286,7 +7329,7 @@ const Inserter = struct {
                 .discard => {},
                 .view => |local| {
                     if (self.localContainsRefcounted(local) and !self.isBindingBorrowed(local)) {
-                        count +|= 1;
+                        count += 1;
                     }
                 },
             }
@@ -7709,7 +7752,7 @@ fn addCanonicalRetain(
     local: LIR.LocalId,
     rc: LIR.RcHelper,
     atomicity: LIR.RcAtomicity,
-    count: u16,
+    count: u32,
     origin: LIR.StmtOrigin,
     next: LIR.CFStmtId,
 ) ResourceError!LIR.CFStmtId {
@@ -7934,7 +7977,7 @@ test "RC elision lowers adjacent multi retain count" {
         release,
     );
     const stmt = f.store.getCFStmt(retain).incref;
-    try testing.expectEqual(@as(u16, 2), stmt.count);
+    try testing.expectEqual(@as(u32, 2), stmt.count);
     try testing.expectEqual(ret, stmt.next);
 }
 
@@ -8121,7 +8164,7 @@ const ArcTest = struct {
         } }, .test_fixture);
     }
 
-    fn assignTag(self: *ArcTest, target: LIR.LocalId, discriminant: u16, payload: ?LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    fn assignTag(self: *ArcTest, target: LIR.LocalId, discriminant: u32, payload: ?LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = discriminant,
@@ -8147,7 +8190,7 @@ const ArcTest = struct {
         } }, .test_fixture);
     }
 
-    fn assignRefField(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u16, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    fn assignRefField(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
@@ -14826,9 +14869,9 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
         try testing.expectEqual(@as(u32, 2), span.len);
         const failure = solution.outcomes[span.start];
         const success = solution.outcomes[span.start + 1];
-        try testing.expectEqual(@as(u16, 0), failure.discriminant);
+        try testing.expectEqual(@as(u32, 0), failure.discriminant);
         try testing.expectEqual(@as(arc_sig.ParamMask, 1), failure.restituted_params);
-        try testing.expectEqual(@as(u16, 1), success.discriminant);
+        try testing.expectEqual(@as(u32, 1), success.discriminant);
         try testing.expectEqual(@as(arc_sig.ParamMask, 0), success.restituted_params);
     }
     return arc_solve.outcome_scratch_entries - before;

@@ -1377,7 +1377,7 @@ pub fn roc_boxy_drop(
     value_layout: u32,
     desc: ?*const BoxyTypeDesc,
     op: u8,
-    count: u16,
+    count: u32,
     atomicity: u8,
 ) callconv(.c) void {
     const g = requireGlobal();

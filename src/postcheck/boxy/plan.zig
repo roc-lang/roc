@@ -301,7 +301,7 @@ pub const TagVariant = struct {
 
 /// Source and representation metadata for one declared aggregate field.
 pub const DeclaredField = struct {
-    index: u16,
+    index: u32,
     source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     is_padding: bool = false,
@@ -393,7 +393,7 @@ pub const TypeRepresentation = struct {
     /// storage convention used for an optional or still-parametric field kind.
     /// The discriminant is explicit so later stages never infer the field's
     /// presence kind from tag names or representation shape.
-    presence_slot_present_discriminant: ?u16 = null,
+    presence_slot_present_discriminant: ?u32 = null,
     /// The source nominal type declared itself opaque: inspect must not
     /// reveal the backing structure.
     inspect_opaque: bool = false,
@@ -9139,7 +9139,7 @@ const Builder = struct {
 
         var pending = std.ArrayList(DeclaredField).empty;
         defer pending.deinit(self.allocator);
-        var padding_ordinal: u16 = 0;
+        var padding_ordinal: u32 = 0;
         for (source.fields) |declared| {
             switch (declared) {
                 .named => |name| {
@@ -9962,33 +9962,36 @@ const Builder = struct {
             for (backing_children) |child| {
                 if (child.role == .record_field) backing_field_count += 1;
             }
-            if (backing_field_count > std.math.maxInt(u16)) {
+            if (backing_field_count > std.math.maxInt(u32)) {
                 boxyPlanInvariant("stored nominal backing field count exceeded Boxy layout range");
+            }
+            // Each backing field by label, so every declared field resolves in
+            // constant time.
+            var backing_fields: std.AutoHashMapUnmanaged(RecordFieldLabelId, DeclaredField) = .empty;
+            defer backing_fields.deinit(self.allocator);
+            try backing_fields.ensureTotalCapacity(self.allocator, @intCast(backing_field_count));
+            var field_index: u32 = 0;
+            for (backing_children) |child| {
+                if (child.role != .record_field) continue;
+                const entry = backing_fields.getOrPutAssumeCapacity(child.role.record_field);
+                if (entry.found_existing) boxyPlanInvariant("stored nominal backing had a duplicate declared field");
+                entry.value_ptr.* = .{
+                    .index = field_index,
+                    .source_type = child.source_type,
+                    .rep = child.rep,
+                };
+                field_index += 1;
             }
             for (named.declared_order) |declared| switch (declared) {
                 .named => |name| {
-                    var selected: ?DeclaredField = null;
-                    var field_index: u16 = 0;
-                    for (backing_children) |child| {
-                        if (child.role != .record_field) continue;
-                        if (child.role.record_field == name) {
-                            if (selected != null) boxyPlanInvariant("stored nominal backing had a duplicate declared field");
-                            selected = .{
-                                .index = field_index,
-                                .source_type = child.source_type,
-                                .rep = child.rep,
-                            };
-                        }
-                        field_index += 1;
-                    }
-                    try pending.append(self.allocator, selected orelse
+                    try pending.append(self.allocator, backing_fields.get(name) orelse
                         boxyPlanInvariant("stored nominal declared field was absent from its backing record"));
                 },
                 .padding => {
                     const padding_rep = results[next];
                     next += 1;
                     try children.append(self.allocator, self.storedChild(.{ .nominal_padding_field = padding_ordinal }, padding_rep));
-                    if (padding_ordinal > std.math.maxInt(u16) - backing_field_count) {
+                    if (padding_ordinal > std.math.maxInt(u32) - backing_field_count) {
                         boxyPlanInvariant("stored nominal declared field count exceeded Boxy layout range");
                     }
                     try pending.append(self.allocator, .{
@@ -10267,8 +10270,8 @@ const Builder = struct {
         self: *Builder,
         backing_view: ModuleView,
         backing_fields: []const checked.CheckedRecordField,
-    ) Allocator.Error![]u16 {
-        const ranks = try self.allocator.alloc(u16, backing_fields.len);
+    ) Allocator.Error![]u32 {
+        const ranks = try self.allocator.alloc(u32, backing_fields.len);
         errdefer self.allocator.free(ranks);
         const names = backing_view.canonical_names orelse {
             for (ranks, 0..) |*rank, index| rank.* = @intCast(index);
@@ -10281,25 +10284,25 @@ const Builder = struct {
             }
         }
 
-        const order = try self.allocator.alloc(u16, backing_fields.len);
+        const order = try self.allocator.alloc(u32, backing_fields.len);
         defer self.allocator.free(order);
         for (order, 0..) |*slot, index| slot.* = @intCast(index);
 
         const SortContext = struct {
             names: *const checked_names.CanonicalNameStore,
             fields: []const checked.CheckedRecordField,
-            fn lessThan(ctx: @This(), lhs: u16, rhs: u16) bool {
+            fn lessThan(ctx: @This(), lhs: u32, rhs: u32) bool {
                 return ctx.names.recordFieldLabelTextLessThan(ctx.fields[lhs].name, ctx.fields[rhs].name);
             }
         };
-        std.mem.sort(u16, order, SortContext{ .names = names, .fields = backing_fields }, SortContext.lessThan);
+        std.mem.sort(u32, order, SortContext{ .names = names, .fields = backing_fields }, SortContext.lessThan);
 
         for (order, 0..) |backing_pos, rank| ranks[backing_pos] = @intCast(rank);
         return ranks;
     }
 
     const NominalBackingField = struct {
-        index: u16,
+        index: u32,
         ty: checked.CheckedTypeId,
     };
 
@@ -10581,7 +10584,7 @@ const Builder = struct {
             if (candidate.checked_expr == site_expr) break candidate;
         } else boxyPlanInvariant("nested numeral evidence omitted its lexical site");
         var scope = site.lexical_scope;
-        var depth: u16 = index.depth;
+        var depth: u32 = index.depth;
         if (own != null) {
             // The site's lexical scope is its enclosing scope; its own
             // generalized scheme has already consumed the first coordinate.
@@ -20819,7 +20822,7 @@ test "boxy planner preserves optional record field representation and descriptor
     try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
     try std.testing.expect(slot.contains_dynamic);
     try std.testing.expect(slot.descriptor != null);
-    try std.testing.expectEqual(@as(?u16, 1), slot.presence_slot_present_discriminant);
+    try std.testing.expectEqual(@as(?u32, 1), slot.presence_slot_present_discriminant);
     const variants = plan.tagVariantSlice(slot.tag_variants);
     try std.testing.expectEqual(@as(usize, 2), variants.len);
     try std.testing.expectEqual(missing, variants[0].name);
@@ -20871,7 +20874,7 @@ test "boxy planner preserves undetermined record field kind identity in a presen
 
     const slot = plan.representations.items[@intFromEnum(record_children[0].rep)];
     try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
-    try std.testing.expectEqual(@as(?u16, 1), slot.presence_slot_present_discriminant);
+    try std.testing.expectEqual(@as(?u32, 1), slot.presence_slot_present_discriminant);
     try std.testing.expect(slot.descriptor != null);
 }
 
@@ -21413,11 +21416,11 @@ test "boxy planner records nominal declared field order from checked payloads" {
     try std.testing.expectEqual(RepresentationKind{ .nominal = .transparent }, nominal.kind);
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
-    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
+    try std.testing.expectEqual(@as(u32, 0), fields[0].index);
     try std.testing.expect(!fields[0].is_padding);
-    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expectEqual(@as(u32, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
-    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+    try std.testing.expectEqual(@as(u32, 1), fields[2].index);
     try std.testing.expect(!fields[2].is_padding);
 }
 
@@ -21514,11 +21517,11 @@ test "boxy planner resolves local nominal declared order from box payload capabi
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
-    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
-    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expectEqual(@as(u32, 0), fields[0].index);
+    try std.testing.expectEqual(@as(u32, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
     try expectTypeRef(moduleKey(1), @enumFromInt(fixtureTableIndex(0)), fields[1].source_type);
-    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+    try std.testing.expectEqual(@as(u32, 1), fields[2].index);
 }
 
 test "boxy planner records imported box payload capability source modules" {
@@ -21681,12 +21684,12 @@ test "boxy planner records imported box payload capability source modules" {
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
-    try std.testing.expectEqual(@as(u16, 0), fields[0].index);
+    try std.testing.expectEqual(@as(u32, 0), fields[0].index);
     try expectTypeRef(source_key, @enumFromInt(5), fields[0].source_type);
-    try std.testing.expectEqual(@as(u16, 2), fields[1].index);
+    try std.testing.expectEqual(@as(u32, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
     try expectTypeRef(source_key, @enumFromInt(5), fields[1].source_type);
-    try std.testing.expectEqual(@as(u16, 1), fields[2].index);
+    try std.testing.expectEqual(@as(u32, 1), fields[2].index);
     try expectTypeRef(source_key, @enumFromInt(1), fields[2].source_type);
 }
 

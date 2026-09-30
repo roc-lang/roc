@@ -114,6 +114,29 @@ are two distinct identities even when their declaring modules are
 byte-identical, and no deduplication, specialization, or merging step may
 collapse two externally-bound identities into one.
 
+### Representation Capacity
+
+A program that passes checking builds. No stage after parsing rejects or
+crashes on a program because it exceeds a width the compiler chose
+internally. Every count, index, position, offset, and value that grows with
+the size of the program is at least 32 bits wide in every stage: tag variant
+indices and discriminant values, discriminant offsets, record and tuple field
+indices, tag payload indices, span lengths, stack argument offsets and sizes,
+and refcount counts. Discriminant locals are `U32`, which holds every
+discriminant width a layout commits.
+
+Converting a host-sized count into one of these widths is checked, and a
+count past the 32-bit range returns `error.OutOfMemory`. Reaching that range
+takes billions of stored entries, so the compiler has exhausted the memory
+it can represent, which is the same failure as an allocation returning null.
+The identifier store's 29-bit ids follow the same rule.
+
+A walk along a chain in a store (alias and wrapper chains, row extensions,
+descriptor extensions) is bounded by that store's entry count: a longer walk
+must revisit an entry, so it has found a cycle, which is an invariant
+violation. A walk whose store cannot be counted detects the cycle directly.
+No walk uses a fixed step limit that a legal program could exceed.
+
 ### Dense IDs and structural keys
 
 Compiler-owned identity domains prefer dense, store-local integer IDs. The

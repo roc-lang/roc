@@ -80,13 +80,13 @@ test "post-check row entries carry checked label ids until LIR indices" {
 
     const lir_field = unionPayloadType(LIR.RefOp, "field");
     const lir_payload = unionPayloadType(LIR.RefOp, "tag_payload");
-    try std.testing.expect(structFieldType(lir_field, "field_idx") == u16);
-    try std.testing.expect(structFieldType(lir_payload, "payload_idx") == u16);
+    try std.testing.expect(structFieldType(lir_field, "field_idx") == u32);
+    try std.testing.expect(structFieldType(lir_payload, "payload_idx") == u32);
 }
 
 test "Monotype record expression lowering does not keep mutable field-store slices across child lowering" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const lower_record_expr = sourceSliceBetween(lower_source, "fn lowerRecordExpr", "fn recordUpdateFieldValue");
+    const lower_record_expr = sourceSliceBetween(lower_source, "fn lowerRecordExpr(", "fn lowerRecordExprAtNode(");
 
     try expectContains(lower_record_expr, "const target_fields");
     try expectContains(lower_record_expr, "const target_field_count");

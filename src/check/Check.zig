@@ -230,7 +230,10 @@ type_visit_stack: std.ArrayListUnmanaged(Var),
 alias_row_frames: std.ArrayListUnmanaged(AliasRowFrame),
 /// Row field/tag names collected by the row frames in flight, one contiguous
 /// run per frame.
-alias_row_names: std.ArrayListUnmanaged(Ident.Idx),
+alias_row_names: std.ArrayListUnmanaged(AliasRowName),
+/// The entries of `alias_row_names`, so a row's duplicate-name check is one
+/// lookup rather than a scan of its run.
+alias_row_name_set: std.AutoHashMapUnmanaged(AliasRowName, void),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// Header rigid vars for the currently-processed type declaration.
@@ -3039,6 +3042,7 @@ fn initAssumePrepared(
         .type_visit_stack = .empty,
         .alias_row_frames = .empty,
         .alias_row_names = .empty,
+        .alias_row_name_set = .empty,
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .pending_default_checks = .empty,
@@ -3299,6 +3303,7 @@ pub fn deinit(self: *Self) void {
     self.type_visit_stack.deinit(self.gpa);
     self.alias_row_frames.deinit(self.gpa);
     self.alias_row_names.deinit(self.gpa);
+    self.alias_row_name_set.deinit(self.gpa);
     self.rigid_var_substitutions.deinit(self.gpa);
     self.type_decl_rigid_vars.deinit(self.gpa);
     self.pending_default_checks.deinit(self.gpa);
@@ -20130,7 +20135,7 @@ fn validateAliasRowsHelp(
     const names_base = self.alias_row_names.items.len;
     defer {
         frames.items.len = frames_base;
-        self.alias_row_names.items.len = names_base;
+        self.truncateAliasRowNames(names_base);
     }
     try frames.append(self.gpa, .{ .node = root_var });
 
@@ -20149,7 +20154,7 @@ fn validateAliasRowsHelp(
                     .suspended => {},
                     .finished => {
                         frames.items.len -= 1;
-                        self.alias_row_names.items.len = row_names_base;
+                        self.truncateAliasRowNames(row_names_base);
                     },
                     .failed => return false,
                 }
@@ -20160,7 +20165,7 @@ fn validateAliasRowsHelp(
                     .suspended => {},
                     .finished => {
                         frames.items.len -= 1;
-                        self.alias_row_names.items.len = row_names_base;
+                        self.truncateAliasRowNames(row_names_base);
                     },
                     .failed => return false,
                 }
@@ -20236,11 +20241,26 @@ fn pushAliasRowVarsReversed(self: *Self, vars: []const Var) Allocator.Error!void
 /// suspended on has drained, `alias_row_names[names_base..]` is exactly the
 /// names this row contributed.
 fn aliasRowNameIsDuplicate(self: *Self, names_base: u32, name: Ident.Idx) Allocator.Error!bool {
-    for (self.alias_row_names.items[names_base..]) |seen| {
-        if (seen == name) return true;
-    }
-    try self.alias_row_names.append(self.gpa, name);
+    const entry: AliasRowName = .{ .names_base = names_base, .name = name };
+    try self.alias_row_names.ensureUnusedCapacity(self.gpa, 1);
+    const gop = try self.alias_row_name_set.getOrPut(self.gpa, entry);
+    if (gop.found_existing) return true;
+    self.alias_row_names.appendAssumeCapacity(entry);
     return false;
+}
+
+/// A name collected by the row frame whose run starts at `names_base`.
+const AliasRowName = struct {
+    names_base: u32,
+    name: Ident.Idx,
+};
+
+/// Drop the collected names from `len` on, along with their set entries.
+fn truncateAliasRowNames(self: *Self, len: usize) void {
+    for (self.alias_row_names.items[len..]) |entry| {
+        _ = self.alias_row_name_set.remove(entry);
+    }
+    self.alias_row_names.items.len = len;
 }
 
 fn failAliasRow(

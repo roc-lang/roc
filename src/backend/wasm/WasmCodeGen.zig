@@ -2724,7 +2724,7 @@ fn emitExplicitRcForValueLocal(
     atomicity: RcAtomicity,
     value_local: u32,
     value_vt: ValType,
-    inc_count: u16,
+    inc_count: u32,
 ) Allocator.Error!void {
     if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) {
         wasmInvariantFmt(
@@ -2902,7 +2902,7 @@ fn emitExplicitRcHelperCallForValuePtr(
     helper_key: RcHelperKey,
     atomicity: RcAtomicity,
     value_ptr_local: u32,
-    inc_count: u16,
+    inc_count: u32,
 ) Allocator.Error!void {
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
@@ -3099,7 +3099,7 @@ fn emitBuiltinInternalFreeRcPtr(self: *Self, rc_ptr_local: u32, element_alignmen
     try self.emitCallRocDealloc(alloc_ptr_local, alloc_alignment);
 }
 
-fn emitDataPtrIncref(self: *Self, data_ptr_local: u32, amount: u16) Allocator.Error!void {
+fn emitDataPtrIncref(self: *Self, data_ptr_local: u32, amount: u32) Allocator.Error!void {
     if (amount == 0) return;
 
     const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -3351,7 +3351,7 @@ fn emitBuiltinInternalListRcShallow(
     comptime kind: RcOpKind,
     list_ptr_local: u32,
     list_layout_idx: layout.Idx,
-    inc_count: u16,
+    inc_count: u32,
 ) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListRcShallow.builtin_list_abi", list_layout_idx);
 
@@ -3373,7 +3373,7 @@ fn emitBuiltinInternalListRc(
     list_layout_idx: layout.Idx,
     list_plan: ?layout.RcListPlan,
     atomicity: RcAtomicity,
-    inc_count: u16,
+    inc_count: u32,
 ) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListRc.builtin_list_abi", list_layout_idx);
 
@@ -3442,7 +3442,7 @@ fn emitBuiltinInternalListIncrefByLocal(
     try self.emitDataPtrIncrefByLocal(alloc_ptr_local, count_local);
 }
 
-fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local: u32, inc_count: u16) Allocator.Error!void {
+fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local: u32, inc_count: u32) Allocator.Error!void {
     const alloc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const is_small_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitDecodeStrAllocPtr(str_ptr_local, alloc_ptr_local, is_small_local);
@@ -4176,7 +4176,7 @@ fn unwrapSingleFieldPayloadLayout(self: *const Self, layout_idx: layout.Idx) ?la
     return field.layout;
 }
 
-fn findBadUtf8Variant(self: *const Self, inner_tu: *const layout.TagUnionData) Allocator.Error!?struct { disc: u16, struct_idx: layout.StructIdx } {
+fn findBadUtf8Variant(self: *const Self, inner_tu: *const layout.TagUnionData) Allocator.Error!?struct { disc: u32, struct_idx: layout.StructIdx } {
     const ls = self.getLayoutStore();
     const variants = ls.getTagUnionVariants(inner_tu);
     for (0..variants.len) |i| {
@@ -4981,7 +4981,7 @@ fn emitBytewiseEqAtOffset(self: *Self, lhs_local: u32, rhs_local: u32, base_offs
 
 /// Emit a load instruction appropriate for the discriminant size.
 /// Loads an unsigned integer of disc_size bytes at the given offset from the address on the stack.
-fn emitLoadBySize(self: *Self, disc_size: u8, offset: u16) Allocator.Error!void {
+fn emitLoadBySize(self: *Self, disc_size: u8, offset: u32) Allocator.Error!void {
     switch (disc_size) {
         0 => {
             self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
@@ -10696,7 +10696,7 @@ fn generateRcStmt(
     value: ProcLocalId,
     rc: LIR.RcHelper,
     atomicity: RcAtomicity,
-    inc_count: u16,
+    inc_count: u32,
 ) Allocator.Error!void {
     switch (rc) {
         .concrete => |helper| {
@@ -11274,7 +11274,7 @@ fn alignUp(value: u32, alignment: u32) u32 {
     return (value + mask) & ~mask;
 }
 
-fn structFieldOffsetByOriginalIndexWasm(self: *const Self, struct_idx: layout.StructIdx, original_idx: u16) Allocator.Error!u32 {
+fn structFieldOffsetByOriginalIndexWasm(self: *const Self, struct_idx: layout.StructIdx, original_idx: u32) Allocator.Error!u32 {
     const ls = self.getLayoutStore();
     const struct_data = ls.getStructData(struct_idx);
     const fields = ls.struct_fields.sliceRange(struct_data.getFields());
@@ -11290,7 +11290,7 @@ fn structFieldOffsetByOriginalIndexWasm(self: *const Self, struct_idx: layout.St
     unreachable;
 }
 
-fn structFieldSizeByOriginalIndexWasm(self: *const Self, struct_idx: layout.StructIdx, original_idx: u16) Allocator.Error!u32 {
+fn structFieldSizeByOriginalIndexWasm(self: *const Self, struct_idx: layout.StructIdx, original_idx: u32) Allocator.Error!u32 {
     const ls = self.getLayoutStore();
     const struct_data = ls.getStructData(struct_idx);
     const fields = ls.struct_fields.sliceRange(struct_data.getFields());
@@ -11850,8 +11850,8 @@ fn generateStoreAggregateValue(self: *Self, dest: ProcLocalId, value_layout: lay
     },
     tag: struct {
         union_layout: layout.Idx,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?ProcLocalId,
     },
 }) Allocator.Error!void {
@@ -13891,8 +13891,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
             const tu_layout = try WasmLayout.tagUnionLayoutWithStore(ret_layout_val.getTagUnion().idx, ls);
             const variants = ls.getTagUnionVariants(tu_data);
-            var ok_disc: ?u16 = null;
-            var err_disc: ?u16 = null;
+            var ok_disc: ?u32 = null;
+            var err_disc: ?u32 = null;
             var err_record_idx: ?layout.StructIdx = null;
             var inner_disc_offset: u32 = 0;
             var inner_disc_size: u32 = 0;

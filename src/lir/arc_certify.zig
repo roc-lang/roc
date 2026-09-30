@@ -1200,7 +1200,7 @@ const ValueInfo = struct {
     payload_source: ValueId = no_value,
     /// Aggregate projection read from `payload_source`, encoded by
     /// `arc_dismantle.encodeProjection`.
-    payload_projection: u64 = arc_dismantle.no_projection,
+    payload_projection: arc_dismantle.Projection = .none,
     /// Complete outcome rows and exact argument-transfer receipts for a
     /// direct call result. Empty for every other value.
     call_outcomes: arc_sig.OutcomeSpan = .empty,
@@ -1246,7 +1246,7 @@ const State = struct {
     /// on its discriminant, and this is what makes that dispatch certifiable:
     /// on the path that took the variant's fields, the arms for other
     /// variants and the whole-release default are infeasible.
-    known_variants: ArcSnapshot(u16, no_variant),
+    known_variants: ArcSnapshot(u32, no_variant),
     /// Scalar discriminant locals read from a tag-union container value on
     /// this path, so a switch on one refines that container's variant.
     variant_discriminants: ArcSnapshot(ValueId, no_value),
@@ -1284,7 +1284,7 @@ const State = struct {
             .conditional = ArcSnapshot(ConditionalEntry, .{}).init(allocator, proc_local_count),
             .claims = ArcSnapshot(ClaimSet, .{}).init(allocator, proc_local_count),
             .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
-            .known_variants = ArcSnapshot(u16, no_variant).init(allocator, proc_local_count),
+            .known_variants = ArcSnapshot(u32, no_variant).init(allocator, proc_local_count),
             .variant_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
             .result_discriminant = no_dense,
             .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
@@ -1310,12 +1310,12 @@ const State = struct {
         }
     }
 
-    fn knownVariant(self: *const State, value: ValueId) ?u16 {
+    fn knownVariant(self: *const State, value: ValueId) ?u32 {
         const variant = self.known_variants.get(value);
         return if (variant == no_variant) null else variant;
     }
 
-    fn setKnownVariant(self: *State, value: ValueId, variant: u16) Allocator.Error!void {
+    fn setKnownVariant(self: *State, value: ValueId, variant: u32) Allocator.Error!void {
         try self.put(&self.known_variants, value, variant);
     }
 
@@ -1385,7 +1385,7 @@ const State = struct {
 
     fn addBalance(self: *State, value: ValueId, delta: i32) Allocator.Error!void {
         const previous = self.balanceOf(value);
-        const next = previous + delta;
+        const next = std.math.add(i32, previous, delta) catch return error.OutOfMemory;
         try self.put(&self.balance, value, next);
         if ((previous < 0) != (next < 0)) {
             const word_index = value / 64;
@@ -1453,8 +1453,8 @@ test "forked state preserves independent tag-union variant witnesses" {
     try forked.setKnownVariant(0, 2);
     try forked.put(&forked.variant_discriminants, @intFromEnum(discriminant), no_value);
 
-    try testing.expectEqual(@as(?u16, 1), source.knownVariant(0));
-    try testing.expectEqual(@as(?u16, 2), forked.knownVariant(0));
+    try testing.expectEqual(@as(?u32, 1), source.knownVariant(0));
+    try testing.expectEqual(@as(?u32, 2), forked.knownVariant(0));
     try testing.expectEqual(@as(?ValueId, 0), source.variantDiscriminant(discriminant));
     try testing.expectEqual(@as(?ValueId, null), forked.variantDiscriminant(discriminant));
 }
@@ -1574,7 +1574,7 @@ const SummaryProvenance = struct {
     holder_reprs: []const u32 = &.{},
     /// Immediate container and projection retained for a deferred field take.
     payload_source: u32 = no_dense,
-    payload_projection: u64 = arc_dismantle.no_projection,
+    payload_projection: arc_dismantle.Projection = .none,
 };
 
 fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
@@ -1583,7 +1583,7 @@ fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenan
     return std.mem.eql(u32, a.?.lender_reprs, b.?.lender_reprs) and
         std.mem.eql(u32, a.?.holder_reprs, b.?.holder_reprs) and
         a.?.payload_source == b.?.payload_source and
-        a.?.payload_projection == b.?.payload_projection;
+        a.?.payload_projection.eql(b.?.payload_projection);
 }
 
 const SummaryProvenanceContext = struct {
@@ -1604,7 +1604,7 @@ const SummaryProvenanceContext = struct {
         return std.mem.eql(u32, a.lender_reprs, b.lender_reprs) and
             std.mem.eql(u32, a.holder_reprs, b.holder_reprs) and
             a.payload_source == b.payload_source and
-            a.payload_projection == b.payload_projection;
+            a.payload_projection.eql(b.payload_projection);
     }
 };
 
@@ -1651,10 +1651,10 @@ const LocalSummary = struct {
     /// rather than walking separately. That loses nothing a residual dispatch
     /// needs, because a path that took a variant's fields carries claims, and
     /// claims already keep such paths in their own group.
-    known_variant: u16 = no_variant,
+    known_variant: u32 = no_variant,
 };
 
-const no_variant: u16 = std.math.maxInt(u16);
+const no_variant: u32 = std.math.maxInt(u32);
 
 const LocalClass = enum(u8) {
     unbound,
@@ -1935,7 +1935,7 @@ const Certifier = struct {
     erased_call_owner_checks: std.ArrayList(ErasedCallOwnerCheck) = .empty,
     /// Result discriminants independently reached while certifying the
     /// current outcome-specialized proc.
-    seen_outcomes: std.AutoHashMap(u16, void),
+    seen_outcomes: std.AutoHashMap(u32, void),
     /// Scratch bitset over dense proc-local positions, reused by
     /// join-relevance extension.
     relevant_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
@@ -1986,7 +1986,7 @@ const Certifier = struct {
             .join_components = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
             .erased_owner_states = collections.DenseMap(LIR.LocalId, ErasedOwnerState).init(allocator),
-            .seen_outcomes = std.AutoHashMap(u16, void).init(allocator),
+            .seen_outcomes = std.AutoHashMap(u32, void).init(allocator),
             .diag = diag,
             .work_stats = work_stats,
         };
@@ -2332,7 +2332,7 @@ const Certifier = struct {
     /// field under it is claimed.
     const PendingContainerClaim = struct {
         container: ValueId,
-        field: u16,
+        field: u32,
         existing: ClaimSet,
     };
 
@@ -2367,11 +2367,11 @@ const Certifier = struct {
             const info = self.values.items[value];
             if (info.payload_source == no_value) break :walk false;
             const container = info.payload_source;
-            if (info.payload_projection == arc_dismantle.no_projection) break :walk false;
+            if (info.payload_projection.isNone()) break :walk false;
             const container_origin = self.values.items[container].origin;
             const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
-            const field: u16 = switch (container_layout.tag) {
-                .struct_ => @intCast(info.payload_projection & 0xffff),
+            const field: u32 = switch (container_layout.tag) {
+                .struct_ => info.payload_projection.first,
                 .tag_union => blk: {
                     if (!arc_dismantle.projectionOwnsAllRc(
                         self.store,
@@ -2454,7 +2454,7 @@ const Certifier = struct {
         self: *Certifier,
         state: *State,
         container: ValueId,
-        field: u16,
+        field: u32,
         existing: ClaimSet,
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) Allocator.Error!void {
@@ -2680,7 +2680,7 @@ const Certifier = struct {
         }
     }
 
-    fn restitutedParamsForDiscriminant(self: *const Certifier, discriminant: u16) ?arc_sig.ParamMask {
+    fn restitutedParamsForDiscriminant(self: *const Certifier, discriminant: u32) ?arc_sig.ParamMask {
         const outcomes = self.sigs.outcomesOf(self.current_sig);
         for (outcomes) |outcome| {
             if (outcome.discriminant == discriminant) return outcome.restituted_params;
@@ -2693,7 +2693,7 @@ const Certifier = struct {
         if (state.result_discriminant == no_dense) {
             return self.fail("outcome-specialized return lacked an exact current result discriminant witness", .{});
         }
-        const discriminant: u16 = @intCast(state.result_discriminant);
+        const discriminant: u32 = @intCast(state.result_discriminant);
         const mask = self.restitutedParamsForDiscriminant(discriminant) orelse {
             return self.fail("returned discriminant {d} was absent from the proc's complete ARC outcome signature", .{discriminant});
         };
@@ -2726,11 +2726,11 @@ const Certifier = struct {
     }
 
     fn callOutcomeMask(self: *const Certifier, value: ValueId, discriminant: u64) ?arc_sig.ParamMask {
-        if (value >= self.values.items.len or discriminant > std.math.maxInt(u16)) return null;
+        if (value >= self.values.items.len or discriminant > std.math.maxInt(u32)) return null;
         const info = self.values.items[value];
         const outcomes = self.sigs.outcomesOf(.{ .outcomes = info.call_outcomes });
         for (outcomes) |outcome| {
-            if (outcome.discriminant == @as(u16, @intCast(discriminant))) return outcome.restituted_params;
+            if (outcome.discriminant == @as(u32, @intCast(discriminant))) return outcome.restituted_params;
         }
         return null;
     }
@@ -3114,7 +3114,7 @@ const Certifier = struct {
             .holder_reprs = self.provenance_holder_scratch.items,
             .payload_source = payload_source,
             .payload_projection = if (payload_source == no_dense)
-                arc_dismantle.no_projection
+                arc_dismantle.Projection.none
             else
                 info.payload_projection,
         };
@@ -4886,7 +4886,7 @@ const Certifier = struct {
                 return self.fail("outcome-specialized proc did not return an RC-bearing top-level tag union", .{});
             }
             const params = self.store.getLocalSpan(proc.args);
-            var previous: ?u16 = null;
+            var previous: ?u32 = null;
             for (published_outcomes) |outcome| {
                 if (previous != null and outcome.discriminant <= previous.?) {
                     return self.fail("outcome signature rows were not strictly discriminant-sorted", .{});
@@ -5350,7 +5350,7 @@ const Certifier = struct {
                         return self.fail("incref of non-refcounted local {d}", .{@intFromEnum(rc.value)});
                     }
                     const value = try self.requireLive(&state, rc.value);
-                    try state.addBalance(value, rc.count);
+                    try state.addBalance(value, std.math.cast(i32, rc.count) orelse return error.OutOfMemory);
                     cursor = rc.next;
                 },
                 .decref => |rc| {
@@ -5389,7 +5389,7 @@ const Certifier = struct {
                     // variants are infeasible once the variant is proven, and
                     // an arm proves its variant where nothing did before.
                     const variant_container = state.variantDiscriminant(switch_stmt.cond);
-                    const known_variant: ?u16 = if (variant_container) |container| state.knownVariant(container) else null;
+                    const known_variant: ?u32 = if (variant_container) |container| state.knownVariant(container) else null;
                     var known_is_listed = false;
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
@@ -5401,7 +5401,7 @@ const Certifier = struct {
                         errdefer branch_state.deinit();
                         branch_state.clearOutcomeDiscriminants();
                         if (variant_container) |container| {
-                            if (known_variant == null and branch.value <= std.math.maxInt(u16)) {
+                            if (known_variant == null and branch.value < no_variant) {
                                 try branch_state.setKnownVariant(container, @intCast(branch.value));
                             }
                         }
@@ -5643,7 +5643,7 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64, take_kind: LIR.TakeKind, tag_discriminant: ?u16) CertifyError!void {
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: arc_dismantle.Projection, take_kind: LIR.TakeKind, tag_discriminant: ?u32) CertifyError!void {
         if (!self.isRc(target) and self.isRc(source) and
             self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag == .struct_)
         {
@@ -5692,7 +5692,7 @@ const Certifier = struct {
         container: ValueId,
         source: LIR.LocalId,
         target: LIR.LocalId,
-        projection: u64,
+        projection: arc_dismantle.Projection,
     ) CertifyError!void {
         try self.settleNegativeClaims(state);
         const claims = state.claimsOf(container);
@@ -5700,10 +5700,7 @@ const Certifier = struct {
         const container_origin = self.values.items[container].origin;
         const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
         const taken = switch (container_layout.tag) {
-            .struct_ => blk: {
-                const field_idx: u16 = @intCast(projection & 0xffff);
-                break :blk claims.contains(field_idx);
-            },
+            .struct_ => claims.contains(projection.first),
             .tag_union => true,
             .scalar,
             .box,
@@ -5769,10 +5766,10 @@ const Certifier = struct {
         var observed: ClaimSet = .{};
         for (0..absent_fields.len) |index| {
             const field_index = GuardedList.at(absent_fields, index);
-            if (field_index > std.math.maxInt(u16) or !required.contains(@intCast(field_index))) {
+            if (field_index > std.math.maxInt(u32) or !required.contains(@intCast(field_index))) {
                 return self.fail("residual-shell metadata names non-RC or absent field {d}", .{field_index});
             }
-            const field: u16 = @intCast(field_index);
+            const field: u32 = @intCast(field_index);
             if (observed.contains(field)) {
                 return self.fail("residual-shell metadata repeats field {d}", .{field_index});
             }
@@ -8283,7 +8280,7 @@ test "certify flags unbounded per-iteration balance accumulation" {
     try testing.expect(std.mem.find(u8, f.diag.message(), "accumulation") != null);
 }
 
-fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u16, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
         .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
@@ -8295,7 +8292,7 @@ fn tagPayloadStructReadStmt(
     f: *CertifyTest,
     target: LIR.LocalId,
     source: LIR.LocalId,
-    variant_index: u16,
+    variant_index: u32,
     next: LIR.CFStmtId,
 ) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
@@ -8941,7 +8938,7 @@ test "certify accepts a fully dismantled record via field takes" {
 }
 
 test "certify accepts a complete field transfer with wide scalar siblings" {
-    for ([_]u16{ 0, 63, 64, 128 }) |rc_index| {
+    for ([_]u32{ 0, 63, 64, 128 }) |rc_index| {
         var f = try CertifyTest.init(testing.allocator);
         defer f.deinit();
         var fields: [129]layout_mod.StructField = undefined;
@@ -9002,7 +8999,7 @@ test "certify joins equal wide claims made in different orders" {
     const join_body = try fieldReadStmt(&f, last, record, 0, try f.decrefStmt(last, .str, end));
     const join_id = f.freshJoinPointId();
     var branches: [2]LIR.CFStmtId = undefined;
-    const orders = [_][2]u16{ .{ 128, 129 }, .{ 129, 128 } };
+    const orders = [_][2]u32{ .{ 128, 129 }, .{ 129, 128 } };
     for (&branches, orders) |*branch, order| {
         var body = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         for (order) |index| {

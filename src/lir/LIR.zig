@@ -546,7 +546,7 @@ pub const LocalSpan = extern struct {
 /// Span into flat u64 storage.
 pub const U64Span = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty u64 span.
     pub fn empty() U64Span {
@@ -582,8 +582,8 @@ pub const BoxyTagPayloadRead = struct {
 /// is the pre-order position among descriptor requirements rooted at the
 /// explicit argument.
 pub const ErasedArgDescKey = extern struct {
-    arg_index: u16,
-    descriptor_index: u16,
+    arg_index: u32,
+    descriptor_index: u32,
 };
 
 /// Capture-storage destination for one keyed erased-call argument descriptor.
@@ -611,9 +611,9 @@ pub const ErasedArgDescParam = extern struct {
     local: LocalId,
     /// For a parameter read from its parent, the descriptor index of that
     /// already-bound parent within the same explicit argument.
-    source_descriptor_index: u16,
+    source_descriptor_index: u32,
     /// Nested descriptor slot or tag payload position read from the parent.
-    source_nested_index: u16,
+    source_nested_index: u32,
     /// Tag whose payload a `tag_payload` read names.
     source_tag_name: BoxyNameId,
     read: ErasedArgDescRead,
@@ -804,7 +804,7 @@ fn strMatchDelimiter(source: []const u8, cursor: usize, delimiter: []const u8) ?
 /// Span into flat string-match-step storage.
 pub const StrMatchStepSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() StrMatchStepSpan {
         return .{ .start = 0, .len = 0 };
@@ -829,7 +829,7 @@ pub const StrMatchArm = struct {
 /// Span into flat string-match-arm storage.
 pub const StrMatchArmSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() StrMatchArmSpan {
         return .{ .start = 0, .len = 0 };
@@ -911,18 +911,18 @@ pub const RefOp = union(enum) {
     },
     field: struct {
         source: LocalId,
-        field_idx: u16,
+        field_idx: u32,
     },
     tag_payload: struct {
         source: LocalId,
-        payload_idx: u16,
-        variant_index: u16,
-        tag_discriminant: u16,
+        payload_idx: u32,
+        variant_index: u32,
+        tag_discriminant: u32,
     },
     tag_payload_struct: struct {
         source: LocalId,
-        variant_index: u16,
-        tag_discriminant: u16,
+        variant_index: u32,
+        tag_discriminant: u32,
     },
     list_reinterpret: struct {
         backing_ref: LocalId,
@@ -944,7 +944,7 @@ pub const CFSwitchBranch = struct {
 /// Span into flat switch-branch storage.
 pub const CFSwitchBranchSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty switch-branch span.
     pub fn empty() CFSwitchBranchSpan {
@@ -962,7 +962,7 @@ pub const JoinPoint = extern struct {
 /// Span into flat join-point storage.
 pub const JoinPointSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty join-point span.
     pub fn empty() JoinPointSpan {
@@ -1310,8 +1310,8 @@ pub const CFStmt = union(enum) {
     assign_tag: struct {
         target: LocalId,
         target_desc: ?BoxyDescRef = null,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?LocalId,
         next: CFStmtId,
     },
@@ -1324,8 +1324,8 @@ pub const CFStmt = union(enum) {
     store_tag: struct {
         dest: LocalId,
         tag_layout: layout.Idx,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?LocalId,
         next: CFStmtId,
     },
@@ -1370,7 +1370,7 @@ pub const CFStmt = union(enum) {
     incref: struct {
         value: LocalId,
         rc: RcHelper,
-        count: u16 = 1,
+        count: u32 = 1,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -1631,7 +1631,7 @@ pub const LirPatternId = enum(u32) {
 /// Span into flat pattern-id storage.
 pub const LirPatternSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() LirPatternSpan {
         return .{ .start = 0, .len = 0 };
@@ -1662,7 +1662,7 @@ pub const LirPattern = union(enum) {
     },
     str_literal: StringLiteral.Idx,
     tag: struct {
-        discriminant: u16,
+        discriminant: u32,
         union_layout: layout.Idx,
         args: LirPatternSpan,
     },

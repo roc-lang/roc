@@ -269,7 +269,7 @@ pub const Resolver = struct {
     }
 
     /// Return the byte offset of the discriminant for a tag-union helper.
-    pub fn tagUnionDiscriminantOffset(self: *const Resolver, tag_plan: TagUnionPlan) u16 {
+    pub fn tagUnionDiscriminantOffset(self: *const Resolver, tag_plan: TagUnionPlan) u32 {
         return self.store.getTagUnionDiscriminantOffset(tag_plan.tag_union_idx);
     }
 

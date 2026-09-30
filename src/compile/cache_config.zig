@@ -253,11 +253,14 @@ pub const Constants = struct {
     ///      their owner type declaration, and a type-rooted dispatch call can
     ///      dispatch on an explicit type var. Version 113 is reserved for the
     ///      separate Stream builtin change.
-    /// 115: Reserved for wide-representation-capacity.
+    /// 115: Combine derived-method and Stream dispatch metadata with 32-bit
+    ///      representation counts, offsets, and discriminants.
     /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
     /// 117: A type variable's rank is a full word, since valid source can nest
     ///      generalization scopes past any narrower bound.
-    pub const CACHE_VERSION = 117;
+    /// 118: Combine full-word type variable ranks with 32-bit representation
+    ///      counts, offsets, and discriminants.
+    pub const CACHE_VERSION = 118;
 };
 
 /// Configuration for the Roc cache system.

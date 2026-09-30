@@ -356,12 +356,12 @@ pub const Pattern = union(enum) {
 };
 
 /// Identifies a tag within a union
-pub const TagId = enum(u16) {
+pub const TagId = enum(u32) {
     /// The first/only constructor in a single-constructor type (records, tuples, etc.)
     only = 0,
     _,
 
-    pub fn toInt(self: TagId) u16 {
+    pub fn toInt(self: TagId) u32 {
         return @intFromEnum(self);
     }
 };
@@ -2350,6 +2350,36 @@ fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
     return null;
 }
 
+/// Constructor ids of a union by constructor name, so a constructor pattern
+/// resolves its id in constant time however wide the union is.
+const TagIdsByName = std.AutoHashMapUnmanaged(u29, TagId);
+
+fn tagIdsByName(allocator: std.mem.Allocator, union_info: Union) error{OutOfMemory}!TagIdsByName {
+    var tag_ids: TagIdsByName = .empty;
+    try tag_ids.ensureTotalCapacity(allocator, @intCast(union_info.alternatives.len));
+    for (union_info.alternatives) |alt| {
+        const alt_ident = ctorNameIdent(alt.name) orelse continue;
+        const gop = tag_ids.getOrPutAssumeCapacity(alt_ident.idx);
+        if (!gop.found_existing) gop.value_ptr.* = alt.tag_id;
+    }
+    return tag_ids;
+}
+
+/// Record fields collected across patterns, each field once in first-seen
+/// order.
+const RecordFieldUnion = struct {
+    names: std.ArrayList(Ident.Idx) = .empty,
+    types: std.ArrayList(Var) = .empty,
+    seen: std.AutoHashMapUnmanaged(u29, void) = .empty,
+
+    fn add(self: *RecordFieldUnion, allocator: std.mem.Allocator, name: Ident.Idx, ty: Var) error{OutOfMemory}!void {
+        const gop = try self.seen.getOrPut(allocator, name.idx);
+        if (gop.found_existing) return;
+        try self.names.append(allocator, name);
+        try self.types.append(allocator, ty);
+    }
+};
+
 fn ctorNameIdent(ctor_name: CtorName) ?Ident.Idx {
     return switch (ctor_name) {
         .tag => |tag| if (tag.eql(Ident.Idx.NONE)) null else tag,
@@ -2787,7 +2817,11 @@ const CollectedCtorsSketched = union(enum) {
     /// Specific tag constructors found
     ctors: struct {
         found: []const TagId,
+        /// The same constructors as `found`, for constant-time membership.
+        found_set: collections.DenseMap(TagId, void),
         union_info: Union,
+        /// `union_info`'s constructor ids by name.
+        tag_ids: TagIdsByName,
         has_wildcards: bool,
     },
     /// List patterns found
@@ -2818,8 +2852,7 @@ fn collectCtorsSketched(
     var union_info: ?Union = null;
 
     // For records, collect all unique field names from all patterns
-    var all_record_fields: std.ArrayList(Ident.Idx) = .empty;
-    var all_record_types: std.ArrayList(Var) = .empty;
+    var all_record_fields: RecordFieldUnion = .{};
     var is_record = false;
 
     for (first_col) |pat| {
@@ -2848,18 +2881,7 @@ fn collectCtorsSketched(
                     .record => |record| {
                         is_record = true;
                         for (record.names, record.types) |field, field_type| {
-                            // Add if not already present
-                            var already_present = false;
-                            for (all_record_fields.items) |existing| {
-                                if (existing.eql(field)) {
-                                    already_present = true;
-                                    break;
-                                }
-                            }
-                            if (!already_present) {
-                                try all_record_fields.append(allocator, field);
-                                try all_record_types.append(allocator, field_type);
-                            }
+                            try all_record_fields.add(allocator, field, field_type);
                         }
                     },
                     .tag, .opaque_type, .tuple, .guard => {},
@@ -2878,12 +2900,13 @@ fn collectCtorsSketched(
     }
 
     if (found_ctor) {
+        const tag_ids = try tagIdsByName(allocator, union_info.?);
         // Collect all unique tag IDs
         var tag_set = collections.DenseMap(TagId, void).init(allocator);
         for (first_col) |pat| {
             switch (pat) {
                 .ctor => |c| {
-                    const tag_id = findTagId(union_info.?, c.tag_name) orelse return error.TypeError;
+                    const tag_id = tag_ids.get(c.tag_name.idx) orelse return error.TypeError;
                     try tag_set.put(tag_id, {});
                 },
                 .known_ctor => |kc| {
@@ -2901,9 +2924,9 @@ fn collectCtorsSketched(
 
         // For records, update union_info to include all fields
         var result_union_info = union_info.?;
-        if (is_record and all_record_fields.items.len > 0) {
-            const all_fields = try all_record_fields.toOwnedSlice(allocator);
-            const all_types = try all_record_types.toOwnedSlice(allocator);
+        if (is_record and all_record_fields.names.items.len > 0) {
+            const all_fields = try all_record_fields.names.toOwnedSlice(allocator);
+            const all_types = try all_record_fields.types.toOwnedSlice(allocator);
             result_union_info.render_as = .{ .record = .{ .names = all_fields, .types = all_types } };
             // Update the alternative's arity to match total fields
             if (result_union_info.alternatives.len == 1) {
@@ -2919,7 +2942,9 @@ fn collectCtorsSketched(
 
         return .{ .ctors = .{
             .found = try found_tags.toOwnedSlice(allocator),
+            .found_set = tag_set,
             .union_info = result_union_info,
+            .tag_ids = tag_ids,
             .has_wildcards = found_wildcard,
         } };
     }
@@ -2965,6 +2990,7 @@ fn specializeByConstructorSketched(
     tag_id: TagId,
     arity: usize,
     union_info: Union,
+    tag_ids_by_name: *const TagIdsByName,
 ) error{OutOfMemory}!SketchedMatrix {
     var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
 
@@ -2973,16 +2999,6 @@ fn specializeByConstructorSketched(
         .record => |record| record.names,
         .tag, .opaque_type, .tuple, .guard => null,
     };
-
-    // Constructor ids by name once per specialization, so each row resolves
-    // its constructor in constant time.
-    var tag_ids_by_name: std.AutoHashMapUnmanaged(u29, TagId) = .empty;
-    try tag_ids_by_name.ensureTotalCapacity(allocator, @intCast(union_info.alternatives.len));
-    for (union_info.alternatives) |alt| {
-        const alt_ident = ctorNameIdent(alt.name) orelse continue;
-        const gop = tag_ids_by_name.getOrPutAssumeCapacity(alt_ident.idx);
-        if (!gop.found_existing) gop.value_ptr.* = alt.tag_id;
-    }
 
     for (matrix.rows) |row| {
         if (row.len == 0) continue;
@@ -3014,21 +3030,20 @@ fn specializeByConstructorSketched(
                         // Build the new row with fields aligned to target order
                         const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
 
+                        var pat_positions: std.AutoHashMapUnmanaged(u29, usize) = .empty;
+                        defer pat_positions.deinit(allocator);
+                        try pat_positions.ensureTotalCapacity(allocator, @intCast(pat_fields.len));
+                        for (pat_fields, 0..) |pat_field, j| {
+                            const gop = pat_positions.getOrPutAssumeCapacity(pat_field.idx);
+                            if (!gop.found_existing) gop.value_ptr.* = j;
+                        }
                         for (targets, 0..) |target_field, i| {
-                            // Find this field in the pattern's field list
-                            var found = false;
-                            for (pat_fields, 0..) |pat_field, j| {
-                                if (pat_field.eql(target_field)) {
-                                    // Found the field - use the pattern's arg
-                                    new_row[i] = if (j < kc.args.len) kc.args[j] else .anything;
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found) {
-                                // Pattern doesn't destructure this field - use wildcard
+                            // A field the pattern doesn't destructure is a wildcard.
+                            const j = pat_positions.get(target_field.idx) orelse {
                                 new_row[i] = .anything;
-                            }
+                                continue;
+                            };
+                            new_row[i] = if (j < kc.args.len) kc.args[j] else .anything;
                         }
 
                         @memcpy(new_row[arity..], rest);
@@ -3202,8 +3217,9 @@ const ExhaustiveCtorsFrame = struct {
     column_types: ColumnTypes,
     alternatives: []const CtorInfo,
     union_info: Union,
+    tag_ids_by_name: TagIdsByName,
     first_col_type: Var,
-    found: []const TagId,
+    found_set: collections.DenseMap(TagId, void),
     close_open_extension: bool,
     index: usize = 0,
     alt: CtorInfo = undefined,
@@ -3363,14 +3379,7 @@ fn exhaustiveEnter(
                         continue;
                     }
 
-                    var found = false;
-                    for (ctor_info.found) |found_id| {
-                        if (@intFromEnum(alt.tag_id) == @intFromEnum(found_id)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
+                    if (!ctor_info.found_set.contains(alt.tag_id)) {
                         all_inhabited_real_ctors_found = false;
                         break;
                     }
@@ -3393,8 +3402,9 @@ fn exhaustiveEnter(
                     .column_types = column_types,
                     .alternatives = real_alternatives,
                     .union_info = ctor_info.union_info,
+                    .tag_ids_by_name = ctor_info.tag_ids,
                     .first_col_type = first_col_type,
-                    .found = ctor_info.found,
+                    .found_set = ctor_info.found_set,
                     .close_open_extension = close_open_extension,
                 };
             } else .{
@@ -3405,8 +3415,9 @@ fn exhaustiveEnter(
                 .column_types = column_types,
                 .alternatives = ctor_info.union_info.alternatives,
                 .union_info = ctor_info.union_info,
+                .tag_ids_by_name = ctor_info.tag_ids,
                 .first_col_type = first_col_type,
-                .found = ctor_info.found,
+                .found_set = ctor_info.found_set,
                 .close_open_extension = close_open_extension,
             };
             try frames.append(allocator, .{ .ctors = frame });
@@ -3523,16 +3534,7 @@ fn exhaustiveResume(
             while (ctors.index < ctors.alternatives.len) {
                 const alt = ctors.alternatives[ctors.index];
                 ctors.index += 1;
-                if (ctors.mode == .missing) {
-                    var found = false;
-                    for (ctors.found) |found_id| {
-                        if (@intFromEnum(alt.tag_id) == @intFromEnum(found_id)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (found) continue;
-                }
+                if (ctors.mode == .missing and ctors.found_set.contains(alt.tag_id)) continue;
 
                 // Skip uninhabited constructors - they don't need to be matched
                 // because no values of that constructor can exist.
@@ -3547,6 +3549,7 @@ fn exhaustiveResume(
                     alt.tag_id,
                     alt.arity,
                     ctors.union_info,
+                    &ctors.tag_ids_by_name,
                 );
 
                 // Use field-name-based lookup for records, positional for everything else
@@ -3629,7 +3632,7 @@ const UsefulFrame = struct {
     kind: union(enum) {
         /// A wildcard against fully covered constructors: every inhabited
         /// constructor, its arguments wildcards.
-        ctors: Union,
+        ctors: struct { union_info: Union, tag_ids: TagIdsByName },
         /// A wildcard against list patterns: every list arity to check.
         lists: struct { arities: []const ListArity, elem_inhabited: bool },
         /// A slice pattern: every arity it covers.
@@ -3697,7 +3700,8 @@ fn usefulNext(
 ) PatternResolveError!?UsefulCall {
     const rest = frame.rest;
     switch (frame.kind) {
-        .ctors => |union_info| while (frame.index < union_info.alternatives.len) {
+        .ctors => |*ctors| while (frame.index < ctors.union_info.alternatives.len) {
+            const union_info = ctors.union_info;
             const alt = union_info.alternatives[frame.index];
             frame.index += 1;
             // Skip uninhabited constructors
@@ -3712,6 +3716,7 @@ fn usefulNext(
                 alt.tag_id,
                 alt.arity,
                 union_info,
+                &ctors.tag_ids,
             );
 
             // Use field-name-based lookup for records, positional for everything else
@@ -3820,7 +3825,8 @@ fn usefulEnter(
                 .success => |u| u,
                 .not_a_union => return error.TypeError,
             };
-            const tag_id = findTagId(union_info, c.tag_name) orelse return error.TypeError;
+            const tag_ids = try tagIdsByName(allocator, union_info);
+            const tag_id = tag_ids.get(c.tag_name.idx) orelse return error.TypeError;
 
             const specialized = try specializeByConstructorSketched(
                 allocator,
@@ -3828,6 +3834,7 @@ fn usefulEnter(
                 tag_id,
                 c.args.len,
                 union_info,
+                &tag_ids,
             );
             const specialized_types = try column_types.specializeByConstructor(allocator, tag_id, c.args.len);
 
@@ -3844,13 +3851,11 @@ fn usefulEnter(
             switch (kc.union_info.render_as) {
                 .record => |current_record| {
                     // Collect all unique fields from matrix patterns + current pattern
-                    var all_fields: std.ArrayList(Ident.Idx) = .empty;
-                    var all_types: std.ArrayList(Var) = .empty;
+                    var all_fields: RecordFieldUnion = .{};
 
                     // Add current pattern's fields
                     for (current_record.names, current_record.types) |field, field_type| {
-                        try all_fields.append(allocator, field);
-                        try all_types.append(allocator, field_type);
+                        try all_fields.add(allocator, field, field_type);
                     }
 
                     // Add fields from matrix patterns
@@ -3861,17 +3866,7 @@ fn usefulEnter(
                                 switch (mat_kc.union_info.render_as) {
                                     .record => |mat_record| {
                                         for (mat_record.names, mat_record.types) |field, field_type| {
-                                            var already_present = false;
-                                            for (all_fields.items) |existing| {
-                                                if (existing.eql(field)) {
-                                                    already_present = true;
-                                                    break;
-                                                }
-                                            }
-                                            if (!already_present) {
-                                                try all_fields.append(allocator, field);
-                                                try all_types.append(allocator, field_type);
-                                            }
+                                            try all_fields.add(allocator, field, field_type);
                                         }
                                     },
                                     .tag, .opaque_type, .tuple, .guard => {},
@@ -3882,8 +3877,8 @@ fn usefulEnter(
                     }
 
                     // Update union_info with all fields
-                    const all_fields_slice = try all_fields.toOwnedSlice(allocator);
-                    const all_types_slice = try all_types.toOwnedSlice(allocator);
+                    const all_fields_slice = try all_fields.names.toOwnedSlice(allocator);
+                    const all_types_slice = try all_fields.types.toOwnedSlice(allocator);
                     merged_union_info.render_as = .{ .record = .{ .names = all_fields_slice, .types = all_types_slice } };
                     if (merged_union_info.alternatives.len == 1) {
                         const new_alts = try allocator.alloc(CtorInfo, 1);
@@ -3903,12 +3898,14 @@ fn usefulEnter(
             else
                 kc.args.len;
 
+            const merged_tag_ids = try tagIdsByName(allocator, merged_union_info);
             const specialized = try specializeByConstructorSketched(
                 allocator,
                 existing_matrix,
                 kc.tag_id,
                 arity,
                 merged_union_info,
+                &merged_tag_ids,
             );
 
             // Use field-name-based lookup for records, positional for everything else
@@ -3980,14 +3977,7 @@ fn usefulEnter(
                         // Not all constructors covered - but check if missing constructors are all uninhabited
                         var any_missing_inhabited = false;
                         for (ctor_info.union_info.alternatives) |alt| {
-                            var found = false;
-                            for (ctor_info.found) |found_id| {
-                                if (@intFromEnum(alt.tag_id) == @intFromEnum(found_id)) {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found) {
+                            if (!ctor_info.found_set.contains(alt.tag_id)) {
                                 if (close_open_extension) {
                                     const is_open_synthetic = switch (alt.name) {
                                         .tag => |tag| tag.isNone(),
@@ -4029,7 +4019,7 @@ fn usefulEnter(
                         .rest = rest,
                         .column_types = column_types,
                         .first_col_type = first_col_type,
-                        .kind = .{ .ctors = ctor_info.union_info },
+                        .kind = .{ .ctors = .{ .union_info = ctor_info.union_info, .tag_ids = ctor_info.tag_ids } },
                     });
                     return .pushed;
                 },
