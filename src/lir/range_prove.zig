@@ -560,7 +560,7 @@ const StableFact = struct {
 };
 
 /// Bound on persisted facts per loop join.
-const loop_fact_cap: usize = 64;
+const loop_fact_cap: usize = 256;
 
 const LoopFacts = struct {
     items: [loop_fact_cap]StableFact = undefined,
