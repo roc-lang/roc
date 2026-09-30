@@ -501,6 +501,11 @@ binding_scheme_classification_stack: std.ArrayListUnmanaged(Var) = .empty,
 /// evidence of discharge: an unrelated error can poison the receiver, and a
 /// relation may be concrete before its place in the worklist is visited.
 settled_static_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// Constraint function vars of generated codec relations that a numeric-default
+/// drain left unresolved, stacked per visited deferred relation. Such a
+/// relation belongs to its owning definition's scheme, so the drain did not
+/// consume it and must not record it as settled.
+scratch_scheme_owned_codec_fns: std.ArrayListUnmanaged(Var) = .empty,
 /// Dispatch requirements discovered while checking a prospective scheme.
 /// Candidates live in an append-only arena while any prospective owner is
 /// active, and the owner index lets each generalization boundary visit only its
@@ -3238,6 +3243,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_deferred_codec_constraint_fns.deinit(self.gpa);
     self.scratch_default_param_vars.deinit();
     self.scratch_generated_codec_calls.deinit(self.gpa);
+    self.scratch_scheme_owned_codec_fns.deinit(self.gpa);
     self.imported_schemes.deinit(self.gpa);
     self.imported_scheme_by_source.deinit(self.gpa);
     self.associated_lookup_cache.deinit(self.gpa);
@@ -35785,6 +35791,13 @@ fn localProcedureMethodBinding(self: *const Self, method_lookup: StaticDispatchM
     return expr == .e_lambda or expr == .e_closure;
 }
 
+fn varListContains(vars: []const Var, target: Var) bool {
+    for (vars) |var_| {
+        if (var_ == target) return true;
+    }
+    return false;
+}
+
 fn sameDeferredDispatchRelation(a: DeferredConstraintCheck, b: DeferredConstraintCheck) bool {
     return a.var_ == b.var_ and
         a.constraints.start == b.constraints.start and
@@ -35808,6 +35821,7 @@ fn deferredDispatchRelationWasRetained(
 fn recordSettledDeferredDispatchRelation(
     self: *Self,
     deferred: DeferredConstraintCheck,
+    scheme_owned_codec_fns: []const Var,
 ) Allocator.Error!void {
     if (self.commit_probe_active) return;
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
@@ -35815,7 +35829,8 @@ fn recordSettledDeferredDispatchRelation(
             constraint.fn_name.eql(self.cir.idents.encoder_for);
         if (generated_codec and
             (self.final_codec_dispatch_constraint_fns.contains(constraint.fn_var) or
-                self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)))
+                self.schemeDefersGeneratedCodecConstraint(constraint.fn_var) or
+                varListContains(scheme_owned_codec_fns, constraint.fn_var)))
         {
             continue;
         }
@@ -35899,6 +35914,8 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
+        const scheme_owned_codecs_top = self.scratch_scheme_owned_codec_fns.items.len;
+        defer self.scratch_scheme_owned_codec_fns.shrinkRetainingCapacity(scheme_owned_codecs_top);
         const failure_expr = explicitDeferredConstraintFailureExpr(deferred_constraint);
         const deferred_children_start = env.deferred_static_dispatch_constraints.items.items.len;
         defer {
@@ -36221,7 +36238,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
-                                },
+                                } else try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var),
                                 .unsupported => try self.reportConstraintError(
                                     deferred_constraint.var_,
                                     constraint,
@@ -36268,7 +36285,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
-                                },
+                                } else try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var),
                                 .unsupported => try self.reportConstraintError(
                                     deferred_constraint.var_,
                                     constraint,
@@ -36574,7 +36591,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
-                                },
+                                } else try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var),
                                 .unsupported => {},
                             }
                         }
@@ -36626,7 +36643,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
-                                },
+                                } else try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var),
                                 .unsupported => {},
                             }
                         }
@@ -37020,7 +37037,10 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
         }
 
         if (!self.deferredDispatchRelationWasRetained(deferred_constraint, retained_top)) {
-            try self.recordSettledDeferredDispatchRelation(deferred_constraint);
+            try self.recordSettledDeferredDispatchRelation(
+                deferred_constraint,
+                self.scratch_scheme_owned_codec_fns.items[scheme_owned_codecs_top..],
+            );
         }
     }
 
