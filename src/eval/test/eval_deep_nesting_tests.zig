@@ -39,36 +39,33 @@ fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
 
 /// Deep-nesting eval cases, each run on a small stack under both
 /// specialization strategies.
-pub const tests = cases ++ boxyVariants(&cases) ++ probe_cases;
+pub const tests = cases ++ boxyVariants(&cases) ++ boxy_cases;
 
-const probe_depth = 2000;
 fn nestedRecord(comptime n: usize) []const u8 {
     return repeat("{ a: ", n) ++ "1.U64" ++ repeat(" }", n);
 }
-fn probe(comptime name: []const u8, comptime source: []const u8, comptime expected: []const u8) TestCase {
+
+fn boxyCase(comptime name: []const u8, comptime source: []const u8, comptime expected: []const u8) TestCase {
     return .{
-        .name = "TEMPDEEP " ++ name,
+        .name = "issue 11698: " ++ name ++ " (specialize=no)",
         .source_kind = .module,
         .source = source,
         .expected = .{ .inspect_str = expected },
-        .stack_bytes = 2 * 1024 * 1024,
+        .stack_bytes = shallow_stack_bytes,
         .specialization_strategy = .boxy,
-        .opt_in = true,
         .skip = .{ .wasm = true },
     };
 }
-const probe_cases = [_]TestCase{
-    probe("boxy generic identity", "id = |x| x\nmain = id(" ++ nestedRecord(probe_depth) ++ ")" ++ repeat(".a", probe_depth) ++ "\n", "1"),
-    probe("boxy inspect", "main = Str.inspect(" ++ nestedRecord(probe_depth) ++ ")\n", "\"" ++ repeat("{ a: ", probe_depth) ++ "1" ++ repeat(" }", probe_depth) ++ "\""),
-    probe("boxy equality", "main = " ++ nestedRecord(probe_depth) ++ " == " ++ nestedRecord(probe_depth) ++ "\n", "True"),
-    probe("boxy eq shallow", "main = " ++ nestedRecord(1) ++ " == " ++ nestedRecord(1) ++ "\n", "True"),
-    probe("boxy bool const", "main = Bool.True\n", "True"),
-    probe("boxy generic eq", "eq = |x, y| x == y\nmain = eq(" ++ nestedRecord(probe_depth) ++ ", " ++ nestedRecord(probe_depth) ++ ")\n", "True"),
-    probe("boxy generic inspect", "show = |x| Str.inspect(x)\nmain = show(" ++ nestedRecord(probe_depth) ++ ")\n", "\"" ++ repeat("{ a: ", probe_depth) ++ "1" ++ repeat(" }", probe_depth) ++ "\""),
-    probe("boxy generic list", "wrap = |x| [x, x]\nmain = wrap(" ++ nestedRecord(probe_depth) ++ ").len()\n", "2"),
-    probe("boxy generic tuple", "swap = |p| (p.1, p.0)\nmain = swap((" ++ nestedRecord(probe_depth) ++ ", 7.U64)).0\n", "7"),
-    probe("boxy set", "main = Set.from_list([" ++ nestedRecord(probe_depth) ++ ", " ++ nestedRecord(probe_depth) ++ "]).len()\n", "1"),
-    probe("lss generic identity", "id = |x| x\nmain = id(" ++ nestedRecord(probe_depth) ++ ")" ++ repeat(".a", probe_depth) ++ "\n", "1"),
+
+/// Deep types flowing through generic code, whose runtime descriptors and
+/// dictionaries Boxy builds from the type's structure.
+const boxy_cases = [_]TestCase{
+    boxyCase("deep record through a generic identity", "id = |x| x\nmain = id(" ++ nestedRecord(shallow_depth) ++ ")" ++ repeat(".a", shallow_depth) ++ "\n", "1"),
+    boxyCase("deep record inspected", "main = Str.inspect(" ++ nestedRecord(shallow_depth) ++ ")\n", "\"" ++ repeat("{ a: ", shallow_depth) ++ "1" ++ repeat(" }", shallow_depth) ++ "\""),
+    boxyCase("deep record equality", "main = " ++ nestedRecord(shallow_depth) ++ " == " ++ nestedRecord(shallow_depth) ++ "\n", "True"),
+    boxyCase("deep record through generic equality", "eq = |x, y| x == y\nmain = eq(" ++ nestedRecord(shallow_depth) ++ ", " ++ nestedRecord(shallow_depth) ++ ")\n", "True"),
+    boxyCase("deep record through generic inspect", "show = |x| Str.inspect(x)\nmain = show(" ++ nestedRecord(shallow_depth) ++ ")\n", "\"" ++ repeat("{ a: ", shallow_depth) ++ "1" ++ repeat(" }", shallow_depth) ++ "\""),
+    boxyCase("deep record in a generic list", "wrap = |x| [x, x]\nmain = wrap(" ++ nestedRecord(shallow_depth) ++ ").len()\n", "2"),
 };
 
 /// Each case again, lowered without specialization (`--specialize=no`).
@@ -286,6 +283,20 @@ const cases = [_]TestCase{
         .name = "issue 11698: deeply nested lists",
         .source_kind = .module,
         .source = "main = List.len(" ++ repeat("[", depth) ++ "1.U64" ++ repeat("]", depth) ++ ")\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = stack_bytes,
+    },
+    .{
+        .name = "issue 11698: nested field access receivers",
+        .source_kind = .module,
+        .source = "main = " ++ repeat("{ a: ", shallow_depth) ++ "1.U64" ++ repeat(" }.a", shallow_depth) ++ "\n",
+        .expected = .{ .inspect_str = "1" },
+        .stack_bytes = shallow_stack_bytes,
+    },
+    .{
+        .name = "issue 11698: deeply nested constant",
+        .source_kind = .module,
+        .source = "nested = " ++ repeat("[", depth) ++ "1.U64" ++ repeat("]", depth) ++ "\nmain = List.len(nested)\n",
         .expected = .{ .inspect_str = "1" },
         .stack_bytes = stack_bytes,
     },

@@ -4094,7 +4094,7 @@ const Builder = struct {
             .parser_record_fields => |state| self.allocator.free(state.fields),
             .encoder_tag_union_body, .encoder_tag_union_payloads, .encoder_tag_union_payload => |state| self.allocator.free(state.row_reps),
             .encoder_record_body, .encoder_record_fields_worker, .encoder_record_rename, .encoder_record_field => |state| self.allocator.free(state.fields),
-            else => {},
+            .ensure_worker, .worker_result, .ensure_worker_runtime_link, .ensure_worker_parser_runtime, .ensure_worker_encoder_runtime, .codec_call, .codec_call_checked_subject, .codec_call_finish, .parser_shape, .parser_alias_links, .parser_tag_link, .parser_try_plan, .parser_dict_key_method, .parser_dict_unit_key, .parser_dict_selection, .parser_record, .encoder_shape, .encoder_set, .encoder_sequence, .encoder_sequence_body, .encoder_sequence_elements, .encoder_sequence_item, .encoder_list, .encoder_list_body, .encoder_list_elements, .encoder_thunk, .encoder_dict, .encoder_dict_encode, .encoder_dict_body, .encoder_dict_fields, .encoder_dict_key_thunk, .encoder_dict_value_thunk, .encoder_tag_union, .encoder_record, .inspect_methods, .inspect_override, .worker_body, .worker_root_expr, .field_iterator, .field_iterator_link, .expr, .call_after_args, .block_statement, .lambda_args, .interpolation_after_parts, .derived_root_after_operands, .low_level_after_args, .inspect_expr, .inspect_expr_methods, .quote_conversion, .numeral_conversion, .callable_lookup, .callable_lookup_after_const, .callable_lookup_runtime, .callable_lookup_worker, .callable_lookup_use, .stored_fn_captures, .const_definition, .const_eval_call, .nested_callable_expr_use, .nested_callable_use_for_caller, .nested_callable_use_record, .nested_callable_use, .nested_callable_direct_record, .dispatch_plan_types, .generated_interpolation, .generated_interpolation_done, .generated_interpolation_record, .dispatch_call_target, .dispatch_call_after_types, .dispatch_call_after_worker, .iterator_for, .iterator_call, .iterator_call_after_operands, .iterator_call_after_worker, .analyze_type, .statement, .pattern, .direct_call_target, .direct_call_after_worker, .omitted_defaults, .static_const_node, .static_fn_value, .static_fn_record, .static_fn_captures, .const_fn_capture => {},
         }
     }
 
@@ -4416,7 +4416,7 @@ const Builder = struct {
                         typeRef(site.view, bodies.expr(hash.hasher).ty),
                         typeRef(site.view, expr.ty),
                     ),
-                    else => unreachable,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
                 }
             },
             .low_level_after_args => |site| {
@@ -6138,7 +6138,7 @@ const Builder = struct {
         const ref_id = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved.?,
             .lookup_external, .lookup_required => |resolved| resolved.?,
-            else => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
         };
         const stored_fn = self.storedFnSourceForProcedureValueRef(view, ref_id);
         const source = if (stored_fn) |stored|
@@ -6174,7 +6174,7 @@ const Builder = struct {
         else
             return;
         // The lowerer restores the const through its use-site requested type
-        // (`restoreConstUseInto`), so that type's representation must be
+        // (`beginRestoreConstUse`), so that type's representation must be
         // planned. The enclosing expression's type is not always the same
         // node as the requested payload type in module graphs whose root is
         // not the app itself.
@@ -13935,7 +13935,7 @@ const Builder = struct {
 
         fn destroy(frame: DictionaryArgsFrame, allocator: Allocator) void {
             switch (frame) {
-                inline else => |state| {
+                inline .call, .source, .static_workers => |state| {
                     state.deinit(allocator);
                     allocator.destroy(state);
                 },
@@ -17413,14 +17413,6 @@ const Builder = struct {
         ref_id: checked.ResolvedValueRefId,
     ) ?WorkerSource {
         return self.resolveWorkerSource(.{ .value_ref = .{ .view = view, .ref_id = ref_id } });
-    }
-
-    fn workerSourceForCallableRootExpr(
-        self: *Builder,
-        view: ModuleView,
-        expr_id: checked.CheckedExprId,
-    ) ?WorkerSource {
-        return self.resolveWorkerSource(.{ .root_expr = .{ .view = view, .expr = expr_id } });
     }
 
     fn workerSourceForProcedureUse(self: *Builder, procedure: checked.ProcedureUseTemplate) WorkerSource {

@@ -11331,22 +11331,14 @@ const Builder = struct {
             defer frozen_field_defaults.deinit(self.allocator);
             ctx.frozen_field_defaults = &frozen_field_defaults;
 
-            const callable = try graph.functionNodes(boundary.callable_node);
-            var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
-            const checked_args = ctx.checkedCallsiteIntrinsicArgs(
-                boundary.intrinsic,
-                boundary.operands,
-                &checked_arg_storage,
-            );
-            const lowered = try ctx.lowerCallsiteIntrinsicBodyAtCallable(
-                boundary.intrinsic,
-                boundary.checked_expr_id,
-                boundary.source_fn_ty,
-                checked_args,
-                callable,
-                null,
-                if (boundary.pre_lowered_args) |span| ctx.exprSpan(span) else null,
-            );
+            const lowered = (try ctx.runLower(.{ .callsite_intrinsic = .{
+                .intrinsic = boundary.intrinsic,
+                .checked_expr_id = boundary.checked_expr_id,
+                .source_fn_ty = boundary.source_fn_ty,
+                .operands = boundary.operands,
+                .callable_node = boundary.callable_node,
+                .deferred_body = .{ .pre_lowered_args = boundary.pre_lowered_args },
+            } })).exprValue();
             var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
             const reserved_cell = body_draft.exprs.items[@intFromEnum(boundary.expr)].ty;
             const reserved_ty = try reserved_cell.seal(graph, sealer);
@@ -13567,14 +13559,29 @@ const Builder = struct {
         ty: Type.TypeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!Ast.ExprId {
-        const address = ConstExprAddress{
+        return try runConstRestore(self, store_view, type_view, node, ty, static_data_const_locator);
+    }
+
+    fn constExprAddress(store_view: ModuleView, type_view: ModuleView, node: checked.ConstNodeId, ty: Type.TypeId) ConstExprAddress {
+        return .{
             .store_module_bytes = store_view.key.bytes,
             .type_module_bytes = type_view.key.bytes,
             .node = @intFromEnum(node),
             .mono_ty = @intFromEnum(ty),
         };
+    }
+
+    fn startConstRestore(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!ConstRestoreStart(Ast.ExprId) {
+        const address = constExprAddress(store_view, type_view, node, ty);
         if (static_data_const_locator == null) {
-            if (self.const_expr_cache.get(address)) |existing| return existing;
+            if (self.const_expr_cache.get(address)) |existing| return .{ .done = existing };
         }
 
         const value = store_view.const_store.get(node);
@@ -13582,25 +13589,45 @@ const Builder = struct {
             .fn_value => |fn_id| {
                 const expr = try self.restoreConstFnExpr(store_view, fn_id, ty, static_data_const_locator);
                 if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
-                return expr;
+                return .{ .done = expr };
             },
             .tag, .record, .tuple => if (self.nominalConstructionLayer(ty)) |layer| {
-                const backing_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, layer.backing, static_data_const_locator);
-                const expr = try self.program.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
-                if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
-                return expr;
+                return .{ .layer = .{ .child = node, .backing = layer.backing, .named = layer.named } };
             },
             .nominal => |nominal| if (self.nominalConstructionLayer(ty)) |layer| {
-                const backing_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, nominal.backing, layer.backing, static_data_const_locator);
-                const expr = try self.program.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
-                if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
-                return expr;
+                return .{ .layer = .{ .child = nominal.backing, .backing = layer.backing, .named = layer.named } };
             },
             .pending, .zst, .scalar, .str, .list, .box, .crash => {},
         }
-        const data = try constRestoreData(self, store_view, type_view, value, ty, static_data_const_locator);
+        return .{ .value = value };
+    }
+
+    fn finishConstRestoreLayer(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        named: Type.TypeId,
+        backing_expr: Ast.ExprId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = try self.program.addExpr(.{ .ty = named, .data = .{ .nominal = backing_expr } });
+        if (static_data_const_locator == null) try self.const_expr_cache.put(constExprAddress(store_view, type_view, node, ty), expr);
+        return expr;
+    }
+
+    fn finishConstRestoreData(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        data: Ast.ExprData,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!Ast.ExprId {
         const expr = try self.program.addExpr(.{ .ty = ty, .data = data });
-        if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
+        if (static_data_const_locator == null) try self.const_expr_cache.put(constExprAddress(store_view, type_view, node, ty), expr);
         return expr;
     }
 
@@ -27981,7 +28008,7 @@ const BodyContext = struct {
             expected_ret_cell: DraftTypeCell,
             arg_nodes: []const NodeId = &.{},
         },
-        /// `lowerPreparedDispatchOperandsAtNodes`
+        /// Dispatch operands not already lowered, each at its prepared node.
         prepared_operands: PreparedOperandsTask,
         /// `lowerDispatchOperandAtType`
         operand_at_type: struct { operand: static_dispatch.StaticDispatchOperand, ty: Type.TypeId },
@@ -27991,7 +28018,7 @@ const BodyContext = struct {
         uninhabited_call: UninhabitedArgumentTask,
         /// `lowerExprSpan`
         span: SpanTask,
-        /// `lowerPreparedExprSpanAtNodes`
+        /// Expressions each lowered at its prepared node.
         prepared_span: SpanTask,
         /// `lowerExprSpanAtTypes`
         span_at_types: SpanTask,
@@ -28033,6 +28060,133 @@ const BodyContext = struct {
         iterator_dispatch: *IteratorDispatchTask,
         /// A pattern binding before its continuation.
         materialize: MaterializeTask,
+        /// A field access whose receiver lowers as a child.
+        field_access: FieldAccessTask,
+        /// A string's segments concatenated in order.
+        str: StrTask,
+        /// A structural equality or hash whose operands lower as children.
+        direct_structural: DirectStructuralTask,
+        /// A function value rendered by `Str.inspect` after it is evaluated.
+        inspect_only: InspectOnlyTask,
+        /// A generalized callable alias's aliased callable.
+        scheme_alias: SchemeAliasTask,
+        /// A call-site intrinsic's arguments, then its generated body.
+        callsite_intrinsic: CallsiteIntrinsicTask,
+        /// A generated interpolation iterator, one part at a time.
+        interpolation_iter: InterpolationIterTask,
+    };
+
+    /// A generated interpolation iterator, built from its last part to its
+    /// first; each part's value and following segment lower as children.
+    const InterpolationIterTask = struct {
+        interpolation: checked.CheckedInterpolation,
+        source_expr_id: checked.CheckedExprId,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+        stage: enum { start, value, segment } = .start,
+        /// Each remaining count's `len_if_known`. Owned.
+        len_exprs: []DraftExprId = &.{},
+        iter_expr: DraftExprId = undefined,
+        /// The part being built.
+        index: usize = 0,
+        rest_expr: DraftExprId = undefined,
+        rest_pat: DraftPatId = undefined,
+        rest_ref: DraftExprId = undefined,
+        item_ty: Type.TypeId = undefined,
+        value_expr: DraftExprId = undefined,
+        demand_scope: ?CallableBodyDemandScope = null,
+    };
+
+    /// A call-site intrinsic whose arguments lower as child tasks, in
+    /// argument order, before its generated body.
+    const CallsiteIntrinsicTask = struct {
+        intrinsic: checked.IntrinsicId,
+        checked_expr_id: checked.CheckedExprId,
+        source_fn_ty: checked.CheckedTypeId,
+        operands: CheckedIntrinsicOperands,
+        /// The callable request node: at a call site, the initial node the
+        /// intrinsic's result source refines when the task starts.
+        callable_node: NodeId,
+        expected_ret_ty: ?Type.TypeId = null,
+        /// A deferred intrinsic emitted once the body's graph is sealed,
+        /// with the arguments its call site lowered, if any.
+        deferred_body: ?struct { pre_lowered_args: ?DraftSpan(DraftExprId) } = null,
+        stage: enum { start, deferred_args, args } = .start,
+        /// The checked arguments. Owned.
+        args: []checked.CheckedExprId = &.{},
+        arg_tys: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined,
+        ret_ty: Type.TypeId = undefined,
+        lowered_args: [checked.IntrinsicId.max_callsite_arity]DraftExprId = undefined,
+        index: usize = 0,
+    };
+
+    /// A checked callable alias is a scheme-use edge, not a new function or
+    /// runtime local. Its aliased callable lowers as a child in a fresh
+    /// type-only scope holding the alias's exact substitution; runtime binder
+    /// and declaration-context tables remain shared with the enclosing body.
+    const SchemeAliasTask = struct {
+        alias: checked.LocalProcedureBinding,
+        use_expr: checked.CheckedExprId,
+        expected_node: NodeId,
+        /// The enclosing scope's instantiation and evidence, restored once
+        /// the aliased callable is lowered. Boxed: an instantiation context
+        /// is far larger than every task.
+        saved: ?*SchemeAliasSavedScope = null,
+    };
+
+    const SchemeAliasSavedScope = struct {
+        instantiation: TypeInstantiationContext,
+        evidence: EvidenceChain,
+    };
+
+    /// A function value `Str.inspect` renders without consuming: the source
+    /// expression still runs as a child, and its value is discarded.
+    const InspectOnlyTask = struct {
+        arg: checked.CheckedExprId,
+        str_ty: Type.TypeId,
+    };
+
+    /// A structural equality or hash expression whose operands lower as
+    /// child tasks.
+    const DirectStructuralTask = struct {
+        expr: checked.CheckedExprId,
+        /// The context type the result is lowered at, checked against the
+        /// result, or the checked result type lowered when the task starts.
+        ret: union(enum) { context: Type.TypeId, checked: checked.CheckedTypeId },
+        stage: enum { start, discriminant, lhs, rhs, hash_value, hash_hasher } = .start,
+        ret_ty: Type.TypeId = undefined,
+        /// The sealed operand type, or null when the operands are lowered
+        /// at the deferred operand node.
+        operand_ty: ?Type.TypeId = null,
+        operand_node: NodeId = undefined,
+        lhs: DraftExprId = undefined,
+    };
+
+    /// A string whose segments lower as child tasks, concatenated in order.
+    const StrTask = struct {
+        segments: []const checked.CheckedExprId,
+        /// The cell the string's expression is built at; without one the
+        /// task produces the string's expression data.
+        cell: ?DraftTypeCell = null,
+        index: usize = 0,
+        out: DraftExprId = undefined,
+    };
+
+    /// A field access whose receiver lowers as a child task, so nested
+    /// receivers never nest native lowering calls.
+    const FieldAccessTask = struct {
+        expr: checked.CheckedExprId,
+        /// The node the access is lowered at, or, for an optional chain at a
+        /// sealed type, its `Try` type.
+        target: union(enum) { node: NodeId, try_ty: Type.TypeId },
+        started: bool = false,
+        optional: bool = false,
+        receiver_node: NodeId = undefined,
+        receiver_ty: Type.TypeId = undefined,
+        result_node: NodeId = undefined,
+        segments_start: u32 = 0,
     };
 
     /// A block whose statements and final expression lower as child tasks,
@@ -29928,6 +30082,9 @@ const BodyContext = struct {
     };
 
     const DispatchLowerTask = struct {
+        /// The result type a structural equality or hash computed before its
+        /// operands lower.
+        structural_ret_ty: Type.TypeId = undefined,
         checked_ret_ty: checked.CheckedTypeId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         expected_ret_cell: DraftTypeCell,
@@ -30409,7 +30566,18 @@ const BodyContext = struct {
                 self.allocator.destroy(task);
             },
             .materialize => |*task| self.releaseMaterializeTask(task),
-            .branch_body, .return_value, .inspected, .divergent => {},
+            .branch_body, .return_value, .inspected, .divergent, .field_access, .str, .direct_structural, .inspect_only => {},
+            .scheme_alias => |*task| self.restoreSchemeAliasScope(task),
+            .callsite_intrinsic => |*task| {
+                self.allocator.free(task.args);
+                task.args = &.{};
+            },
+            .interpolation_iter => |*task| {
+                if (task.demand_scope) |scope| scope.leave();
+                task.demand_scope = null;
+                self.allocator.free(task.len_exprs);
+                task.len_exprs = &.{};
+            },
             .prepared_operands => |*task| {
                 if (task.reserving) self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
                 task.reserving = false;
@@ -30467,6 +30635,13 @@ const BodyContext = struct {
             .loop => |*task| self.stepLoop(task, input),
             .iterator_dispatch => |task| self.stepIteratorDispatch(frame, task, input),
             .materialize => |*task| self.stepMaterialize(task, input),
+            .field_access => |*task| self.stepFieldAccessLower(task, input),
+            .str => |*task| self.stepStr(task, input),
+            .direct_structural => |*task| self.stepDirectStructural(task, input),
+            .inspect_only => |*task| self.stepInspectOnly(task, input),
+            .scheme_alias => |*task| self.stepSchemeAlias(task, input),
+            .callsite_intrinsic => |*task| self.stepCallsiteIntrinsic(task, input),
+            .interpolation_iter => |*task| self.stepInterpolationIter(task, input),
         };
     }
 
@@ -30570,12 +30745,12 @@ const BodyContext = struct {
         }
         frame.cursor = 5;
         switch (expr.data) {
-            .lookup_local => |lookup| return loweredExprStep(try self.lowerLookupExprAtNode(checked_expr, lookup.resolved, expected_node)),
-            .lookup_external => |resolved| return loweredExprStep(try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node)),
-            .lookup_required => |resolved| return loweredExprStep(try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node)),
+            .lookup_local => |lookup| return try self.lookupExprAtNodeStep(checked_expr, lookup.resolved, expected_node),
+            .lookup_external => |resolved| return try self.lookupExprAtNodeStep(checked_expr, resolved, expected_node),
+            .lookup_required => |resolved| return try self.lookupExprAtNodeStep(checked_expr, resolved, expected_node),
             .lambda => return requestLowerTask(self, .{ .nested_fn = .{ .expr_id = checked_expr, .request_fn_node = expected_node } }),
             .closure => |closure| return requestLowerTask(self, .{ .nested_fn = .{ .expr_id = checked_expr, .request_fn_node = expected_node, .closure = closure } }),
-            .field_access => |field| return loweredExprStep(try self.lowerFieldAccessExprAtNode(checked_expr, field, expected_node)),
+            .field_access => return requestLowerTask(self, .{ .field_access = .{ .expr = checked_expr, .target = .{ .node = expected_node } } }),
             .tag => |tag| return constructorStep(self, .{ .kind = .{ .tag = tag.name }, .node = expected_node, .children = tag.args }),
             .zero_argument_tag => |tag| return loweredExprStep(try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
                 .name = try self.tagName(self.view, tag.name),
@@ -30712,12 +30887,15 @@ const BodyContext = struct {
             },
         }
         switch (expr.data) {
-            .call => |call| if (try self.lowerInspectOnlyCall(
+            .call => |call| if (try self.inspectOnlyCallStep(
                 expr.ty,
                 call,
                 ty,
                 self.inspectCallDemand(call),
-            )) |rendered| return loweredExprStep(rendered),
+            )) |step| {
+                frame.cursor = 3;
+                return step;
+            },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return loweredExprStep(restored);
@@ -30727,8 +30905,9 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .with_type = .{ .expr = checked_expr, .ty = ty } });
             },
             .call => |call| {
-                if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| {
-                    return loweredExprStep(lowered);
+                if (try self.callsiteIntrinsicCallTask(checked_expr, expr.ty, call, try self.activeNodeFromType(ty), ty)) |intrinsic| {
+                    frame.cursor = 3;
+                    return requestLowerTask(self, intrinsic);
                 }
                 try self.constrainKnownType(expr.ty, ty);
                 frame.cursor = 2;
@@ -30756,35 +30935,33 @@ const BodyContext = struct {
                 frame.cursor = 3;
                 return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = .{ .sealed = ty } } });
             },
-            .lookup_local => |lookup| return loweredExprStep(try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty)),
-            .lookup_external => |resolved| return loweredExprStep(try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
-            .lookup_required => |resolved| return loweredExprStep(try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
-            .structural_eq => |eq| {
-                try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerDirectStructuralEqAtType(eq, ty);
-                if (!self.sameType(ty, try self.exprType(lowered))) {
-                    Common.invariant("checked structural equality lowered at a type different from its context type");
-                }
-                return loweredExprStep(lowered);
+            .lookup_local => |lookup| {
+                frame.cursor = 3;
+                return try self.lookupExprAtTypeStep(expr.ty, lookup.resolved, ty);
             },
-            .structural_hash => |h| {
-                try self.constrainKnownType(expr.ty, ty);
-                const lowered = try self.lowerDirectStructuralHashAtType(h, ty);
-                if (!self.sameType(ty, try self.exprType(lowered))) {
-                    Common.invariant("checked structural hash lowered at a type different from its context type");
-                }
-                return loweredExprStep(lowered);
+            .lookup_external => |resolved| {
+                frame.cursor = 3;
+                return try self.lookupExprAtTypeStep(expr.ty, resolved, ty);
             },
-            .field_access => |field| {
+            .lookup_required => |resolved| {
+                frame.cursor = 3;
+                return try self.lookupExprAtTypeStep(expr.ty, resolved, ty);
+            },
+            .structural_eq, .structural_hash => {
+                try self.constrainKnownType(expr.ty, ty);
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .direct_structural = .{ .expr = checked_expr, .ret = .{ .context = ty } } });
+            },
+            .field_access => {
                 // A sealed result does not imply that the receiver is sealed:
                 // it may be a graph-backed local whose open row is constrained
                 // only at this field. Keep the receiver and field relation in
                 // the graph and let normal finalization seal the result.
-                return loweredExprStep(try self.lowerFieldAccessExprAtNode(
-                    checked_expr,
-                    field,
-                    try self.activeNodeFromType(ty),
-                ));
+                frame.cursor = 3;
+                return requestLowerTask(self, .{ .field_access = .{
+                    .expr = checked_expr,
+                    .target = .{ .node = try self.activeNodeFromType(ty) },
+                } });
             },
             .lambda, .closure => {},
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.constrainKnownType(expr.ty, ty),
@@ -30806,12 +30983,18 @@ const BodyContext = struct {
             return step;
         }
         switch (expr.data) {
-            .call => |call| if (try self.lowerInspectOnlyCall(
+            .call => |call| if (try self.inspectOnlyCallStep(
                 expr.ty,
                 call,
                 try self.primitiveType(.str),
                 self.inspectCallDemand(call),
-            )) |rendered| return self.exprInnerDone(task, rendered),
+            )) |step| switch (step) {
+                .ret => |result| return self.exprInnerDone(task, result.exprValue()),
+                .call => {
+                    frame.cursor = 1;
+                    return step;
+                },
+            },
             .runtime_error => {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = try self.unitType() } });
@@ -30878,10 +31061,8 @@ const BodyContext = struct {
                     .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
                 }
                 try self.graph.unify(expr_node, try self.graph.importMono(try self.primitiveType(.str)));
-                return self.exprInnerDone(task, try self.addExprWithTypeCell(
-                    DraftTypeCell.fromGraphNode(expr_node),
-                    try self.lowerStr(segments),
-                ));
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .str = .{ .segments = segments, .cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
             // Constructor payloads carry the type evidence that completes the
             // constructor node. Lower them first, then seal the whole value at
@@ -30938,9 +31119,10 @@ const BodyContext = struct {
                     .ext = @as(?checked.CheckedExprId, null),
                 }, expr_node, &.{}));
             },
-            .field_access => |field| {
+            .field_access => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return self.exprInnerDone(task, try self.lowerFieldAccessExprAtNode(expr_id, field, expr_node));
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .field_access = .{ .expr = expr_id, .target = .{ .node = expr_node } } });
             },
             .pending, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
@@ -30971,8 +31153,10 @@ const BodyContext = struct {
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
         switch (expr.data) {
-            .structural_eq => |eq| return self.exprInnerDone(task, try self.lowerDirectStructuralEq(expr.ty, eq)),
-            .structural_hash => |h| return self.exprInnerDone(task, try self.lowerDirectStructuralHash(expr.ty, h)),
+            .structural_eq, .structural_hash => {
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .direct_structural = .{ .expr = expr_id, .ret = .{ .checked = expr.ty } } });
+            },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         frame.cursor = 1;
@@ -31011,10 +31195,13 @@ const BodyContext = struct {
                     try self.zeroBranchMatch(child.exprValue(), backing_ty)
                 else
                     child.exprValue() } })),
-                .field_access => |field| try self.withTypeData(task, .{ .field_access = .{
-                    .receiver = child.exprValue(),
-                    .segments = .{ .start = task.field_access_start, .len = @intCast(field.segments.len) },
-                } }),
+                .field_access => |field| if (fieldAccessAnySegmentOptional(field.segments))
+                    self.withTypeDone(task, child.exprValue())
+                else
+                    try self.withTypeData(task, .{ .field_access = .{
+                        .receiver = child.exprValue(),
+                        .segments = .{ .start = task.field_access_start, .len = @intCast(field.segments.len) },
+                    } }),
                 .tuple_access => |access| try self.withTypeData(task, .{ .tuple_access = .{
                     .tuple = child.exprValue(),
                     .elem_index = access.elem_index,
@@ -31025,14 +31212,14 @@ const BodyContext = struct {
                     .msg = child.exprValue(),
                     .region = expr.source_region,
                 } }),
-                .return_ => try self.withTypeData(task, child.dataValue()),
+                .return_, .str => try self.withTypeData(task, child.dataValue()),
                 .for_ => try self.withTypeData(task, .{ .block = .{
                     .statements = try self.addStmtSpan(&.{child.statementValue().stmt.?}),
                     .final_expr = try self.addExpr(.{ .ty = ty, .data = .unit }),
                 } }),
                 .run_low_level => |low_level| try self.withTypeData(task, .{ .low_level = .{ .op = low_level.op, .args = child.spanValue() } }),
-                .match_, .if_, .block, .closure, .lambda, .record => self.withTypeDone(task, child.exprValue()),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable,
+                .match_, .if_, .block, .closure, .lambda, .record, .lookup_local, .lookup_external, .lookup_required => self.withTypeDone(task, child.exprValue()),
+                .pending, .numeral, .str_from_quote, .str_segment, .bytes_literal, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable,
             };
         }
         task.saved = try self.saveSourceLocation(expr);
@@ -31070,10 +31257,19 @@ const BodyContext = struct {
                 .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
                 .ext = @as(?checked.CheckedExprId, null),
             }, ty, &.{})),
-            .str => |segments| try self.lowerStr(segments),
-            .lookup_local => |lookup| return self.withTypeDone(task, try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty)),
-            .lookup_external => |resolved| return self.withTypeDone(task, try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
-            .lookup_required => |resolved| return self.withTypeDone(task, try self.lowerLookupExprAtType(expr.ty, resolved, ty)),
+            .str => |segments| return requestLowerTask(self, .{ .str = .{ .segments = segments } }),
+            .lookup_local => |lookup| return switch (try self.lookupExprAtTypeStep(expr.ty, lookup.resolved, ty)) {
+                .ret => |result| self.withTypeDone(task, result.exprValue()),
+                .call => |step| .{ .call = step },
+            },
+            .lookup_external => |resolved| return switch (try self.lookupExprAtTypeStep(expr.ty, resolved, ty)) {
+                .ret => |result| self.withTypeDone(task, result.exprValue()),
+                .call => |step| .{ .call = step },
+            },
+            .lookup_required => |resolved| return switch (try self.lookupExprAtTypeStep(expr.ty, resolved, ty)) {
+                .ret => |result| self.withTypeDone(task, result.exprValue()),
+                .call => |step| .{ .call = step },
+            },
             .list => |items| return requestLowerTask(self, .{ .list_span = .{ .exprs = items, .list_ty = ty } }),
             .tuple => |items| return requestLowerTask(self, try self.spanAtTypesTask(items, self.tupleItemTypes(ty))),
             .record => |record| return try self.beginRecordAtType(record, ty),
@@ -31108,7 +31304,7 @@ const BodyContext = struct {
             .field_access => |field| {
                 if (field.segments.len == 0) Common.invariant("checked field access path had no segments");
                 if (fieldAccessAnySegmentOptional(field.segments)) {
-                    return self.withTypeDone(task, try self.lowerOptionalFieldAccessChain(field, try self.lowerExprType(field.receiver), ty));
+                    return requestLowerTask(self, .{ .field_access = .{ .expr = expr_id, .target = .{ .try_ty = ty } } });
                 }
                 const receiver_ty = try self.lowerExprType(field.receiver);
                 const start: u32 = @intCast(self.draft.field_access_segments.items.len);
@@ -31203,6 +31399,32 @@ const BodyContext = struct {
                 // here.
                 return self.dispatchLowerDone(task, try self.applyDispatchResultMode(plan.result_mode, call_expr));
             },
+            // A resolved method call's remaining operands.
+            5, 6 => {
+                const lookup = switch (self.evidenceResolution(plan) orelse
+                    Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
+                    .target => |lookup| lookup,
+                    .structural => Common.invariant("resolved dispatch operands reached a structural derivation"),
+                };
+                const call_data = if (frame.cursor == 6)
+                    try self.resolvedDirectDispatchCallData(plan, lookup, task.callable_node, input.?.spanValue())
+                else
+                    try self.resolvedDispatchCallData(plan, lookup, task.callable_node, input.?.spanValue());
+                const plan_ret_node = task.callable_ret;
+                const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
+                    DraftTypeCell.fromGraphNode(plan_ret_node)
+                else
+                    expected_ret_cell;
+                const call_expr = try self.addExprWithTypeCell(
+                    call_ret_cell,
+                    call_data,
+                );
+                return self.dispatchLowerDone(task, try self.applyDispatchResultMode(plan.result_mode, call_expr));
+            },
+            // A structural equality's operands.
+            7 => return self.dispatchLowerDone(task, try self.finishStructuralEqualityAtNode(plan, task.callable_node, task.structural_ret_ty, input.?.spanValue())),
+            // A structural hash's operands.
+            8 => return self.dispatchLowerDone(task, try self.finishStructuralHashAtNode(task.callable_node, task.structural_ret_ty, input.?.spanValue())),
             // A closed direct call lowered by its own frame.
             else => return self.dispatchLowerDone(task, input.?.exprValue()),
         }
@@ -31313,14 +31535,15 @@ const BodyContext = struct {
             if (plan.result_mode != .value) {
                 Common.invariant("call-site intrinsic dispatch had a non-value result mode");
             }
-            return self.dispatchLowerDone(task, try self.lowerCallsiteIntrinsicAtCallableNode(
-                intrinsic,
-                plan.expr,
-                plan.callable_ty,
-                .{ .dispatch = plan_args },
-                callable_node,
-                expected_ret_ty,
-            ));
+            frame.cursor = 4;
+            return requestLowerTask(self, .{ .callsite_intrinsic = .{
+                .intrinsic = intrinsic,
+                .checked_expr_id = plan.expr,
+                .source_fn_ty = plan.callable_ty,
+                .operands = .{ .dispatch = plan_args },
+                .callable_node = callable_node,
+                .expected_ret_ty = expected_ret_ty,
+            } });
         }
         const callable_graph = switch (self.graph.content(callable_node)) {
             .func => |function| function,
@@ -31370,7 +31593,6 @@ const BodyContext = struct {
         }
 
         const checked_ret_ty = task.checked_ret_ty;
-        const expected_ret_cell = task.expected_ret_cell;
         const callable_node = task.callable_node;
         const call_ctx = task.call_ctx.?;
         const plan_args = task.plan_args;
@@ -31386,12 +31608,20 @@ const BodyContext = struct {
         // reported missing methods); both emit an ordinary Roc runtime crash
         // and never return a dispatch result. A genuinely reachable ownerless
         // dispatch was rejected at check time.
-        const resolved = switch (self.evidenceResolution(plan) orelse
+        switch (self.evidenceResolution(plan) orelse
             Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
-            .target => |lookup| lookup,
+            .target => {},
             .structural => |structural| return self.dispatchLowerDone(task, switch (structural.derivation) {
-                .equality => try self.lowerStructuralEqualityAtNode(plan, callable_node, self, pre_lowered),
-                .hash => try self.lowerStructuralHashAtNode(plan, callable_node, self, pre_lowered),
+                .equality => {
+                    task.structural_ret_ty = try self.beginStructuralEqualityAtNode(plan, callable_node);
+                    frame.cursor = 7;
+                    return try self.dispatchOperandsAtCallableStep(plan, callable_node, pre_lowered);
+                },
+                .hash => {
+                    task.structural_ret_ty = try self.beginStructuralHashAtNode(plan, callable_node);
+                    frame.cursor = 8;
+                    return try self.dispatchOperandsAtCallableStep(plan, callable_node, pre_lowered);
+                },
                 .parser, .encoder => try self.deferStructuralSerializationAtNode(
                     plan,
                     structural,
@@ -31410,7 +31640,7 @@ const BodyContext = struct {
                     break :blk try self.lowerStructuralMap("map!", plan, map_plan, callable_mono_ty, plan_ret_ty, self, pre_lowered);
                 },
             }),
-        };
+        }
         const checked_result_node = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
             try self.freshInstNode(checked_ret_ty)
         else
@@ -31425,19 +31655,26 @@ const BodyContext = struct {
                 .pre_lowered = pre_lowered,
             } });
         }
-        const call_data = if (task.direct_graph_call)
-            try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered)
-        else
-            try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered);
-        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
-            DraftTypeCell.fromGraphNode(plan_ret_node)
-        else
-            expected_ret_cell;
-        const call_expr = try self.addExprWithTypeCell(
-            call_ret_cell,
-            call_data,
-        );
-        return self.dispatchLowerDone(task, try self.applyDispatchResultMode(plan.result_mode, call_expr));
+        frame.cursor = if (task.direct_graph_call) 6 else 5;
+        return try self.dispatchOperandsAtCallableStep(plan, callable_node, pre_lowered);
+    }
+
+    /// Lower a dispatch's operands not already lowered at the callable's
+    /// argument nodes, as a child.
+    fn dispatchOperandsAtCallableStep(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        callable_node: NodeId,
+        pre_lowered: []const PreLoweredOperand,
+    ) Allocator.Error!LowerStep {
+        const fn_nodes = try self.graph.functionNodes(callable_node);
+        const operands = plan.argsSlice(self.view.static_dispatch_plans);
+        try self.prepareDispatchOperandsAtNodes(operands, fn_nodes.args, pre_lowered);
+        return requestLowerTask(self, .{ .prepared_operands = .{
+            .operands = operands,
+            .nodes = fn_nodes.args,
+            .pre_lowered = pre_lowered,
+        } });
     }
 
     fn stepClosedLowLevel(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -31734,7 +31971,7 @@ const BodyContext = struct {
         }
     }
 
-    /// `lowerPreparedDispatchOperandsAtNodes`: lower each operand not already
+    /// Lower each dispatch operand not already
     /// lowered at its slot node.
     fn stepPreparedOperands(self: *BodyContext, frame: *LowerFrame, task: *PreparedOperandsTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const operands = task.operands;
@@ -31780,7 +32017,10 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 break :blk requestLowerChild(self, expr, .{ .sealed = task.ty });
             },
-            .generated_interpolation_iter => |expr| loweredExprStep(try self.lowerGeneratedInterpolationIter(expr, task.ty)),
+            .generated_interpolation_iter => |expr| blk: {
+                frame.cursor = 1;
+                break :blk requestLowerTask(self, try self.generatedInterpolationIterTask(expr, task.ty));
+            },
             .generated_numeral => |literal| loweredExprStep(try self.lowerNumeralValue(literal, task.ty)),
             .generated_quote => |literal| loweredExprStep(try self.lowerQuoteValue(literal, task.ty)),
         };
@@ -31908,7 +32148,7 @@ const BodyContext = struct {
     const SpanMode = enum {
         /// `lowerExprSpan`: each child at its own expression type node.
         typed_by_expr,
-        /// `lowerPreparedExprSpanAtNodes`: each child at its prepared node.
+        /// Each child at its prepared node.
         at_nodes,
         /// `lowerExprSpanAtTypes`: each child at its sealed type.
         at_types,
@@ -31988,6 +32228,8 @@ const BodyContext = struct {
 
     /// The call task's cursor while a divergent operand's effect lowers.
     const divergent_call_cursor: u8 = 0xff;
+    /// The generated iterator whose `next` a direct call reads.
+    const iterator_next_cursor: u8 = 0xfe;
 
     /// `lowerCallAtExpectedNode`
     fn stepCallLower(self: *BodyContext, frame: *LowerFrame, task: *CallLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -31999,6 +32241,13 @@ const BodyContext = struct {
                 .ret_ty = task.divergent_ret_cell,
                 .data = try self.exprIdAsDivergentData(input.?.exprValue()),
             }),
+            iterator_next_cursor => {
+                const iterator_node = task.fn_nodes.args[0];
+                return self.callLowerDone(task, .{
+                    .ret_ty = DraftTypeCell.fromGraphNode(task.fn_nodes.ret),
+                    .data = try self.lowerGeneratedIteratorNextData(input.?.exprValue(), iterator_node),
+                });
+            },
             0 => {
                 const expected_ret_node = task.expected_ret_node;
                 const expected_ret_ty = task.expected_ret_ty;
@@ -32074,7 +32323,10 @@ const BodyContext = struct {
                 const target = call.direct_target.?;
                 const fn_nodes = task.fn_nodes;
                 if (task.iterator_procedure) |procedure| {
-                    if (try self.lowerGeneratedIteratorNextCall(procedure, call.args, fn_nodes)) |lowered| return self.callLowerDone(task, lowered);
+                    if (self.generatedIteratorNextOperand(procedure, call.args, fn_nodes)) |iterator| {
+                        frame.cursor = iterator_next_cursor;
+                        return requestLowerChild(self, iterator, DraftTypeCell.fromGraphNode(fn_nodes.args[0]));
+                    }
                 }
                 const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
                 if (self.resolvedTargetIsStrInspect(target)) {
@@ -32166,39 +32418,46 @@ const BodyContext = struct {
             .call => |call| call,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("call-at-node lowering received a non-call expression"),
         };
-        if (frame.cursor == 1) {
-            const call_data = input.?.callValue();
-            return loweredExprStep(try self.finishCallExprAtNode(expected_node, try self.addExprWithTypeCell(call_data.ret_ty, call_data.data)));
+        switch (frame.cursor) {
+            0 => {},
+            1 => {
+                const call_data = input.?.callValue();
+                return loweredExprStep(try self.finishCallExprAtNode(expected_node, try self.addExprWithTypeCell(call_data.ret_ty, call_data.data)));
+            },
+            // A function value rendered after its evaluation.
+            else => return loweredExprStep(try self.finishCallExprAtNode(expected_node, input.?.exprValue())),
         }
         const producer_request = if (self.isGeneratedPrivateRootNode(expected_node)) expected_node else null;
-        const lowered = if (try self.lowerInspectOnlyCall(
+        if (try self.inspectOnlyCallStep(
             expr.ty,
             call,
             try self.primitiveType(.str),
             self.inspectCallDemand(call),
-        )) |rendered|
-            rendered
-        else if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored|
-            restored
-        else if (if (producer_request) |request|
-            try self.lowerCallsiteIntrinsicCallExprAtNode(checked_expr, expr.ty, call, request)
-        else
-            try self.lowerCallsiteIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
-            intrinsic
-        else {
-            // Preserve the expected result as an active graph relation. It
-            // may contain unresolved payload cells here, so materializing it
-            // as a Monotype TypeId would emit an incomplete output.
-            frame.cursor = 1;
-            return requestLowerTask(self, .{ .call = .{
-                .expr = checked_expr,
-                .checked_ret_ty = expr.ty,
-                .call = call,
-                .expected_ret_node = producer_request,
-                .expected_ret_ty = null,
-            } });
+        )) |step| switch (step) {
+            .ret => |result| return loweredExprStep(try self.finishCallExprAtNode(expected_node, result.exprValue())),
+            .call => {
+                frame.cursor = 2;
+                return step;
+            },
         };
-        return loweredExprStep(try self.finishCallExprAtNode(expected_node, lowered));
+        if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored| {
+            return loweredExprStep(try self.finishCallExprAtNode(expected_node, restored));
+        }
+        if (try self.callsiteIntrinsicCallTask(checked_expr, expr.ty, call, producer_request, null)) |intrinsic| {
+            frame.cursor = 2;
+            return requestLowerTask(self, intrinsic);
+        }
+        // Preserve the expected result as an active graph relation. It may
+        // contain unresolved payload cells here, so materializing it as a
+        // Monotype TypeId would emit an incomplete output.
+        frame.cursor = 1;
+        return requestLowerTask(self, .{ .call = .{
+            .expr = checked_expr,
+            .checked_ret_ty = expr.ty,
+            .call = call,
+            .expected_ret_node = producer_request,
+            .expected_ret_ty = null,
+        } });
     }
 
     fn finishCallExprAtNode(self: *BodyContext, expected_node: NodeId, lowered: DraftExprId) Allocator.Error!DraftExprId {
@@ -32226,8 +32485,9 @@ const BodyContext = struct {
         const checked_expr_id = task.expr;
         const checked_ret_ty = task.checked_ret_ty;
         if (frame.cursor == 0) {
-            if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr_id, checked_ret_ty, task.call, null)) |expr| {
-                return loweredExprStep(expr);
+            if (try self.callsiteIntrinsicCallTask(checked_expr_id, checked_ret_ty, task.call, null, null)) |intrinsic| {
+                frame.cursor = 2;
+                return requestLowerTask(self, intrinsic);
             }
             frame.cursor = 1;
             return requestLowerTask(self, .{ .call = .{
@@ -32238,6 +32498,8 @@ const BodyContext = struct {
                 .expected_ret_ty = null,
             } });
         }
+        // A call-site intrinsic lowered by its own frame.
+        if (frame.cursor == 2) return .{ .ret = input.? };
         const lowered = input.?.callValue();
         const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
         const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
@@ -32580,18 +32842,27 @@ const BodyContext = struct {
         return try PatternUninhabitedScan.Evaluation.run(self.allocator, &scan, pattern_id);
     }
 
-    fn lowerStr(self: *BodyContext, segments: []const checked.CheckedExprId) Allocator.Error!BodyExprData {
+    fn stepStr(self: *BodyContext, task: *StrTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const str_ty = try self.primitiveType(.str);
-        if (segments.len == 0) {
-            return .{ .nominal = try self.stringExpr("", str_ty) };
+        if (input) |lowered| {
+            task.out = if (task.index == 0)
+                lowered.exprValue()
+            else
+                try self.concatExpr(task.out, lowered.exprValue(), str_ty);
+            task.index += 1;
+        } else if (task.segments.len == 0) {
+            return try self.finishStr(task, try self.stringExpr("", str_ty));
         }
+        if (task.index < task.segments.len) {
+            return requestLowerChild(self, task.segments[task.index], .{ .sealed = str_ty });
+        }
+        return try self.finishStr(task, task.out);
+    }
 
-        var out = try self.lowerExprAtType(segments[0], str_ty);
-        for (segments[1..]) |segment| {
-            const right = try self.lowerExprAtType(segment, str_ty);
-            out = try self.concatExpr(out, right, str_ty);
-        }
-        return .{ .nominal = out };
+    fn finishStr(self: *BodyContext, task: *const StrTask, value: DraftExprId) Allocator.Error!LowerStep {
+        const data: BodyExprData = .{ .nominal = value };
+        const cell = task.cell orelse return .{ .ret = .{ .data = data } };
+        return loweredExprStep(try self.addExprWithTypeCell(cell, data));
     }
 
     fn lowerStringLiteral(self: *BodyContext, id: checked.CheckedStringLiteralId) Allocator.Error!DraftStringLiteralId {
@@ -32630,59 +32901,27 @@ const BodyContext = struct {
         return self.functionShape(fn_ty, "checked call function type was not a function").ret;
     }
 
-    fn lowerCallsiteIntrinsicCallExpr(
-        self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-        expected_ret_ty: ?Type.TypeId,
-    ) Allocator.Error!?DraftExprId {
-        return try self.lowerCallsiteIntrinsicCallExprAtExpectedNode(
-            checked_expr_id,
-            checked_ret_ty,
-            call,
-            if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
-            expected_ret_ty,
-        );
-    }
-
-    fn lowerCallsiteIntrinsicCallExprAtNode(
-        self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
-        checked_ret_ty: checked.CheckedTypeId,
-        call: anytype,
-        expected_ret_node: NodeId,
-    ) Allocator.Error!?DraftExprId {
-        return try self.lowerCallsiteIntrinsicCallExprAtExpectedNode(
-            checked_expr_id,
-            checked_ret_ty,
-            call,
-            expected_ret_node,
-            null,
-        );
-    }
-
-    fn lowerCallsiteIntrinsicCallExprAtExpectedNode(
+    /// The task lowering a direct call to a call-site intrinsic, or null
+    /// when the call's target is not one.
+    fn callsiteIntrinsicCallTask(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: ?NodeId,
         expected_ret_ty: ?Type.TypeId,
-    ) Allocator.Error!?DraftExprId {
+    ) Allocator.Error!?LowerTask {
         const target = call.direct_target orelse return null;
         const intrinsic = self.callsiteIntrinsicForResolvedTarget(target) orelse return null;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-
-        const callable_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node);
-        return try self.lowerCallsiteIntrinsicAtCallableNode(
-            intrinsic,
-            checked_expr_id,
-            source_fn_ty,
-            .{ .direct_call = call.args },
-            callable_node,
-            expected_ret_ty,
-        );
+        return .{ .callsite_intrinsic = .{
+            .intrinsic = intrinsic,
+            .checked_expr_id = checked_expr_id,
+            .source_fn_ty = source_fn_ty,
+            .operands = .{ .direct_call = call.args },
+            .callable_node = try self.directCallTypeNode(checked_ret_ty, call, source_fn_ty, expected_ret_node),
+            .expected_ret_ty = expected_ret_ty,
+        } };
     }
 
     /// Return checked expression operands for a call-site intrinsic without
@@ -32744,94 +32983,170 @@ const BodyContext = struct {
     /// monomorphic body generator. The checked callable request owns the
     /// specialization cells; neither source syntax nor the intrinsic wrapper
     /// is a later type authority.
-    fn lowerCallsiteIntrinsicAtCallableNode(
-        self: *BodyContext,
-        intrinsic: checked.IntrinsicId,
-        checked_expr_id: checked.CheckedExprId,
-        source_fn_ty: checked.CheckedTypeId,
-        operands: CheckedIntrinsicOperands,
-        initial_callable_node: NodeId,
-        expected_ret_ty: ?Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
-        const args = self.checkedCallsiteIntrinsicArgs(intrinsic, operands, &checked_arg_storage);
-        const callable_node = try self.callsiteIntrinsicRequestNode(intrinsic, initial_callable_node);
-        const callable = try self.graph.functionNodes(callable_node);
-        if (callable.args.len != args.len) {
-            Common.invariant("checked call-site intrinsic request had an unexpected arity");
-        }
-
-        if (!self.frozen_sealed_emission) {
-            var unresolved = !try self.graph.typeIsResolved(callable.ret);
-            if (!unresolved) for (callable.args) |arg_node| {
-                if (!try self.graph.typeIsResolved(arg_node)) {
-                    unresolved = true;
-                    break;
-                }
-            };
-            if (intrinsic == .parse_tag_union or unresolved) {
-                // Structural tag-union parsing always generates a codec body,
-                // so it follows the same prepare/freeze/emit boundary whether
-                // or not this particular request happens to be resolved yet.
-                // Other intrinsics defer only while their request still owns
-                // live row defaults such as an open `FieldName(shape)` row.
-                const pre_lowered_args: ?DraftSpan(DraftExprId) = if (intrinsic == .parse_tag_union) blk: {
-                    try self.prepareExprSpanAtNodes(args, callable.args);
-                    break :blk try self.lowerPreparedExprSpanAtNodes(args, callable.args);
-                } else null;
-                const expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(callable.ret), .pending_deferred);
-                const lexical = try self.captureCodecLexicalContext();
-                var lexical_needs_cleanup = true;
-                errdefer if (lexical_needs_cleanup) {
-                    self.allocator.free(lexical.binders);
-                    self.allocator.free(lexical.local_procs);
-                };
-                const codec_contract = if (intrinsic == .parse_tag_union)
-                    try self.retainActiveCodecContract()
-                else
-                    null;
-                var codec_contract_needs_cleanup = true;
-                errdefer if (codec_contract_needs_cleanup) {
-                    if (codec_contract) |contract| {
-                        contract.deinit(self.allocator);
+    fn stepCallsiteIntrinsic(self: *BodyContext, task: *CallsiteIntrinsicTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        switch (task.stage) {
+            .start => {
+                var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
+                task.args = try self.allocator.dupe(checked.CheckedExprId, self.checkedCallsiteIntrinsicArgs(task.intrinsic, task.operands, &checked_arg_storage));
+                if (task.deferred_body) |deferred| {
+                    if (deferred.pre_lowered_args) |span| {
+                        const lowered = self.exprSpan(span);
+                        if (lowered.len != task.args.len) Common.invariant("ParseTagUnionSpec.parse pre-lowered argument arity differed from its checked call");
+                        try self.beginCallsiteIntrinsicBody(task);
+                        @memcpy(task.lowered_args[0..lowered.len], lowered);
+                        return try self.finishCallsiteIntrinsic(task);
                     }
-                };
-                try self.draft.deferred_callsite_intrinsics.append(self.allocator, .{
-                    .view = self.view,
-                    .method_scope = self.method_scope,
-                    .owner_template = self.owner_template,
-                    .owner = self.draft.current_owner,
-                    .expr = expr,
-                    .intrinsic = intrinsic,
-                    .checked_expr_id = checked_expr_id,
-                    .source_fn_ty = source_fn_ty,
-                    .operands = operands,
-                    .pre_lowered_args = pre_lowered_args,
-                    .callable_node = callable_node,
-                    .evidence = self.evidence,
-                    .current_fn_key = self.current_fn_key,
-                    .lexical = lexical,
-                    .codec_contract = codec_contract,
-                });
-                lexical_needs_cleanup = false;
-                codec_contract_needs_cleanup = false;
-                return expr;
+                    try self.beginCallsiteIntrinsicBody(task);
+                    return try self.nextCallsiteIntrinsicArg(task);
+                }
+                task.callable_node = try self.callsiteIntrinsicRequestNode(task.intrinsic, task.callable_node);
+                const callable = try self.graph.functionNodes(task.callable_node);
+                if (callable.args.len != task.args.len) {
+                    Common.invariant("checked call-site intrinsic request had an unexpected arity");
+                }
+
+                if (!self.frozen_sealed_emission) {
+                    var unresolved = !try self.graph.typeIsResolved(callable.ret);
+                    if (!unresolved) for (callable.args) |arg_node| {
+                        if (!try self.graph.typeIsResolved(arg_node)) {
+                            unresolved = true;
+                            break;
+                        }
+                    };
+                    if (task.intrinsic == .parse_tag_union) {
+                        // Structural tag-union parsing always generates a codec
+                        // body, so it follows the same prepare/freeze/emit
+                        // boundary whether or not this particular request
+                        // happens to be resolved yet.
+                        try self.prepareExprSpanAtNodes(task.args, callable.args);
+                        task.stage = .deferred_args;
+                        return requestLowerTask(self, .{ .prepared_span = .{ .exprs = task.args, .nodes = callable.args } });
+                    }
+                    // Other intrinsics defer only while their request still
+                    // owns live row defaults such as an open
+                    // `FieldName(shape)` row.
+                    if (unresolved) return loweredExprStep(try self.deferCallsiteIntrinsic(task, null));
+                }
+                try self.beginCallsiteIntrinsicBody(task);
+                return try self.nextCallsiteIntrinsicArg(task);
+            },
+            .deferred_args => return loweredExprStep(try self.deferCallsiteIntrinsic(task, input.?.spanValue())),
+            .args => {
+                task.lowered_args[task.index] = input.?.exprValue();
+                task.index += 1;
+                return try self.nextCallsiteIntrinsicArg(task);
+            },
+        }
+    }
+
+    /// Reserve a call-site intrinsic's expression, emitted once its body's
+    /// graph is sealed.
+    fn deferCallsiteIntrinsic(
+        self: *BodyContext,
+        task: *CallsiteIntrinsicTask,
+        pre_lowered_args: ?DraftSpan(DraftExprId),
+    ) Allocator.Error!DraftExprId {
+        const callable = try self.graph.functionNodes(task.callable_node);
+        const expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(callable.ret), .pending_deferred);
+        const lexical = try self.captureCodecLexicalContext();
+        var lexical_needs_cleanup = true;
+        errdefer if (lexical_needs_cleanup) {
+            self.allocator.free(lexical.binders);
+            self.allocator.free(lexical.local_procs);
+        };
+        const codec_contract = if (task.intrinsic == .parse_tag_union)
+            try self.retainActiveCodecContract()
+        else
+            null;
+        var codec_contract_needs_cleanup = true;
+        errdefer if (codec_contract_needs_cleanup) {
+            if (codec_contract) |contract| {
+                contract.deinit(self.allocator);
+            }
+        };
+        try self.draft.deferred_callsite_intrinsics.append(self.allocator, .{
+            .view = self.view,
+            .method_scope = self.method_scope,
+            .owner_template = self.owner_template,
+            .owner = self.draft.current_owner,
+            .expr = expr,
+            .intrinsic = task.intrinsic,
+            .checked_expr_id = task.checked_expr_id,
+            .source_fn_ty = task.source_fn_ty,
+            .operands = task.operands,
+            .pre_lowered_args = pre_lowered_args,
+            .callable_node = task.callable_node,
+            .evidence = self.evidence,
+            .current_fn_key = self.current_fn_key,
+            .lexical = lexical,
+            .codec_contract = codec_contract,
+        });
+        lexical_needs_cleanup = false;
+        codec_contract_needs_cleanup = false;
+        self.allocator.free(task.args);
+        task.args = &.{};
+        return expr;
+    }
+
+    /// Materialize the intrinsic's argument and result types from the exact
+    /// checked callable request nodes. Under frozen emission the
+    /// current-phase view seals each node to its final type; during ordinary
+    /// body lowering every node is already resolved.
+    fn beginCallsiteIntrinsicBody(self: *BodyContext, task: *CallsiteIntrinsicTask) Allocator.Error!void {
+        const callable = try self.graph.functionNodes(task.callable_node);
+        if (task.args.len > checked.IntrinsicId.max_callsite_arity or callable.args.len != task.args.len) {
+            Common.invariant("call-site intrinsic body had an unexpected arity");
+        }
+        for (callable.args, task.arg_tys[0..task.args.len]) |arg_node, *arg_ty| {
+            arg_ty.* = try self.currentPhaseTypeForNode(arg_node);
+        }
+        task.ret_ty = try self.currentPhaseTypeForNode(callable.ret);
+        if (task.expected_ret_ty) |expected| {
+            if (!self.sameType(expected, task.ret_ty)) Common.invariant("checked call-site intrinsic lowered at a type different from its context type");
+        }
+        task.index = 0;
+        task.stage = .args;
+    }
+
+    /// Lower the intrinsic's next argument, as a child when it is not a
+    /// callable reference; the body follows the last argument.
+    fn nextCallsiteIntrinsicArg(self: *BodyContext, task: *CallsiteIntrinsicTask) Allocator.Error!LowerStep {
+        while (task.index < task.args.len) {
+            switch (try self.callsiteIntrinsicArgStep(task.args[task.index], task.arg_tys[task.index])) {
+                .ret => |lowered| {
+                    task.lowered_args[task.index] = lowered.exprValue();
+                    task.index += 1;
+                },
+                .call => |child| return .{ .call = child },
             }
         }
+        return try self.finishCallsiteIntrinsic(task);
+    }
 
-        const lowered = try self.lowerCallsiteIntrinsicBodyAtCallable(
-            intrinsic,
-            checked_expr_id,
-            source_fn_ty,
-            args,
-            callable,
-            expected_ret_ty,
-            null,
-        );
-        if (try self.graph.containsGeneratedPrivate(callable.ret)) {
-            self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(callable.ret);
+    fn finishCallsiteIntrinsic(self: *BodyContext, task: *CallsiteIntrinsicTask) Allocator.Error!LowerStep {
+        const args = task.args;
+        const arg_tys = task.arg_tys[0..args.len];
+        const lowered_args = task.lowered_args[0..args.len];
+        const ret_ty = task.ret_ty;
+        const lowered = switch (task.intrinsic) {
+            .parse_tag_union => try self.lowerParseTagUnionDecode(args, arg_tys, ret_ty, lowered_args),
+            .field_names_rename_fields => try self.lowerFieldNamesRenameFieldNames(args, arg_tys, ret_ty, lowered_args),
+            .field_names_shortest_name => try self.lowerFieldNamesNameBound(args, arg_tys, ret_ty, .shortest, lowered_args),
+            .field_names_longest_name => try self.lowerFieldNamesNameBound(args, arg_tys, ret_ty, .longest, lowered_args),
+            .field_names_iter => try self.lowerFieldNamesIter(task.checked_expr_id, task.source_fn_ty, args, arg_tys, ret_ty, .all, lowered_args),
+            .field_names_for_size => try self.lowerFieldNamesIter(task.checked_expr_id, task.source_fn_ty, args, arg_tys, ret_ty, .for_size, lowered_args),
+            .field_name => try self.lowerFieldName(args, arg_tys, ret_ty, lowered_args),
+            .str_inspect, .structural_eq => unreachable,
+        };
+        if (task.deferred_body == null) {
+            const callable = try self.graph.functionNodes(task.callable_node);
+            if (try self.graph.containsGeneratedPrivate(callable.ret)) {
+                self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(callable.ret);
+            }
         }
-        return lowered;
+        self.allocator.free(task.args);
+        task.args = &.{};
+        return loweredExprStep(lowered);
     }
 
     /// Synthetic `(encoding) -> (state) -> Try` constructor node over a
@@ -32847,50 +33162,11 @@ const BodyContext = struct {
         return try self.graphFunctionNode(&.{encoding_node}, runtime_node);
     }
 
-    /// Materialize the intrinsic's argument and result types from the exact
-    /// checked callable request nodes and lower the intrinsic body. Under
-    /// frozen emission the current-phase view seals each node to its final
-    /// type; during ordinary body lowering every node is already resolved.
-    fn lowerCallsiteIntrinsicBodyAtCallable(
-        self: *BodyContext,
-        intrinsic: checked.IntrinsicId,
-        checked_expr_id: checked.CheckedExprId,
-        source_fn_ty: checked.CheckedTypeId,
-        args: []const checked.CheckedExprId,
-        callable: FunctionNodes,
-        expected_ret_ty: ?Type.TypeId,
-        pre_lowered_args: ?[]const DraftExprId,
-    ) Allocator.Error!DraftExprId {
-        if (args.len > checked.IntrinsicId.max_callsite_arity or callable.args.len != args.len) {
-            Common.invariant("call-site intrinsic body had an unexpected arity");
-        }
-        var arg_ty_storage: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined;
-        const arg_tys = arg_ty_storage[0..args.len];
-        for (callable.args, arg_tys) |arg_node, *arg_ty| {
-            arg_ty.* = try self.currentPhaseTypeForNode(arg_node);
-        }
-        const ret_ty = try self.currentPhaseTypeForNode(callable.ret);
-        if (expected_ret_ty) |expected| {
-            if (!self.sameType(expected, ret_ty)) Common.invariant("checked call-site intrinsic lowered at a type different from its context type");
-        }
-
-        return switch (intrinsic) {
-            .parse_tag_union => try self.lowerParseTagUnionDecode(args, arg_tys, ret_ty, pre_lowered_args),
-            .field_names_rename_fields => try self.lowerFieldNamesRenameFieldNames(args, arg_tys, ret_ty),
-            .field_names_shortest_name => try self.lowerFieldNamesNameBound(args, arg_tys, ret_ty, .shortest),
-            .field_names_longest_name => try self.lowerFieldNamesNameBound(args, arg_tys, ret_ty, .longest),
-            .field_names_iter => try self.lowerFieldNamesIter(checked_expr_id, source_fn_ty, args, arg_tys, ret_ty, .all),
-            .field_names_for_size => try self.lowerFieldNamesIter(checked_expr_id, source_fn_ty, args, arg_tys, ret_ty, .for_size),
-            .field_name => try self.lowerFieldName(args, arg_tys, ret_ty),
-            .str_inspect, .structural_eq => unreachable,
-        };
-    }
-
-    fn lowerCallsiteIntrinsicArgAtType(
+    fn callsiteIntrinsicArgStep(
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
         ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
+    ) Allocator.Error!LowerStep {
         const expr = self.view.bodies.expr(checked_arg);
         const maybe_ref: ?checked.ResolvedValueId = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
@@ -32904,14 +33180,18 @@ const BodyContext = struct {
                 if (!self.sameType(ty, local_ty)) {
                     Common.invariant("checked call-site intrinsic local argument type differed from its concrete local type");
                 }
-                return try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } });
+                return loweredExprStep(try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } }));
             }
 
             const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
             switch (record.ref) {
                 .local_proc => |local| {
                     const request_fn_node = try self.activeNodeFromType(ty);
-                    if (local.is_alias) return try self.lowerSchemeAliasAtNode(local, record.expr, request_fn_node);
+                    if (local.is_alias) return requestLowerTask(self, .{ .scheme_alias = .{
+                        .alias = local,
+                        .use_expr = record.expr,
+                        .expected_node = request_fn_node,
+                    } });
                     const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                     const fn_id = try self.lowerDraftLocalProcAtNode(
                         local,
@@ -32925,7 +33205,7 @@ const BodyContext = struct {
                         .inherit,
                     );
                     const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
-                    return try self.addExprWithTypeCell(
+                    return loweredExprStep(try self.addExprWithTypeCell(
                         DraftTypeCell.fromGraphNode(fn_node),
                         .{ .fn_def = .{ .fn_id = fn_id, .captures = try self.localProcFnDefCaptureSpan(
                             context_id,
@@ -32934,18 +33214,18 @@ const BodyContext = struct {
                             local.expr,
                             null,
                         ) } },
-                    );
+                    ));
                 },
                 .top_level_proc,
                 .imported_proc,
                 .hosted_proc,
                 .promoted_top_level_proc,
-                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), record.expr, null, record.recursive_reference),
-                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference),
+                => |proc| return loweredExprStep(try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), record.expr, null, record.recursive_reference)),
+                .platform_required_proc => |proc| return loweredExprStep(try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference)),
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
             }
         }
-        return try self.lowerExprAtType(checked_arg, ty);
+        return requestLowerChild(self, checked_arg, .{ .sealed = ty });
     }
 
     fn lowerCallableEvalBindingValue(
@@ -33407,13 +33687,16 @@ const BodyContext = struct {
         try self.draft.materialized_const_node_indices.put(address, @intCast(index));
     }
 
-    fn lowerInspectOnlyCall(
+    /// A `Str.inspect` of a function value: its rendering, or the task
+    /// evaluating the function expression before rendering it. Null when
+    /// the call is not an inspect-only rendering of a function.
+    fn inspectOnlyCallStep(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         str_ty: Type.TypeId,
         demand: LoweringDemand,
-    ) Allocator.Error!?DraftExprId {
+    ) Allocator.Error!?LowerStep {
         if (demand != .inspect_only) return null;
         if (call.args.len != 1) Common.invariant("Str.inspect call did not have exactly one argument");
 
@@ -33425,18 +33708,21 @@ const BodyContext = struct {
 
         try self.constrainTypeToMono(checked_ret_ty, str_ty);
         if (self.view.bodies.exprEvaluationMayBeElidedForInspect(call.args[0])) {
-            return try self.stringExpr("<function>", str_ty);
+            return loweredExprStep(try self.stringExpr("<function>", str_ty));
         }
+        return requestLowerTask(self, .{ .inspect_only = .{ .arg = call.args[0], .str_ty = str_ty } });
+    }
 
-        // Function rendering does not consume the function value, but the
-        // source expression must still run. Lower it normally, discard the
-        // produced callable, then return the representation.
-        const evaluated = try self.lowerExpr(call.args[0]);
+    /// Function rendering does not consume the function value, but the
+    /// source expression must still run: it lowers normally, the produced
+    /// callable is discarded, and the representation is the result.
+    fn stepInspectOnly(self: *BodyContext, task: *InspectOnlyTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const evaluated = if (input) |lowered| lowered.exprValue() else return requestLowerTask(self, .{ .expr = .{ .expr = task.arg } });
         const evaluation = try self.addStmt(.{ .expr = evaluated });
-        return try self.addExpr(.{ .ty = str_ty, .data = .{ .block = .{
+        return loweredExprStep(try self.addExpr(.{ .ty = task.str_ty, .data = .{ .block = .{
             .statements = try self.addStmtSpan(&.{evaluation}),
-            .final_expr = try self.stringExpr("<function>", str_ty),
-        } } });
+            .final_expr = try self.stringExpr("<function>", task.str_ty),
+        } } }));
     }
 
     fn inspectCallDemand(self: *BodyContext, call: anytype) LoweringDemand {
@@ -33537,12 +33823,13 @@ const BodyContext = struct {
         args: []const checked.CheckedExprId,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
+        lowered_args: []const DraftExprId,
     ) Allocator.Error!DraftExprId {
         if (args.len != 2 or arg_tys.len != 2) Common.invariant("FieldNames.rename_fields reached Monotype with an unexpected arity");
         if (!self.sameType(arg_tys[0], ret_ty)) Common.invariant("FieldNames.rename_fields result type differed from its field set argument");
 
-        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
-        const rename_value = try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
+        const fields_value = lowered_args[0];
+        const rename_value = lowered_args[1];
         if (self.generatedFieldNamesBackingValueFieldNames(arg_tys[0])) |backing_fields| {
             const stable_backing_fields = try GuardedList.dupe(self.allocator, Type.Field, backing_fields);
             defer self.allocator.free(stable_backing_fields);
@@ -33722,6 +34009,7 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
         bound: FieldNameBound,
+        lowered_args: []const DraftExprId,
     ) Allocator.Error!DraftExprId {
         if (args.len != 1 or arg_tys.len != 1) Common.invariant("FieldNames name bound reached Monotype with an unexpected arity");
         if (!self.typeHasBuiltinOwner(ret_ty, .u64)) Common.invariant("FieldNames name bound result was not U64");
@@ -33729,7 +34017,7 @@ const BodyContext = struct {
         const shape_ty = self.fieldsShapeType(arg_tys[0]);
         const fields = try GuardedList.dupe(self.allocator, Type.Field, self.recordFieldsForShape(shape_ty));
         defer self.allocator.free(fields);
-        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
+        const fields_value = lowered_args[0];
         if (self.generatedFieldNamesBackingInfo(arg_tys[0])) |info| {
             const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
             const body = try self.lowerGeneratedFieldNamesNameBound(
@@ -33795,6 +34083,7 @@ const BodyContext = struct {
         args: []const checked.CheckedExprId,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
+        lowered_args: []const DraftExprId,
     ) Allocator.Error!DraftExprId {
         if (args.len != 1 or arg_tys.len != 1) Common.invariant("Field.name reached Monotype with an unexpected arity");
         if (!self.typeHasBuiltinOwner(ret_ty, .str)) Common.invariant("Field.name result was not Str");
@@ -33805,7 +34094,7 @@ const BodyContext = struct {
         const name_field = self.recordFieldByText(backing_ty, "name");
         if (!self.sameType(name_field.ty, ret_ty)) Common.invariant("Field.name backing name field differed from Str");
 
-        const field_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], field_ty);
+        const field_value = lowered_args[0];
         const field_local = try self.addLocal(self.builder.symbols.fresh(), field_ty);
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
         const name_expr = try self.addFieldAccessExpr(
@@ -34049,6 +34338,7 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
         mode: FieldNamesIterMode,
+        lowered_args: []const DraftExprId,
     ) Allocator.Error!DraftExprId {
         const expected_arity: usize = switch (mode) {
             .all => 1,
@@ -34071,7 +34361,7 @@ const BodyContext = struct {
         }
         const field_handle_ty = self.iterItemType(ret_ty);
 
-        const fields_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
+        const fields_value = lowered_args[0];
         const fields_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
         const size_local: ?DraftLocalId = if (mode == .for_size) blk: {
             if (!self.typeHasBuiltinOwner(arg_tys[1], .u64)) Common.invariant("FieldNames.for_size size argument was not U64");
@@ -34123,7 +34413,7 @@ const BodyContext = struct {
             );
         };
         if (mode == .for_size) {
-            const size_value = try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
+            const size_value = lowered_args[1];
             iter_expr = try self.wrapLet(size_local.?, arg_tys[1], size_value, iter_expr, ret_ty);
         }
         return try self.wrapLet(fields_local, arg_tys[0], fields_value, iter_expr, ret_ty);
@@ -39578,12 +39868,9 @@ const BodyContext = struct {
         args: []const checked.CheckedExprId,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
-        pre_lowered_args: ?[]const DraftExprId,
+        lowered_args: []const DraftExprId,
     ) Allocator.Error!DraftExprId {
         if (args.len != 2 or arg_tys.len != 2) Common.invariant("ParseTagUnionSpec.parse reached Monotype with an unexpected arity");
-        if (pre_lowered_args) |lowered| {
-            if (lowered.len != args.len) Common.invariant("ParseTagUnionSpec.parse pre-lowered argument arity differed from its checked call");
-        }
         const ret_info = self.tryInfo(ret_ty);
 
         const value_name = try self.nameStoreMut().internRecordFieldLabel("value");
@@ -39593,8 +39880,8 @@ const BodyContext = struct {
             .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("ParseTagUnionSpec.parse value type was not a tag union"),
         };
         const spec_ty = arg_tys[0];
-        const spec_value = if (pre_lowered_args) |lowered| lowered[0] else try self.lowerCallsiteIntrinsicArgAtType(args[0], arg_tys[0]);
-        const options_value = if (pre_lowered_args) |lowered| lowered[1] else try self.lowerCallsiteIntrinsicArgAtType(args[1], arg_tys[1]);
+        const spec_value = lowered_args[0];
+        const options_value = lowered_args[1];
         const options_ty = arg_tys[1];
         const key_ty = self.recordFieldType(options_ty, try self.nameStoreMut().internRecordFieldLabel("tag"));
         const encoding_ty = self.recordFieldType(options_ty, try self.nameStoreMut().internRecordFieldLabel("encoding"));
@@ -40219,27 +40506,20 @@ const BodyContext = struct {
         } } });
     }
 
-    fn lowerGeneratedIteratorNextCall(
+    /// The iterator operand of an `Iter.next` over a generated iterator,
+    /// whose `next` reads the iterator's step directly.
+    fn generatedIteratorNextOperand(
         self: *BodyContext,
         procedure: checked.IteratorProcedureId,
         checked_args: []const checked.CheckedExprId,
         fn_nodes: FunctionNodes,
-    ) Allocator.Error!?LoweredCall {
+    ) ?checked.CheckedExprId {
         if (procedure != .iter_next) return null;
         if (checked_args.len != 1 or fn_nodes.args.len != 1) {
             Common.invariant("Iter.next reached Monotype with an unexpected arity");
         }
-        const iterator_node = fn_nodes.args[0];
-        if (!self.isGeneratedIteratorEvidenceNode(iterator_node)) return null;
-
-        const iterator = try self.lowerExprAtTypeCell(
-            checked_args[0],
-            DraftTypeCell.fromGraphNode(iterator_node),
-        );
-        return .{
-            .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
-            .data = try self.lowerGeneratedIteratorNextData(iterator, iterator_node),
-        };
+        if (!self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0])) return null;
+        return checked_args[0];
     }
 
     fn lowerGeneratedIteratorNextData(
@@ -41697,7 +41977,7 @@ const BodyContext = struct {
             => Common.invariant("local lookup reached Monotype without a current local binding"),
             .local_proc => |local| blk: {
                 const request_fn_node = try self.activeNodeFromType(ty);
-                if (local.is_alias) break :blk try self.lowerSchemeAliasAtNode(local, record.expr, request_fn_node);
+                if (local.is_alias) Common.invariant("callable alias lookup reached value lookup lowering");
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
                     local,
@@ -41745,33 +42025,74 @@ const BodyContext = struct {
         return !self.view.types.roots[raw].contains_identity_variables;
     }
 
-    /// A checked callable alias is a scheme-use edge, not a new function or
-    /// runtime local. Install its exact substitution in a fresh type-only
-    /// scope and forward the original callable value. Runtime binder and
-    /// declaration-context tables remain shared with the enclosing body.
-    fn lowerSchemeAliasAtNode(
+    /// The scheme alias task a lookup of `maybe_ref` lowers through at
+    /// `expected_node`, when it names a generalized callable alias.
+    fn schemeAliasLookupTask(self: *BodyContext, maybe_ref: ?checked.ResolvedValueId, expected_node: NodeId) ?LowerTask {
+        const ref_id = maybe_ref orelse return null;
+        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        return switch (record.ref) {
+            .local_proc => |local| if (local.is_alias) .{ .scheme_alias = .{
+                .alias = local,
+                .use_expr = record.expr,
+                .expected_node = expected_node,
+            } } else null,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => null,
+        };
+    }
+
+    fn lookupExprAtNodeStep(
         self: *BodyContext,
-        alias: checked.LocalProcedureBinding,
-        use_expr: checked.CheckedExprId,
+        checked_expr: checked.CheckedExprId,
+        maybe_ref: ?checked.ResolvedValueId,
         expected_node: NodeId,
-    ) Allocator.Error!DraftExprId {
+    ) Allocator.Error!LowerStep {
+        if (self.schemeAliasLookupTask(maybe_ref, expected_node)) |task| return requestLowerTask(self, task);
+        return loweredExprStep(try self.lowerLookupExprAtNode(checked_expr, maybe_ref, expected_node));
+    }
+
+    fn lookupExprAtTypeStep(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        maybe_ref: ?checked.ResolvedValueId,
+        ty: Type.TypeId,
+    ) Allocator.Error!LowerStep {
+        if (maybe_ref) |ref_id| switch (self.view.resolved_refs.records[@intFromEnum(ref_id)].ref) {
+            .local_proc => |local| if (local.is_alias) {
+                return requestLowerTask(self, self.schemeAliasLookupTask(maybe_ref, try self.activeNodeFromType(ty)).?);
+            },
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
+        };
+        return loweredExprStep(try self.lowerLookupExprAtType(checked_ty, maybe_ref, ty));
+    }
+
+    fn stepSchemeAlias(self: *BodyContext, task: *SchemeAliasTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (input) |lowered| {
+            self.restoreSchemeAliasScope(task);
+            return .{ .ret = lowered };
+        }
+        const alias = task.alias;
         const scope_id = alias.dispatch_scope orelse
             Common.invariant("generalized callable alias has no checked scheme scope");
-        const edge = try self.evidenceForUseSiteAtNode(use_expr, expected_node);
+        const edge = try self.evidenceForUseSiteAtNode(task.use_expr, task.expected_node);
         const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
         const scope = self.view.templates.dispatch_scopes[@intFromEnum(scope_id)];
-        const previous_instantiation = self.instantiation;
-        const previous_evidence = self.evidence;
+        const saved = try self.allocator.create(SchemeAliasSavedScope);
+        saved.* = .{ .instantiation = self.instantiation, .evidence = self.evidence };
+        task.saved = saved;
         self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
         self.evidence = evidence;
-        defer {
-            self.instantiation.deinit();
-            self.instantiation = previous_instantiation;
-            self.evidence = previous_evidence;
-        }
         try self.seedSubstitution(evidence.schema.?, edge.subst);
-        try relateFunctionRequestInterface(self.graph, try self.instNode(scope.scheme_root), expected_node);
-        return try self.lowerExprAtTypeCell(alias.expr, DraftTypeCell.fromGraphNode(expected_node));
+        try relateFunctionRequestInterface(self.graph, try self.instNode(scope.scheme_root), task.expected_node);
+        return requestLowerChild(self, alias.expr, DraftTypeCell.fromGraphNode(task.expected_node));
+    }
+
+    fn restoreSchemeAliasScope(self: *BodyContext, task: *SchemeAliasTask) void {
+        const saved = task.saved orelse return;
+        self.instantiation.deinit();
+        self.instantiation = saved.instantiation;
+        self.evidence = saved.evidence;
+        self.allocator.destroy(saved);
+        task.saved = null;
     }
 
     /// Whether lowering `ty` takes no input from the enclosing specialization:
@@ -41899,7 +42220,7 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| {
-                if (local.is_alias) return try self.lowerSchemeAliasAtNode(local, record.expr, expected_node);
+                if (local.is_alias) Common.invariant("callable alias lookup reached value lookup lowering");
                 const checked_ty = self.view.bodies.expr(checked_expr).ty;
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
@@ -42581,39 +42902,85 @@ const BodyContext = struct {
         ty: Type.TypeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
+        return try runConstRestore(self, store_view, type_view, node, ty, static_data_const_locator);
+    }
+
+    fn startConstRestore(
+        self: *BodyContext,
+        store_view: ModuleView,
+        _: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!ConstRestoreStart(DraftExprId) {
         const value = store_view.const_store.get(node);
         const representation: ActiveConstNodeRepresentation = .{ .sealed = ty };
         const cell = DraftTypeCell.fromSealed(ty);
-        if (try self.materializedConstNodeExpr(store_view, node, representation, cell, static_data_const_locator)) |existing| return existing;
+        if (try self.materializedConstNodeExpr(store_view, node, representation, cell, static_data_const_locator)) |existing| return .{ .done = existing };
 
         switch (value) {
             .fn_value => {},
             .tag, .record, .tuple => if (self.nominalConstructionLayer(ty)) |layer| {
-                const backing_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, layer.backing, static_data_const_locator);
-                const materialized = try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
-                try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
-                return materialized;
+                return .{ .layer = .{ .child = node, .backing = layer.backing, .named = layer.named } };
             },
             .nominal => |nominal| if (self.nominalConstructionLayer(ty)) |layer| {
-                const backing_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, nominal.backing, layer.backing, static_data_const_locator);
-                const materialized = try self.addExpr(.{ .ty = layer.named, .data = .{ .nominal = backing_expr } });
-                try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
-                return materialized;
+                return .{ .layer = .{ .child = nominal.backing, .backing = layer.backing, .named = layer.named } };
             },
             .pending, .zst, .scalar, .str, .list, .box, .crash => {},
         }
 
-        if (try self.activeConstNodeBindingExpr(store_view, node, representation, cell)) |active| return active;
+        if (try self.activeConstNodeBindingExpr(store_view, node, representation, cell)) |active| return .{ .done = active };
 
         try self.reserveConstNodeBinding(store_view, node, representation, cell);
-        const lowered = switch (value) {
-            .fn_value => |fn_id| try self.restoreConstFn(store_view, fn_id, ty, static_data_const_locator),
-            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal => try self.addExpr(.{
-                .ty = ty,
-                .data = try constRestoreData(self, store_view, type_view, value, ty, static_data_const_locator),
-            }),
-        };
-        const materialized = try self.finishConstNodeBinding(store_view, node, representation, cell, lowered);
+        switch (value) {
+            .fn_value => |fn_id| {
+                const lowered = try self.restoreConstFn(store_view, fn_id, ty, static_data_const_locator);
+                return .{ .done = try self.finishRestoredConstNode(store_view, node, ty, lowered, static_data_const_locator) };
+            },
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal => return .{ .value = value },
+        }
+    }
+
+    fn finishConstRestoreLayer(
+        self: *BodyContext,
+        store_view: ModuleView,
+        _: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        named: Type.TypeId,
+        backing_expr: DraftExprId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!DraftExprId {
+        const materialized = try self.addExpr(.{ .ty = named, .data = .{ .nominal = backing_expr } });
+        try self.cacheMaterializedConstNode(store_view, node, .{ .sealed = ty }, materialized, static_data_const_locator);
+        return materialized;
+    }
+
+    fn finishConstRestoreData(
+        self: *BodyContext,
+        store_view: ModuleView,
+        _: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        data: BodyExprData,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!DraftExprId {
+        const lowered = try self.addExpr(.{ .ty = ty, .data = data });
+        return try self.finishRestoredConstNode(store_view, node, ty, lowered, static_data_const_locator);
+    }
+
+    /// Complete a sealed constant node's reserved binding with its lowered
+    /// expression and reuse it for later requests.
+    fn finishRestoredConstNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        lowered: DraftExprId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!DraftExprId {
+        const representation: ActiveConstNodeRepresentation = .{ .sealed = ty };
+        const materialized = try self.finishConstNodeBinding(store_view, node, representation, DraftTypeCell.fromSealed(ty), lowered);
         try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
         return materialized;
     }
@@ -42716,14 +43083,83 @@ const BodyContext = struct {
         );
     }
 
+    /// A constant node restoring at a graph node. Its children restore at
+    /// child nodes computed as a recursive walk would reach them.
+    const ConstAtNodeFrame = struct {
+        node: checked.ConstNodeId,
+        request_node: NodeId,
+        value: checked.ConstValue,
+        /// How the node's expression is built once its children are restored.
+        form: enum { constructor, nominal, data },
+        /// A nominal's representation node.
+        representation_node: NodeId = undefined,
+        /// A box's payload or a nominal's backing.
+        single_child: ?checked.ConstNodeId = null,
+        children: []const checked.ConstNodeId = &.{},
+        /// Each child's graph node, except a tag's, which is computed as its
+        /// payload is reached. Owned.
+        child_nodes: []NodeId = &.{},
+        /// A record's field names, in stored child order. Owned.
+        field_names: []@FieldType(InstField, "name") = &.{},
+        tag_name: names.TagNameId = undefined,
+        lowered: std.ArrayListUnmanaged(DraftExprId) = .empty,
+
+        fn childCount(frame: *const ConstAtNodeFrame) usize {
+            return if (frame.single_child != null) 1 else frame.children.len;
+        }
+
+        fn deinit(frame: *ConstAtNodeFrame, allocator: Allocator) void {
+            allocator.free(frame.child_nodes);
+            allocator.free(frame.field_names);
+            frame.lowered.deinit(allocator);
+        }
+    };
+
     fn restoreConstNodeAtNodeWithStaticRoot(
         self: *BodyContext,
         store_view: ModuleView,
-        type_view: ModuleView,
+        _: ModuleView,
+        root: checked.ConstNodeId,
+        root_request_node: NodeId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!DraftExprId {
+        var frames: std.ArrayListUnmanaged(ConstAtNodeFrame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
+        var delivered = try self.beginConstAtNode(&frames, store_view, root, root_request_node, static_data_const_locator);
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (delivered) |lowered| try frame.lowered.append(self.allocator, lowered);
+            delivered = null;
+            if (frame.lowered.items.len < frame.childCount()) {
+                const index = frame.lowered.items.len;
+                const child = frame.single_child orelse frame.children[index];
+                const child_node = switch (frame.value) {
+                    .tag => try self.graph.tagConstructionPayloadNode(frame.request_node, frame.tag_name, index),
+                    .pending, .zst, .scalar, .str, .crash, .list, .box, .tuple, .record, .nominal, .fn_value => frame.child_nodes[index],
+                };
+                delivered = try self.beginConstAtNode(&frames, store_view, child, child_node, static_data_const_locator);
+                continue;
+            }
+            var finished = frames.pop().?;
+            defer finished.deinit(self.allocator);
+            delivered = try self.finishConstAtNode(store_view, &finished, static_data_const_locator);
+        }
+        return delivered.?;
+    }
+
+    /// Start one node restoring at `request_node`: its expression when it is
+    /// already built or has no children, else the frame restoring them.
+    fn beginConstAtNode(
+        self: *BodyContext,
+        frames: *std.ArrayListUnmanaged(ConstAtNodeFrame),
+        store_view: ModuleView,
         node: checked.ConstNodeId,
         request_node: NodeId,
         static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftExprId {
+    ) Allocator.Error!?DraftExprId {
         const value = store_view.const_store.get(node);
         const representation: ActiveConstNodeRepresentation = .{ .graph = request_node };
         const cell = DraftTypeCell.fromGraphNode(request_node);
@@ -42731,274 +43167,178 @@ const BodyContext = struct {
         if (try self.activeConstNodeBindingExpr(store_view, node, representation, cell)) |active| return active;
 
         try self.reserveConstNodeBinding(store_view, node, representation, cell);
-        const lowered = switch (value) {
-            .fn_value => |fn_id| try self.restoreConstFnAtNodeWithStaticRoot(
-                store_view,
-                fn_id,
-                request_node,
-                static_data_const_locator,
-            ),
-            .tag, .record, .tuple => try self.addConstructorExprAtNode(
-                request_node,
-                try self.restoreConstDataAtNode(
+        var frame = ConstAtNodeFrame{ .node = node, .request_node = request_node, .value = value, .form = .data };
+        var frame_owned = true;
+        errdefer if (frame_owned) frame.deinit(self.allocator);
+        switch (value) {
+            .fn_value => |fn_id| {
+                const lowered = try self.restoreConstFnAtNodeWithStaticRoot(
                     store_view,
-                    type_view,
-                    value,
+                    fn_id,
                     request_node,
                     static_data_const_locator,
-                ),
-            ),
-            .nominal => |nominal| blk: {
-                const representation_node = self.constructorRepresentationNode(request_node);
-                if (self.graph.content(representation_node) != .named) {
+                );
+                const materialized = try self.finishConstNodeBinding(store_view, node, representation, cell, lowered);
+                try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
+                return materialized;
+            },
+            .tag, .record, .tuple => frame.form = .constructor,
+            .nominal => |nominal| {
+                frame.form = .nominal;
+                frame.representation_node = self.constructorRepresentationNode(request_node);
+                if (self.graph.content(frame.representation_node) != .named) {
                     Common.invariant("ConstStore nominal restored without a nominal graph representation");
                 }
-                const named = self.graph.namedNodes(representation_node);
+                const named = self.graph.namedNodes(frame.representation_node);
                 const backing = named.backing orelse
                     Common.invariant("ConstStore nominal restored with a named graph node that had no backing");
-                const backing_expr = try self.restoreConstNodeAtNodeWithStaticRoot(
-                    store_view,
-                    type_view,
-                    nominal.backing,
-                    backing.node,
-                    static_data_const_locator,
-                );
-                break :blk try self.addExprWithTypeCell(
-                    DraftTypeCell.fromGraphNode(representation_node),
-                    .{ .nominal = backing_expr },
-                );
+                frame.single_child = nominal.backing;
+                frame.child_nodes = try self.allocator.dupe(NodeId, &.{backing.node});
             },
-            .pending, .zst, .scalar, .str, .list, .box, .crash => try self.addExprWithTypeCell(
-                DraftTypeCell.fromGraphNode(request_node),
-                try self.restoreConstDataAtNode(
-                    store_view,
-                    type_view,
-                    value,
-                    request_node,
-                    static_data_const_locator,
-                ),
+            .pending, .zst, .scalar, .str, .list, .box, .crash => {},
+        }
+        switch (value) {
+            .list => |list| switch (list) {
+                .nodes => |items| {
+                    const element_node = try self.graph.listElementNode(request_node);
+                    frame.children = items;
+                    frame.child_nodes = try self.allocator.alloc(NodeId, items.len);
+                    @memset(frame.child_nodes, element_node);
+                },
+                .empty, .packed_bytes => {},
+            },
+            .box => |payload| {
+                frame.single_child = payload;
+                frame.child_nodes = try self.allocator.dupe(NodeId, &.{try self.graph.boxElementNode(request_node)});
+            },
+            .tuple => |items| {
+                const item_nodes = try self.graph.tupleItemNodes(request_node);
+                if (item_nodes.len != items.len) Common.invariant("ConstStore tuple length differs from checked graph type");
+                frame.children = items;
+                frame.child_nodes = try self.allocator.dupe(NodeId, item_nodes);
+            },
+            .record => |items| {
+                // ConstStore record children follow the lexicographic Monotype
+                // field order used to build the LIR const plan, not the
+                // checked constructor's original row-fragment order. Read the
+                // flattened backing row so every stored child is paired with
+                // its exact graph field cell.
+                const record_node = switch (self.graph.content(request_node)) {
+                    .named => |named| (named.backing orelse
+                        Common.invariant("ConstStore record restored through a named graph node without a backing")).node,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => request_node,
+                };
+                const graph_fields = (try self.graph.recordNodes(record_node)).fields;
+                if (graph_fields.len != items.len) Common.invariant("ConstStore record length differs from checked graph type");
+                const fields = try self.allocator.dupe(InstField, graph_fields);
+                defer self.allocator.free(fields);
+                std.mem.sort(
+                    InstField,
+                    fields,
+                    self.nameStore(),
+                    instRecordFieldLessThan,
+                );
+                frame.children = items;
+                frame.child_nodes = try self.allocator.alloc(NodeId, fields.len);
+                frame.field_names = try self.allocator.alloc(@FieldType(InstField, "name"), fields.len);
+                for (fields, frame.child_nodes, frame.field_names) |field, *child_node, *name| {
+                    child_node.* = field.ty;
+                    name.* = field.name;
+                }
+            },
+            .tag => |tag| {
+                frame.tag_name = try self.nameStoreMut().internTagLabel(tag.tag_name);
+                frame.children = tag.payloads;
+            },
+            .pending, .zst, .scalar, .str, .crash, .nominal, .fn_value => {},
+        }
+        if (frame.childCount() == 0) {
+            frame_owned = false;
+            defer frame.deinit(self.allocator);
+            return try self.finishConstAtNode(store_view, &frame, static_data_const_locator);
+        }
+        try frames.append(self.allocator, frame);
+        frame_owned = false;
+        return null;
+    }
+
+    /// Build a node restored at a graph node from its restored children,
+    /// completing its reserved binding.
+    fn finishConstAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        frame: *const ConstAtNodeFrame,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!DraftExprId {
+        const request_node = frame.request_node;
+        const lowered_children = frame.lowered.items;
+        const cell = DraftTypeCell.fromGraphNode(request_node);
+        const lowered = switch (frame.form) {
+            .nominal => try self.addExprWithTypeCell(
+                DraftTypeCell.fromGraphNode(frame.representation_node),
+                .{ .nominal = lowered_children[0] },
             ),
+            .constructor, .data => blk: {
+                const data: BodyExprData = switch (frame.value) {
+                    .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
+                    .zst => .unit,
+                    .scalar => |scalar| restoreScalarBody(scalar),
+                    .str => |str| .{ .str_lit = try self.addStringView(
+                        store_view.const_store.blobData(str.data),
+                        str.offset,
+                        str.len,
+                    ) },
+                    .crash => |str| .{ .crash = try self.addStringView(
+                        store_view.const_store.blobData(str.data),
+                        str.offset,
+                        str.len,
+                    ) },
+                    .list => |list| switch (list) {
+                        .nodes => .{ .list = try self.addExprSpan(lowered_children) },
+                        .empty => |capacity| try self.constEmptyListData(capacity),
+                        .packed_bytes => |packed_list| .{ .bytes_lit = .{
+                            .literal = try self.addConstBlobView(
+                                store_view.key.bytes,
+                                packed_list.bytes.data,
+                                store_view.const_store.blobData(packed_list.bytes.data),
+                                packed_list.bytes.offset,
+                                packed_list.bytes.len,
+                            ),
+                            .len = packed_list.len,
+                            .element = packed_list.element,
+                            .product_width = packed_list.product_width,
+                        } },
+                    },
+                    .box => .{ .low_level = .{
+                        .op = .box_box,
+                        .args = try self.addExprSpan(lowered_children),
+                    } },
+                    .tuple => .{ .tuple = try self.addExprSpan(lowered_children) },
+                    .record => record: {
+                        const fields = try self.allocator.alloc(DraftFieldExpr, lowered_children.len);
+                        defer self.allocator.free(fields);
+                        for (fields, frame.field_names, lowered_children) |*field, name, value| {
+                            field.* = .{ .name = name, .value = value };
+                        }
+                        break :record .{ .record = try self.addFieldExprSpan(fields) };
+                    },
+                    .tag => .{ .tag = .{
+                        .name = frame.tag_name,
+                        .payloads = try self.addExprSpan(lowered_children),
+                    } },
+                    .nominal => Common.invariant("ConstStore nominal must be restored as an expression"),
+                    .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
+                };
+                break :blk if (frame.form == .constructor)
+                    try self.addConstructorExprAtNode(request_node, data)
+                else
+                    try self.addExprWithTypeCell(cell, data);
+            },
         };
-        const materialized = try self.finishConstNodeBinding(store_view, node, representation, cell, lowered);
-        try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
+        const representation: ActiveConstNodeRepresentation = .{ .graph = request_node };
+        const materialized = try self.finishConstNodeBinding(store_view, frame.node, representation, cell, lowered);
+        try self.cacheMaterializedConstNode(store_view, frame.node, representation, materialized, static_data_const_locator);
         return materialized;
-    }
-
-    fn restoreConstDataAtNode(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        value: checked.ConstValue,
-        request_node: NodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!BodyExprData {
-        return switch (value) {
-            .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
-            .zst => .unit,
-            .scalar => |scalar| restoreScalarBody(scalar),
-            .str => |str| .{ .str_lit = try self.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .crash => |str| .{ .crash = try self.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .list => |list| try self.restoreConstListDataAtNode(
-                store_view,
-                type_view,
-                request_node,
-                list,
-                static_data_const_locator,
-            ),
-            .box => |payload| blk: {
-                const child = try self.restoreConstNodeAtNodeWithStaticRoot(
-                    store_view,
-                    type_view,
-                    payload,
-                    try self.graph.boxElementNode(request_node),
-                    static_data_const_locator,
-                );
-                break :blk .{ .low_level = .{
-                    .op = .box_box,
-                    .args = try self.addExprSpan(&.{child}),
-                } };
-            },
-            .tuple => |items| .{ .tuple = try self.restoreConstTupleAtNode(
-                store_view,
-                type_view,
-                request_node,
-                items,
-                static_data_const_locator,
-            ) },
-            .record => |items| .{ .record = try self.restoreConstRecordAtNode(
-                store_view,
-                type_view,
-                request_node,
-                items,
-                static_data_const_locator,
-            ) },
-            .tag => |tag| .{ .tag = .{
-                .name = try self.nameStoreMut().internTagLabel(tag.tag_name),
-                .payloads = try self.restoreConstTagPayloadsAtNode(
-                    store_view,
-                    type_view,
-                    request_node,
-                    tag,
-                    static_data_const_locator,
-                ),
-            } },
-            .nominal => Common.invariant("ConstStore nominal must be restored as an expression"),
-            .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
-        };
-    }
-
-    fn restoreConstListAtNode(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        request_node: NodeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const element_node = try self.graph.listElementNode(request_node);
-        const lowered = try self.allocator.alloc(DraftExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtNodeWithStaticRoot(
-                store_view,
-                type_view,
-                item,
-                element_node,
-                static_data_const_locator,
-            );
-        }
-        return try self.addExprSpan(lowered);
-    }
-
-    fn restoreConstListDataAtNode(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        request_node: NodeId,
-        list: checked.ConstList,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!BodyExprData {
-        return switch (list) {
-            .nodes => |items| .{ .list = try self.restoreConstListAtNode(
-                store_view,
-                type_view,
-                request_node,
-                items,
-                static_data_const_locator,
-            ) },
-            .empty => |capacity| try self.constEmptyListData(capacity),
-            .packed_bytes => |packed_list| .{ .bytes_lit = .{
-                .literal = try self.addConstBlobView(
-                    store_view.key.bytes,
-                    packed_list.bytes.data,
-                    store_view.const_store.blobData(packed_list.bytes.data),
-                    packed_list.bytes.offset,
-                    packed_list.bytes.len,
-                ),
-                .len = packed_list.len,
-                .element = packed_list.element,
-                .product_width = packed_list.product_width,
-            } },
-        };
-    }
-
-    fn restoreConstTupleAtNode(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        request_node: NodeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const item_nodes = try self.graph.tupleItemNodes(request_node);
-        if (item_nodes.len != items.len) Common.invariant("ConstStore tuple length differs from checked graph type");
-        const lowered = try self.allocator.alloc(DraftExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, item_nodes, 0..) |item, item_node, index| {
-            lowered[index] = try self.restoreConstNodeAtNodeWithStaticRoot(
-                store_view,
-                type_view,
-                item,
-                item_node,
-                static_data_const_locator,
-            );
-        }
-        return try self.addExprSpan(lowered);
-    }
-
-    fn restoreConstRecordAtNode(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        request_node: NodeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftFieldExpr) {
-        // ConstStore record children follow the lexicographic Monotype field
-        // order used to build the LIR const plan, not the checked constructor's
-        // original row-fragment order. Read the flattened backing row so every
-        // stored child is paired with its exact graph field cell.
-        const record_node = switch (self.graph.content(request_node)) {
-            .named => |named| (named.backing orelse
-                Common.invariant("ConstStore record restored through a named graph node without a backing")).node,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => request_node,
-        };
-        const graph_fields = (try self.graph.recordNodes(record_node)).fields;
-        if (graph_fields.len != items.len) Common.invariant("ConstStore record length differs from checked graph type");
-        const fields = try self.allocator.dupe(InstField, graph_fields);
-        defer self.allocator.free(fields);
-        std.mem.sort(
-            InstField,
-            fields,
-            self.nameStore(),
-            instRecordFieldLessThan,
-        );
-        const lowered = try self.allocator.alloc(DraftFieldExpr, items.len);
-        defer self.allocator.free(lowered);
-        for (items, fields, 0..) |item, field, index| {
-            lowered[index] = .{
-                .name = field.name,
-                .value = try self.restoreConstNodeAtNodeWithStaticRoot(
-                    store_view,
-                    type_view,
-                    item,
-                    field.ty,
-                    static_data_const_locator,
-                ),
-            };
-        }
-        return try self.addFieldExprSpan(lowered);
-    }
-
-    fn restoreConstTagPayloadsAtNode(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        request_node: NodeId,
-        tag: anytype,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const mono_tag_name = try self.nameStoreMut().internTagLabel(tag.tag_name);
-        const lowered = try self.allocator.alloc(DraftExprId, tag.payloads.len);
-        defer self.allocator.free(lowered);
-        for (tag.payloads, 0..) |payload, index| {
-            lowered[index] = try self.restoreConstNodeAtNodeWithStaticRoot(
-                store_view,
-                type_view,
-                payload,
-                try self.graph.tagConstructionPayloadNode(request_node, mono_tag_name, index),
-                static_data_const_locator,
-            );
-        }
-        return try self.addExprSpan(lowered);
     }
 
     /// Forwards to the scope that owns the type store; the query itself
@@ -44747,14 +45087,6 @@ const BodyContext = struct {
         _ = try self.runEvidence(.{ .prepare_span = .{ .checked_exprs = checked_exprs, .nodes = nodes } });
     }
 
-    fn lowerPreparedExprSpanAtNodes(
-        self: *BodyContext,
-        checked_exprs: []const checked.CheckedExprId,
-        nodes: []const NodeId,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        return (try self.runLower(.{ .prepared_span = .{ .exprs = checked_exprs, .nodes = nodes } })).spanValue();
-    }
-
     const PreLoweredOperand = struct {
         index: usize,
         expr: DraftExprId,
@@ -44777,16 +45109,6 @@ const BodyContext = struct {
             if (operand.index == index) return operand.expr;
         }
         return null;
-    }
-
-    fn lowerDispatchOperandsAtNodes(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        nodes: []const NodeId,
-        pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        try self.prepareDispatchOperandsAtNodes(operands, nodes, pre_lowered);
-        return try self.lowerPreparedDispatchOperandsAtNodes(operands, nodes, pre_lowered);
     }
 
     fn prepareDispatchOperandsAtNodes(
@@ -44825,15 +45147,6 @@ const BodyContext = struct {
         }
     }
 
-    fn lowerPreparedDispatchOperandsAtNodes(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        nodes: []const NodeId,
-        pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        return (try self.runLower(.{ .prepared_operands = .{ .operands = operands, .nodes = nodes, .pre_lowered = pre_lowered } })).spanValue();
-    }
-
     fn lowerDispatchOperandAtType(
         self: *BodyContext,
         operand: static_dispatch.StaticDispatchOperand,
@@ -44856,11 +45169,11 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerGeneratedInterpolationIter(
+    fn generatedInterpolationIterTask(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
+    ) Allocator.Error!LowerTask {
         const expr = self.view.bodies.expr(expr_id);
         const interpolation = switch (expr.data) {
             .interpolation => |interpolation| interpolation,
@@ -44878,65 +45191,86 @@ const BodyContext = struct {
             Common.invariant("generated interpolation iterator step function was not zero-argument");
         }
 
-        return try self.lowerInterpolationIter(
-            interpolation,
-            expr_id,
-            ty,
-            backing_ty,
-            len_field.ty,
-            step_fn_ty,
-            step_shape.ret,
-        );
+        const part_count = interpolation.parts.len;
+        const len_exprs = try self.allocator.alloc(DraftExprId, part_count + 1);
+        errdefer self.allocator.free(len_exprs);
+        for (len_exprs, 0..) |*len_expr, index| {
+            len_expr.* = try self.lowerInterpolationLenIfKnown(part_count - index, len_field.ty);
+        }
+        return .{ .interpolation_iter = .{
+            .interpolation = interpolation,
+            .source_expr_id = expr_id,
+            .iter_ty = ty,
+            .backing_ty = backing_ty,
+            .step_fn_ty = step_fn_ty,
+            .step_ret_ty = step_shape.ret,
+            .len_exprs = len_exprs,
+        } };
     }
 
     /// The iterator over `interpolation`'s parts. Each part's iterator binds
     /// the iterator over the parts after it, so the lengths lower from the
     /// front and the steps from the back.
-    fn lowerInterpolationIter(
-        self: *BodyContext,
-        interpolation: checked.CheckedInterpolation,
-        source_expr_id: checked.CheckedExprId,
-        iter_ty: Type.TypeId,
-        backing_ty: Type.TypeId,
-        len_ty: Type.TypeId,
-        step_fn_ty: Type.TypeId,
-        step_ret_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const part_count = interpolation.parts.len;
-        const len_exprs = try self.allocator.alloc(DraftExprId, part_count + 1);
-        defer self.allocator.free(len_exprs);
-        for (len_exprs, 0..) |*len_expr, index| {
-            len_expr.* = try self.lowerInterpolationLenIfKnown(part_count - index, len_ty);
-        }
+    fn stepInterpolationIter(self: *BodyContext, task: *InterpolationIterTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const interpolation = task.interpolation;
+        switch (task.stage) {
+            .start => {
+                const part_count = interpolation.parts.len;
+                const done_step = try self.lowerInterpolationDoneStep(interpolation.step_fn_ty, task.source_expr_id, part_count, task.step_fn_ty, task.step_ret_ty);
+                task.iter_expr = try self.lowerInterpolationIterRecord(task.iter_ty, task.backing_ty, task.len_exprs[part_count], done_step);
+                task.index = part_count;
+            },
+            .value => {
+                task.value_expr = input.?.exprValue();
+                task.stage = .segment;
+                const part = interpolation.parts[task.index];
+                return requestLowerChild(self, part.following_segment, .{ .sealed = GuardedList.at(self.tupleItemTypes(task.item_ty), 1) });
+            },
+            .segment => {
+                const segment_expr = input.?.exprValue();
+                const item_expr = try self.addExpr(.{ .ty = task.item_ty, .data = .{
+                    .tuple = try self.addExprSpan(&[_]DraftExprId{ task.value_expr, segment_expr }),
+                } });
 
-        const done_step = try self.lowerInterpolationDoneStep(interpolation.step_fn_ty, source_expr_id, part_count, step_fn_ty, step_ret_ty);
-        var iter_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_exprs[part_count], done_step);
+                const topology = try self.iteratorRepresentationNames();
+                const one_tag = self.monoTagByName(task.step_ret_ty, topology.one_tag);
+                const payloads = self.typeStore().span(one_tag.payloads);
+                if (payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
+                const payload_ty = GuardedList.at(payloads, 0);
+                const payload_expr = try self.lowerInterpolationOnePayload(payload_ty, item_expr, task.rest_ref);
 
-        var index = part_count;
-        while (index > 0) {
-            index -= 1;
-            const rest_expr = iter_expr;
-            const rest_local = try self.addLocal(self.builder.symbols.fresh(), iter_ty);
-            const rest_pat = try self.bindPat(rest_local, iter_ty);
-            const rest_ref = try self.localExpr(rest_local, iter_ty);
-            const step_expr = try self.lowerInterpolationOneStep(
-                interpolation,
-                index,
-                source_expr_id,
-                rest_ref,
-                iter_ty,
-                interpolation.step_fn_ty,
-                step_fn_ty,
-                step_ret_ty,
-            );
-            const record_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_exprs[index], step_expr);
-            iter_expr = try self.addExpr(.{ .ty = iter_ty, .data = .{ .let_ = .{
-                .bind = rest_pat,
-                .value = rest_expr,
-                .rest = record_expr,
-            } } });
+                const body = try self.addExpr(.{ .ty = task.step_ret_ty, .data = .{ .tag = .{
+                    .name = one_tag.name,
+                    .payloads = try self.addExprSpan(&[_]DraftExprId{payload_expr}),
+                } } });
+                const step_expr = try self.lowerInterpolationStepLambda(interpolation.step_fn_ty, task.source_expr_id, task.index, task.step_fn_ty, body);
+                task.demand_scope.?.leave();
+                task.demand_scope = null;
+                const record_expr = try self.lowerInterpolationIterRecord(task.iter_ty, task.backing_ty, task.len_exprs[task.index], step_expr);
+                task.iter_expr = try self.addExpr(.{ .ty = task.iter_ty, .data = .{ .let_ = .{
+                    .bind = task.rest_pat,
+                    .value = task.rest_expr,
+                    .rest = record_expr,
+                } } });
+            },
         }
-        return iter_expr;
+        if (task.index == 0) {
+            self.allocator.free(task.len_exprs);
+            task.len_exprs = &.{};
+            return loweredExprStep(task.iter_expr);
+        }
+        task.index -= 1;
+        const iter_ty = task.iter_ty;
+        task.rest_expr = task.iter_expr;
+        const rest_local = try self.addLocal(self.builder.symbols.fresh(), iter_ty);
+        task.rest_pat = try self.bindPat(rest_local, iter_ty);
+        task.rest_ref = try self.localExpr(rest_local, iter_ty);
+        task.demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{iter_ty});
+        task.item_ty = self.iterItemType(iter_ty);
+        const item_fields = self.tupleItemTypes(task.item_ty);
+        if (item_fields.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
+        task.stage = .value;
+        return requestLowerChild(self, interpolation.parts[task.index].value, .{ .sealed = GuardedList.at(item_fields, 0) });
     }
 
     fn lowerInterpolationIterRecord(
@@ -45005,44 +45339,6 @@ const BodyContext = struct {
         const body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = done_tag.name,
             .payloads = .empty(),
-        } } });
-        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
-    }
-
-    fn lowerInterpolationOneStep(
-        self: *BodyContext,
-        interpolation: checked.CheckedInterpolation,
-        index: usize,
-        source_expr_id: checked.CheckedExprId,
-        rest_expr: DraftExprId,
-        rest_ty: Type.TypeId,
-        source_fn_ty: checked.CheckedTypeId,
-        step_fn_ty: Type.TypeId,
-        step_ret_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{rest_ty});
-        defer demand_scope.leave();
-        const item_ty = self.iterItemType(rest_ty);
-        const item_fields = self.tupleItemTypes(item_ty);
-        if (item_fields.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
-
-        const part = interpolation.parts[index];
-        const value_expr = try self.lowerExprAtType(part.value, GuardedList.at(item_fields, 0));
-        const segment_expr = try self.lowerExprAtType(part.following_segment, GuardedList.at(item_fields, 1));
-        const item_expr = try self.addExpr(.{ .ty = item_ty, .data = .{
-            .tuple = try self.addExprSpan(&[_]DraftExprId{ value_expr, segment_expr }),
-        } });
-
-        const topology = try self.iteratorRepresentationNames();
-        const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
-        const payloads = self.typeStore().span(one_tag.payloads);
-        if (payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
-        const payload_ty = GuardedList.at(payloads, 0);
-        const payload_expr = try self.lowerInterpolationOnePayload(payload_ty, item_expr, rest_expr);
-
-        const body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
-            .name = one_tag.name,
-            .payloads = try self.addExprSpan(&[_]DraftExprId{payload_expr}),
         } } });
         return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
     }
@@ -45140,14 +45436,6 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerExprAtType(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        return try self.lowerExprAtTypeCell(checked_expr, .{ .sealed = ty });
-    }
-
     fn lowerExprAtTypeCell(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
@@ -45192,53 +45480,59 @@ const BodyContext = struct {
         );
     }
 
-    fn lowerFieldAccessExprAtNode(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        field: anytype,
-        expected_node: NodeId,
-    ) Allocator.Error!DraftExprId {
+    fn stepFieldAccessLower(self: *BodyContext, task: *FieldAccessTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const field = self.view.bodies.expr(task.expr).data.field_access;
+        if (task.started) {
+            const receiver = input.?.exprValue();
+            return loweredExprStep(switch (task.target) {
+                .node => if (task.optional)
+                    try self.optionalChainRestAtNode(field.segments, 0, receiver, task.receiver_node, task.result_node)
+                else
+                    try self.addExprWithTypeCell(
+                        DraftTypeCell.fromGraphNode(task.result_node),
+                        .{ .field_access = .{
+                            .receiver = receiver,
+                            .segments = .{ .start = task.segments_start, .len = @intCast(field.segments.len) },
+                        } },
+                    ),
+                .try_ty => |out_try_ty| try self.optionalChainRest(field.segments, 0, receiver, task.receiver_ty, out_try_ty),
+            });
+        }
+        task.started = true;
         if (field.segments.len == 0) Common.invariant("checked field access path had no segments");
+        const expected_node = switch (task.target) {
+            .node => |node| node,
+            .try_ty => {
+                task.receiver_ty = try self.lowerExprType(field.receiver);
+                return requestLowerChild(self, field.receiver, .{ .sealed = task.receiver_ty });
+            },
+        };
         if (fieldAccessAnySegmentOptional(field.segments)) {
             // A `.?` chain compiles to runtime slot tests producing the
             // chain's checked `Try` (design.md "Field Kinds (All-Dynamic
             // Optional Fields)"). Both the receiver and result stay attached
             // to the specialization graph until their active Monotypes are
             // needed by the runtime chain lowering.
-            const checked_ty = self.view.bodies.expr(expr_id).ty;
-            const receiver_node = try self.lowerExprTypeNode(field.receiver);
+            const checked_ty = self.view.bodies.expr(task.expr).ty;
+            task.receiver_node = try self.lowerExprTypeNode(field.receiver);
             const observable = try self.fieldAccessTypeNode(checked_ty, field, null);
             try relateRequestComponent(self.graph, expected_node, observable);
-            const result_node = if (try self.graph.containsGeneratedPrivate(observable)) observable else expected_node;
-            return try self.lowerOptionalFieldAccessChainAtNode(field, receiver_node, result_node);
+            task.result_node = if (try self.graph.containsGeneratedPrivate(observable)) observable else expected_node;
+            task.optional = true;
+            return requestLowerChild(self, field.receiver, DraftTypeCell.fromGraphNode(task.receiver_node));
         }
-        const receiver_node = try self.lowerExprTypeNode(field.receiver);
-        const start: u32 = @intCast(self.draft.field_access_segments.items.len);
+        task.receiver_node = try self.lowerExprTypeNode(field.receiver);
+        task.segments_start = @intCast(self.draft.field_access_segments.items.len);
         try self.draft.field_access_segments.ensureUnusedCapacity(self.allocator, field.segments.len);
-        var prefix_node = receiver_node;
+        var prefix_node = task.receiver_node;
         for (field.segments) |segment| {
             const field_name = try self.recordFieldName(self.view, segment.field_name);
             prefix_node = try self.graph.requiredRecordFieldNode(prefix_node, field_name);
             self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
         }
         try relateRequestComponent(self.graph, expected_node, prefix_node);
-        const result_node = if (try self.graph.containsGeneratedPrivate(prefix_node)) prefix_node else expected_node;
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(result_node),
-            .{ .field_access = .{
-                .receiver = try self.lowerExprAtTypeCell(field.receiver, DraftTypeCell.fromGraphNode(receiver_node)),
-                .segments = .{ .start = start, .len = @intCast(field.segments.len) },
-            } },
-        );
-    }
-
-    fn lowerExprAtTypeWithDemand(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        ty: Type.TypeId,
-        demand: LoweringDemand,
-    ) Allocator.Error!DraftExprId {
-        return try self.lowerExprAtTypeCellWithDemand(checked_expr, .{ .sealed = ty }, demand);
+        task.result_node = if (try self.graph.containsGeneratedPrivate(prefix_node)) prefix_node else expected_node;
+        return requestLowerChild(self, field.receiver, DraftTypeCell.fromGraphNode(task.receiver_node));
     }
 
     fn sameType(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId) bool {
@@ -45920,25 +46214,6 @@ const BodyContext = struct {
         });
     }
 
-    /// Lower a mixed access chain to one flat Try, short-circuiting on the
-    /// first Missing slot (design.md "Field Kinds").
-    fn lowerOptionalFieldAccessChainAtNode(
-        self: *BodyContext,
-        access: anytype,
-        receiver_node: NodeId,
-        out_try_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const receiver_cell = DraftTypeCell.fromGraphNode(receiver_node);
-        const receiver = try self.lowerExprAtTypeCell(access.receiver, receiver_cell);
-        return try self.optionalChainRestAtNode(
-            access.segments,
-            0,
-            receiver,
-            receiver_node,
-            out_try_node,
-        );
-    }
-
     /// An optional segment of an access chain whose match waits on the rest
     /// of the chain as its present branch.
     const PendingOptionalSegmentAtNode = struct {
@@ -46034,16 +46309,6 @@ const BodyContext = struct {
             } });
         }
         return result;
-    }
-
-    fn lowerOptionalFieldAccessChain(
-        self: *BodyContext,
-        access: anytype,
-        receiver_ty: Type.TypeId,
-        out_try_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const receiver = try self.lowerExprAtType(access.receiver, receiver_ty);
-        return try self.optionalChainRest(access.segments, 0, receiver, receiver_ty, out_try_ty);
     }
 
     /// An optional segment of an access chain whose match waits on the rest
@@ -46235,7 +46500,8 @@ const BodyContext = struct {
         pre_lowered: []const PreLoweredChild,
     ) Allocator.Error!DraftExprId {
         if (record.ext) |ext| {
-            const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext);
+            const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse
+                Common.invariant("record update lost its pre-lowered base child");
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
@@ -46255,13 +46521,11 @@ const BodyContext = struct {
                                     Common.invariant("record update child lowered at a type different from its finalized field type");
                                 }
                                 break :pre_blk pre;
-                            } else try self.lowerExprAtType(field.value, slot.payload_ty);
+                            } else Common.invariant("record update lost its pre-lowered field child");
                             break :value try self.optionalSlotPresentExpr(slot_ty, slot, payload);
                         }
-                        break :value if (self.preLoweredChildAt(pre_lowered, field.value)) |pre|
-                            pre
-                        else
-                            try self.lowerExprAtType(field.value, slot_ty);
+                        break :value self.preLoweredChildAt(pre_lowered, field.value) orelse
+                            Common.invariant("record update lost its pre-lowered field child");
                     },
                 };
             }
@@ -46309,7 +46573,8 @@ const BodyContext = struct {
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_field_count);
         defer self.allocator.free(lowered);
         const base_record = if (record.ext) |ext|
-            self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
+            self.preLoweredChildAt(pre_lowered, ext) orelse
+                Common.invariant("record constructor lost its pre-lowered base child")
         else
             null;
         const base_ty = if (base_record) |base_expr| try self.exprType(base_expr) else ty;
@@ -46341,7 +46606,7 @@ const BodyContext = struct {
                             Common.invariant("record constructor child lowered at a type different from its finalized field type");
                         }
                         break :pre_blk pre;
-                    } else try self.lowerExprAtType(field_value, slot.payload_ty);
+                    } else Common.invariant("record constructor lost its pre-lowered field child");
                     break :supplied try self.optionalSlotPresentExpr(field.ty, slot, payload);
                 }
                 if (self.preLoweredChildAt(pre_lowered, field_value)) |pre| {
@@ -46350,10 +46615,7 @@ const BodyContext = struct {
                     }
                     break :supplied pre;
                 }
-                if (try self.typeIsProvenUninhabited(field.ty)) {
-                    break :supplied try self.lowerExplicitUninhabitedInvocation(field_value, field.ty);
-                }
-                break :supplied try self.lowerExprAtType(field_value, field.ty);
+                Common.invariant("record constructor lost its pre-lowered field child");
             } else if (base_expr) |base_value| blk: {
                 // Record update copies unmentioned slots verbatim—for an
                 // optional field that copies the tagged slot, presence state
@@ -46522,7 +46784,8 @@ const BodyContext = struct {
         var requires_distinct_witness = false;
 
         const base_record = if (record.ext) |ext|
-            self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
+            self.preLoweredChildAt(pre_lowered, ext) orelse
+                Common.invariant("record constructor lost its pre-lowered base child")
         else
             null;
         const base_cell = if (base_record) |base_value|
@@ -50664,20 +50927,13 @@ const BodyContext = struct {
         return try self.draftFnSlotTypeNode(slot, request_fn_node);
     }
 
-    fn lowerResolvedDispatchAtNode(
+    fn resolvedDispatchCallData(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         lookup: MethodLookup,
         callable_node: NodeId,
-        arg_ctx: *BodyContext,
-        pre_lowered: []const PreLoweredOperand,
+        args: DraftSpan(DraftExprId),
     ) Allocator.Error!BodyExprData {
-        const fn_nodes = try self.graph.functionNodes(callable_node);
-        const args = try arg_ctx.lowerDispatchOperandsAtNodes(
-            plan.argsSlice(self.view.static_dispatch_plans),
-            fn_nodes.args,
-            pre_lowered,
-        );
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNodeWithEvidence(
@@ -50691,20 +50947,13 @@ const BodyContext = struct {
         } };
     }
 
-    fn lowerResolvedDirectDispatchAtNode(
+    fn resolvedDirectDispatchCallData(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         lookup: MethodLookup,
         callable_node: NodeId,
-        arg_ctx: *BodyContext,
-        pre_lowered: []const PreLoweredOperand,
+        args: DraftSpan(DraftExprId),
     ) Allocator.Error!BodyExprData {
-        const fn_nodes = try self.graph.functionNodes(callable_node);
-        const args = try arg_ctx.lowerDispatchOperandsAtNodes(
-            plan.argsSlice(self.view.static_dispatch_plans),
-            fn_nodes.args,
-            pre_lowered,
-        );
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(
@@ -50717,13 +50966,13 @@ const BodyContext = struct {
         } };
     }
 
-    fn lowerStructuralEqualityAtNode(
+    /// Relate a structural equality's operand nodes, returning its result
+    /// type; its operands lower next.
+    fn beginStructuralEqualityAtNode(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         callable_node: NodeId,
-        arg_ctx: *BodyContext,
-        pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!DraftExprId {
+    ) Allocator.Error!Type.TypeId {
         const eq = switch (plan.result_mode) {
             .equality => |eq| eq,
             .value, .hash, .parser_for, .encoder_for, .map, .map_effectful => Common.invariant("non-equality dispatch plan reached graph equality lowering"),
@@ -50737,14 +50986,19 @@ const BodyContext = struct {
             Common.invariant("structural equality callable graph node must have two operands");
         }
         try self.graph.unify(fn_nodes.args[0], fn_nodes.args[1]);
+        return try self.resolvedTypeViewForNode(fn_nodes.ret);
+    }
 
-        const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
-        const operands_span = try arg_ctx.lowerDispatchOperandsAtNodes(
-            plan.argsSlice(self.view.static_dispatch_plans),
-            fn_nodes.args,
-            pre_lowered,
-        );
-        const operands = arg_ctx.exprSpan(operands_span);
+    fn finishStructuralEqualityAtNode(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        callable_node: NodeId,
+        ret_ty: Type.TypeId,
+        operands_span: DraftSpan(DraftExprId),
+    ) Allocator.Error!DraftExprId {
+        const eq = plan.result_mode.equality;
+        const fn_nodes = try self.graph.functionNodes(callable_node);
+        const operands = self.exprSpan(operands_span);
         if (operands.len != 2) {
             Common.invariant("structural equality dispatch did not lower two operands");
         }
@@ -50787,17 +51041,15 @@ const BodyContext = struct {
         return try self.deferStructuralEqOperandsAtNode(ret_ty, fn_nodes.args[0], operands[0], operands[1], eq.negated);
     }
 
-    /// The hash counterpart of `lowerStructuralEqualityAtNode`: the hashed
+    /// The hash counterpart of `beginStructuralEqualityAtNode`: the hashed
     /// value's node may still carry live row defaults, so the derivation
     /// defers to final graph sealing instead of forcing an eager resolved
     /// view. The hasher operand and result share one concrete type.
-    fn lowerStructuralHashAtNode(
+    fn beginStructuralHashAtNode(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         callable_node: NodeId,
-        arg_ctx: *BodyContext,
-        pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!DraftExprId {
+    ) Allocator.Error!Type.TypeId {
         const hash = switch (plan.result_mode) {
             .hash => |hash| hash,
             .value, .equality, .parser_for, .encoder_for, .map, .map_effectful => Common.invariant("non-hash dispatch plan reached graph hash lowering"),
@@ -50811,14 +51063,17 @@ const BodyContext = struct {
             Common.invariant("structural hash callable graph node must have two operands");
         }
         try self.graph.unify(fn_nodes.args[1], fn_nodes.ret);
+        return try self.resolvedTypeViewForNode(fn_nodes.ret);
+    }
 
-        const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
-        const operands_span = try arg_ctx.lowerDispatchOperandsAtNodes(
-            plan.argsSlice(self.view.static_dispatch_plans),
-            fn_nodes.args,
-            pre_lowered,
-        );
-        const operands = arg_ctx.exprSpan(operands_span);
+    fn finishStructuralHashAtNode(
+        self: *BodyContext,
+        callable_node: NodeId,
+        ret_ty: Type.TypeId,
+        operands_span: DraftSpan(DraftExprId),
+    ) Allocator.Error!DraftExprId {
+        const fn_nodes = try self.graph.functionNodes(callable_node);
+        const operands = self.exprSpan(operands_span);
         if (operands.len != 2) {
             Common.invariant("structural hash dispatch did not lower two operands");
         }
@@ -56546,46 +56801,105 @@ const BodyContext = struct {
         });
     }
 
-    fn lowerDirectStructuralEq(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        eq: anytype,
-    ) Allocator.Error!DraftExprId {
-        const ret_ty = try self.lowerTypeView(checked_ret_ty);
-        return try self.lowerDirectStructuralEqAtType(eq, ret_ty);
+    fn stepDirectStructural(self: *BodyContext, task: *DirectStructuralTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const data = self.view.bodies.expr(task.expr).data;
+        switch (task.stage) {
+            .start => {
+                task.ret_ty = switch (task.ret) {
+                    .context => |ty| ty,
+                    .checked => |checked_ret_ty| try self.lowerTypeView(checked_ret_ty),
+                };
+                switch (data) {
+                    .structural_eq => |eq| {
+                        switch (try self.structuralEqualityOperandType(eq)) {
+                            .sealed => |operand_ty| task.operand_ty = operand_ty,
+                            .deferred => |operand_node| task.operand_node = operand_node,
+                        }
+                        if (eq.discriminant) |discriminant| {
+                            task.stage = .discriminant;
+                            return requestLowerChild(self, discriminant.value, self.directStructuralOperandCell(task));
+                        }
+                        task.stage = .lhs;
+                        return requestLowerChild(self, eq.lhs, self.directStructuralOperandCell(task));
+                    },
+                    .structural_hash => |h| {
+                        task.operand_ty = try self.lowerExprType(h.value);
+                        task.stage = .hash_value;
+                        return requestLowerChild(self, h.value, .{ .sealed = task.operand_ty.? });
+                    },
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("direct structural task reached a non-structural expression"),
+                }
+            },
+            .discriminant => {
+                const eq = data.structural_eq;
+                const discriminant = eq.discriminant.?;
+                const value = input.?.exprValue();
+                if (task.operand_ty) |operand_ty| {
+                    return try self.finishDirectStructural(task, try self.lowerEqualityAgainstTag(
+                        value,
+                        operand_ty,
+                        try self.tagName(self.view, discriminant.tag),
+                        eq.negated,
+                        task.ret_ty,
+                    ));
+                }
+                return try self.finishDirectStructural(task, try self.deferStructuralDerivationOperandsAtNode(
+                    task.ret_ty,
+                    task.operand_node,
+                    value,
+                    value,
+                    .{ .tag_discriminant = .{
+                        .value = value,
+                        .tag = try self.tagName(self.view, discriminant.tag),
+                        .negated = eq.negated,
+                    } },
+                ));
+            },
+            .lhs => {
+                task.lhs = input.?.exprValue();
+                task.stage = .rhs;
+                return requestLowerChild(self, data.structural_eq.rhs, self.directStructuralOperandCell(task));
+            },
+            .rhs => {
+                const eq = data.structural_eq;
+                const rhs = input.?.exprValue();
+                if (task.operand_ty) |operand_ty| {
+                    return try self.finishDirectStructural(task, try self.lowerStructuralEqFromOperands(operand_ty, task.lhs, rhs, eq.negated, task.ret_ty));
+                }
+                return try self.finishDirectStructural(task, try self.deferStructuralDerivationOperandsAtNode(
+                    task.ret_ty,
+                    task.operand_node,
+                    task.lhs,
+                    rhs,
+                    .{ .equality = .{ .negated = eq.negated } },
+                ));
+            },
+            .hash_value => {
+                task.lhs = input.?.exprValue();
+                task.stage = .hash_hasher;
+                return requestLowerChild(self, data.structural_hash.hasher, .{ .sealed = task.ret_ty });
+            },
+            .hash_hasher => return try self.finishDirectStructural(
+                task,
+                try self.lowerHashExpr(task.operand_ty.?, task.lhs, input.?.exprValue(), task.ret_ty),
+            ),
+        }
     }
 
-    fn lowerDirectStructuralEqAtType(
-        self: *BodyContext,
-        eq: anytype,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        return switch (try self.structuralEqualityOperandType(eq)) {
-            .sealed => |operand_ty| if (eq.discriminant) |discriminant|
-                try self.lowerEqualityAgainstTag(
-                    try self.lowerExprAtType(discriminant.value, operand_ty),
-                    operand_ty,
-                    try self.tagName(self.view, discriminant.tag),
-                    eq.negated,
-                    ret_ty,
-                )
-            else
-                try self.lowerDirectStructuralEqWithOperandType(eq.lhs, eq.rhs, eq.negated, ret_ty, operand_ty),
-            .deferred => |operand_node| try self.deferStructuralEqAtNode(eq, ret_ty, operand_node),
-        };
+    fn directStructuralOperandCell(_: *BodyContext, task: *const DirectStructuralTask) DraftTypeCell {
+        if (task.operand_ty) |operand_ty| return .{ .sealed = operand_ty };
+        return DraftTypeCell.fromGraphNode(task.operand_node);
     }
 
-    fn lowerDirectStructuralEqWithOperandType(
-        self: *BodyContext,
-        lhs_checked: checked.CheckedExprId,
-        rhs_checked: checked.CheckedExprId,
-        negated: bool,
-        ret_ty: Type.TypeId,
-        operand_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const lhs = try self.lowerExprAtType(lhs_checked, operand_ty);
-        const rhs = try self.lowerExprAtType(rhs_checked, operand_ty);
-        return try self.lowerStructuralEqFromOperands(operand_ty, lhs, rhs, negated, ret_ty);
+    fn finishDirectStructural(self: *BodyContext, task: *const DirectStructuralTask, lowered: DraftExprId) Allocator.Error!LowerStep {
+        switch (task.ret) {
+            .context => |ty| if (!self.sameType(ty, try self.exprType(lowered))) switch (task.stage) {
+                .hash_hasher => Common.invariant("checked structural hash lowered at a type different from its context type"),
+                .start, .discriminant, .lhs, .rhs, .hash_value => Common.invariant("checked structural equality lowered at a type different from its context type"),
+            },
+            .checked => {},
+        }
+        return loweredExprStep(lowered);
     }
 
     fn lowerStructuralEqFromOperands(
@@ -56646,38 +56960,6 @@ const BodyContext = struct {
 
         const operand_node = try self.instNode(lhs_checked_ty);
         return try self.structuralEqualityOperandFromNode(operand_node);
-    }
-
-    fn deferStructuralEqAtNode(
-        self: *BodyContext,
-        eq: anytype,
-        ret_ty: Type.TypeId,
-        operand_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const operand_cell = DraftTypeCell.fromGraphNode(operand_node);
-        if (eq.discriminant) |discriminant| {
-            const value = try self.lowerExprAtTypeCell(discriminant.value, operand_cell);
-            return try self.deferStructuralDerivationOperandsAtNode(
-                ret_ty,
-                operand_node,
-                value,
-                value,
-                .{ .tag_discriminant = .{
-                    .value = value,
-                    .tag = try self.tagName(self.view, discriminant.tag),
-                    .negated = eq.negated,
-                } },
-            );
-        }
-        const lhs = try self.lowerExprAtTypeCell(eq.lhs, operand_cell);
-        const rhs = try self.lowerExprAtTypeCell(eq.rhs, operand_cell);
-        return try self.deferStructuralDerivationOperandsAtNode(
-            ret_ty,
-            operand_node,
-            lhs,
-            rhs,
-            .{ .equality = .{ .negated = eq.negated } },
-        );
     }
 
     fn deferStructuralEqOperandsAtNode(
@@ -57409,26 +57691,6 @@ const BodyContext = struct {
         const lhs = try self.intLiteralExpr(0, u64_ty);
         const rhs = try self.intLiteralExpr(if (value) 0 else 1, u64_ty);
         return try self.lowLevelExpr(.num_is_eq, &.{ lhs, rhs }, bool_ty);
-    }
-
-    fn lowerDirectStructuralHash(
-        self: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        h: anytype,
-    ) Allocator.Error!DraftExprId {
-        const ret_ty = try self.lowerTypeView(checked_ret_ty);
-        return try self.lowerDirectStructuralHashAtType(h, ret_ty);
-    }
-
-    fn lowerDirectStructuralHashAtType(
-        self: *BodyContext,
-        h: anytype,
-        hasher_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const value_ty = try self.lowerExprType(h.value);
-        const value = try self.lowerExprAtType(h.value, value_ty);
-        const hasher = try self.lowerExprAtType(h.hasher, hasher_ty);
-        return try self.lowerHashExpr(value_ty, value, hasher, hasher_ty);
     }
 
     /// Emit `Hasher.write_u64(hasher, value)` as a low-level operation.
@@ -60933,22 +61195,6 @@ const BodyContext = struct {
         return local;
     }
 
-    fn lowerUninhabitedScrutinee(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        return try self.lowerExprAtTypeWithDemand(expr_id, ty, .uninhabited_result);
-    }
-
-    fn lowerExplicitUninhabitedInvocation(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        return try self.zeroBranchMatch(try self.lowerUninhabitedScrutinee(expr_id, ty), ty);
-    }
-
     fn zeroBranchMatch(self: *BodyContext, scrutinee: DraftExprId, ty: Type.TypeId) Allocator.Error!DraftExprId {
         return try self.zeroBranchMatchAtTypeCell(scrutinee, .{ .sealed = ty });
     }
@@ -64083,16 +64329,165 @@ fn moduleViewIdentityMatches(view: ModuleView, origin_hash: *const [32]u8) bool 
 /// its type and name queries through scope-owned methods, and the recursive descent
 /// through `restoreConstNodeAtTypeWithStaticRoot`, which genuinely differs
 /// between the two.
-fn constRestoreData(
+/// How a restorer starts one stored constant node.
+fn ConstRestoreStart(comptime Id: type) type {
+    return union(enum) {
+        /// The node's expression, already built or reused.
+        done: Id,
+        /// A nominal construction layer: `child` restored at `backing`,
+        /// wrapped in `named`.
+        layer: ConstRestoreLayer,
+        /// The node's stored value, built once its children are restored.
+        value: checked.ConstValue,
+    };
+}
+
+const ConstRestoreLayer = struct {
+    child: checked.ConstNodeId,
+    backing: Type.TypeId,
+    named: Type.TypeId,
+};
+
+fn ConstRestoreFrame(comptime Id: type) type {
+    return struct {
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+        layer: ?ConstRestoreLayer = null,
+        started: bool = false,
+        value: checked.ConstValue = undefined,
+        /// A box's payload or a nominal's backing.
+        single_child: ?checked.ConstNodeId = null,
+        children: []const checked.ConstNodeId = &.{},
+        tag_name: names.TagNameId = undefined,
+        lowered: std.ArrayListUnmanaged(Id) = .empty,
+
+        fn childCount(frame: *const @This()) usize {
+            return if (frame.single_child != null) 1 else frame.children.len;
+        }
+
+        fn child(frame: *const @This(), index: usize) checked.ConstNodeId {
+            return frame.single_child orelse frame.children[index];
+        }
+    };
+}
+
+/// Restore a stored constant's node tree at `root_ty` on explicit frames:
+/// each node's children are restored in order before the node itself.
+fn runConstRestore(
     restorer: anytype,
     store_view: ModuleView,
     type_view: ModuleView,
-    value: checked.ConstValue,
+    root: checked.ConstNodeId,
+    root_ty: Type.TypeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprId {
+    const Id = @TypeOf(restorer.*).ConstExprId;
+    var frames: std.ArrayListUnmanaged(ConstRestoreFrame(Id)) = .empty;
+    defer {
+        for (frames.items) |*frame| frame.lowered.deinit(restorer.allocator);
+        frames.deinit(restorer.allocator);
+    }
+    var delivered = try beginConstRestoreNode(restorer, &frames, store_view, type_view, root, root_ty, static_data_const_locator);
+    while (frames.items.len != 0) {
+        const frame = &frames.items[frames.items.len - 1];
+        if (frame.layer) |layer| {
+            if (!frame.started) {
+                frame.started = true;
+                delivered = try beginConstRestoreNode(restorer, &frames, store_view, type_view, layer.child, layer.backing, static_data_const_locator);
+                continue;
+            }
+            const finished = frames.pop().?;
+            delivered = try restorer.finishConstRestoreLayer(store_view, type_view, finished.node, finished.ty, layer.named, delivered.?, static_data_const_locator);
+            continue;
+        }
+        if (delivered) |lowered| try frame.lowered.append(restorer.allocator, lowered);
+        delivered = null;
+        if (frame.lowered.items.len < frame.childCount()) {
+            const index = frame.lowered.items.len;
+            const child_ty = constRestoreChildType(restorer, frame, index);
+            delivered = try beginConstRestoreNode(restorer, &frames, store_view, type_view, frame.child(index), child_ty, static_data_const_locator);
+            continue;
+        }
+        var finished = frames.pop().?;
+        defer finished.lowered.deinit(restorer.allocator);
+        const data = try constRestoreData(restorer, store_view, &finished);
+        delivered = try restorer.finishConstRestoreData(store_view, type_view, finished.node, finished.ty, data, static_data_const_locator);
+    }
+    return delivered.?;
+}
+
+/// Start one node: its expression when the restorer has it or it has no
+/// children, else the frame that restores its children.
+fn beginConstRestoreNode(
+    restorer: anytype,
+    frames: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    node: checked.ConstNodeId,
     ty: Type.TypeId,
     static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!?@TypeOf(restorer.*).ConstExprId {
+    const value = switch (try restorer.startConstRestore(store_view, type_view, node, ty, static_data_const_locator)) {
+        .done => |expr| return expr,
+        .layer => |layer| {
+            try frames.append(restorer.allocator, .{ .node = node, .ty = ty, .layer = layer });
+            return null;
+        },
+        .value => |value| value,
+    };
+    var frame: ConstRestoreFrame(@TypeOf(restorer.*).ConstExprId) = .{ .node = node, .ty = ty, .value = value };
+    switch (value) {
+        .box => |payload| frame.single_child = payload,
+        .list => |list| switch (list) {
+            .nodes => |items| frame.children = items,
+            .empty, .packed_bytes => {},
+        },
+        .tuple => |items| {
+            if (restorer.tupleItemTypes(ty).len != items.len) Common.invariant("ConstStore tuple length differs from checked type");
+            frame.children = items;
+        },
+        .record => |items| {
+            if (restorer.constRecordFields(ty).len != items.len) Common.invariant("ConstStore record length differs from checked type");
+            frame.children = items;
+        },
+        .tag => |tag| {
+            frame.tag_name = try restorer.constNameStore().internTagLabel(tag.tag_name);
+            if (restorer.tagPayloadTypes(ty, frame.tag_name).len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
+            frame.children = tag.payloads;
+        },
+        .nominal => |nominal| frame.single_child = nominal.backing,
+        .pending, .zst, .scalar, .str, .crash, .fn_value => {},
+    }
+    if (frame.childCount() == 0) {
+        const data = try constRestoreData(restorer, store_view, &frame);
+        return try restorer.finishConstRestoreData(store_view, type_view, node, ty, data, static_data_const_locator);
+    }
+    try frames.append(restorer.allocator, frame);
+    return null;
+}
+
+/// The type child `index` of a restoring node is restored at.
+fn constRestoreChildType(restorer: anytype, frame: anytype, index: usize) Type.TypeId {
+    return switch (frame.value) {
+        .box => restorer.constBoxPayloadType(frame.ty),
+        .list => restorer.constListElemType(frame.ty),
+        .tuple => GuardedList.at(restorer.tupleItemTypes(frame.ty), index),
+        .record => GuardedList.at(restorer.constRecordFields(frame.ty), index).ty,
+        .tag => GuardedList.at(restorer.tagPayloadTypes(frame.ty, frame.tag_name), index),
+        .nominal => restorer.namedBackingType(frame.ty) orelse frame.ty,
+        .pending, .zst, .scalar, .str, .crash, .fn_value => Common.invariant("ConstStore leaf node had a restored child"),
+    };
+}
+
+/// A restored node's expression data, from its restored children.
+fn constRestoreData(
+    restorer: anytype,
+    store_view: ModuleView,
+    frame: anytype,
 ) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
     const emit = restorer.constEmit();
-    return switch (value) {
+    const lowered = frame.lowered.items;
+    return switch (frame.value) {
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restorer.constScalarData(scalar),
@@ -64106,142 +64501,44 @@ fn constRestoreData(
             str.offset,
             str.len,
         ) },
-        .box => |node| blk: {
-            const child = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, restorer.constBoxPayloadType(ty), static_data_const_locator);
-            break :blk .{ .low_level = .{
-                .op = .box_box,
-                .args = try emit.addExprSpan(&.{child}),
-            } };
-        },
-        .list => |list| try constRestoreListData(restorer, store_view, type_view, ty, list, static_data_const_locator),
-        .tuple => |items| .{ .tuple = try constRestoreTuple(restorer, store_view, type_view, ty, items, static_data_const_locator) },
-        .record => |items| .{ .record = try constRestoreRecord(restorer, store_view, type_view, ty, items, static_data_const_locator) },
-        .tag => |tag| .{ .tag = .{
-            .name = try restorer.constNameStore().internTagLabel(tag.tag_name),
-            .payloads = try constRestoreTagPayloads(restorer, store_view, type_view, ty, tag, static_data_const_locator),
+        .box => .{ .low_level = .{
+            .op = .box_box,
+            .args = try emit.addExprSpan(lowered),
         } },
-        .nominal => |nominal| .{ .nominal = try restorer.restoreConstNodeAtTypeWithStaticRoot(
-            store_view,
-            type_view,
-            nominal.backing,
-            restorer.namedBackingType(ty) orelse ty,
-            static_data_const_locator,
-        ) },
+        .list => |list| switch (list) {
+            .nodes => .{ .list = try emit.addExprSpan(lowered) },
+            .empty => |capacity| try restorer.constEmptyListData(capacity),
+            .packed_bytes => |packed_list| .{ .bytes_lit = .{
+                .literal = try emit.addConstBlobView(
+                    store_view.key.bytes,
+                    packed_list.bytes.data,
+                    store_view.const_store.blobData(packed_list.bytes.data),
+                    packed_list.bytes.offset,
+                    packed_list.bytes.len,
+                ),
+                .len = packed_list.len,
+                .element = packed_list.element,
+                .product_width = packed_list.product_width,
+            } },
+        },
+        .tuple => .{ .tuple = try emit.addExprSpan(lowered) },
+        .record => blk: {
+            const Field = @TypeOf(restorer.*).ConstFieldExpr;
+            const fields = restorer.constRecordFields(frame.ty);
+            const restored = try restorer.allocator.alloc(Field, lowered.len);
+            defer restorer.allocator.free(restored);
+            for (restored, lowered, 0..) |*field, value, index| {
+                field.* = .{ .name = GuardedList.at(fields, index).name, .value = value };
+            }
+            break :blk .{ .record = try emit.addFieldExprSpan(restored) };
+        },
+        .tag => .{ .tag = .{
+            .name = frame.tag_name,
+            .payloads = try emit.addExprSpan(lowered),
+        } },
+        .nominal => .{ .nominal = lowered[0] },
         .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
     };
-}
-
-/// Restore a stored list, which is either restored nodes or packed product bytes.
-fn constRestoreListData(
-    restorer: anytype,
-    store_view: ModuleView,
-    type_view: ModuleView,
-    ty: Type.TypeId,
-    list: checked.ConstList,
-    static_data_const_locator: ?checked.ConstLocator,
-) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
-    return switch (list) {
-        .nodes => |items| .{ .list = try constRestoreList(restorer, store_view, type_view, ty, items, static_data_const_locator) },
-        .empty => |capacity| try restorer.constEmptyListData(capacity),
-        .packed_bytes => |packed_list| .{ .bytes_lit = .{
-            .literal = try restorer.constEmit().addConstBlobView(
-                store_view.key.bytes,
-                packed_list.bytes.data,
-                store_view.const_store.blobData(packed_list.bytes.data),
-                packed_list.bytes.offset,
-                packed_list.bytes.len,
-            ),
-            .len = packed_list.len,
-            .element = packed_list.element,
-            .product_width = packed_list.product_width,
-        } },
-    };
-}
-
-/// Restore each element of a stored list at the checked element type.
-fn constRestoreList(
-    restorer: anytype,
-    store_view: ModuleView,
-    type_view: ModuleView,
-    ty: Type.TypeId,
-    items: []const checked.ConstNodeId,
-    static_data_const_locator: ?checked.ConstLocator,
-) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
-    const Emitted = @TypeOf(restorer.*).ConstExprId;
-    const elem_ty = restorer.constListElemType(ty);
-    const lowered = try restorer.allocator.alloc(Emitted, items.len);
-    defer restorer.allocator.free(lowered);
-    for (items, 0..) |item, index| {
-        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
-    }
-    return try restorer.constEmit().addExprSpan(lowered);
-}
-
-/// Restore each element of a stored tuple at its checked element type.
-fn constRestoreTuple(
-    restorer: anytype,
-    store_view: ModuleView,
-    type_view: ModuleView,
-    ty: Type.TypeId,
-    items: []const checked.ConstNodeId,
-    static_data_const_locator: ?checked.ConstLocator,
-) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
-    const Emitted = @TypeOf(restorer.*).ConstExprId;
-    const item_tys = restorer.tupleItemTypes(ty);
-    if (item_tys.len != items.len) Common.invariant("ConstStore tuple length differs from checked type");
-    const lowered = try restorer.allocator.alloc(Emitted, items.len);
-    defer restorer.allocator.free(lowered);
-    for (items, 0..) |item, index| {
-        const item_ty = GuardedList.at(item_tys, index);
-        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, item_ty, static_data_const_locator);
-    }
-    return try restorer.constEmit().addExprSpan(lowered);
-}
-
-/// Restore each field of a stored record at its checked field type.
-fn constRestoreRecord(
-    restorer: anytype,
-    store_view: ModuleView,
-    type_view: ModuleView,
-    ty: Type.TypeId,
-    items: []const checked.ConstNodeId,
-    static_data_const_locator: ?checked.ConstLocator,
-) Allocator.Error!@TypeOf(restorer.*).ConstFieldExprSpan {
-    const Field = @TypeOf(restorer.*).ConstFieldExpr;
-    const fields = restorer.constRecordFields(ty);
-    if (fields.len != items.len) Common.invariant("ConstStore record length differs from checked type");
-    const lowered = try restorer.allocator.alloc(Field, items.len);
-    defer restorer.allocator.free(lowered);
-    for (items, 0..) |item, index| {
-        const field = GuardedList.at(fields, index);
-        lowered[index] = .{
-            .name = field.name,
-            .value = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, field.ty, static_data_const_locator),
-        };
-    }
-    return try restorer.constEmit().addFieldExprSpan(lowered);
-}
-
-/// Restore each payload of a stored tag at its checked payload type.
-fn constRestoreTagPayloads(
-    restorer: anytype,
-    store_view: ModuleView,
-    type_view: ModuleView,
-    ty: Type.TypeId,
-    tag: anytype,
-    static_data_const_locator: ?checked.ConstLocator,
-) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
-    const Emitted = @TypeOf(restorer.*).ConstExprId;
-    const mono_tag_name = try restorer.constNameStore().internTagLabel(tag.tag_name);
-    const payload_tys = restorer.tagPayloadTypes(ty, mono_tag_name);
-    if (payload_tys.len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
-    const lowered = try restorer.allocator.alloc(Emitted, tag.payloads.len);
-    defer restorer.allocator.free(lowered);
-    for (tag.payloads, 0..) |payload, index| {
-        const payload_ty = GuardedList.at(payload_tys, index);
-        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, payload_ty, static_data_const_locator);
-    }
-    return try restorer.constEmit().addExprSpan(lowered);
 }
 
 fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {

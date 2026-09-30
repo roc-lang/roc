@@ -2116,7 +2116,7 @@ const ProcedureBuilder = struct {
 
     fn destroyStaticFrame(self: *ProcedureBuilder, frame: StaticFrame) void {
         switch (frame) {
-            inline else => |payload| {
+            inline .desc, .source_desc, .dict, .inspect_slot, .nested_descs, .tag_variants, .payload_descs, .inspect_hidden, .inspect_arg, .structural_slot, .method_adapter => |payload| {
                 payload.deinit(self.allocator);
                 self.allocator.destroy(payload);
             },
@@ -15190,7 +15190,7 @@ const ProcedureBuilder = struct {
     fn verifyDirectCallAbis(self: *ProcedureBuilder) Allocator.Error!void {
         // A provisional call kept in its descriptor-returning form is exempt:
         // its replacement form is unused.
-        var unused_static_calls = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
+        var unused_static_calls = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
         defer unused_static_calls.deinit();
         for (self.pending_direct_call_descriptor_abis.items) |pending| {
             if (!pending.resolved) {
@@ -15377,9 +15377,9 @@ const ProcBodyBuilder = struct {
     current_lambda: ?checked.CheckedExprId,
     /// Provenance of the construct this builder is currently lowering. The
     /// body's creator states it explicitly (scaffold or derived, naming the
-    /// construct that demanded the body), and `lowerExprInto`/`beginStatement`
-    /// restate it as `source` for the checked node they lower, restoring the
-    /// enclosing origin when that node is done.
+    /// construct that demanded the body), and the expression machine
+    /// (`runExprTasks`) restates it as `source` for each checked node it
+    /// lowers, restoring the enclosing origin when that node is done.
     origin: LIR.StmtOrigin,
 
     const LoopContext = struct {
@@ -18890,7 +18890,7 @@ const ProcBodyBuilder = struct {
     ///
     /// Binder state is swapped to fresh empty arrays for the duration
     /// (`ensureBinderLocals` re-sizes them lazily against the swapped
-    /// module), mirroring `lowerRuntimeCallableEvalExprInto`. This is
+    /// module), mirroring `beginRuntimeCallableEval`. This is
     /// required even when `expr_module` is the current module: the caller's
     /// binder arrays index the caller's pattern binders, and boxy binder
     /// slots are write-once, so a second materialization of the same closed
@@ -24155,224 +24155,6 @@ const ProcBodyBuilder = struct {
             .lambda, .closure => .{ .nested_expr = .{ .module = self.module.key, .expr = expr_id } },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("non-callable checked expression reached callable worker source lookup"),
         };
-    }
-
-    fn workerSourceForProcedureValueRefInModule(
-        self: *ProcBodyBuilder,
-        module: ProcedureModuleView,
-        ref_id: checked.ResolvedValueRefId,
-    ) ?Plan.WorkerSource {
-        return self.resolveWorkerSource(.{ .value_ref = .{ .module = module, .ref_id = ref_id } });
-    }
-
-    fn workerSourceForProcedureUse(self: *ProcBodyBuilder, procedure: checked.ProcedureUseTemplate) Plan.WorkerSource {
-        return self.resolveWorkerSource(.{ .procedure_use = procedure }) orelse
-            boxyLowerInvariant("procedure use resolved to no worker source");
-    }
-
-    fn workerSourceForTopLevelProcedureBinding(
-        self: *ProcBodyBuilder,
-        binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
-    ) Plan.WorkerSource {
-        return self.resolveWorkerSource(.{ .top_level_binding = binding_ref }) orelse
-            boxyLowerInvariant("procedure binding resolved to no worker source");
-    }
-
-    fn workerSourceForCallableEvalTemplate(
-        self: *ProcBodyBuilder,
-        module: ProcedureModuleView,
-        template_id: checked.CallableEvalTemplateId,
-    ) ?Plan.WorkerSource {
-        return self.resolveWorkerSource(.{ .eval_template = .{ .module = module, .template = template_id } });
-    }
-
-    fn workerSourceForCallableRootExpr(
-        self: *ProcBodyBuilder,
-        module: ProcedureModuleView,
-        expr_id: checked.CheckedExprId,
-    ) ?Plan.WorkerSource {
-        return self.resolveWorkerSource(.{ .root_expr = .{ .module = module, .expr = expr_id } });
-    }
-
-    /// One reference on a chain of callable references.
-    const WorkerSourceQuery = union(enum) {
-        value_ref: struct { module: ProcedureModuleView, ref_id: checked.ResolvedValueRefId },
-        root_expr: struct { module: ProcedureModuleView, expr: checked.CheckedExprId },
-        procedure_use: checked.ProcedureUseTemplate,
-        top_level_binding: checked.ArtifactTopLevelProcedureBindingRef,
-        eval_template: struct { module: ProcedureModuleView, template: checked.CallableEvalTemplateId },
-    };
-
-    /// Follow a chain of callable references (a lookup, the procedure it
-    /// names, that procedure's evaluated callable, and so on) to the worker
-    /// source it ends at. Each step names a source, names none, or forwards
-    /// to the next reference. A top-level binding whose evaluated callable
-    /// names no source is itself the source; since that always names one,
-    /// only the most recent such binding can apply.
-    fn resolveWorkerSource(self: *ProcBodyBuilder, first: WorkerSourceQuery) ?Plan.WorkerSource {
-        var query = first;
-        var fallback: ?checked.ArtifactTopLevelProcedureBindingRef = null;
-        while (true) {
-            query = switch (query) {
-                .value_ref => |ref| next: {
-                    const module = ref.module;
-                    const record = module.resolved_value_refs.callableTarget(ref.ref_id);
-                    break :next switch (record.ref) {
-                        .local_proc => |local| return if (topLevelProcedureBindingForExpr(module, local.expr)) |binding|
-                            .{ .procedure_binding = binding }
-                        else
-                            .{ .nested_expr = .{ .module = module.key, .expr = nestedCallableSiteExprForExpr(module, local.expr) orelse local.expr } },
-                        .top_level_proc,
-                        .promoted_top_level_proc,
-                        => |procedure| .{ .procedure_use = procedure },
-                        .platform_required_proc => |required| .{ .procedure_use = required.procedure },
-                        .imported_proc => |procedure| .{ .procedure_use = procedure },
-                        .hosted_proc => |procedure| .{ .procedure_use = procedure },
-                        .local_param,
-                        .local_value,
-                        .local_mutable_version,
-                        .pattern_binder,
-                        .selected_hoisted_const,
-                        .top_level_const,
-                        .imported_const,
-                        .platform_required_declaration,
-                        .platform_required_const,
-                        => return bindingFallback(fallback),
-                    };
-                },
-                .procedure_use => |procedure| switch (procedure.binding) {
-                    .top_level => |top_level| .{ .top_level_binding = top_level },
-                    .platform_required => |required| .{ .top_level_binding = .{
-                        .artifact = required.app_value.artifact,
-                        .binding = required.procedure_binding,
-                    } },
-                    .imported, .hosted => return .{ .procedure_use = procedure },
-                },
-                .top_level_binding => |binding_ref| next: {
-                    const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
-                    const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
-                    switch (binding.body) {
-                        .checked_error => boxyLowerInvariant("rejected binding reached Boxy lowering callable consumption"),
-                        .callable_eval_template => |template| {
-                            fallback = binding_ref;
-                            break :next .{ .eval_template = .{ .module = module, .template = template } };
-                        },
-                        .direct_template => return .{ .procedure_binding = binding_ref },
-                    }
-                },
-                .eval_template => |eval| next: {
-                    const module = eval.module;
-                    const raw = @intFromEnum(eval.template);
-                    if (raw >= module.callable_eval_templates.templates.len) {
-                        boxyLowerInvariant("callable eval binding referenced a missing checked template");
-                    }
-                    const template = module.callable_eval_templates.templates[raw];
-                    const root = module.compile_time_roots.root(template.root);
-                    break :next switch (root.payload) {
-                        .fn_value => |fn_id| {
-                            if (@intFromEnum(fn_id) >= module.const_store.fns.items.len) {
-                                boxyLowerInvariant("finalized callable eval root referenced a missing ConstStore function");
-                            }
-                            return self.workerSourceForConstFnValue(module.const_store.getFn(fn_id));
-                        },
-                        .pending => .{ .root_expr = .{ .module = module, .expr = root.expr } },
-                        .const_node, .discarded, .expect => return bindingFallback(fallback),
-                    };
-                },
-                .root_expr => |root| next: {
-                    const module = root.module;
-                    const expr = module.checked_bodies.expr(root.expr);
-                    if (expr.data == .lambda or expr.data == .closure) {
-                        return .{ .nested_expr = .{ .module = module.key, .expr = root.expr } };
-                    }
-                    const maybe_ref: ?checked.ResolvedValueRefId = if (expr.data == .lookup_local)
-                        expr.data.lookup_local.resolved
-                    else if (expr.data == .lookup_external)
-                        expr.data.lookup_external
-                    else if (expr.data == .lookup_required)
-                        expr.data.lookup_required
-                    else
-                        return bindingFallback(fallback);
-                    const ref_id = maybe_ref orelse return bindingFallback(fallback);
-                    break :next .{ .value_ref = .{ .module = module, .ref_id = ref_id } };
-                },
-            };
-        }
-    }
-
-    /// The source a top-level binding names when its evaluated callable names
-    /// none: the binding itself.
-    fn bindingFallback(maybe_binding: ?checked.ArtifactTopLevelProcedureBindingRef) ?Plan.WorkerSource {
-        const binding = maybe_binding orelse return null;
-        return .{ .procedure_binding = binding };
-    }
-
-    fn workerSourceForConstFnValue(
-        self: *ProcBodyBuilder,
-        fn_value: check.ConstStore.ConstFn,
-    ) Plan.WorkerSource {
-        return switch (fn_value.fn_def) {
-            .local_template,
-            .imported_template,
-            .checked_generated,
-            .local_hosted,
-            .imported_hosted,
-            => |template| .{ .procedure_template = template },
-            .nested => |nested| blk: {
-                // A default-root-qualified stored function resolves its site
-                // in the declaring module (by content identity) against the
-                // `.default_root` owner (design.md "Defaulted Fields").
-                const module = if (nested.default_root) |identity|
-                    procedureModuleByIdentity(self.parent.modules, &identity.bytes)
-                else
-                    procedureModuleByKey(self.parent.modules, .{
-                        .bytes = names.procTemplateModuleDigest(nested.owner).bytes,
-                    });
-                var site_expr: ?checked.CheckedExprId = null;
-                for (module.nested_proc_sites.sites) |site| {
-                    if (site.site != nested.site) continue;
-                    switch (site.owner) {
-                        .template => |site_owner| {
-                            if (nested.default_root != null) continue;
-                            if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
-                        },
-                        .default_root => if (nested.default_root == null) continue,
-                    }
-                    site_expr = site.checked_expr orelse
-                        boxyLowerInvariant("stored nested function had no checked expression site");
-                    break;
-                }
-                break :blk .{ .nested_expr = .{
-                    .module = module.key,
-                    .expr = site_expr orelse
-                        boxyLowerInvariant("stored nested function referenced a missing checked nested site"),
-                } };
-            },
-            .parser_runtime => |runtime| self.workerSourceForStoredGeneratedCodec(runtime.owner, runtime.expr, .parser_runtime),
-            .encoder_for_runtime => |runtime| self.workerSourceForStoredGeneratedCodec(runtime.owner, runtime.expr, .encoder_runtime),
-        };
-    }
-
-    fn workerSourceForStoredGeneratedCodec(
-        self: *ProcBodyBuilder,
-        owner: names.ProcedureTemplateRef,
-        expr_id: checked.CheckedExprId,
-        kind: Plan.GeneratedCodecKind,
-    ) Plan.WorkerSource {
-        const module = procedureModuleByKey(self.parent.modules, .{
-            .bytes = names.procTemplateModuleDigest(owner).bytes,
-        });
-        const dispatch = dispatchPlanForGeneratedRuntime(module, expr_id);
-        const constructor = checkedFunctionPayload(module, dispatch.callable_ty);
-        if (constructor.args.len != 1) {
-            boxyLowerInvariant("stored generated codec constructor did not have one encoding argument");
-        }
-        return .{ .generated_codec = .{
-            .kind = kind,
-            .shape = .{ .module = module.key, .ty = dispatch.dispatcher_ty },
-            .capture_type = .{ .module = module.key, .ty = constructor.args[0] },
-            .contract_expr = .{ .module = module.key, .expr = expr_id },
-        } };
     }
 
     fn directTargetIsLocalProc(self: *const ProcBodyBuilder, target: checked.ResolvedValueId) bool {
@@ -33021,23 +32803,6 @@ const ProcBodyBuilder = struct {
         /// The frame finished with this descriptor and was popped.
         done: LIR.BoxyTypeDescId,
     };
-
-    fn descriptorTemplateRefForRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        parent_desc: ?Plan.DescriptorRequirementId,
-        captures: *std.ArrayList(LIR.LocalId),
-        context: *DescriptorTemplateContext,
-    ) Allocator.Error!LIR.BoxyDescRef {
-        var frames: std.ArrayList(TemplateDescFrame) = .empty;
-        defer {
-            for (frames.items) |*frame| frame.deinit(self.parent.allocator);
-            frames.deinit(self.parent.allocator);
-        }
-        errdefer unwindTemplateDescFrames(&frames, context);
-        const first = try self.beginTemplateRef(rep_id, parent_desc, &frames, captures, context);
-        return try self.runTemplateDescFrames(&frames, first, captures, context);
-    }
 
     fn descriptorTemplateTypeDescForRep(
         self: *ProcBodyBuilder,
@@ -43017,69 +42782,6 @@ fn checkedFunctionPayload(module: ProcedureModuleView, checked_ty: checked.Check
         .function => |function| function,
         .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("checked intrinsic wrapper did not have a function type"),
     };
-}
-
-fn dispatchPlanForGeneratedRuntime(
-    module: ProcedureModuleView,
-    expr_id: checked.CheckedExprId,
-) static_dispatch.StaticDispatchCallPlan {
-    const expr = module.checked_bodies.expr(expr_id);
-    const plan_id = switch (expr.data) {
-        .dispatch_call => |maybe| maybe orelse
-            boxyLowerInvariant("stored serialization dispatch expression had no dispatch plan"),
-        .type_dispatch_call => |maybe| maybe orelse
-            boxyLowerInvariant("stored serialization type dispatch expression had no dispatch plan"),
-        .pending,
-        .numeral,
-        .str_from_quote,
-        .str_segment,
-        .str,
-        .bytes_literal,
-        .lookup_local,
-        .lookup_external,
-        .lookup_required,
-        .list,
-        .empty_list,
-        .tuple,
-        .match_,
-        .if_,
-        .call,
-        .record,
-        .empty_record,
-        .block,
-        .tag,
-        .nominal,
-        .zero_argument_tag,
-        .closure,
-        .lambda,
-        .binop,
-        .unary_minus,
-        .unary_not,
-        .field_access,
-        .interpolation,
-        .structural_eq,
-        .structural_hash,
-        .method_eq,
-        .tuple_access,
-        .runtime_error,
-        .crash,
-        .dbg,
-        .expect_err,
-        .expect,
-        .ellipsis,
-        .anno_only,
-        .break_,
-        .return_,
-        .for_,
-        .hosted_lambda,
-        .run_low_level,
-        => boxyLowerInvariant("stored serialization runtime function did not reference a dispatch expression"),
-    };
-    const raw = @intFromEnum(plan_id);
-    if (raw >= module.static_dispatch_plans.plans.len) {
-        boxyLowerInvariant("stored serialization dispatch plan was outside its checked table");
-    }
-    return module.static_dispatch_plans.plans[raw];
 }
 
 fn constTupleItemTypes(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {

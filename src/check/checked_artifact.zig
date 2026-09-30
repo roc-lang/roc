@@ -20064,114 +20064,126 @@ const EvidencePass = struct {
 
     fn resolveObligationStep(
         self: *EvidencePass,
-        dispatcher_var: Var,
-        dispatcher_ty: CheckedTypeId,
+        dispatcher_var_in: Var,
+        dispatcher_ty_in: CheckedTypeId,
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
-        constraint_fn_var: ?Var,
+        constraint_fn_var_in: ?Var,
         chain: []const []const EvidenceParam,
-        commit_unpinned: bool,
+        commit_unpinned_in: bool,
     ) Allocator.Error!ObligationStep {
-        if (constraint_fn_var) |fn_var| {
-            if (self.types.varStaticDispatchRejected(fn_var)) return .{ .resolved = .checked_error };
-        }
-
-        const resolved = self.types.resolveVar(dispatcher_var);
-        // A structural receiver may still own a generic codec requirement.
-        // Its exact scheme relation takes precedence over its current shape.
-        if (structural_kind == .parser or structural_kind == .encoder) if (constraint_fn_var) |fn_var| {
-            for (chain, 0..) |params, depth| {
-                for (params, 0..) |param, index| {
-                    if (param.source != .scheme_requirement) continue;
-                    if (self.types.resolveVar(param.constraint.fn_var).var_ != self.types.resolveVar(fn_var).var_) continue;
-                    if (try self.names.internMethodIdent(self.module.identStoreConst(), param.constraint.fn_name) != method) continue;
-                    return .{ .resolved = .{ .evidence_dependent = .{
-                        .scheme_param = param.published_index orelse checkedArtifactInvariant("forwarded scheme requirement was not published", .{}),
-                        .index = .{ .depth = @intCast(depth), .index = @intCast(index) },
-                        .independent_callable = false,
-                    } } };
-                }
+        var dispatcher_var = dispatcher_var_in;
+        var dispatcher_ty = dispatcher_ty_in;
+        var constraint_fn_var = constraint_fn_var_in;
+        var commit_unpinned = commit_unpinned_in;
+        // A generalized value's use redirects resolution to the type that use
+        // instantiated, which can itself redirect.
+        redirect: while (true) {
+            if (constraint_fn_var) |fn_var| {
+                if (self.types.varStaticDispatchRejected(fn_var)) return .{ .resolved = .checked_error };
             }
-        };
 
-        // Builtin containers have ordinary registry methods for parser_for and
-        // encoder_for, but checking can deliberately discharge an obligation
-        // through the generated structural codec path instead. Preserve that
-        // exact producer decision: the derivation records the original
-        // constraint-function variable that selected it.
-        if (structural_kind) |kind| {
-            const derivation_kind: ?static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
-                .parser => .parser,
-                .encoder => .encoder,
-                .equality, .hash, .map, .map_effectful => null,
+            const resolved = self.types.resolveVar(dispatcher_var);
+            // A structural receiver may still own a generic codec requirement.
+            // Its exact scheme relation takes precedence over its current shape.
+            if (structural_kind == .parser or structural_kind == .encoder) if (constraint_fn_var) |fn_var| {
+                for (chain, 0..) |params, depth| {
+                    for (params, 0..) |param, index| {
+                        if (param.source != .scheme_requirement) continue;
+                        if (self.types.resolveVar(param.constraint.fn_var).var_ != self.types.resolveVar(fn_var).var_) continue;
+                        if (try self.names.internMethodIdent(self.module.identStoreConst(), param.constraint.fn_name) != method) continue;
+                        return .{ .resolved = .{ .evidence_dependent = .{
+                            .scheme_param = param.published_index orelse checkedArtifactInvariant("forwarded scheme requirement was not published", .{}),
+                            .index = .{ .depth = @intCast(depth), .index = @intCast(index) },
+                            .independent_callable = false,
+                        } } };
+                    }
+                }
             };
-            if (derivation_kind) |expected_kind| {
-                if (constraint_fn_var) |fn_var| {
-                    if (self.generatedCodecDerivationForSourceConstraint(fn_var, expected_kind) != null) {
-                        return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
+
+            // Builtin containers have ordinary registry methods for parser_for and
+            // encoder_for, but checking can deliberately discharge an obligation
+            // through the generated structural codec path instead. Preserve that
+            // exact producer decision: the derivation records the original
+            // constraint-function variable that selected it.
+            if (structural_kind) |kind| {
+                const derivation_kind: ?static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
+                    .parser => .parser,
+                    .encoder => .encoder,
+                    .equality, .hash, .map, .map_effectful => null,
+                };
+                if (derivation_kind) |expected_kind| {
+                    if (constraint_fn_var) |fn_var| {
+                        if (self.generatedCodecDerivationForSourceConstraint(fn_var, expected_kind) != null) {
+                            return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
+                        }
                     }
                 }
             }
-        }
 
-        // A generalized VALUE decl's scheme param may LOOK concrete here:
-        // compile-time finalization defaults the pristine var (e.g. to Dec)
-        // after uses were instantiated. The uses are the truth—they carry
-        // the type each inline lowering actually runs at—so resolve through
-        // a representative use record before trusting the var's content.
-        if (self.local_value_scheme_by_var.get(@intFromEnum(resolved.var_))) |pattern_raw| {
-            if (self.value_use_record_by_pattern.get(pattern_raw)) |record_idx| {
-                const module_env = self.module.moduleEnvConst();
-                const record = module_env.scheme_uses.items.items[record_idx];
-                const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
-                if (self.pairForResolved(pairs, resolved.var_)) |fresh| {
-                    if (self.types.resolveVar(fresh).var_ != resolved.var_) {
-                        const fresh_fn: ?Var = if (constraint_fn_var) |fn_var| self.pairForResolved(pairs, self.types.resolveVar(fn_var).var_) else null;
-                        const fresh_dispatcher_ty = self.checked_types.rootForSourceVar(self.module, fresh) orelse
-                            checkedArtifactInvariant("checked dispatch use instantiation type was not published", .{});
-                        return self.resolveObligationStep(fresh, fresh_dispatcher_ty, method, structural_kind, fresh_fn orelse constraint_fn_var, chain, true);
+            // A generalized VALUE decl's scheme param may LOOK concrete here:
+            // compile-time finalization defaults the pristine var (e.g. to Dec)
+            // after uses were instantiated. The uses are the truth—they carry
+            // the type each inline lowering actually runs at—so resolve through
+            // a representative use record before trusting the var's content.
+            if (self.local_value_scheme_by_var.get(@intFromEnum(resolved.var_))) |pattern_raw| {
+                if (self.value_use_record_by_pattern.get(pattern_raw)) |record_idx| {
+                    const module_env = self.module.moduleEnvConst();
+                    const record = module_env.scheme_uses.items.items[record_idx];
+                    const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+                    if (self.pairForResolved(pairs, resolved.var_)) |fresh| {
+                        if (self.types.resolveVar(fresh).var_ != resolved.var_) {
+                            const fresh_fn: ?Var = if (constraint_fn_var) |fn_var| self.pairForResolved(pairs, self.types.resolveVar(fn_var).var_) else null;
+                            const fresh_dispatcher_ty = self.checked_types.rootForSourceVar(self.module, fresh) orelse
+                                checkedArtifactInvariant("checked dispatch use instantiation type was not published", .{});
+                            dispatcher_var = fresh;
+                            dispatcher_ty = fresh_dispatcher_ty;
+                            constraint_fn_var = fresh_fn orelse constraint_fn_var;
+                            commit_unpinned = true;
+                            continue :redirect;
+                        }
                     }
                 }
             }
-        }
 
-        switch (resolved.desc.content) {
-            // A different checker diagnostic can poison the value that owns
-            // this receiver after the dispatch itself checked successfully.
-            // The explicit rejection map above remains the sole authority for
-            // dispatch-specific failures; `.err` is the separate value-error
-            // fence and must never be inferred from the callable or its return.
-            // A presence variable is not a dispatch target and carries no
-            // obligations—treat it as inert like `.err`.
-            .err, .field_presence => return .{ .resolved = .checked_error },
-            .flex => |flex| return self.resolveVarObligation(resolved.var_, dispatcher_ty, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
-            .rigid => |rigid| return self.resolveVarObligation(resolved.var_, dispatcher_ty, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
-            .alias, .structure => {
-                if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
-                    if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
-                        return switch (found) {
-                            // The method is declared, but canonicalization or
-                            // checking rejected its declaration and already
-                            // reported why. The dispatch itself needs no second
-                            // diagnostic; it just must never lower.
-                            .rejected => .{ .resolved = .checked_error },
-                            .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var),
-                        };
+            switch (resolved.desc.content) {
+                // A different checker diagnostic can poison the value that owns
+                // this receiver after the dispatch itself checked successfully.
+                // The explicit rejection map above remains the sole authority for
+                // dispatch-specific failures; `.err` is the separate value-error
+                // fence and must never be inferred from the callable or its return.
+                // A presence variable is not a dispatch target and carries no
+                // obligations—treat it as inert like `.err`.
+                .err, .field_presence => return .{ .resolved = .checked_error },
+                .flex => |flex| return self.resolveVarObligation(resolved.var_, dispatcher_ty, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
+                .rigid => |rigid| return self.resolveVarObligation(resolved.var_, dispatcher_ty, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
+                .alias, .structure => {
+                    if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
+                        if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
+                            return switch (found) {
+                                // The method is declared, but canonicalization or
+                                // checking rejected its declaration and already
+                                // reported why. The dispatch itself needs no second
+                                // diagnostic; it just must never lower.
+                                .rejected => .{ .resolved = .checked_error },
+                                .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var),
+                            };
+                        }
+                        // The dispatcher has an owner, checking passed, and no
+                        // registry-visible view declares the method: the checker
+                        // discharged the obligation with the derived structural
+                        // implementation. Value dispatches cannot discharge
+                        // structurally, so a miss there is a publication bug
+                        // (every view the checker resolved against is searched
+                        // above).
+                        if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
+                        std.debug.panic("publication could not resolve a checked dispatch target for an owned method", .{});
                     }
-                    // The dispatcher has an owner, checking passed, and no
-                    // registry-visible view declares the method: the checker
-                    // discharged the obligation with the derived structural
-                    // implementation. Value dispatches cannot discharge
-                    // structurally, so a miss there is a publication bug
-                    // (every view the checker resolved against is searched
-                    // above).
+                    // No owner head: a genuinely structural shape.
                     if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
-                    std.debug.panic("publication could not resolve a checked dispatch target for an owned method", .{});
-                }
-                // No owner head: a genuinely structural shape.
-                if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
-                checkedArtifactInvariant("ownerless non-structural dispatch reached publication without an explicit rejection", .{});
-            },
+                    checkedArtifactInvariant("ownerless non-structural dispatch reached publication without an explicit rejection", .{});
+                },
+            }
         }
     }
 

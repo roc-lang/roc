@@ -110,7 +110,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
     try expectContains(type_node_step, ".lookup_required => |resolved| return finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved))");
-    try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return loweredExprStep(try self.lowerLookupExprAtType(expr.ty, resolved, ty))");
+    try expectContains(lower_expr_at_type, ".lookup_required => |resolved| {\n                frame.cursor = 3;\n                return try self.lookupExprAtTypeStep(expr.ty, resolved, ty);");
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(");
@@ -403,7 +403,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     const dispatch_selection = sourceSliceBetween(
         lower_source,
         "fn selectExprRepresentationAtNode(",
-        "fn lowerFieldAccessExprAtNode(",
+        "fn stepFieldAccessLower(",
     );
     try expectContains(dispatch_selection, "selectRequestRepresentation(");
     try expectContains(dispatch_selection, "try self.lowerExprTypeNode(checked_expr)");
@@ -628,8 +628,8 @@ test "Monotype pairs stored record children in lexicographic field order" {
     const lower_source = @embedFile("monotype/lower.zig");
     const restore_record = sourceSliceBetween(
         lower_source,
-        "fn restoreConstRecordAtNode",
-        "fn restoreConstTagPayloadsAtNode",
+        "fn beginConstAtNode",
+        "fn finishConstAtNode",
     );
     try expectContains(restore_record, "const graph_fields = (try self.graph.recordNodes(record_node)).fields");
     try expectContains(restore_record, "const fields = try self.allocator.dupe(InstField, graph_fields)");
@@ -688,7 +688,7 @@ test "Monotype structural equality result probes remain graph-native" {
 
     const dispatch_equality = sourceSliceBetween(
         lower_source,
-        "fn lowerStructuralEqualityAtNode(",
+        "fn beginStructuralEqualityAtNode(",
         "const StructuralBinaryOperands = struct",
     );
     try expectContains(dispatch_equality, "self.graph.functionNodes(callable_node)");
@@ -835,7 +835,7 @@ test "Monotype match lowering relates patterns before specialization and project
     const binder_source = sourceSliceBetween(
         lower_source,
         "fn materializePatternBinderAtCell(",
-        "fn lowerUninhabitedScrutinee(",
+        "fn zeroBranchMatch(",
     );
     try expectContains(binder_source, "self.draft.setLocalType(local, cell)");
 }
@@ -1381,8 +1381,8 @@ test "Monotype encoding intrinsics consume producer-owned identity and result to
 
     const intrinsic_call = sourceSliceBetween(
         lower_source,
-        "fn lowerCallsiteIntrinsicCallExpr(",
-        "fn lowerCallsiteIntrinsicArgAtType(",
+        "fn callsiteIntrinsicCallTask(",
+        "fn callsiteIntrinsicArgStep(",
     );
     try expectContains(intrinsic_call, "intrinsic.requestResultSource()");
     try expectContains(intrinsic_call, "checkedMonoRequestNode(self.graph, callable.ret, callable.args[index], .exact)");
@@ -1722,12 +1722,10 @@ test "const restoration has one implementation per shape" {
     // checked type at all.
     const source = @embedFile("monotype/lower.zig");
     const shapes = [_][]const u8{
+        "runConstRestore",
+        "beginConstRestoreNode",
+        "constRestoreChildType",
         "constRestoreData",
-        "constRestoreListData",
-        "constRestoreList",
-        "constRestoreTuple",
-        "constRestoreRecord",
-        "constRestoreTagPayloads",
     };
     inline for (shapes) |name| {
         try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
