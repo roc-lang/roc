@@ -24,7 +24,18 @@ pub const TimingInfo = struct {
     canonicalize_diagnostics_ns: u64 = 0,
     type_checking_ns: u64 = 0,
     check_diagnostics_ns: u64 = 0,
+    /// Compile-time evaluation run inside individual module checks, summed
+    /// across the worker threads that ran those checks.
+    module_compile_time_evaluation_ns: u64 = 0,
+    /// Wall time of whole-program finalization, which runs after every module
+    /// has been checked.
+    program_finalization_ns: u64 = 0,
+    /// Compile-time evaluation and shared lowering performed by whole-program
+    /// finalization.
     compile_time_evaluation: eval.CompileTimeFinalization.TimingSnapshot = .{},
+    /// Deterministic lowering and emission counters from all compile-time
+    /// evaluation, whether run inside module checks or program finalization.
+    compile_time_counters: eval.CompileTimeFinalization.TimingSnapshot = .{},
 };
 const Allocator = std.mem.Allocator;
 

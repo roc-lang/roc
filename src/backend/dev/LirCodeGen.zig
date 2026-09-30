@@ -185,17 +185,25 @@ fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
 /// separately compiled objects share them; a Boxy capture-drop helper is named
 /// by its capture layout's digest and descriptor field offset.
 pub fn compiledRcHelperSymbolName(allocator: std.mem.Allocator, layout_store: *const layout.Store, cache_key: u64) std.mem.Allocator.Error![]u8 {
+    var digests = try layout.Digests.init(allocator, layout_store);
+    defer digests.deinit();
+    return compiledRcHelperSymbolNameWithDigests(allocator, &digests, cache_key);
+}
+
+/// `compiledRcHelperSymbolName` over caller-owned layout digests, so naming
+/// many helpers of one unchanging layout store digests each layout once.
+pub fn compiledRcHelperSymbolNameWithDigests(allocator: std.mem.Allocator, digests: *layout.Digests, cache_key: u64) std.mem.Allocator.Error![]u8 {
     if ((cache_key >> 63) != 0) {
         const capture_layout: layout.Idx = @enumFromInt(@as(u32, @intCast((cache_key >> 32) & 0x7fff_ffff)));
         const desc_field_offset: u32 = @truncate(cache_key);
-        const hex = layout.digestSymbolHex(try layout_store.contentDigest(capture_layout));
+        const hex = layout.digestSymbolHex(try digests.get(capture_layout));
         return std.fmt.allocPrint(allocator, "roc__rc_boxy_capture_drop_{s}_{d}", .{ &hex, desc_field_offset });
     }
     const variant = RcHelperVariant{
         .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
         .atomicity = @enumFromInt(@as(u1, @intCast((cache_key >> 34) & 1))),
     };
-    return layout.rc_helper.symbolName(allocator, layout_store, variant.key, switch (variant.atomicity) {
+    return layout.rc_helper.symbolNameForDigest(allocator, variant.key.op, try digests.get(variant.key.layout_idx), switch (variant.atomicity) {
         .atomic => .atomic,
         .single_thread => .single_thread,
     });
@@ -25700,9 +25708,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// been placed. Missing symbols are a coordinator contract violation.
         pub fn resolveAssembledSymbolicRefs(self: *Self) Allocator.Error!void {
             if (self.assembled_symbolic_refs.items.len == 0) return;
+            var digests = try layout.Digests.init(self.allocator, self.layout_store);
+            defer digests.deinit();
             var helpers = self.compiled_rc_helpers.iterator();
             while (helpers.next()) |helper| {
-                const name = try compiledRcHelperSymbolName(self.allocator, self.layout_store, helper.key_ptr.*);
+                const name = try compiledRcHelperSymbolNameWithDigests(self.allocator, &digests, helper.key_ptr.*);
                 defer self.allocator.free(name);
                 try self.registerSplicedHelper(name, helper.value_ptr.*);
             }

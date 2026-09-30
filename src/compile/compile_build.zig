@@ -229,6 +229,8 @@ pub const BuildEnv = struct {
     /// Whether `compileDiscovered` validates that the selected platform target's
     /// declared link files exist before type checking.
     validate_target_files_for_selected_target: bool = false,
+    /// Collect fine-grained compile-time lowering timings and counters.
+    detailed_lowering_timing: bool = false,
 
     /// Controls which checked-artifact publication work runs after ordinary
     /// checking has completed.
@@ -493,6 +495,11 @@ pub const BuildEnv = struct {
 
     pub fn setValidateTargetFilesForSelectedTarget(self: *BuildEnv, enabled: bool) void {
         self.validate_target_files_for_selected_target = enabled;
+    }
+
+    pub fn setDetailedLoweringTiming(self: *BuildEnv, enabled: bool) void {
+        if (self.coordinator) |coordinator| coordinator.setDetailedLoweringTiming(enabled);
+        self.detailed_lowering_timing = enabled;
     }
 
     pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
@@ -815,6 +822,7 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
         self.coordinator = coord;
     }

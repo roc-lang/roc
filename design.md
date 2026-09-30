@@ -7049,6 +7049,23 @@ positions, `[]` in negative ones—negating through functions embedded in the
 alias body (`Instantiator.PolarityVarBehavior`). Nominal declaration bodies
 close as written.
 
+A declaration reference whose instance resolves to a ground type (no
+variable, marker or error leaf, and no marker opened) is instantiated once
+per position—declaration, marker behavior, polarity and adapter reach—and that
+instance is shared by every later reference at the same position
+(`Check.instantiateVarPolarized`). A large record alias referenced from many
+annotations would otherwise be copied once per reference. A shared instance
+is unified with every annotation that refers to it; if a mismatch merges any
+of it into an error it is no longer ground, and the next reference
+instantiates a fresh copy.
+
+An expected type is copied before the expression checked against it, so the
+expression's own errors can later be related to the type as it was. A ground
+expected type can change only through an explicit write, so one pristine copy
+serves every later expression expecting a structurally identical type
+(`Check.expectedTypeBackup`); a consumer that needs to unify with a shared
+copy takes its own copy first, so the shared one stays pristine.
+
 A row the reference itself WRITES as a type argument is decided the same way,
 by composition rather than by inheritance. A declaration's formal stands
 wherever the declaration's body puts it, so the argument substituted for it is
@@ -10825,8 +10842,12 @@ A Roc template without evidence parameters cannot dispatch on its quantified
 variables, so its interface relates a quantified variable only by unification
 when every occurrence of that variable in its checked function type is a value
 position: a function argument or result, a tuple item, a record field, a tag
-payload, or the item of `List` or `Box`. A row tail, or an argument of any
-other nominal type, is not a value position. A request captures such a
+payload, an argument of `List`, `Box` or `Try`, or an argument of a declared
+nominal type whose corresponding parameter occurs only in value positions of
+its backing. A declaration's parameters are decided as the greatest assignment
+consistent with its own recursive uses; mutually recursive declarations decide
+none of theirs. A row tail, a padding field, or an argument of any other
+nominal type is not a value position. A request captures such a
 variable's substitution cell as a parametric hole, an unconstrained variable,
 when the cell is resolved and nothing it reaches carries private backing,
 source-interface or constructor evidence, forced-dynamic iterator identity, or
@@ -10838,7 +10859,9 @@ authority is captured as itself: relating it back would not be plain
 unification. An unfinished expansion is joined only by the instantiation it
 expands: each hole slot of the joining request names the class the expanding
 request supplied, or the expansion's own hole cell, as a recursive call inside
-the expansion does. A single-request component takes a parametric
+the expansion does. Across mutually recursive expansions a slot may name
+another unfinished expansion's hole cell, which stands for the class that
+expansion's request supplied, and is followed to it. A single-request component takes a parametric
 summary from its expansion before relating back to the request, so the summary
 keeps its holes open. Members of a larger component relate back to each other's
 requests before their summaries are taken, so a parametric member stores no
@@ -10893,7 +10916,10 @@ graph; capture partitions those groups by the declaration checks used by nominal
 identity queries so replay never asserts equality between distinct declarations.
 Imported finished-type witnesses remain finished after replay, preserving the prohibition
 on rewriting a finalized representation. Import and summary replay register each
-witness on its singleton cell before relating it. Each union class stores its
+witness on its singleton cell before relating it. Summary replay imports each
+settled leaf as its own occurrence rather than through the graph's shared import
+of that type, so class metadata the graph accumulated on its own occurrence, such
+as recursive-slot membership, cannot reach what the summary relates. Each union class stores its
 first finished witness, or explicit absence. Because union concatenates the
 winner's permanent-member list before the loser's, it retains the winner's
 witness when present and otherwise takes the loser's. Capture and finished-type
@@ -10922,7 +10948,11 @@ scheme variables that are not reachable from the function shape. An expansion
 whose captured roots equal its captured input contributed no constraint; its
 summary records exactly that, and replaying it neither instantiates nor
 relates anything. The input identity is the same exact interface the cache key
-compares, so an unchanged summary is as complete as any other.
+compares, so an unchanged summary is as complete as any other. Interface
+identity excludes the checked occurrence through which a named type was
+reached, for open named structure and settled leaves alike: that occurrence
+records the route that lowered the type, not its meaning, so requests that
+differ only in it share one summary.
 
 Recursive dependency components store summaries only after every member has
 contributed its relations. An active exact request joins its active interface;
@@ -10940,6 +10970,11 @@ graph-local replay entries borrow their owning cache’s immutable summaries;
 temporary capture and replay mappings do not live as long as the graph. Active
 recursive entries remain graph-local. Replay must agree with fresh checked
 relation expansion, including unresolved state and relationships between roots.
+Agreement is judged up to what a producing graph chooses arbitrarily: local
+numbering, the order in which a row's members were joined, a named-instance
+group with a single member inside the interface, and whether a class that
+finished as a settled type and carries no other evidence was captured as open
+structure or as its settled leaf. An unchanged summary stands for its input.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
