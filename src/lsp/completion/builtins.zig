@@ -7,6 +7,8 @@ const std = @import("std");
 
 /// Known builtin type names that are part of the Builtin module.
 /// These are the core types provided by the Roc language runtime.
+/// Names are listed as users write them (`I64`, `Json`), even when the type
+/// is declared inside another builtin type (`Num.I64`, `Encoding.Json`).
 pub const BUILTIN_TYPES = [_][]const u8{
     // Collection types
     "Str",
@@ -37,6 +39,12 @@ pub const BUILTIN_TYPES = [_][]const u8{
     "Dec",
     // Generic numeric
     "Num",
+    // Iteration
+    "Iter",
+    "Stream",
+    "Range",
+    // Encoding
+    "Json",
 };
 
 /// Compile-time hash map for O(1) builtin type lookups.
@@ -98,6 +106,13 @@ test "isBuiltinType recognizes Dec and Num types" {
     try std.testing.expect(isBuiltinType("Num"));
 }
 
+test "isBuiltinType recognizes iteration and encoding types" {
+    try std.testing.expect(isBuiltinType("Iter"));
+    try std.testing.expect(isBuiltinType("Stream"));
+    try std.testing.expect(isBuiltinType("Range"));
+    try std.testing.expect(isBuiltinType("Json"));
+}
+
 test "isBuiltinType rejects non-builtin types" {
     try std.testing.expect(!isBuiltinType("MyType"));
     try std.testing.expect(!isBuiltinType("String")); // Not "Str"
@@ -109,6 +124,7 @@ test "isBuiltinType rejects non-builtin types" {
 }
 
 test "BUILTIN_TYPES has expected count" {
-    // 6 collection/namespace types + 2 bool/control + 5 unsigned + 5 signed + 2 float + 2 decimal/num = 22
-    try std.testing.expectEqual(@as(usize, 22), BUILTIN_TYPES.len);
+    // 6 collection/namespace types + 2 bool/control + 5 unsigned + 5 signed + 2 float + 2 decimal/num
+    // + 3 iteration + 1 encoding = 26
+    try std.testing.expectEqual(@as(usize, 26), BUILTIN_TYPES.len);
 }

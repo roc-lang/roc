@@ -14,7 +14,7 @@ All paths are relative to `src/lsp/`.
 | `syntax.zig` | **Orchestrator.** `SyntaxChecker.getCompletionsAtPosition()` is the main entry point. Builds the file, obtains a `ModuleEnv`, detects the completion context, creates a `CompletionBuilder`, and dispatches to the context-specific branch. Also contains helper resolution functions (`resolveModuleAlias`, `resolveLocalBindingTypeVar`, `resolveAccessChainTypeVar`, `extractReturnType`). |
 | `completion/context.zig` | Pure text analysis. `detectCompletionContext()` scans backwards from the cursor to decide which `CompletionContext` variant applies. Also provides `computeOffset()` for converting LSP line/character to a byte offset. |
 | `completion/builder.zig` | `CompletionBuilder` struct. Accumulates `CompletionItem`s with deduplication (via `seen_labels` hash map). All the `add*` methods live here. |
-| `completion/builtins.zig` | `BUILTIN_TYPES` list (21 entries: `Str`, `List`, `Dict`, …, `Num`) and `isBuiltinType()` helper. |
+| `completion/builtins.zig` | `BUILTIN_TYPES` list (26 entries: `Str`, `List`, `Dict`, …, `Num`) and `isBuiltinType()` helper. |
 | `completion/mod.zig` | Re-exports `CompletionContext`, `detectCompletionContext`, `computeOffset`, and `CompletionBuilder`. |
 | `scope_map.zig` | Reconstructs lexical scopes from CIR so the builder can answer "which local variables are visible at byte offset X?" |
 | `cir_queries.zig` | Offset-based CIR queries. `findFieldAccessReceiverTypeVar()` finds the receiver type of an existing field-access node. `findTypeAtOffset()` returns the type at an arbitrary offset. Used as a first-pass type resolver before falling back to name-based lookup. |
@@ -139,7 +139,10 @@ every kind of completion the system can produce, grouped by context.
    walks all `exposed_items` from the target module's `ModuleEnv`. For builtin
    type names (recognised via `isBuiltinType`), it uses the special
    `builtin_module.env`. Items are classified as `function` (lowercase) or
-   `class` (uppercase).
+   `class` (uppercase). Some builtin types are declared inside another builtin
+   type (`I64` in `Num`, `Json` in `Encoding`), so their members are exposed as
+   `Num.I64.to_str`; for builtin names the lookup also matches the type as an
+   inner segment of the exposed name.
 3. `builder.addTagCompletionsForNominalType(module_env, name, null)`—if the
    name is also a nominal type in the current module, adds its tag constructors
    (e.g., `Color.Red`, `Color.Green`).
@@ -202,9 +205,9 @@ does not merge their lookup or resolution.
    which adds every entry in `BUILTIN_TYPES`.
 
 This means typing `x : ` suggests: user-defined type aliases and nominals,
-imported module names, all loaded module names, and all 21 builtin types
+imported module names, all loaded module names, every builtin type in `BUILTIN_TYPES`
 (`Str`, `List`, `Bool`, `U8`–`U128`, `I8`–`I128`, `F32`, `F64`, `Dec`, `Num`,
-`Dict`, `Set`, `Box`, `Try`).
+`Dict`, `Set`, `Box`, `Try`, `Crypto`).
 
 **CompletionItemKind:** `class` (types), `module` (module names)
 
@@ -357,7 +360,7 @@ Every public `add*` method on `CompletionBuilder`:
 
 ## BUILTIN_TYPES
 
-Defined in `completion/builtins.zig`. These 21 names are added as module-kind
+Defined in `completion/builtins.zig`. These 26 names are added as module-kind
 completions by `addBuiltinModuleNameCompletions()`:
 
 ```
@@ -367,6 +370,8 @@ U8  U16  U32  U64  U128
 I8  I16  I32  I64  I128
 F32  F64
 Dec  Num
+Iter  Stream  Range
+Json
 ```
 
 `isBuiltinType(name)` does a case-sensitive linear scan of this list. It is
@@ -422,6 +427,9 @@ Each test follows this pattern:
 | `returns lambda parameters` | `foo = \|x, y\| ...` | inside body | `x`, `y` visible |
 | `returns top-level definitions` | `add = \|a, b\| ...\nresult = ` | after `=` | `add` appears |
 | `returns record fields after dot` | `rec = { name: "hi" }\nresult = rec.` | after `rec.` | `name` field appears |
+| `returns I64 members after I64 dot` | `app [...]\n\nx = I64.` | 2:8 | `to_str`, `abs` (type nested in `Num`) |
+| `returns Json members after Json dot` | `app [...]\n\nx = Json.` | 2:9 | `parse_null` (type nested in `Encoding`) |
+| `returns Iter members after Iter dot` | `app [...]\n\nx = Iter.` | 2:9 | `single` |
 
 ### Syntax test structure (syntax_test.zig)
 

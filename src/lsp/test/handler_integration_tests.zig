@@ -375,6 +375,9 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "completion handler returns module members after dot", .run = completionHandlerReturnsModuleMembersAfterDot },
     .{ .name = "completion handler returns module names in expression context", .run = completionHandlerReturnsModuleNamesInExpressionContext },
     .{ .name = "completion handler returns types after colon", .run = completionHandlerReturnsTypesAfterColon },
+    .{ .name = "completion handler returns I64 members after I64 dot", .run = completionHandlerReturnsI64MembersAfterI64Dot },
+    .{ .name = "completion handler returns Json members after Json dot", .run = completionHandlerReturnsJsonMembersAfterJsonDot },
+    .{ .name = "completion handler returns Iter members after Iter dot", .run = completionHandlerReturnsIterMembersAfterIterDot },
     .{ .name = "completion handler returns List module members after List dot", .run = completionHandlerReturnsListModuleMembersAfterListDot },
     .{ .name = "completion handler returns completion list in block scope", .run = completionHandlerReturnsLocalVariablesInBlockScope },
     .{ .name = "completion handler returns completion list in lambda body", .run = completionHandlerReturnsLambdaParameters },
@@ -3145,6 +3148,114 @@ pub fn completionHandlerReturnsTypesAfterColon() integration_spec.SpecError!void
     defer response.deinit();
     const items = try completionItems(try response.result());
     try expectCompletionLabels(items, &.{ "Str", "U64", "Bool" });
+}
+
+/// Opens a document ending in `x = <type_name>.` and checks that completing
+/// right after the dot offers each label in `expected`.
+fn expectBuiltinTypeMembersAfterDot(type_name: []const u8, expected: []const []const u8) integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "builtin_type_completion.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_body = try std.fmt.allocPrint(
+        allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main] {{ pf: platform \"{s}\" }}\n\nx = {s}."}}}}}}
+    ,
+        .{ file_uri, platform_path, type_name },
+    );
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // Request completion right after the dot on line 2 (`x = ` is 4 characters).
+    const character = 4 + type_name.len + 1;
+    const completion_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":{d}}}}}}}
+    , .{ file_uri, character });
+    defer allocator.free(completion_body);
+    const completion_msg = try frame(allocator, completion_body);
+    defer allocator.free(completion_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, completion_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    // Module completions can be very large depending on builtins and docs.
+    var writer_buffer: [1024 * 1024]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectCompletionLabels(items, expected);
+}
+
+/// `I64` is declared inside `Num`, so its members are exposed as `Num.I64.*`.
+pub fn completionHandlerReturnsI64MembersAfterI64Dot() integration_spec.SpecError!void {
+    try expectBuiltinTypeMembersAfterDot("I64", &.{ "to_str", "abs" });
+}
+
+/// `Json` is declared inside `Encoding`, so its members are exposed as `Encoding.Json.*`.
+pub fn completionHandlerReturnsJsonMembersAfterJsonDot() integration_spec.SpecError!void {
+    try expectBuiltinTypeMembersAfterDot("Json", &.{"parse_null"});
+}
+
+/// `Iter` is a top-level builtin type that was missing from the builtin type list.
+pub fn completionHandlerReturnsIterMembersAfterIterDot() integration_spec.SpecError!void {
+    try expectBuiltinTypeMembersAfterDot("Iter", &.{"single"});
 }
 
 /// Verifies completions include `List` module members after `List.`.

@@ -376,11 +376,23 @@ pub const CompletionBuilder = struct {
                     break :blk without_module;
                 }
 
-                if (!std.mem.startsWith(u8, without_module, module_name)) continue;
-                if (without_module.len <= module_name.len or without_module[module_name.len] != '.') continue;
+                if (std.mem.startsWith(u8, without_module, module_name) and
+                    without_module.len > module_name.len and
+                    without_module[module_name.len] == '.')
+                {
+                    break :blk firstSegment(without_module[module_name.len + 1 ..]);
+                }
 
-                const remainder = without_module[module_name.len + 1 ..];
-                break :blk firstSegment(remainder);
+                // Some builtin types are declared inside another builtin type:
+                // `I64` lives in `Num` and `Json` in `Encoding`, so their members
+                // are exposed as `Num.I64.to_str` and `Encoding.Json.parse_str`.
+                // Users write `I64.to_str`, so match the type as an inner segment.
+                if (builtin_completion.isBuiltinType(module_name)) {
+                    if (namespaceMemberLabel(without_module, module_name)) |nested_label| {
+                        break :blk nested_label;
+                    }
+                }
+                continue;
             };
             if (label.len == 0) continue;
 
