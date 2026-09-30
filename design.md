@@ -16058,6 +16058,17 @@ general mode specialization. All forms run the identical solver and therefore
 may differ only in optional RC placement and proc count, never observable
 program results.
 
+An object-cache entry is a body-less procedure pinned to the base signature it
+was compiled with, so a program that links it cannot emit any variant of it.
+ARC therefore marks every solved base procedure a call could demand a variant
+of under the run's options (`rc_variant_demandable`): a borrowed position with
+an owned-only field-take benefit, an available outcome span, a borrowed
+position reached by a same-SCC tail call from another procedure, and, with
+general specialization, a borrowed position with a uniqueness seed or a
+borrowed return lent by a borrowed position. A pack never offers a marked
+procedure, so a warm build lowers it from source and demands the same
+variants the cold build did.
+
 ### Outcome-Conditioned Argument Restitution
 
 An owned direct-call argument may be returned to its caller as an ownership

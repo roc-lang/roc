@@ -409,6 +409,7 @@ const CustomCase = enum {
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
     issue_11710_shared_object_cache,
+    issue_11826_cache_ownership_variants,
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
@@ -1890,6 +1891,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11826: a warm dev build keeps the ARC ownership variants of the cold build", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11826_cache_ownership_variants } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
@@ -3580,6 +3582,7 @@ fn runCustomCase(
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
@@ -6710,6 +6713,60 @@ fn customIssue11710SharedObjectCache(
             .args = &.{},
             .stdout_exact = build.stdout_exact,
         })) |failure| return failure;
+    }
+    return null;
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/11826: both callers of
+// `push` move their record into an owned-parameter variant that takes its
+// list field in place. The cold build writes a pack offering `push`; if the
+// warm build linked that entry, its callers could only pass the record
+// borrowed at the entry's base signature, and every append would copy the
+// list. Both builds must allocate the same, and the warm build must still be
+// served from the cold build's pack.
+fn customIssue11826CacheOwnershipVariants(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const hits_marker = "pack hits: ";
+    const expected = "items: 1024 2048, allocations: 9 11\n";
+    var stats_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack statistics environment: {}", .{err}),
+    };
+    defer stats_env.env_map.deinit();
+    stats_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+    for ([_][]const u8{ "cold", "warm" }) |name| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/issue_11826_{s}", .{ env.dirs.work_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, &stats_env, &.{ "build", "--opt=dev", out_arg }, "test/alloc-count/app_cache_variant.roc", .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build with the object cache did not succeed");
+        }
+        if (std.mem.eql(u8, name, "warm")) {
+            const hits_at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "warm build did not report pack hits");
+            if (countAfterMarker(built.stderr[hits_at + hits_marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "warm build did not consume the cold build's pack");
+            }
+        }
+        const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before running a build");
+        const run = runRawInEnv(io, allocator, env, &.{exe}, env.dirs.work_dir, "", exe_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "program spawn error: {}", .{err});
+        if (!processSucceeded(run.term) or !std.mem.eql(u8, run.stderr, expected)) {
+            return failureFromRun(allocator, timer, run, "object-cache build allocates differently from the cold build");
+        }
     }
     return null;
 }
