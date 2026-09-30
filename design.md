@@ -13369,6 +13369,24 @@ still hold at the default, and nothing reads a per-use guess
 (`test/cli/TopLevelOpenRowValues.roc`,
 `test/cli/UnresolvedPolymorphicTopLevelValue.roc`).
 
+A stored function value was produced at one instantiation of its worker, and
+its use's type fixes that instantiation completely, including the variables of
+the scope that created the closure (a helper's `a` and `errs` when it returns
+`|input| ...`). Boxy relates the worker's type to the use's type the way
+checking relates a scheme to a site, and supplies every descriptor the worker
+takes, its signature's and its creating scope's alike, from that relation; the
+frame using the stored value never inherits the creating scope's variables.
+When such a closure is rebuilt, its hidden descriptor fields read only the
+using frame, so they are initialized before its stored captures are restored,
+since each restored capture is described by those fields
+(`test/cli/ParserTopLevelStoredInputWrapper.roc` under `--specialize=no`).
+
+A `FieldNames` iterator step is typed against `Iter`'s backing, so its item is
+the backing's item formal. The frame creating a step binds that formal to
+the iterator's `FieldName(shape)` argument and captures its descriptor like any
+other closure descriptor, and the step boxes each field at that descriptor
+(`test/cli/IntrinsicMethodDispatch.roc` under `--specialize=no`).
+
 Nominal substitution identity does not demand a runtime representation. Boxy
 interns checked type bindings separately from representations; a binding receives
 a representation only when type analysis reaches it through an explicit runtime

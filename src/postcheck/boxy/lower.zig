@@ -7759,14 +7759,18 @@ const ProcedureBuilder = struct {
             step_child.rep,
             next,
         );
-        continuation = try self.packGeneratedFieldIteratorStep(
+        // The step's type is written against the iterator's backing formals,
+        // which this iterator's arguments bind.
+        const formal_scope = try proc.enterNominalWrapperFormalScopes(iter_rep);
+        errdefer proc.dropNominalBackingFormalScope(formal_scope);
+        continuation = try proc.leaveNominalBackingFormalScope(formal_scope, try self.packGeneratedFieldIteratorStep(
             proc,
             step_local,
             step_child.rep,
             step_worker,
             capture_values,
             continuation,
-        );
+        ));
         return try proc.assignGeneratedIteratorLength(len_local, len_child.rep, mode, known_remaining, continuation);
     }
 
@@ -7781,15 +7785,16 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        if (captures.len != capture_values.len) {
-            boxyLowerInvariant("generated FieldNames iterator capture count disagreed with its worker");
-        }
-        for (captures, capture_values) |capture, value| {
-            if (capture.kind != .captured_value or
-                self.result.store.getLocal(value).layout_idx != proc.workerRuntimeLayoutForRep(capture.rep).layoutIdx())
-            {
-                boxyLowerInvariant("generated FieldNames iterator capture layout disagreed with its worker");
-            }
+        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
+        defer descriptor_initializers.deinit(self.allocator);
+        var dictionary_initializers = std.ArrayList(ProcBodyBuilder.DictionaryArgLocal).empty;
+        defer dictionary_initializers.deinit(self.allocator);
+        // The step's type names the field shape of the frame creating it, which
+        // that frame describes.
+        const all_capture_values = try self.generatedCodecCaptureValues(proc, worker_id, captures, capture_values, &descriptor_initializers, &dictionary_initializers);
+        defer self.allocator.free(all_capture_values);
+        if (dictionary_initializers.items.len != 0) {
+            boxyLowerInvariant("generated FieldNames iterator step unexpectedly captured literal evidence");
         }
 
         const function = proc.functionChildrenForRep(worker.rep) orelse
@@ -7810,12 +7815,12 @@ const ProcedureBuilder = struct {
             function.ret,
             result_desc,
             captures,
-            capture_values,
+            all_capture_values,
             worker_layout.erased_capture_layout,
             boundary.next,
         );
         try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return entry;
+        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, entry);
     }
 
     fn lowerGeneratedFieldIteratorStepInto(
@@ -7825,12 +7830,19 @@ const ProcedureBuilder = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const captures = proc.erased_capture_locals.items;
+        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
+        // The value captures precede the step's descriptor captures.
         const expected_captures: usize = if (source.mode == .for_size) 4 else 3;
-        if (captures.len != expected_captures) {
+        const worker_captures = self.plan.erasedCaptureSlice(worker.erased_captures);
+        if (proc.erased_capture_locals.items.len != worker_captures.len or worker_captures.len < expected_captures) {
             boxyLowerInvariant("generated FieldNames iterator step had invalid capture metadata");
         }
-        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
+        for (worker_captures, 0..) |capture, index| {
+            if ((capture.kind == .captured_value) != (index < expected_captures)) {
+                boxyLowerInvariant("generated FieldNames iterator step had invalid capture metadata");
+            }
+        }
+        const captures = proc.erased_capture_locals.items[0..expected_captures];
         const function = proc.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("generated FieldNames iterator step worker was not callable");
         const done = proc.generatedParserTagVariant(function.ret, "Done");
@@ -7845,6 +7857,7 @@ const ProcedureBuilder = struct {
         const item = try proc.addFrameLocalForRep(item_child.rep);
         const rest = try proc.addFrameLocalForRep(rest_child.rep);
         const one_payload = try proc.addFrameLocalForRep(one_payload_rep);
+        const raw_item = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
 
         var one_body = try proc.assignGeneratedParserTag(
             target,
@@ -7896,7 +7909,7 @@ const ProcedureBuilder = struct {
             dispatch = try proc.assignBinaryLowLevel(matches, .num_is_eq, name_len, captures[3], dispatch);
             dispatch = try self.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = name_len,
-                .op = .{ .field = .{ .source = item, .field_idx = 2 } },
+                .op = .{ .field = .{ .source = raw_item, .field_idx = 2 } },
                 .next = dispatch,
             } }, proc.derivedOrigin());
         }
@@ -7922,7 +7935,22 @@ const ProcedureBuilder = struct {
             dispatch,
         );
         const items = try proc.addFrameLocal(self.layout_plan.generated_evidence.field_list);
-        dispatch = try proc.assignBinaryLowLevel(item, .list_get_unsafe, items, captures[1], dispatch);
+        const field_layout = self.layout_plan.generated_evidence.field;
+        if (self.result.store.getLocal(item).layout_idx != field_layout) {
+            // The step's item is the iterator's element variable, which boxes
+            // the field at the descriptor the creating frame captured.
+            dispatch = try self.result.store.addCFStmt(.{ .assign_boxy_box = .{
+                .target = item,
+                .payload = raw_item,
+                .payload_layout = field_layout,
+                .payload_desc = try proc.descriptorRefForKnownRep(item_child.rep),
+                .payload_mode = .copy,
+                .next = dispatch,
+            } }, proc.derivedOrigin());
+        } else {
+            dispatch = try proc.assignLocal(item, raw_item, dispatch);
+        }
+        dispatch = try proc.assignBinaryLowLevel(raw_item, .list_get_unsafe, items, captures[1], dispatch);
         if (source.mode == .all) {
             dispatch = try proc.assignBinaryLowLevel(remaining, .num_int_sub_crash_on_overflow, captures[2], next_index, dispatch);
         }
@@ -17078,13 +17106,15 @@ const ProcBodyBuilder = struct {
         const static_fn = planned orelse
             boxyLowerInvariant("stored function value had no producer-selected static plan");
         const worker = self.parent.plan.workers.items[@intFromEnum(static_fn.worker)];
-        return try self.lowerWorkerValueWithCallTypeRefInto(
+        return try self.lowerWorkerValueWithCallDictionaryArgsInto(
             target,
             worker.checked_type,
             self.parent.plan.representations.items[@intFromEnum(static_fn.rep)].source_type,
             worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
+            self.staticFnHiddenDescArgs(static_fn),
+            null,
             next,
         );
     }
@@ -17453,15 +17483,22 @@ const ProcBodyBuilder = struct {
                 static_fn.rep,
                 next,
             );
-        return try self.lowerWorkerValueWithCallTypeRefInto(
+        return try self.lowerWorkerValueWithCallDictionaryArgsInto(
             callable_target,
             worker.checked_type,
             planned_type,
             worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
+            self.staticFnHiddenDescArgs(static_fn),
+            null,
             continuation,
         );
+    }
+
+    fn staticFnHiddenDescArgs(self: *const ProcBodyBuilder, static_fn: Plan.StaticFnPlan) ?[]const Plan.DirectCallHiddenDescriptorArg {
+        if (static_fn.hidden_desc_args.len == 0) return null;
+        return self.parent.plan.directCallHiddenDescriptorArgSlice(static_fn.hidden_desc_args);
     }
 
     fn restoreConstListInto(
@@ -18352,19 +18389,6 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn lowerWorkerValueWithCallTypeRefInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        worker_type: Plan.CheckedTypeIdentity,
-        call_type: Plan.CheckedTypeIdentity,
-        source: Plan.WorkerSource,
-        maybe_expr: ?checked.CheckedExprId,
-        stored_capture_sources: []const Plan.StoredCallableCaptureSource,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.lowerWorkerValueWithCallDictionaryArgsInto(target, worker_type, call_type, source, maybe_expr, stored_capture_sources, null, null, next);
-    }
-
     fn lowerWorkerValueWithCallDictionaryArgsInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -18573,9 +18597,11 @@ const ProcBodyBuilder = struct {
             .snapshot_existing,
             field_desc_overrides,
         );
+        var hidden_desc_field_initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer hidden_desc_field_initializers.deinit(self.parent.allocator);
         for (hidden_desc_initializers) |maybe_initializer| {
             if (maybe_initializer) |initializer| {
-                try descriptor_initializers.append(self.parent.allocator, initializer);
+                try hidden_desc_field_initializers.append(self.parent.allocator, initializer);
             }
         }
 
@@ -18719,6 +18745,10 @@ const ProcBodyBuilder = struct {
                 },
             };
         }
+        // A hidden descriptor field reads only the enclosing frame, while a
+        // stored capture restored inside this capture window is described by
+        // those fields, so the fields are initialized first.
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_field_initializers.items, continuation);
         var callable_bindings = std.ArrayList(LocalDescriptorEnvironmentBinding).empty;
         defer callable_bindings.deinit(self.parent.allocator);
         for (captures, field_locals, capture_desc_sources) |capture, field_local, desc_source| {
