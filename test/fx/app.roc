@@ -7,6 +7,18 @@ import pf.Stdin
 str : Str -> Str
 str = |s| s
 
+sha256_matches = |expected, actual|
+	match expected {
+		Ok(digest) => Crypto.SHA256.Digest.is_eq(actual, digest)
+		Err(_) => False
+	}
+
+blake3_matches = |expected, actual|
+	match expected {
+		Ok(digest) => Crypto.BLAKE3.Digest.is_eq(actual, digest)
+		Err(_) => False
+	}
+
 main! = || {
 	bytes = Stdin.line!().to_utf8()
 	sha256 = Crypto.SHA256.hash(bytes)
@@ -19,13 +31,10 @@ main! = || {
 	sha256_hasher1 = Crypto.SHA256.Hasher.write(sha256_hasher0, bytes)
 	sha256_stream = Crypto.SHA256.Hasher.finish(sha256_hasher1)
 
-	hashes_ok = match (sha256_expected, blake3_expected) {
-		(Ok(expected_sha256), Ok(expected_blake3)) =>
-			Crypto.SHA256.Digest.is_eq(sha256, expected_sha256)
-				and Crypto.SHA256.Digest.is_eq(sha256_stream, expected_sha256)
-					and Crypto.BLAKE3.Digest.is_eq(blake3, expected_blake3)
-		_ => False
-	}
+	hashes_ok =
+		sha256_matches(sha256_expected, sha256)
+			and sha256_matches(sha256_expected, sha256_stream)
+				and blake3_matches(blake3_expected, blake3)
 
 	Stdout.line!(str("Hello from stdout!"))
 	Stdout.line!(str("Line 1 to stdout"))
