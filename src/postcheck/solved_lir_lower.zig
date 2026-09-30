@@ -5939,6 +5939,9 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
+        /// The argument positions an inlined call bound directly to the
+        /// caller locals they read.
+        substituted: ?[]bool = null,
     };
 
     const InlineCallTask = struct {
@@ -6276,6 +6279,8 @@ const Lowerer = struct {
                 task.arg_tys = &.{};
                 if (task.lowered) |lowered| lowered.deinit(self.allocator);
                 task.lowered = null;
+                if (task.substituted) |mask| self.allocator.free(mask);
+                task.substituted = null;
             },
             .inline_call => |*task| {
                 self.restoreInlineCallArgs(task);
@@ -6434,9 +6439,24 @@ const Lowerer = struct {
         tail_item: ?ChainItem,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerTask {
+        return try self.operandChainSkipping(where, lowered, tys, null, tail_item, next);
+    }
+
+    /// `operandChain`, skipping the positions an inlined call already bound
+    /// to the caller locals they read.
+    fn operandChainSkipping(
+        self: *Lowerer,
+        where: LowerSite,
+        lowered: LoweredExprLocals,
+        tys: ?[]const Type.TypeId,
+        substituted: ?[]const bool,
+        tail_item: ?ChainItem,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerTask {
         if (tys) |types| {
             if (lowered.ids.len != types.len) Common.invariant("typed expression prepend arity differed from local arity");
         }
+        if (substituted) |mask| if (mask.len != lowered.ids.len) Common.invariant("inline argument substitution arity differed from local arity");
         var items: std.ArrayList(ChainItem) = .empty;
         errdefer items.deinit(self.allocator);
         for ([_]bool{ true, false }) |plain_reads| {
@@ -6444,6 +6464,7 @@ const Lowerer = struct {
             while (i > 0) {
                 i -= 1;
                 if (self.operandIsPlainLocalRead(lowered.exprs[i]) != plain_reads) continue;
+                if (substituted) |mask| if (mask[i]) continue;
                 try items.append(self.allocator, .{ .expr = .{
                     .target = lowered.ids[i],
                     .expr = lowered.exprs[i],
@@ -6453,6 +6474,38 @@ const Lowerer = struct {
         }
         if (tail_item) |item| try items.append(self.allocator, item);
         return .{ .chain = .{ .where = where, .items = try items.toOwnedSlice(self.allocator), .current = next } };
+    }
+
+    /// The caller local an inlined parameter can bind directly: a plain read
+    /// of a lexical binding whose committed type and layout equal the
+    /// parameter's, so lowering the read would emit exactly one local alias.
+    /// The inlined body writes only `call_target` among caller locals, so
+    /// every other local keeps its value for the whole body.
+    fn inlineArgumentLocal(
+        self: *Lowerer,
+        expr_id: Lifted.ExprId,
+        ty: Type.TypeId,
+        temp: LIR.LocalId,
+        call_target: LIR.LocalId,
+    ) Common.LowerError!?LIR.LocalId {
+        const data = self.solved.lifted.getExpr(expr_id).data;
+        if (data != .local) return null;
+        const local = data.local;
+        if (self.aggregate_bindings) |aggregates| {
+            if (aggregates.bindings.contains(local)) return null;
+        }
+        const source = if (self.typed_local_map.get(.{ .local = local, .ty = ty })) |typed|
+            typed
+        else if (self.local_map.get(local)) |plain| blk: {
+            if (try self.lowerLocalTy(local) != ty) return null;
+            break :blk plain;
+        } else return null;
+        if (source == call_target) return null;
+        const temp_layout = self.result.store.getLocal(temp).layout_idx;
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        if (!self.layoutsMatch(temp_layout, source_layout)) return null;
+        try self.noteLocal(source);
+        return source;
     }
 
     /// Chain items lowering each join argument that needs a write into its
@@ -7550,7 +7603,7 @@ const Lowerer = struct {
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
-            return .{ .tail = try self.operandChain(task.where, lowered, task.arg_tys, null, input.?) };
+            return .{ .tail = try self.operandChainSkipping(task.where, lowered, task.arg_tys, task.substituted, null, input.?) };
         }
         const callee = task.callee;
         const where = task.where;
@@ -7579,6 +7632,19 @@ const Lowerer = struct {
         // model destination demand directly.
         if (task.capture_arg == null and !task.is_cold and !has_return_reuse) {
             if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
+                // An argument that reads a caller local at the parameter's
+                // exact type binds the inlined parameter to that local
+                // itself. A snapshot temp would be a second name bound before
+                // the body's branches, so a caller that keeps the local on
+                // one outcome would retain it across every other outcome's
+                // consuming use.
+                const substituted = try self.allocator.alloc(bool, lowered.ids.len);
+                task.substituted = substituted;
+                for (lowered.exprs, task.arg_tys, 0..) |arg_expr, arg_ty, i| {
+                    const source = try self.inlineArgumentLocal(arg_expr, arg_ty, lowered.ids[i], call_target);
+                    substituted[i] = source != null;
+                    if (source) |local| lowered.ids[i] = local;
+                }
                 const arg_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids);
                 frame.cursor = 1;
                 return .{ .call = .{ .inline_call = .{

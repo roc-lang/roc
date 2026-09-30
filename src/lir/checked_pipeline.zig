@@ -167,12 +167,17 @@ pub const TargetConfig = struct {
     /// shape-comparison tests turn it off because promotion intentionally
     /// changes the loop skeleton of qualifying sides.
     promote_loop_appends: bool = true,
-    /// The rewrites that exist only to make the produced program faster:
-    /// tag-case fusion, join scalarization and box reuse. `--opt=dev` skips
-    /// them, since it trades program speed for compile speed; TRMC and loop
-    /// append promotion stay on everywhere because they bound stack depth and
-    /// list copying rather than shave constant factors.
+    /// Route each literal tag edge straight to the arm that matches it:
+    /// tag-case fusion and known-tag jump threading. Every runtime
+    /// optimization level runs them, as it does TRMC and loop append
+    /// promotion, because they bound list copying rather than shave constant
+    /// factors: while a tag's match is not resolved on its edge, a value the
+    /// other arms keep is live across the producer, so a list the producer
+    /// appends to is copied once per loop iteration.
     fuse_tag_cases: bool = true,
+    /// The rewrites that exist only to make the produced program faster:
+    /// join scalarization and box reuse. `--opt=dev` skips them, since it
+    /// trades program speed for compile speed.
     scalarize_joins: bool = true,
     reuse_boxes: bool = true,
     /// Build ConstStore materialization plans for requested layouts.
