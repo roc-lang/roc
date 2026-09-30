@@ -7221,12 +7221,13 @@ test "comment prefix matches inter-token scans for every region" {
 }
 
 test "nested lists and tuples format on a small native stack" {
+    const StackTestError = FormatTestError || std.mem.Allocator.Error || error{TestExpectedEqual};
     const Worker = struct {
-        fn run(result: *anyerror!void) void {
+        fn run(result: *StackTestError!void) void {
             result.* = check();
         }
 
-        fn check() !void {
+        fn check() StackTestError!void {
             const gpa = std.testing.allocator;
             const cases = [_]struct { depth: usize, mixed: bool = false, expanded: bool = false }{
                 .{ .depth = 10000 },
@@ -7260,7 +7261,7 @@ test "nested lists and tuples format on a small native stack" {
             }
         }
     };
-    var result: anyerror!void = {};
+    var result: StackTestError!void = {};
     const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
     thread.join();
     try result;

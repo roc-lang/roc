@@ -688,11 +688,11 @@ checker recovery. The recovery rules:
   runtime error. The rejected relation has no lowering.
 
 A module that fails before checking, such as a member or dependent of an import
-cycle, has no checked artifact. Checked-program finalization publishes a
+cycle, has no CheckedModule. Checked-program finalization produces a
 program only when the app root finished checking; otherwise every checked
 module still finishes its independent compile-time work and every report is
 emitted, and a command that needs a program stops after rendering diagnostics.
-Consumers of a build's modules skip a module that has no checked artifact.
+Consumers of a build's modules skip a module that has no CheckedModule.
 
 Rejected programs are tested generatively rather than case by case. The
 `build-errors` fuzzer uses the shared typed generator with a type-error budget:
