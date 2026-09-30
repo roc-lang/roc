@@ -28039,6 +28039,9 @@ pub const CompileTimeRootPayload = union(enum) {
     fn_value: ConstFnId,
     discarded,
     expect,
+    /// A guarded hoisted root whose compile-time evaluation failed. Runtime
+    /// lowering evaluates its original expression and declaration in place.
+    runtime,
 };
 
 /// Whether a selected compile-time root may become a root request.
@@ -28061,6 +28064,10 @@ pub const CompileTimeRoot = struct {
     checked_type: CheckedTypeId,
     request_eligibility: CompileTimeRootRequestEligibility,
     payload: CompileTimeRootPayload,
+    /// A hoisted root reached only through a branch, guard, loop body, or
+    /// expect body. Its evaluation failure is not a diagnostic; finalization
+    /// records the `runtime` payload instead.
+    guarded: bool = false,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
         return switch (self.kind) {
@@ -28212,6 +28219,7 @@ pub const CompileTimeRootTable = struct {
                 .expr = checked_root.expr,
                 .checked_type = checked_root.checked_type,
                 .payload = .pending,
+                .guarded = selected.guarded,
             });
         }
 
@@ -28274,7 +28282,7 @@ pub const CompileTimeRootTable = struct {
         if (index >= self.roots.len) {
             checkedArtifactInvariant("compile-time root id is out of range", .{});
         }
-        verifyCompileTimeRootPayloadMatchesKind(self.roots[index].kind, payload);
+        verifyCompileTimeRootPayloadMatchesKind(self.roots[index], payload);
         self.roots[index].payload = payload;
     }
 
@@ -28295,6 +28303,7 @@ pub const CompileTimeRootTable = struct {
         checked_type: CheckedTypeId,
         request_eligibility: CompileTimeRootRequestEligibility = .pending,
         payload: CompileTimeRootPayload,
+        guarded: bool = false,
     };
 
     /// Collect one top-level `expect` as a test root. Expects evaluated inside
@@ -28342,6 +28351,7 @@ pub const CompileTimeRootTable = struct {
             .checked_type = entry.checked_type,
             .request_eligibility = entry.request_eligibility,
             .payload = entry.payload,
+            .guarded = entry.guarded,
         }) catch |err| {
             if (entry.hoisted_body) |body| hoist_roots.deinitBody(allocator, body);
             return err;
@@ -28683,14 +28693,16 @@ fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) vo
     }
 }
 
-fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
-    const matches = switch (kind) {
+fn verifyCompileTimeRootPayloadMatchesKind(root: CompileTimeRoot, payload: CompileTimeRootPayload) void {
+    const matches = switch (root.kind) {
         .constant, .hoisted_constant, .repl_expr => switch (payload) {
             .const_node => true,
+            .runtime => root.guarded,
             .pending, .fn_value, .discarded, .expect => false,
         },
         .hoisted_validation => switch (payload) {
             .discarded => true,
+            .runtime => root.guarded,
             .pending, .const_node, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
@@ -28699,15 +28711,15 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             // node at the callable's expected type, so execution crashes at
             // the exact invalid binding while independent roots remain usable.
             .fn_value, .const_node => true,
-            .pending, .discarded, .expect => false,
+            .pending, .discarded, .expect, .runtime => false,
         },
         .expect => switch (payload) {
             .expect => true,
-            .pending, .const_node, .fn_value, .discarded => false,
+            .pending, .const_node, .fn_value, .discarded, .runtime => false,
         },
         .numeral_conversion, .quote_conversion => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .discarded, .expect => false,
+            .pending, .fn_value, .discarded, .expect, .runtime => false,
         },
     };
     if (matches) return;
@@ -34129,7 +34141,8 @@ pub const CheckedModuleArtifact = struct {
                     .fn_value,
                     .discarded,
                     .expect,
-                    => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
+                    .runtime,
+                    => verifyCompileTimeRootPayloadMatchesKind(root, root.payload),
                 },
                 .expect => switch (root.payload) {
                     .expect => {},
@@ -34137,6 +34150,7 @@ pub const CheckedModuleArtifact = struct {
                     .const_node,
                     .fn_value,
                     .discarded,
+                    .runtime,
                     => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
                 },
             }
@@ -35189,7 +35203,7 @@ pub const CheckedModuleArtifact = struct {
             if (root.kind == .expect) {
                 switch (root.payload) {
                     .expect => {},
-                    .pending, .const_node, .fn_value, .discarded => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
+                    .pending, .const_node, .fn_value, .discarded, .runtime => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
                 continue;
             }
@@ -35205,11 +35219,11 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
                     }
                 },
-                .const_node, .fn_value, .discarded, .expect => {
+                .const_node, .fn_value, .discarded, .expect, .runtime => {
                     if (!has_request) {
                         std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }
-                    verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload);
+                    verifyCompileTimeRootPayloadMatchesKind(root, root.payload);
                 },
             }
         }

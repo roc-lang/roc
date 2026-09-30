@@ -554,6 +554,7 @@ fn resolveCallableEvalTemplate(
         .const_node,
         .discarded,
         .expect,
+        .runtime,
         => boxyLowerInvariant("callable eval binding root did not output a callable value"),
     };
 }
@@ -20513,6 +20514,7 @@ const ProcBodyBuilder = struct {
             .fn_value,
             .discarded,
             .expect,
+            .runtime,
             => boxyLowerInvariant("from_quote conversion root had a non-data payload"),
         };
     }
@@ -20748,6 +20750,7 @@ const ProcBodyBuilder = struct {
             .fn_value,
             .discarded,
             .expect,
+            .runtime,
             => boxyLowerInvariant("from_numeral conversion root had a non-data payload"),
         };
     }

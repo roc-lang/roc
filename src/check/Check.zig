@@ -757,6 +757,9 @@ hoist_selected_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u3
 /// errors after hoist selection had already seen them. Selected roots and
 /// dependencies inside these subtrees must be pruned before publication.
 hoist_invalidated_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
+/// Top-level-equivalent expressions checked in a guarded hoist position. A
+/// root whose expression is in this set is published as a guarded root.
+hoist_guarded_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Sparse roots selected during checking. Publication consumes this slice and
 /// turns the entries into checked compile-time roots.
 selected_hoisted_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
@@ -1917,9 +1920,20 @@ const HoistPosition = enum {
     /// The expression is in a structurally unguarded runtime position where
     /// selected roots may be emitted.
     eligible,
+    /// The expression is reached only through a branch, guard, loop body, or
+    /// expect body of a runtime procedure. Selected roots are emitted, and
+    /// their evaluation failures leave the original expression at runtime.
+    guarded,
 
     fn allowsSelection(self: @This()) bool {
-        return self == .eligible;
+        return self == .eligible or self == .guarded;
+    }
+
+    fn guard(self: @This()) HoistPosition {
+        return switch (self) {
+            .eligible, .guarded => .guarded,
+            .suppressed, .comptime_root => .suppressed,
+        };
     }
 
     fn allowsSemanticEligibility(self: @This()) bool {
@@ -2287,6 +2301,7 @@ const HoistSelectionTransaction = struct {
                 try self.staged_roots.append(gpa, .{
                     .expr = expr_root.expr,
                     .pattern = expr_root.pattern,
+                    .guarded = self.checker.hoist_guarded_exprs.contains(expr_root.expr),
                 });
                 try self.staged_exprs.put(gpa, expr_root.expr, root_index);
                 if (expr_root.pattern) |pattern_idx| {
@@ -2298,6 +2313,7 @@ const HoistSelectionTransaction = struct {
                     .expr = extraction_root.extraction.base_expr,
                     .pattern = extraction_root.pattern,
                     .body = .{ .pattern_extraction = extraction_root.extraction },
+                    .guarded = self.checker.hoist_guarded_exprs.contains(extraction_root.extraction.base_expr),
                 });
                 try self.stageBindingAssociation(extraction_root.pattern, root_index);
             },
@@ -2307,6 +2323,7 @@ const HoistSelectionTransaction = struct {
                     .body = .{ .pattern_validation = validation_root.validation },
                     .value_kind = .discarded,
                     .validation_owner_expr = validation_root.owner_expr,
+                    .guarded = self.checker.hoist_guarded_exprs.contains(validation_root.validation.base_expr),
                 });
                 try self.staged_pattern_validations.put(gpa, validation_root.validation.scrutinee_pattern, root_index);
             },
@@ -3163,6 +3180,7 @@ fn initAssumePrepared(
         .hoist_selected_exprs = .{},
         .hoist_selected_pattern_validations = .{},
         .hoist_invalidated_exprs = .{},
+        .hoist_guarded_exprs = .{},
         .selected_hoisted_roots = .empty,
         .local_procedure_candidates = .{},
         .local_procedure_candidate_stack = .empty,
@@ -3319,6 +3337,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_selected_exprs.deinit(self.gpa);
     self.hoist_selected_pattern_validations.deinit(self.gpa);
     self.hoist_invalidated_exprs.deinit(self.gpa);
+    self.hoist_guarded_exprs.deinit(self.gpa);
     for (self.selected_hoisted_roots.items) |*root| {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
     }
@@ -3696,6 +3715,10 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     if (should_bubble_to_parent) {
         try self.hoist_expr_candidates.ensureUnusedCapacity(self.gpa, 1);
     }
+    const records_guarded_expr = frame.hoist_position == .guarded and top_level_equivalent;
+    if (records_guarded_expr) {
+        try self.hoist_guarded_exprs.ensureUnusedCapacity(self.gpa, 1);
+    }
 
     const has_deferred_roots = self.hoist_deferred_roots.items.len > frame.deferred_dependency_start;
     const should_flush_deferred_roots = selection_allowed and has_deferred_roots and
@@ -3761,6 +3784,8 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         }
         self.hoist_deferred_roots.shrinkRetainingCapacity(retained);
     }
+
+    if (records_guarded_expr) self.hoist_guarded_exprs.putAssumeCapacity(expr, {});
 
     const completed = CompletedHoistResult{
         .promotion_dependency = frame.promotion_dependency,
@@ -4774,6 +4799,7 @@ const HoistSelectionTestState = struct {
         checker.hoist_selected_exprs = .{};
         checker.hoist_selected_pattern_validations = .{};
         checker.hoist_invalidated_exprs = .{};
+        checker.hoist_guarded_exprs = .{};
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
         checker.hoist_promotion_dependencies = .empty;
@@ -4804,6 +4830,7 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_selected_exprs.deinit(self.allocator);
         self.checker.hoist_selected_pattern_validations.deinit(self.allocator);
         self.checker.hoist_invalidated_exprs.deinit(self.allocator);
+        self.checker.hoist_guarded_exprs.deinit(self.allocator);
         for (self.checker.selected_hoisted_roots.items) |*root| {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
         }
@@ -10564,6 +10591,9 @@ fn hoistedRootIsIntrinsicallyKept(
 
     if (root.body == .pattern_extraction) {
         const is_function = self.varIsFunctionType(type_var);
+        // A guarded root whose evaluation fails is lowered from its original
+        // expression at runtime; callable roots have no such runtime form.
+        if (is_function and root.guarded) return false;
         if (is_function or self.selectedHoistedRootIsTopLevel(root.*)) {
             root.value_kind = if (is_function) .callable_binding else .data_constant;
             if (self.selectedHoistedRootIsTopLevel(root.*)) {
@@ -20520,6 +20550,10 @@ const Expected = struct {
         return self.withHoistPosition(.suppressed);
     }
 
+    fn guardHoistSelection(self: Expected) Expected {
+        return self.withHoistPosition(self.hoist_position.guard());
+    }
+
     fn forComptimeRoot(self: Expected) Expected {
         return .{
             .annotation = self.annotation,
@@ -20540,7 +20574,7 @@ const Expected = struct {
             .contextual_type = self.expected_type orelse self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
-            .hoist_position = .suppressed,
+            .hoist_position = self.hoist_position.guard(),
         };
     }
 
@@ -24301,7 +24335,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 //     print!($count.toStr())  <<<<
                 //     $count = $count + 1
                 // }
-                return .{ .expr = while_stmt.body, .expected = statement_expected.suppressHoistSelection() };
+                return .{ .expr = while_stmt.body, .expected = statement_expected.guardHoistSelection() };
             }
             if (stmt == .s_infinite_loop) {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
@@ -24482,7 +24516,7 @@ fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator
     );
 
     state.phase = .body;
-    return .{ .expr = state.body, .expected = state.expected.forStatement().suppressHoistSelection() };
+    return .{ .expr = state.body, .expected = state.expected.forStatement().guardHoistSelection() };
 }
 
 fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
@@ -24526,7 +24560,7 @@ const ExpectBodyScope = struct {
 };
 
 fn expectBodyExpected(expected: Expected) Expected {
-    return expected.suppressComptimeConditionWarnings().suppressHoistSelection();
+    return expected.suppressComptimeConditionWarnings().guardHoistSelection();
 }
 
 fn beginExpectBody(self: *Self, expect_region: Region) std.mem.Allocator.Error!ExpectBodyScope {
@@ -26014,7 +26048,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_branch_cond => {
                 state.phase = .after_branch_cond;
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
-                return self.requestIfChild(state, branch.cond, expected.forStatement().suppressHoistSelection(), false, false);
+                return self.requestIfChild(state, branch.cond, expected.forStatement().guardHoistSelection(), false, false);
             },
             .after_branch_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.branch_index]);
@@ -26068,7 +26102,7 @@ fn resumeIfCheck(self: *Self, task: *ExprTask, state: *IfCheck, env: *Env, child
             .schedule_remaining_cond => {
                 state.phase = .after_remaining_cond;
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
-                return self.requestIfChild(state, branch.cond, expected.forStatement().suppressHoistSelection(), false, false);
+                return self.requestIfChild(state, branch.cond, expected.forStatement().guardHoistSelection(), false, false);
             },
             .after_remaining_cond => {
                 const branch = self.cir.store.getIfBranch(branches[state.remaining_index]);
@@ -26543,7 +26577,7 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     // Check guard if present
     if (branch.guard) |guard_idx| {
         state.phase = .guard;
-        return .{ .child = .{ .expr = guard_idx, .expected = child_expected.suppressHoistSelection() } };
+        return .{ .child = .{ .expr = guard_idx, .expected = child_expected.guardHoistSelection() } };
     }
     return self.requestMatchBranchValue(task, state, branch);
 }
