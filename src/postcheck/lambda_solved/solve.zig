@@ -94,11 +94,9 @@ pub fn run(
     allocator: Allocator,
     lifted: Lifted.Program,
 ) Common.LowerError!Ast.Program {
-    var owned = lifted;
-    errdefer owned.deinit();
-
-    var program = Ast.Program.init(allocator, owned);
-    owned = undefined;
+    // `Ast.Program.init` cannot fail and takes ownership of `lifted`, so
+    // `program.deinit()` is the only cleanup a later error needs.
+    var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
 
     var solver = try Solver.init(allocator, &program);
