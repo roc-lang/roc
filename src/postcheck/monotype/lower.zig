@@ -5419,7 +5419,7 @@ const Builder = struct {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
+            .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -25289,7 +25289,17 @@ const BodyContext = struct {
     ) ?checked.HoistedConstEntry {
         const entry = self.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
+        if (hoistedConstRunsAtRuntime(self.view, entry)) return null;
+        // A guarded binding root's declaration stays in the runtime body with
+        // its original right-hand side; only its other uses restore the root.
+        if (entry.pattern != null and self.view.compile_time_roots.root(entry.root).guarded) return null;
         return entry;
+    }
+
+    /// A guarded hoisted root whose compile-time evaluation failed has no
+    /// stored value. Its original expression and declaration lower in place.
+    fn hoistedConstRunsAtRuntime(view: ModuleView, entry: checked.HoistedConstEntry) bool {
+        return view.compile_time_roots.root(entry.root).payload == .runtime;
     }
 
     fn selectedHoistedConstEntry(
@@ -26273,7 +26283,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
+            .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -26346,7 +26356,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
-            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
+            .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -42590,7 +42600,7 @@ const BodyContext = struct {
         switch (root.payload) {
             .const_node => |node| return try self.restoreConstNodeAtNode(self.view, self.view, node, request_node),
             .pending => {},
-            .fn_value, .discarded, .expect => Common.invariant("literal conversion root stored a non-constant payload"),
+            .fn_value, .discarded, .expect, .runtime => Common.invariant("literal conversion root stored a non-constant payload"),
         }
         if (self.builder.comptimeValueReadDeclared(self.view, root_id)) {
             return try self.declaredComptimeValueRead(self.view, root_id, DraftTypeCell.fromGraphNode(request_node), null);
@@ -55812,6 +55822,15 @@ const BodyContext = struct {
         }
     }
 
+    /// Whether a declaration's binder is restored from its hoisted root rather
+    /// than bound by lowering the declaration. A guarded root's declaration
+    /// always stays and evaluates its original right-hand side, so a failure
+    /// surfaces at the declaration just as it does without the root.
+    fn hoistedBindingRestored(self: *const BodyContext, pattern: checked.CheckedPatternId) bool {
+        const entry = self.view.hoisted_constants.lookupByPattern(pattern) orelse return false;
+        return !self.view.compile_time_roots.root(entry.root).guarded;
+    }
+
     fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
@@ -55825,7 +55844,7 @@ const BodyContext = struct {
                 // information but has no runtime value to bind.
                 .anno_only => false,
                 .pending => Common.invariant("pending checked declaration reached Monotype runtime statement filter"),
-                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null and
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => !self.hoistedBindingRestored(decl.pattern) and
                     !self.view.compile_time_roots.validationResolvedByPattern(decl.pattern),
             },
             .var_,

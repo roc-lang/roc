@@ -721,6 +721,9 @@ hoist_selected_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u3
 /// errors after hoist selection had already seen them. Selected roots and
 /// dependencies inside these subtrees must be pruned before publication.
 hoist_invalidated_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
+/// Top-level-equivalent expressions checked in a guarded hoist position. A
+/// root whose expression is in this set is published as a guarded root.
+hoist_guarded_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Sparse roots selected during checking. Publication consumes this slice and
 /// turns the entries into checked compile-time roots.
 selected_hoisted_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
@@ -1865,9 +1868,20 @@ const HoistPosition = enum {
     /// The expression is in a structurally unguarded runtime position where
     /// selected roots may be emitted.
     eligible,
+    /// The expression is reached only through a branch, guard, loop body, or
+    /// expect body of a runtime procedure. Selected roots are emitted, and
+    /// their evaluation failures leave the original expression at runtime.
+    guarded,
 
     fn allowsSelection(self: @This()) bool {
-        return self == .eligible;
+        return self == .eligible or self == .guarded;
+    }
+
+    fn guard(self: @This()) HoistPosition {
+        return switch (self) {
+            .eligible, .guarded => .guarded,
+            .suppressed, .comptime_root => .suppressed,
+        };
     }
 
     fn allowsSemanticEligibility(self: @This()) bool {
@@ -2081,6 +2095,7 @@ const HoistSelectionTransaction = struct {
         try self.staged_roots.append(self.checker.gpa, .{
             .expr = expr,
             .pattern = pattern,
+            .guarded = self.checker.hoist_guarded_exprs.contains(expr),
         });
         try self.staged_exprs.put(self.checker.gpa, expr, root_index);
         if (pattern) |pattern_idx| {
@@ -2104,6 +2119,7 @@ const HoistSelectionTransaction = struct {
             .expr = extraction.base_expr,
             .pattern = pattern,
             .body = .{ .pattern_extraction = extraction },
+            .guarded = self.checker.hoist_guarded_exprs.contains(extraction.base_expr),
         });
         try self.stageBindingAssociation(pattern, root_index);
         return root_index;
@@ -2125,6 +2141,7 @@ const HoistSelectionTransaction = struct {
             .body = .{ .pattern_validation = validation },
             .value_kind = .discarded,
             .validation_owner_expr = owner_expr,
+            .guarded = self.checker.hoist_guarded_exprs.contains(validation.base_expr),
         });
         try self.staged_pattern_validations.put(self.checker.gpa, validation.scrutinee_pattern, root_index);
         return root_index;
@@ -3029,6 +3046,7 @@ fn initAssumePrepared(
         .hoist_selected_exprs = .{},
         .hoist_selected_pattern_validations = .{},
         .hoist_invalidated_exprs = .{},
+        .hoist_guarded_exprs = .{},
         .selected_hoisted_roots = .empty,
         .local_procedure_candidates = .{},
         .local_procedure_candidate_stack = .empty,
@@ -3179,6 +3197,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_selected_exprs.deinit(self.gpa);
     self.hoist_selected_pattern_validations.deinit(self.gpa);
     self.hoist_invalidated_exprs.deinit(self.gpa);
+    self.hoist_guarded_exprs.deinit(self.gpa);
     for (self.selected_hoisted_roots.items) |*root| {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
     }
@@ -3542,6 +3561,10 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     if (should_bubble_to_parent) {
         try self.hoist_expr_candidates.ensureUnusedCapacity(self.gpa, 1);
     }
+    const records_guarded_expr = frame.hoist_position == .guarded and top_level_equivalent;
+    if (records_guarded_expr) {
+        try self.hoist_guarded_exprs.ensureUnusedCapacity(self.gpa, 1);
+    }
 
     const has_deferred_roots = self.hoist_deferred_roots.items.len > frame.deferred_dependency_start;
     const should_flush_deferred_roots = selection_allowed and has_deferred_roots and
@@ -3607,6 +3630,8 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         }
         self.hoist_deferred_roots.shrinkRetainingCapacity(retained);
     }
+
+    if (records_guarded_expr) self.hoist_guarded_exprs.putAssumeCapacity(expr, {});
 
     const completed = CompletedHoistResult{
         .promotion_dependency = frame.promotion_dependency,
@@ -4724,6 +4749,7 @@ const HoistSelectionTestState = struct {
         checker.hoist_selected_exprs = .{};
         checker.hoist_selected_pattern_validations = .{};
         checker.hoist_invalidated_exprs = .{};
+        checker.hoist_guarded_exprs = .{};
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
         checker.hoist_promotion_dependencies = .empty;
@@ -4754,6 +4780,7 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_selected_exprs.deinit(self.allocator);
         self.checker.hoist_selected_pattern_validations.deinit(self.allocator);
         self.checker.hoist_invalidated_exprs.deinit(self.allocator);
+        self.checker.hoist_guarded_exprs.deinit(self.allocator);
         for (self.checker.selected_hoisted_roots.items) |*root| {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
         }
@@ -10265,6 +10292,9 @@ fn hoistedRootIsIntrinsicallyKept(
 
     if (root.body == .pattern_extraction) {
         const is_function = self.varIsFunctionType(type_var);
+        // A guarded root whose evaluation fails is lowered from its original
+        // expression at runtime; callable roots have no such runtime form.
+        if (is_function and root.guarded) return false;
         if (is_function or self.selectedHoistedRootIsTopLevel(root.*)) {
             root.value_kind = if (is_function) .callable_binding else .data_constant;
             if (self.selectedHoistedRootIsTopLevel(root.*)) {
@@ -13161,7 +13191,7 @@ fn checkExpectBody(
     self.current_expect_effect_slot = slot;
     defer self.current_expect_effect_slot = saved_expect_slot;
 
-    const does_fx = try self.checkExpr(body, env, expected.suppressComptimeConditionWarnings().suppressHoistSelection());
+    const does_fx = try self.checkExpr(body, env, expected.suppressComptimeConditionWarnings().guardHoistSelection());
     self.expect_effect_slots.items[@intFromEnum(slot)].effectful = does_fx;
     return does_fx;
 }
@@ -20142,6 +20172,10 @@ const Expected = struct {
         return self.withHoistPosition(.suppressed);
     }
 
+    fn guardHoistSelection(self: Expected) Expected {
+        return self.withHoistPosition(self.hoist_position.guard());
+    }
+
     fn forComptimeRoot(self: Expected) Expected {
         return .{
             .annotation = self.annotation,
@@ -20162,7 +20196,7 @@ const Expected = struct {
             .contextual_type = self.expected_type orelse self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
-            .hoist_position = .suppressed,
+            .hoist_position = self.hoist_position.guard(),
         };
     }
 
@@ -25191,7 +25225,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 //     print!($count.toStr())  <<<<
                 //     $count = $count + 1
                 // }
-                does_fx = try self.checkExpr(while_stmt.body, env, statement_expected.suppressHoistSelection()) or does_fx;
+                does_fx = try self.checkExpr(while_stmt.body, env, statement_expected.guardHoistSelection()) or does_fx;
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
@@ -25204,7 +25238,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
 
-                does_fx = try self.checkExpr(while_stmt.body, env, statement_expected.suppressHoistSelection()) or does_fx;
+                does_fx = try self.checkExpr(while_stmt.body, env, statement_expected.guardHoistSelection()) or does_fx;
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
@@ -25217,7 +25251,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
 
-                does_fx = try self.checkExpr(while_stmt.body, env, statement_expected.suppressHoistSelection()) or does_fx;
+                does_fx = try self.checkExpr(while_stmt.body, env, statement_expected.guardHoistSelection()) or does_fx;
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
@@ -25963,7 +25997,7 @@ fn checkIfElseExpr(
                     &current,
                     branch.cond,
                     env,
-                    current.expected.forStatement().suppressHoistSelection(),
+                    current.expected.forStatement().guardHoistSelection(),
                     false,
                     false,
                     false,
@@ -26043,7 +26077,7 @@ fn checkIfElseExpr(
                     &current,
                     branch.cond,
                     env,
-                    current.expected.forStatement().suppressHoistSelection(),
+                    current.expected.forStatement().guardHoistSelection(),
                     false,
                     false,
                     false,
@@ -26300,7 +26334,7 @@ fn checkMatchExpr(
 
         // Check guard if present
         if (first_branch.guard) |guard_idx| {
-            does_fx = try self.checkExpr(guard_idx, env, child_expected.suppressHoistSelection()) or does_fx;
+            does_fx = try self.checkExpr(guard_idx, env, child_expected.guardHoistSelection()) or does_fx;
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const guard_bool_var = try self.freshBool(env, expr_region);
             const guard_result = try self.unifyInContext(guard_bool_var, guard_var, env, .if_condition);
@@ -26370,7 +26404,7 @@ fn checkMatchExpr(
 
         // Check guard if present
         if (branch.guard) |guard_idx| {
-            does_fx = try self.checkExpr(guard_idx, env, child_expected.suppressHoistSelection()) or does_fx;
+            does_fx = try self.checkExpr(guard_idx, env, child_expected.guardHoistSelection()) or does_fx;
             const guard_var = ModuleEnv.varFrom(guard_idx);
             const branch_guard_bool_var = try self.freshBool(env, expr_region);
             const guard_result = try self.unifyInContext(branch_guard_bool_var, guard_var, env, .if_condition);
@@ -27359,7 +27393,7 @@ fn checkIteratorForLoop(
         step.topology,
     );
 
-    does_fx = try self.checkExpr(body, env, child_expected.suppressHoistSelection()) or does_fx;
+    does_fx = try self.checkExpr(body, env, child_expected.guardHoistSelection()) or does_fx;
     return switch (kind) {
         .iter => does_fx,
         // Every `for!` pulls its items with the effectful `next!`.

@@ -3805,24 +3805,26 @@ concreteness purpose that rejects a function anywhere in their stored type, so a
 value containing a callable remains one ordinary runtime allocation rather than
 being copied into independently restored callables.
 
-Hoisted-root selection is positional as well as dependency-based. Selection may
-fire only in structurally unguarded positions of runtime bodies, and the checker
-must carry that position as explicit checking context while computing
+Hoisted-root selection is positional as well as dependency-based, and the
+checker carries that position as explicit checking context while computing
 hoistability in the normal recursive traversal. Eager child expressions inherit
-their parent's position. Branch bodies, match guards, expect bodies, loop bodies,
-statements and block finals after an unconditionally diverging statement
-(`return`, `crash`, `break`, an infinite loop, or an all-crash conditional), and
-conditions reached only after earlier conditional branches are suppressed: they
-may still prove top-level-equivalent for enclosing expressions or warnings, but
-they must not become independent roots. An earlier effectful call, `dbg`,
-`expect`, or loop in the same block does not change a later statement's
-position. A selected root has no observable effect of its own, and whether an
-unguarded root is evaluated never depends on whether its enclosing procedure is
-reached at runtime, so a preceding effect is not a guard. Otherwise inserting a
-`dbg` or an effect would decide whether a later refutable destructure compiles. Ordinary top-level
-constant bodies use a stronger compile-time-root context that suppresses nested
-root selection and nested eligibility entirely, because the enclosing body is
-already evaluated at compile time.
+their parent's position. There are three positions in a runtime body:
+
+- Unguarded: statements and block finals that run whenever the procedure body
+  runs. An earlier effectful call, `dbg`, `expect`, or loop in the same block
+  does not change a later statement's position: a selected root has no
+  observable effect of its own, so a preceding effect is not a guard.
+- Guarded: branch bodies, match guards, conditions reached only after earlier
+  conditional branches, loop bodies, and expect bodies. Roots selected here are
+  guarded roots (see below).
+- Suppressed: statements and block finals after an unconditionally diverging
+  statement (`return`, `crash`, `break`, an infinite loop, or an all-crash
+  conditional). This code never runs, so it selects no roots; it may still prove
+  top-level-equivalent for enclosing expressions or warnings.
+
+Ordinary top-level constant bodies use a stronger compile-time-root context that
+suppresses nested root selection and nested eligibility entirely, because the
+enclosing body is already evaluated at compile time.
 
 Canonicalization's top-level dependency order remains an input for ordinary
 top-level constants, and checking should prefer to emit selected hoisted roots
@@ -3932,12 +3934,34 @@ another CIR traversal. Eligibility for compile-time condition warnings remains
 independent of whether a condition is selected as an independent root or covered
 by an enclosing root.
 
-Hoisted roots use the same compile-time constant rules as ordinary top-level
-constants. A failure produced while evaluating a hoisted root is a checking-time
-failure reported at the hoisted expression's original source region. If Roc ever
-needs lazy-runtime-preserving hoists, that must be a separate checked root policy
-with explicit totality and failure behavior; it must not be implemented as a
-best-effort variant of top-level constant hoisting.
+Unguarded hoisted roots use the same compile-time constant rules as ordinary
+top-level constants. A failure produced while evaluating one is a checking-time
+failure reported at the hoisted expression's original source region.
+
+Guarded roots are evaluated at compile time exactly like unguarded roots, and a
+successful guarded root is restored like any other. Their failure behavior is
+explicit and different, because a guarded expression runs only when the program
+takes its branch, and a branch that calls a crashing helper (an `unreachable`
+marker, say) is ordinary code that must keep compiling:
+
+- A crash during a guarded root's evaluation is not a diagnostic. Finalization
+  records the root's `runtime` payload. Lowering that consumes finalized roots
+  lowers the original expression in its place; a program lowered before
+  finalization reads the root through its value guard, which crashes with the
+  recorded failure at that same read. Either way the crash happens at runtime
+  if and only if the program reaches the expression. A compile-time root that
+  reads the failed value reports the crash as its own, because the guarded root
+  reported nothing.
+- An exhaustiveness site the guarded root was selected to validate is decided
+  statically again, exactly as if the root had not been selected.
+- An empirical exhaustiveness failure is reported as it is for unguarded roots:
+  the destructure or match is a compile error either way.
+- A guarded binding root's declaration always stays in the runtime body with its
+  original right-hand side, so a failure surfaces at the declaration, in source
+  order with the procedure's effects. Only the binder's other uses restore the
+  root.
+- Callable extraction roots are never guarded, since a callable root has no
+  runtime form to leave in place.
 
 Imported checked modules must contain every checked procedure template and checked
 body that may be instantiated by an importing root. This includes private helper

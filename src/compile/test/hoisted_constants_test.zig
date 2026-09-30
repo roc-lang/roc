@@ -1768,88 +1768,167 @@ test "issue 10721: compile-time validation reports a known failing destructure" 
 }
 
 test "issue 10892: effects and dbg before a destructure do not block compile-time validation" {
-    const gpa = std.testing.allocator;
+    const ok = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |_| {
+        \\    Echo.line!("before")
+        \\    dbg 1.I64
+        \\    Ok(byte) = (0xFF.U32).to_u8_try()
+        \\    Echo.line!(byte.to_str())
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{}, ok);
 
-    const cases = [_]struct { source: []const u8, expect_non_exhaustive: bool }{
-        .{
-            .source =
-            \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
-            \\
-            \\import pf.Echo
-            \\
-            \\main! = |_| {
-            \\    Echo.line!("before")
-            \\    dbg 1.I64
-            \\    Ok(byte) = (0xFF.U32).to_u8_try()
-            \\    Echo.line!(byte.to_str())
-            \\    Ok({})
-            \\}
-            ,
-            .expect_non_exhaustive = false,
-        },
-        .{
-            .source =
-            \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
-            \\
-            \\import pf.Echo
-            \\
-            \\main! = |_| {
-            \\    Echo.line!("before")
-            \\    dbg 1.I64
-            \\    Ok(byte) = (0x1FF.U32).to_u8_try()
-            \\    Echo.line!(byte.to_str())
-            \\    Ok({})
-            \\}
-            ,
-            .expect_non_exhaustive = true,
-        },
-    };
+    const failing = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |_| {
+        \\    Echo.line!("before")
+        \\    dbg 1.I64
+        \\    Ok(byte) = (0x1FF.U32).to_u8_try()
+        \\    Echo.line!(byte.to_str())
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .empirical = true }, failing);
+}
 
-    for (cases) |case| {
-        var tmp_dir = std.testing.tmpDir(.{});
-        defer tmp_dir.cleanup();
+test "guarded roots validate destructures inside runtime-controlled branches" {
+    const ok = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    if List.is_empty(args) {
+        \\        Echo.line!("none")
+        \\    } else {
+        \\        Ok(byte) = (0xFF.U32).to_u8_try()
+        \\        Echo.line!(byte.to_str())
+        \\    }
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{}, ok);
 
-        try writeEchoPlatform(tmp_dir.dir);
-        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "main.roc", .data = case.source });
-        const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
-        defer gpa.free(app_path);
+    const failing = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    if List.is_empty(args) {
+        \\        Echo.line!("none")
+        \\    } else {
+        \\        Ok(byte) = (0x1FF.U32).to_u8_try()
+        \\        Echo.line!(byte.to_str())
+        \\    }
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .empirical = true, .has_runtime_roots = true }, failing);
+}
 
-        var arena_impl = collections.SingleThreadArena.init(gpa);
-        defer arena_impl.deinit();
-        const arena = arena_impl.allocator();
+test "a guarded root that crashes at compile time is left to runtime" {
+    const crash_helper = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\unreachable : Str -> U64
+        \\unreachable = |msg| crash msg
+        \\
+        \\main! = |args| {
+        \\    n = if List.is_empty(args) { 1 } else { unreachable("args are not supported") }
+        \\    Echo.line!(n.to_str())
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_runtime_roots = true }, crash_helper);
 
-        const builtin_modules = try sharedBuiltinModules();
+    // The destructure's diagnostic is decided statically, exactly as when its
+    // right-hand side is not compile-time known.
+    const crashing_rhs = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\bad : U64 -> Try(U64, [Zero])
+        \\bad = |_| crash "bad"
+        \\
+        \\main! = |args| {
+        \\    if List.is_empty(args) {
+        \\        Echo.line!("none")
+        \\    } else {
+        \\        Ok(n) = bad(1)
+        \\        Echo.line!(n.to_str())
+        \\    }
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .has_runtime_roots = true }, crashing_rhs);
+}
 
-        var coord = try Coordinator.init(
-            gpa,
-            .single_threaded,
-            1,
-            roc_target.RocTarget.detectNative(),
-            builtin_modules,
-            build_options.compiler_version,
-            null,
-            CoreCtx.default(gpa, arena, std.testing.io),
-        );
-        defer coord.deinit();
-        coord.enable_hosted_transform = true;
+const EchoAppCheck = struct {
+    has_errors: bool = false,
+    non_exhaustive: bool = false,
+    empirical: bool = false,
+    comptime_crash: bool = false,
+    has_runtime_roots: bool = false,
+};
 
-        try coord.start();
-        try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
-        try coord.coordinatorLoop();
-        try coord.finishCheckedProgram(.none);
+fn checkEchoApp(gpa: std.mem.Allocator, source: []const u8) !EchoAppCheck {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
 
-        var found_non_exhaustive = false;
-        var found_empirical_note = false;
-        var report_iter = coord.iterReports();
-        while (report_iter.next()) |entry| {
-            if (!std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) continue;
-            found_non_exhaustive = true;
-            if (try reportContains(gpa, entry.report, "empirically during compile-time evaluation")) found_empirical_note = true;
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "main.roc", .data = source });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
+
+    var result = EchoAppCheck{ .has_errors = coord.hasUserErrors() };
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) {
+            result.non_exhaustive = true;
+            if (try reportContains(gpa, entry.report, "empirically during compile-time evaluation")) result.empirical = true;
         }
-        try std.testing.expectEqual(case.expect_non_exhaustive, found_non_exhaustive);
-        try std.testing.expectEqual(case.expect_non_exhaustive, found_empirical_note);
-        try std.testing.expectEqual(case.expect_non_exhaustive, coord.hasUserErrors());
+        if (std.mem.eql(u8, entry.report.title, "Compile Time Crash")) result.comptime_crash = true;
     }
+    for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
+        if (root.payload == .runtime) result.has_runtime_roots = true;
+    }
+    return result;
 }
 
 test "issue 10721: runtime-dependent callable use keeps one validating extraction root" {
@@ -2651,6 +2730,7 @@ fn storedI64(
         .fn_value,
         .discarded,
         .expect,
+        .runtime,
         => return error.HoistedRootDidNotStoreConstNode,
     };
     const template = artifact.const_templates.get(entry.const_ref);
@@ -2676,6 +2756,7 @@ fn rootStoredI64(
         .fn_value,
         .discarded,
         .expect,
+        .runtime,
         => return error.RootDidNotStoreConstNode,
     };
     return scalarConstNodeI64(artifact, node);

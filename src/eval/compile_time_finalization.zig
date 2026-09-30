@@ -1891,16 +1891,16 @@ fn evalInterpreterProgramRoots(
                         error.RuntimeError, error.DivisionByZero => {
                             const message = interpreter.getRuntimeErrorMessage() orelse host.crash_message orelse "compile-time evaluation failed";
                             failed_message = message;
-                            break :blk .{ .const_node = try appendCrashConst(module, message) };
+                            break :blk try unreportedFailedRootPayload(module, compile_time_root, message);
                         },
                         error.ComptimeExhaustiveness => {
                             failed_message = "compile-time exhaustiveness failure";
-                            break :blk .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
+                            break :blk try unreportedFailedRootPayload(module, compile_time_root, "compile-time exhaustiveness failure");
                         },
                         error.Crash => {
                             const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                             failed_message = message;
-                            break :blk .{ .const_node = try appendCrashConst(module, message) };
+                            break :blk try unreportedFailedRootPayload(module, compile_time_root, message);
                         },
                         error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
                         error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
@@ -2155,16 +2155,36 @@ fn testLiteralRootFailureOwnership(allocator: Allocator) (Allocator.Error || err
     try std.testing.expectEqual(@as(?lir.LIR.LiteralRootId, null), failures.source(root_ids[5]));
 }
 
+const GuardProducerSlot = struct {
+    module: checked.ModuleId,
+    root: lir.LIR.ComptimeProducer,
+};
+
 /// The producer whose value guard `failed_stmt` is the failure path of.
-fn guardProducer(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?lir.LIR.ComptimeProducer {
+fn guardProducerSlot(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?GuardProducerSlot {
     const stmt = failed_stmt orelse return null;
     for (lir_result.comptime_value_guards.items) |guard| {
         if (guard.crash != stmt) continue;
         const root = lir_result.static_data_values.items[@intFromEnum(guard.value_slot)].compile_time_root orelse
             finalizationInvariant("value guard slot lost its compile-time producer");
-        return root.root;
+        return .{ .module = root.module, .root = root.root };
     }
     return null;
+}
+
+/// Whether a checked root's failure was reported by that root. A guarded
+/// hoisted root reports none: its failure leaves the original expression to
+/// runtime, so a root that reads its failed value reports the crash itself.
+fn checkedProducerReportedFailure(
+    owners: *const ModuleOwners,
+    module: checked.ModuleId,
+    root_id: checked.ComptimeRootId,
+) bool {
+    for (owners.modules) |owner| {
+        if (!artifactMatches(module, owner.module.key)) continue;
+        return !owner.module.compile_time_roots.root(root_id).guarded;
+    }
+    finalizationInvariant("value guard producer belonged to a module this finalization does not complete");
 }
 
 /// What a checked root's failure reports in its own module.
@@ -2195,8 +2215,11 @@ fn reportEmbeddedFailure(
     failed_loc: ?base.SourceLoc,
 ) FinalizeError!EmbeddedReport {
     const Embedded = struct { kind: ?lir.LIR.LiteralRejectionKind, message: []const u8, region: ?base.Region, loc: ?base.SourceLoc };
-    const embedded: Embedded = if (guardProducer(lir_result, failed_stmt)) |producer| switch (producer) {
-        .checked => return .reported_elsewhere,
+    const embedded: Embedded = if (guardProducerSlot(lir_result, failed_stmt)) |producer| switch (producer.root) {
+        .checked => |producer_root| {
+            if (checkedProducerReportedFailure(owners, producer.module, producer_root)) return .reported_elsewhere;
+            return .none;
+        },
         .literal => |read| blk: {
             const failures = owners.literal_failures orelse
                 finalizationInvariant("a literal root guard was read in a program without literal roots");
@@ -2385,9 +2408,9 @@ fn recordLiteralRootFailure(
 ) Allocator.Error!void {
     const failures = owners.literal_failures orelse
         finalizationInvariant("a literal root failed in a finalization that records no literal root failures");
-    const cause: LiteralRootFailures.Cause = if (guardProducer(&lowered.lir_result, failure.stmt)) |producer| switch (producer) {
+    const cause: LiteralRootFailures.Cause = if (guardProducerSlot(&lowered.lir_result, failure.stmt)) |producer| switch (producer.root) {
         .literal => |read| .{ .literal = read },
-        .checked => .checked,
+        .checked => |producer_root| if (checkedProducerReportedFailure(owners, producer.module, producer_root)) .checked else .crash,
     } else if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site|
         .{ .rejection = site.kind }
     else
@@ -3968,7 +3991,7 @@ fn devComptimeExhaustivenessRootPayload(
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
     if (request.kind == .compile_time_constant and problem_store == null) {
-        return .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
+        return try unreportedFailedRootPayload(module, root, "compile-time exhaustiveness failure");
     }
 
     _ = problem_store orelse {
@@ -3997,13 +4020,14 @@ fn devCrashedRootPayload(
     switch (try reportEmbeddedFailure(allocator, problem_store, module, devRootSourceRegion(module, root), owners, lir_result, failed_stmt, message, failed_region, failed_loc)) {
         .reported => {
             had_problem.* = true;
-            return try failedRootPayload(module, root, message);
+            return try crashedRootPayload(problem_store, module, root, message);
         },
-        .reported_elsewhere => return try failedRootPayload(module, root, message),
+        .reported_elsewhere => return try crashedRootPayload(problem_store, module, root, message),
         .none => {},
     }
+    if (root.guarded) return try crashedRootPayload(problem_store, module, root, message);
     if (request.kind == .compile_time_constant and problem_store == null) {
-        return .{ .const_node = try appendCrashConst(module, message) };
+        return try unreportedFailedRootPayload(module, root, message);
     }
     const store = problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
@@ -4022,7 +4046,7 @@ fn devCrashedRootPayload(
         .origin = try comptimeFailureOrigin(store, site),
     } });
     had_problem.* = true;
-    return try failedRootPayload(module, root, message);
+    return try crashedRootPayload(problem_store, module, root, message);
 }
 
 fn reportDevHostEvents(
@@ -4138,6 +4162,16 @@ fn literalRejectionReported(store: *const check.problem.Store, kind: lir.LIR.Lit
         if (regionsEqual(reported_region, region)) return true;
     }
     return false;
+}
+
+/// The payload of a failed root in an evaluation that collects no diagnostics.
+fn unreportedFailedRootPayload(
+    module: *checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    message: []const u8,
+) Allocator.Error!checked.CompileTimeRootPayload {
+    if (root.guarded) return .runtime;
+    return .{ .const_node = try appendCrashConst(module, message) };
 }
 
 fn appendCrashConst(
@@ -4451,9 +4485,10 @@ fn reportCompileTimeCrash(
         interpreter.getFailedCheckedRegion(),
         interpreter.getFailedSourceLoc(),
     )) {
-        .reported, .reported_elsewhere => return try failedRootPayload(module, root, message),
+        .reported, .reported_elsewhere => return try crashedRootPayload(maybe_problem_store, module, root, message),
         .none => {},
     }
+    if (root.guarded) return try crashedRootPayload(maybe_problem_store, module, root, message);
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
@@ -4464,6 +4499,28 @@ fn reportCompileTimeCrash(
         .region = site.region,
         .origin = try comptimeFailureOrigin(problem_store, site),
     } });
+    return try crashedRootPayload(problem_store, module, root, message);
+}
+
+/// A crashed guarded root leaves its original expression and declaration to
+/// runtime, so the exhaustiveness sites it was selected to validate are decided
+/// statically, exactly as if the root had not been selected.
+fn crashedRootPayload(
+    maybe_problem_store: ?*check.problem.Store,
+    module: *checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    message: []const u8,
+) Allocator.Error!checked.CompileTimeRootPayload {
+    if (root.guarded) {
+        if (maybe_problem_store) |store| {
+            for (module.exhaustiveness_sites.sites) |site| {
+                switch (site.policy) {
+                    .compile_time_replaced_by_root => |owner| if (owner == root.id) store.markPendingStaticExhaustivenessStatic(site.id),
+                    .compile_time_only, .runtime_reachable, .not_pending => {},
+                }
+            }
+        }
+    }
     return try failedRootPayload(module, root, message);
 }
 
@@ -4472,6 +4529,7 @@ fn failedRootPayload(
     root: checked.CompileTimeRoot,
     message: []const u8,
 ) Allocator.Error!checked.CompileTimeRootPayload {
+    if (root.guarded) return .runtime;
     return switch (root.kind) {
         .expect => .expect,
         .hoisted_validation => .discarded,
@@ -4673,6 +4731,9 @@ fn finishConstRoot(
     if (root.kind != .constant and root.kind != .hoisted_constant) return;
     const node = switch (payload) {
         .const_node => |id| id,
+        // Runtime lowering evaluates the original expression; no stored
+        // constant exists for it.
+        .runtime => return,
         .pending,
         .fn_value,
         .discarded,

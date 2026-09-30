@@ -13722,7 +13722,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .pending => .{ .module = view.key, .expr = root.expr },
-            .fn_value, .const_node, .discarded, .expect => null,
+            .fn_value, .const_node, .discarded, .expect, .runtime => null,
         };
     }
 
@@ -13818,6 +13818,7 @@ const Builder = struct {
             .const_node,
             .discarded,
             .expect,
+            .runtime,
             => boxyPlanInvariant("callable eval binding root did not output a callable value"),
         };
     }
@@ -14402,6 +14403,7 @@ const Builder = struct {
             .fn_value,
             .discarded,
             .expect,
+            .runtime,
             => boxyPlanInvariant("from_quote conversion root had a non-data payload"),
         }
     }
@@ -14459,6 +14461,7 @@ const Builder = struct {
             .fn_value,
             .discarded,
             .expect,
+            .runtime,
             => boxyPlanInvariant("from_numeral conversion root had a non-data payload"),
         }
     }
@@ -15689,7 +15692,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| .{ .module = view.key, .fn_id = fn_id },
-            .pending, .const_node, .discarded, .expect => null,
+            .pending, .const_node, .discarded, .expect, .runtime => null,
         };
     }
 
@@ -15921,7 +15924,7 @@ const Builder = struct {
                 );
             },
             .pending => self.workerSourceForCallableRootExpr(view, root.expr),
-            .const_node, .discarded, .expect => null,
+            .const_node, .discarded, .expect, .runtime => null,
         };
     }
 
