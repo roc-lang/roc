@@ -4131,7 +4131,7 @@ fn appendShapeOf(store: *LirStore, root: CFStmtId, head: LIR.JoinPointId, copy: 
             .switch_stmt => shape.switches += 1,
             .assign_low_level => |s| {
                 if (s.op == .list_append_unsafe) shape.unsafe_appends += 1;
-                if (s.op == .list_reserve) shape.reserves += 1;
+                if (s.op == .list_reserve_for_append) shape.reserves += 1;
             },
             .jump => |s| {
                 if (s.target == head) shape.jumps_to_head += 1;
