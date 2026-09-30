@@ -4568,9 +4568,9 @@ Builtin :: [].{
 	    ## Run the given function on each item and keep every item
 		## until the function returns `Bool.True`.
 		## ```roc
-		## expect [1, 2, 3] |> keep_until(|item| item == 2) |> List.is_eq([1])
-		## expect [1, 2, 3] |> keep_until(|item| item > 2) |> List.is_eq([1, 2])
-		## expect [1, 2, 3] |> keep_until(|item| item > 0) |> List.is_empty
+		## expect [1, 2, 3].keep_until(|item| item == 2) |> List.is_eq([1])
+		## expect [1, 2, 3].keep_until(|item| item > 2) |> List.is_eq([1, 2])
+		## expect [1, 2, 3].keep_until(|item| item > 0) |> List.is_empty
 		## ```
 		keep_until : List(item), (item -> Bool) -> List(item)
 		keep_until = |items, predicate| {
