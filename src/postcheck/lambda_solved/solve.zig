@@ -1567,14 +1567,9 @@ const Solver = struct {
     /// same cyclic graph an eager clone produced.
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
         const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
-            const raw_id = @intFromEnum(leaf.id);
-            const callable_free = !self.contains_callable[raw_id] and !self.contains_forced_dynamic[raw_id];
-            if (callable_free) {
-                if (self.shared_leaf_context) |shared| break :blk shared;
-            }
+            if (self.isCallableFree(leaf.id)) break :blk try self.sharedLeafContext();
             const index: u32 = @intCast(self.leaf_contexts.items.len);
             try self.leaf_contexts.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
-            if (callable_free) self.shared_leaf_context = index;
             break :blk index;
         };
         if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
@@ -1593,6 +1588,22 @@ const Solver = struct {
         self.program.types.set(root, content);
         self.registerNamedBacking(content);
         return content;
+    }
+
+    /// Whether clones of this Monotype carry no callable slot and no
+    /// forced-dynamic iterator, so every clone of it solves identically.
+    fn isCallableFree(self: *const Solver, ty: MonoType.TypeId) bool {
+        const raw_id = @intFromEnum(ty);
+        return !self.contains_callable[raw_id] and !self.contains_forced_dynamic[raw_id];
+    }
+
+    /// The one clone context every callable-free leaf materializes in.
+    fn sharedLeafContext(self: *Solver) Allocator.Error!u32 {
+        if (self.shared_leaf_context) |shared| return shared;
+        const index: u32 = @intCast(self.leaf_contexts.items.len);
+        try self.leaf_contexts.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
+        self.shared_leaf_context = index;
+        return index;
     }
 
     fn registerNamedBacking(self: *Solver, content: Type.Content) void {
@@ -3406,9 +3417,10 @@ const TypeCloner = struct {
     /// callable-free types carry no unbound slots, so those may share one var
     /// per Monotype during finalization.
     share: bool = false,
-    /// One-level mode: children lower to lazy leaves in this clone context
-    /// instead of eager clones, reusing the context's existing var when the
-    /// Monotype already occurs in the tree. Used by `expandMonoRoot`.
+    /// One-level mode: children lower to lazy leaves instead of eager clones,
+    /// callable-free ones in the shared context and the rest in this one,
+    /// reusing a context's existing var when the Monotype already occurs in
+    /// it. Used by `expandMonoRoot`.
     lazy_ctx: ?u32 = null,
 
     fn init(solver: *Solver) TypeCloner {
@@ -3473,7 +3485,12 @@ const TypeCloner = struct {
     /// The clone `ty` already has, or that lazy mode creates without
     /// descending; null when it must be cloned.
     fn existingClone(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!?Type.TypeVarId {
-        if (self.lazy_ctx) |ctx| {
+        if (self.lazy_ctx) |parent_ctx| {
+            // A callable-free child is the same shared clone wherever it
+            // occurs, exactly as a callable-free root is: it has no callable
+            // slot to solve, so unifying two of its occurrences reaches one
+            // var instead of walking two copies of its structure.
+            const ctx = if (self.solver.isCallableFree(ty)) try self.solver.sharedLeafContext() else parent_ctx;
             const map = &self.solver.leaf_contexts.items[ctx];
             if (map.get(ty)) |existing| return existing;
             const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
