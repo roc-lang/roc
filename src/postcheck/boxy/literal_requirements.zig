@@ -99,32 +99,70 @@ pub const Terms = struct {
         return self.closed.items[@intFromEnum(term)];
     }
 
+    /// Substitute `bindings` into `root`, rebuilding each open application
+    /// after its arguments, in the order a depth-first walk reaches them.
     pub fn substitute(
         self: *Terms,
-        term: TermId,
+        root: TermId,
         bindings: []const Binding,
         memo: *std.AutoHashMapUnmanaged(TermId, TermId),
     ) Allocator.Error!TermId {
-        if (self.isClosed(term)) return term;
-        if (memo.get(term)) |result| return result;
-        const result = switch (self.entries.items[@intFromEnum(term)]) {
-            .variable => |variable| blk: {
-                for (bindings) |binding| {
-                    if (binding.variable == variable) break :blk binding.term;
+        const Frame = struct { term: TermId, args: []TermId, next: usize = 0 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer {
+            for (frames.items) |frame| self.allocator.free(frame.args);
+            frames.deinit(self.allocator);
+        }
+        var delivered: ?TermId = null;
+        var pending: ?TermId = root;
+        while (true) {
+            if (pending) |term| {
+                pending = null;
+                if (self.isClosed(term)) {
+                    delivered = term;
+                } else if (memo.get(term)) |result| {
+                    delivered = result;
+                } else switch (self.entries.items[@intFromEnum(term)]) {
+                    .variable => |variable| {
+                        // A lexical variable not quantified by the callee
+                        // stays in its enclosing scope. Only recorded
+                        // substitutions apply.
+                        var result = term;
+                        for (bindings) |binding| {
+                            if (binding.variable == variable) {
+                                result = binding.term;
+                                break;
+                            }
+                        }
+                        try memo.put(self.allocator, term, result);
+                        delivered = result;
+                    },
+                    .application => |application| {
+                        const args = try self.allocator.alloc(TermId, application.args.len);
+                        frames.append(self.allocator, .{ .term = term, .args = args }) catch |err| {
+                            self.allocator.free(args);
+                            return err;
+                        };
+                    },
                 }
-                // A lexical variable not quantified by the callee stays in
-                // its enclosing scope. Only recorded substitutions apply.
-                break :blk term;
-            },
-            .application => |application| blk: {
-                const args = try self.allocator.alloc(TermId, application.args.len);
-                defer self.allocator.free(args);
-                for (application.args, args) |arg, *out| out.* = try self.substitute(arg, bindings, memo);
-                break :blk try self.intern(.{ .application = .{ .constructor = application.constructor, .args = args } });
-            },
-        };
-        try memo.put(self.allocator, term, result);
-        return result;
+            }
+            const top = if (frames.items.len == 0) return delivered.? else &frames.items[frames.items.len - 1];
+            if (delivered) |result| {
+                top.args[top.next] = result;
+                top.next += 1;
+                delivered = null;
+            }
+            const application = self.entries.items[@intFromEnum(top.term)].application;
+            if (top.next < application.args.len) {
+                pending = application.args[top.next];
+                continue;
+            }
+            const frame = frames.pop().?;
+            defer self.allocator.free(frame.args);
+            const result = try self.intern(.{ .application = .{ .constructor = application.constructor, .args = frame.args } });
+            try memo.put(self.allocator, frame.term, result);
+            delivered = result;
+        }
     }
 };
 

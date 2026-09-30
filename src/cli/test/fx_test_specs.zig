@@ -41,6 +41,11 @@ pub const host_boxed_fn_boundary_test = TestSpec{
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.
 pub const io_spec_tests = [_]TestSpec{
+    .{
+        .roc_file = "test/fx/var_reassign_in_nested_block_expr.roc",
+        .io_spec = "1>in_call_arg: 8|1>in_operand: 9|1>in_record: 8|1>bound_first: 8|1>constant: 8|1>branch_constant: 9|1>list_constant: 3|1>zero_call: 1|1>zero_operand: 1|1>zero_record: 0|1>statement: 8|1>loop: 5|1>list: 3|1>left|1>right|1>ordered: 23|1>early: 7",
+        .description = "Nested mutable variable versions remain in scope through operands and compile-time evaluation (issue #11821)",
+    },
     // Basic effectful function tests
     .{
         .roc_file = "test/fx/app.roc",
@@ -638,6 +643,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/transitive_import_nominal_equality/main.roc",
         .io_spec = "1>True",
         .description = "Regression test: transitive imports preserve nominal method owner environments for equality",
+    },
+    .{
+        .roc_file = "test/fx/issue_11839_untransitive_derived_codec/main.roc",
+        .io_spec = "1>\"On\" Ok(W)",
+        .description = "Regression test: a method calling a derived codec of a nominal absent from its type keeps that nominal's owner reachable from importers",
     },
     .{
         .roc_file = "test/fx/test_no_dbg.roc",

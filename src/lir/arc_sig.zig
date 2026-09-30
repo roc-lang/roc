@@ -38,7 +38,7 @@ pub const Mode = enum(u1) {
 /// ARC-stage-local calling-convention facts; no runtime representation is
 /// added to the source result.
 pub const Outcome = struct {
-    discriminant: u16,
+    discriminant: u32,
     restituted_params: ParamMask,
 };
 
@@ -229,9 +229,9 @@ test "outcome spans expose exact restitution rows" {
     const table = SigTable{ .sigs = &sigs, .outcomes = &outcomes };
     const rows = table.outcomesOf(sigs[0]);
     try std.testing.expectEqual(@as(usize, 2), rows.len);
-    try std.testing.expectEqual(@as(u16, 0), rows[0].discriminant);
+    try std.testing.expectEqual(@as(u32, 0), rows[0].discriminant);
     try std.testing.expectEqual(@as(ParamMask, 1), rows[0].restituted_params);
-    try std.testing.expectEqual(@as(u16, 1), rows[1].discriminant);
+    try std.testing.expectEqual(@as(u32, 1), rows[1].discriminant);
 }
 
 test "return-condition spans expose their rows" {

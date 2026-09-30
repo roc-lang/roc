@@ -819,6 +819,39 @@ test "nominal record reserves unnamed padding fields without inflating alignment
     try std.testing.expectEqual(@as(u64, 4), layout_val.alignment(.u64).toByteUnits());
 }
 
+/// A module whose unannotated `big` chains `links` method calls, used by
+/// `uses` expects, each lowered as its own root.
+fn methodChainExpectCounters(links: usize, uses: usize) TestError!MonoLower.SpecializationCounters {
+    const allocator = std.testing.allocator;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "big = |a| {\n    b0 = a\n");
+    for (1..links + 1) |i| try source.print(allocator, "    b{d} = b{d}.map(|x| x + 1)\n", .{ i, i - 1 });
+    try source.print(allocator, "    b{d}\n}}\n", .{links});
+    for (0..uses) |i| try source.print(allocator, "expect big([{d}.I64]) == [{d}]\n", .{ i, i + links });
+    try source.appendSlice(allocator, "main = 0\n");
+
+    var counters: MonoLower.SpecializationCounters = .{};
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source.items, .{
+        .specialization_counters = &counters,
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    return counters;
+}
+
+test "a generic method chain's relations are expanded once however many roots use it" {
+    // Every expect is its own root and requests `big` at the same type. Only
+    // the first request expands `big`'s dispatch relations and relates its
+    // evidence contracts; the rest replay that expansion's summary.
+    const few = try methodChainExpectCounters(6, 2);
+    const many = try methodChainExpectCounters(6, 5);
+    try std.testing.expect(few.template_dispatch_relation_replays > 0);
+    try std.testing.expectEqual(few.template_dispatch_relation_replays, many.template_dispatch_relation_replays);
+    try std.testing.expect(few.evidence_contract_relations > 0);
+    try std.testing.expectEqual(few.evidence_contract_relations, many.evidence_contract_relations);
+}
+
 test "generic nominal record instantiates unnamed padding to the argument's size" {
     const allocator = std.testing.allocator;
     // A type-parameterized unnamed field (`_ : a`) must reserve the *instantiated*
@@ -842,6 +875,40 @@ test "generic nominal record instantiates unnamed padding to the argument's size
     const struct_idx = layout_val.getStruct().idx;
     // x (the only named field) at offset 0; padding reserves the instantiated
     // sizeof(U64) = 8 bytes, so the whole struct is 16 bytes (not 8).
+    try std.testing.expectEqual(@as(u16, 2), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
+    try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructSize(struct_idx));
+}
+
+test "imported generic nominal record instantiates unnamed padding to the argument's size" {
+    const allocator = std.testing.allocator;
+    const foo_module =
+        \\Foo(a) := { x : a, _ : a }
+    ;
+    // The importing module has its own unrelated `a`: the padding field must
+    // still take this instance's argument, not any other variable of the
+    // same shape.
+    const source =
+        \\import Foos exposing [Foo]
+        \\
+        \\keep : a -> a
+        \\keep = |value| value
+        \\
+        \\main : Foo(U64) -> Foo(U64)
+        \\main = |foo| keep(foo)
+    ;
+
+    var lowered_source = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .imports = &.{.{ .name = "Foos", .source = foo_module }},
+    });
+    defer lowered_source.deinit(allocator);
+    const lowered = &lowered_source.lowered;
+
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const layout_val = lowered.lir_result.layouts.getLayout(proc.ret_layout);
+    try std.testing.expectEqual(layout_mod.LayoutTag.struct_, layout_val.tag);
+
+    const struct_idx = layout_val.getStruct().idx;
     try std.testing.expectEqual(@as(u16, 2), lowered.lir_result.layouts.getStructData(struct_idx).fields.count);
     try std.testing.expectEqual(@as(u32, 0), lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 16), lowered.lir_result.layouts.getStructSize(struct_idx));
@@ -2106,7 +2173,10 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 160,
         .max_specialization_type_digest_nodes_visited = 160,
         .exact_type_checks = 0,
-        .nominal_backing_reuses = 8,
+        // A template miss relates its open interface through a summarized
+        // expansion, which instantiates the template's root on detached
+        // copies of the request.
+        .nominal_backing_reuses = 13,
         // Each direct call instantiates its callee's checked type once per
         // body and shares that request across its result-type queries and
         // its own lowering.
@@ -2583,8 +2653,10 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 360,
         .max_specialization_type_digest_nodes_visited = 360,
         .exact_type_checks = 0,
-        .nominal_backing_reuses = 30,
-        .nominal_backing_instantiations = 66,
+        // Each template miss also instantiates the template's root once for
+        // its interface relations' summarized expansion.
+        .nominal_backing_reuses = 38,
+        .nominal_backing_instantiations = 79,
     });
 }
 
@@ -4183,6 +4255,47 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(found_mul3);
 }
 
+fn countProcsNamed(store: *const lir.LirStore, name: []const u8) usize {
+    var count: usize = 0;
+    for (0..store.getProcSpecs().len) |i| {
+        const proc_name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, proc_name, name)) count += 1;
+    }
+    return count;
+}
+
+test "layout-keyed builtin specializations share one procedure per layout" {
+    const allocator = std.testing.allocator;
+
+    // `List.len` wraps `list_len`, which is on the layout-keyed allow list, so
+    // its specializations at `List({ a : U64 })` and `List({ b : U64 })`,
+    // whose item types differ but commit the same layout, are one
+    // procedure, while `List(Str)` gets its own. `List.is_empty` has a Roc
+    // body and no provided low-level operation, so it keeps one type-keyed
+    // procedure per item type even where the layouts agree.
+    const source =
+        \\count_all : List({ a : U64 }), List({ b : U64 }), List(Str) -> U64
+        \\count_all = |xs, ys, strs| List.len(xs) + List.len(ys) + List.len(strs)
+        \\
+        \\no_items : List({ a : U64 }), List({ b : U64 }) -> Bool
+        \\no_items = |xs, ys| List.is_empty(xs) and List.is_empty(ys)
+        \\
+        \\main : U64
+        \\main = {
+        \\    xs = [{ a: 1 }, { a: 2 }]
+        \\    ys = [{ b: 3 }]
+        \\    if no_items(xs, ys) 0 else count_all(xs, ys, ["x", "y"])
+        \\}
+    ;
+
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(store, "Builtin.List.len"));
+    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(store, "Builtin.List.is_empty"));
+}
+
 test "referenced but uncalled function does not materialize a proc" {
     const allocator = std.testing.allocator;
 
@@ -4884,22 +4997,37 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, []))
     ;
 
-    var lowered = try lowerModule(allocator, source, .wrappers);
-    defer lowered.deinit(allocator);
+    for ([_]bool{ false, true }) |promote_loop_appends| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .promote_loop_appends = promote_loop_appends,
+        });
+        defer lowered.deinit(allocator);
 
-    const store = &lowered.lowered.lir_result.store;
-    const root_body = store.getProcSpec(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
-    const loop_join = try findSingleLoopJoin(store, root_body);
-    const loop_params = store.getLocalSpan(loop_join.params);
-    try std.testing.expect(loop_params.len >= 2);
+        const store = &lowered.lowered.lir_result.store;
+        const root_body = store.getProcSpec(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
+        var walk = try lir.BodyClone.ReachableStmts.init(store, root_body);
+        defer walk.deinit();
 
-    // Scalarized record fields preserve source order, so the second loop param
-    // is `state.b`. It must be released once on the entry path and never from
-    // the self-looping body. Counting this exact local remains valid when
-    // inlining introduces additional exit paths for the other owned lists.
-    const invariant_b = GuardedList.at(loop_params, 1);
-    try std.testing.expectEqual(@as(usize, 1), try countLocalDecrefs(store, root_body, invariant_b));
-    try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, invariant_b));
+        var loop_count: usize = 0;
+        while (try walk.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .join) continue;
+            const loop_join = stmt.join;
+            if (!try containsJumpTo(store, loop_join.body, loop_join.id)) continue;
+            loop_count += 1;
+            const loop_params = store.getLocalSpan(loop_join.params);
+            try std.testing.expect(loop_params.len >= 2);
+
+            // Scalarized record fields preserve source order, so the second
+            // loop param is `state.b`. Slack versioning adds a self-looping
+            // unchecked copy with the same params. In both versions, this
+            // field must be released once on entry and never in the body.
+            const invariant_b = GuardedList.at(loop_params, 1);
+            try std.testing.expectEqual(@as(usize, 1), try countLocalDecrefs(store, root_body, invariant_b));
+            try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, invariant_b));
+        }
+        try std.testing.expectEqual(@as(usize, if (promote_loop_appends) 2 else 1), loop_count);
+    }
 }
 
 // A producer-authored concrete iterator representation must survive ordinary
@@ -11697,7 +11825,7 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
     }
 }
 
-test "tail-call lowering preserves boxy return adaptations" {
+test "tail-call lowering loops a boxy self-call whose resolved ABI needs no return adaptation" {
     const allocator = std.testing.allocator;
     const source =
         \\walk : U64, U64 -> U64
@@ -11732,7 +11860,11 @@ test "tail-call lowering preserves boxy return adaptations" {
         const name = result.store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "walk")) continue;
         found_walk = true;
-        try std.testing.expectEqual(LIR.TailTransform.none, result.store.getProcSpec(proc_id).tail_transform);
+        // The self-call is emitted before `walk`'s body exists, so it starts
+        // on the provisional descriptor ABI; `walk` returns no runtime
+        // descriptor, so the call is replaced by its static form before the
+        // tail-call proof runs, and nothing adapts its result on the way out.
+        try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpec(proc_id).tail_transform);
     }
     try std.testing.expect(found_walk);
 }

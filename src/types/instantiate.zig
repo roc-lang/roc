@@ -8,6 +8,7 @@ const std = @import("std");
 const base = @import("base");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
+const DenseMap = @import("collections").DenseMap;
 
 const TypesStore = types_store.Store;
 const Var = types_mod.Var;
@@ -127,11 +128,14 @@ pub const Scratch = struct {
     /// Buffers for the scheme pre-walk that decides which monomorphic nodes a
     /// scheme instantiation copies. `reach_state` maps every visited root to
     /// whether a generalized variable is reachable from it; `reach_heads`
-    /// maps a child root to its first incoming edge in `reach_edges`.
+    /// maps a child root to its first incoming edge in `reach_edges`. Both are
+    /// direct-indexed so that clearing and scanning them costs what the last
+    /// walk visited, not the largest scheme any walk has visited. They are
+    /// created with the store's allocator on first use.
     reach_edges: std.ArrayListUnmanaged(ReachEdge) = .empty,
-    reach_heads: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+    reach_heads: ?DenseMap(Var, u32) = null,
     reach_stack: std.ArrayListUnmanaged(Var) = .empty,
-    reach_state: std.AutoHashMapUnmanaged(Var, bool) = .empty,
+    reach_state: ?DenseMap(Var, bool) = null,
 
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
         self.frames.deinit(gpa);
@@ -141,9 +145,19 @@ pub const Scratch = struct {
         self.pending_constraints.deinit(gpa);
         self.pending_parts.deinit(gpa);
         self.reach_edges.deinit(gpa);
-        self.reach_heads.deinit(gpa);
+        if (self.reach_heads) |*heads| heads.deinit();
         self.reach_stack.deinit(gpa);
-        self.reach_state.deinit(gpa);
+        if (self.reach_state) |*state| state.deinit();
+    }
+
+    fn reachHeads(self: *Scratch, gpa: std.mem.Allocator) *DenseMap(Var, u32) {
+        if (self.reach_heads == null) self.reach_heads = .init(gpa);
+        return &self.reach_heads.?;
+    }
+
+    fn reachState(self: *Scratch, gpa: std.mem.Allocator) *DenseMap(Var, bool) {
+        if (self.reach_state == null) self.reach_state = .init(gpa);
+        return &self.reach_state.?;
     }
 };
 
@@ -531,13 +545,15 @@ pub const Instantiator = struct {
     /// sharing or recursion in the graph.
     fn computeGeneralizedReachability(self: *Self, root: Var) std.mem.Allocator.Error!void {
         const machine = self.scratch();
+        const reach_heads = machine.reachHeads(self.store.gpa);
+        const reach_state = machine.reachState(self.store.gpa);
         machine.reach_edges.clearRetainingCapacity();
-        machine.reach_heads.clearRetainingCapacity();
+        reach_heads.clearRetainingCapacity();
         machine.reach_stack.clearRetainingCapacity();
-        machine.reach_state.clearRetainingCapacity();
+        reach_state.clearRetainingCapacity();
 
         const root_resolved = self.store.resolveVar(root);
-        try machine.reach_state.put(self.store.gpa, root_resolved.var_, root_resolved.desc.rank == .generalized);
+        try reach_state.put(root_resolved.var_, root_resolved.desc.rank == .generalized);
         try machine.reach_stack.append(self.store.gpa, root_resolved.var_);
 
         while (machine.reach_stack.pop()) |parent| {
@@ -586,15 +602,15 @@ pub const Instantiator = struct {
             }
         }
 
-        var seeds = machine.reach_state.iterator();
+        var seeds = reach_state.iterator();
         while (seeds.next()) |entry| {
             if (entry.value_ptr.*) try machine.reach_stack.append(self.store.gpa, entry.key_ptr.*);
         }
         while (machine.reach_stack.pop()) |child| {
-            var edge_idx = machine.reach_heads.get(child) orelse continue;
+            var edge_idx = reach_heads.get(child) orelse continue;
             while (edge_idx != ReachEdge.none) {
                 const edge = machine.reach_edges.items[edge_idx];
-                const parent_state = machine.reach_state.getPtr(edge.parent).?;
+                const parent_state = reach_state.getPtr(edge.parent).?;
                 if (!parent_state.*) {
                     parent_state.* = true;
                     try machine.reach_stack.append(self.store.gpa, edge.parent);
@@ -643,13 +659,13 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         const resolved = self.store.resolveVar(child);
         const edge_idx: u32 = @intCast(machine.reach_edges.items.len);
-        const head = try machine.reach_heads.getOrPut(self.store.gpa, resolved.var_);
+        const head = try machine.reach_heads.?.getOrPut(resolved.var_);
         try machine.reach_edges.append(self.store.gpa, .{
             .parent = parent,
             .next = if (head.found_existing) head.value_ptr.* else ReachEdge.none,
         });
         head.value_ptr.* = edge_idx;
-        const entry = try machine.reach_state.getOrPut(self.store.gpa, resolved.var_);
+        const entry = try machine.reach_state.?.getOrPut(resolved.var_);
         if (entry.found_existing) return;
         entry.value_ptr.* = resolved.desc.rank == .generalized;
         try machine.reach_stack.append(self.store.gpa, resolved.var_);
@@ -744,7 +760,7 @@ pub const Instantiator = struct {
         }
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
-                .alias, .structure => machine.reach_state.get(resolved_var) orelse false,
+                .alias, .structure => machine.reach_state.?.get(resolved_var) orelse false,
                 .flex, .rigid, .field_presence, .err => false,
             };
             if (!copy_structure and !is_polarity_marker) {

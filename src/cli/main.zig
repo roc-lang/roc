@@ -2350,7 +2350,7 @@ const LayoutHashContext = struct {
                 const info = self.layouts.getTagUnionInfo(layout_val);
                 updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
                 updateHashU32(hasher, info.size());
-                updateHashU32(hasher, @intCast(info.discriminant_offset));
+                updateHashU32(hasher, info.discriminant_offset);
                 updateHashU32(hasher, @intCast(info.data.discriminant_size));
                 updateHashU32(hasher, @intCast(info.variants.len));
                 for (0..info.variants.len) |i| {
@@ -8936,6 +8936,13 @@ fn packFileBytes(
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@intFromEnum(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
+        // A linking program calls an entry at its base signature and cannot
+        // emit the ownership variants its callers would demand from the
+        // body, so an entry that admits such demands is not offered.
+        if (proc.rc_variant_demandable) {
+            withheld += 1;
+            continue;
+        }
         // Boxy statements index the program's own descriptor sidecar, and a
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
@@ -8954,7 +8961,7 @@ fn packFileBytes(
         });
     }
     if (std.c.getenv("ROC_PACK_TRACE") != null) {
-        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld (reach program-local symbols)\n", .{ set.artifacts.len, specs.items.len, withheld });
+        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
     }
     return try backend.dev.PackFile.write(allocator, set, specs.items);
 }
@@ -12875,7 +12882,6 @@ fn checkedRuntimeLoweringConfig(
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
-            .fuse_tag_cases = optimizeLirForOpt(opt),
             .scalarize_joins = optimizeLirForOpt(opt),
             .reuse_boxes = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names,
@@ -17172,7 +17178,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -17196,6 +17202,8 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Interface relation requests", .count = counters.interface_relation_requests },
         .{ .name = "Interface replay hits", .count = counters.interface_replay_hits },
         .{ .name = "Interface closed expansions", .count = counters.interface_closed_expansions },
+        .{ .name = "Template dispatch relation replays", .count = counters.template_dispatch_relation_replays },
+        .{ .name = "Evidence contract relations", .count = counters.evidence_contract_relations },
         .{ .name = "Exact type checks", .count = counters.exact_type_checks },
         .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
@@ -17424,9 +17432,11 @@ fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics)
     };
     inline for (comptime std.meta.tags(lir.CheckedPipeline.LirPassPhase), 0..) |phase, index| {
         const name = comptime switch (phase) {
+            .branch_expectation => "Branch expectation",
             .trmc => "TRMC",
             .forwarding_join => "Forwarding joins",
             .tag_fusion => "Tag-case fusion",
+            .prune_join_params => "Join parameter pruning",
             .scalarize => "Join scalarization",
             .loop_append => "Loop append promotion",
             .range => "Range proving",
@@ -17585,17 +17595,28 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
         .prepared_statement_rows = 100,
         .appended_statements = 30,
         .peak_retained_shards = 8,
-        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7 },
-        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6 },
+        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9 },
+        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7, 8 },
     });
     try std.testing.expectEqualStrings("Tasks submitted", rows[0].name);
     try std.testing.expectEqual(@as(u64, 10), rows[0].count);
     try std.testing.expectEqualStrings("Peak retained procedure shards", rows[4].name);
     try std.testing.expectEqual(@as(u64, 8), rows[4].count);
-    try std.testing.expectEqualStrings("Forwarding joins tasks", rows[7].name);
-    try std.testing.expectEqualStrings("Tag-case fusion rewrites", rows[10].name);
-    try std.testing.expectEqualStrings("Box reuse rewrites", rows[18].name);
-    for (0..std.meta.fields(lir.CheckedPipeline.LirPassPhase).len) |index| {
+    const phase_names = .{
+        "Branch expectation",
+        "TRMC",
+        "Forwarding joins",
+        "Tag-case fusion",
+        "Join parameter pruning",
+        "Join scalarization",
+        "Loop append promotion",
+        "Range proving",
+        "Box reuse",
+    };
+    try std.testing.expectEqual(std.meta.fields(lir.CheckedPipeline.LirPassPhase).len, phase_names.len);
+    inline for (phase_names, 0..) |name, index| {
+        try std.testing.expectEqualStrings(name ++ " tasks", rows[5 + 2 * index].name);
+        try std.testing.expectEqualStrings(name ++ " rewrites", rows[6 + 2 * index].name);
         try std.testing.expectEqual(@as(u64, @intCast(index + 1)), rows[5 + 2 * index].count);
         try std.testing.expectEqual(@as(u64, @intCast(index)), rows[6 + 2 * index].count);
     }

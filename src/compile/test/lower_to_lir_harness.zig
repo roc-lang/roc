@@ -274,6 +274,13 @@ pub fn runAppPathLirInspection(app_path: []const u8, opts: LirLoweringOptions, i
     try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect, null);
 }
 
+/// Lower an app whose body is `app_body` to LIR with explicit lowering
+/// options, then run a focused check against the whole lowered program, for
+/// tests that drive a backend over the result.
+pub fn runLoweredInspection(app_body: []const u8, opts: LirLoweringOptions, inspect: LoweredInspectFn) LowerToLirHarnessError!void {
+    try runToLirInspected(app_body, null, opts, null, inspect);
+}
+
 /// Lower an app whose body is `app_body` to LIR, then run a focused invariant
 /// check against the actual lowered store and layout store.
 pub fn expectLirInspection(app_body: []const u8, inspect: LirInspectFn) LowerToLirHarnessError!void {
@@ -979,6 +986,16 @@ fn runToLir(
     opts: LirLoweringOptions,
     inspect: ?LirInspectFn,
 ) LowerToLirHarnessError!void {
+    try runToLirInspected(app_body, dump, opts, inspect, null);
+}
+
+fn runToLirInspected(
+    app_body: []const u8,
+    dump: ?*std.Io.Writer,
+    opts: LirLoweringOptions,
+    inspect: ?LirInspectFn,
+    inspect_lowered: ?LoweredInspectFn,
+) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -1100,7 +1117,7 @@ fn runToLir(
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
-    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, null);
+    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, inspect_lowered);
 }
 
 fn lowerAppPathToLir(

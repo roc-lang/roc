@@ -276,10 +276,11 @@ test "one evaluated root has one completed-value slot however many places read i
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\import Helper
-        \\main! = |_args| {
+        \\main! = |args| {
         \\    Echo.line!(Str.inspect(Helper.base_value))
         \\    Echo.line!(Str.inspect(Helper.doubled))
-        \\    Echo.line!(Str.inspect(Helper.offset))
+        \\    # Depends on the arguments, so `offset` is read only at runtime.
+        \\    Echo.line!(Str.inspect(if args.is_empty() Helper.offset else Helper.offset))
         \\    Ok({})
         \\}
     });

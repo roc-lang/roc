@@ -1767,6 +1767,91 @@ test "issue 10721: compile-time validation reports a known failing destructure" 
     try std.testing.expect(found_non_exhaustive);
 }
 
+test "issue 10892: effects and dbg before a destructure do not block compile-time validation" {
+    const gpa = std.testing.allocator;
+
+    const cases = [_]struct { source: []const u8, expect_non_exhaustive: bool }{
+        .{
+            .source =
+            \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+            \\
+            \\import pf.Echo
+            \\
+            \\main! = |_| {
+            \\    Echo.line!("before")
+            \\    dbg 1.I64
+            \\    Ok(byte) = (0xFF.U32).to_u8_try()
+            \\    Echo.line!(byte.to_str())
+            \\    Ok({})
+            \\}
+            ,
+            .expect_non_exhaustive = false,
+        },
+        .{
+            .source =
+            \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+            \\
+            \\import pf.Echo
+            \\
+            \\main! = |_| {
+            \\    Echo.line!("before")
+            \\    dbg 1.I64
+            \\    Ok(byte) = (0x1FF.U32).to_u8_try()
+            \\    Echo.line!(byte.to_str())
+            \\    Ok({})
+            \\}
+            ,
+            .expect_non_exhaustive = true,
+        },
+    };
+
+    for (cases) |case| {
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+
+        try writeEchoPlatform(tmp_dir.dir);
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "main.roc", .data = case.source });
+        const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+        defer gpa.free(app_path);
+
+        var arena_impl = collections.SingleThreadArena.init(gpa);
+        defer arena_impl.deinit();
+        const arena = arena_impl.allocator();
+
+        const builtin_modules = try sharedBuiltinModules();
+
+        var coord = try Coordinator.init(
+            gpa,
+            .single_threaded,
+            1,
+            roc_target.RocTarget.detectNative(),
+            builtin_modules,
+            build_options.compiler_version,
+            null,
+            CoreCtx.default(gpa, arena, std.testing.io),
+        );
+        defer coord.deinit();
+        coord.enable_hosted_transform = true;
+
+        try coord.start();
+        try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+        try coord.coordinatorLoop();
+        try coord.finishCheckedProgram(.none);
+
+        var found_non_exhaustive = false;
+        var found_empirical_note = false;
+        var report_iter = coord.iterReports();
+        while (report_iter.next()) |entry| {
+            if (!std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) continue;
+            found_non_exhaustive = true;
+            if (try reportContains(gpa, entry.report, "empirically during compile-time evaluation")) found_empirical_note = true;
+        }
+        try std.testing.expectEqual(case.expect_non_exhaustive, found_non_exhaustive);
+        try std.testing.expectEqual(case.expect_non_exhaustive, found_empirical_note);
+        try std.testing.expectEqual(case.expect_non_exhaustive, coord.hasUserErrors());
+    }
+}
+
 test "issue 10721: runtime-dependent callable use keeps one validating extraction root" {
     const gpa = std.testing.allocator;
 
@@ -2391,6 +2476,14 @@ fn expectReportDoesNotContain(
     report: *const @import("reporting").Report,
     needle: []const u8,
 ) HoistedConstantsTestError!void {
+    try std.testing.expect(!try reportContains(allocator, report, needle));
+}
+
+fn reportContains(
+    allocator: std.mem.Allocator,
+    report: *const @import("reporting").Report,
+    needle: []const u8,
+) HoistedConstantsTestError!bool {
     var rendered = std.array_list.Managed(u8).init(allocator);
     defer rendered.deinit();
 
@@ -2406,7 +2499,7 @@ fn expectReportDoesNotContain(
         => return error.OutOfMemory,
     };
 
-    try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) == null);
+    return std.mem.find(u8, writer_alloc.written(), needle) != null;
 }
 
 fn findStoredCompileTimeRootI64(

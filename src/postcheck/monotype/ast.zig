@@ -224,6 +224,13 @@ pub const FnTemplate = struct {
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
     cached: ?Common.SpecCacheHit = null,
+    /// Set for a closed specialization of a Builtin template whose checked
+    /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
+    /// allow list. Direct LIR identifies the plain procedure of such a
+    /// specialization by its argument and result layouts, so specializations
+    /// whose closed types commit the same layouts share one procedure
+    /// (design.md "Layout-Keyed Builtin Procedures").
+    procedure_keyed_by_layout: bool = false,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
@@ -321,7 +328,7 @@ pub const SpecIdentity = struct {
 /// computes the same key as one that names the backing type.
 pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.monotype.spec-key.v3");
+    hasher.update("roc.monotype.spec-key.v4");
     switch (identity.callable) {
         .proc_template => |template| {
             hasher.update("proc_template");
@@ -532,6 +539,7 @@ pub fn fnEvidenceEql(
     right_head: ?u32,
 ) bool {
     if (left_head != right_head or left_evidence.len != right_evidence.len or left_frames.len != right_frames.len) return false;
+    if (left_evidence.ptr == right_evidence.ptr and left_frames.ptr == right_frames.ptr) return true;
     for (left_evidence, right_evidence) |left, right| {
         switch (left) {
             .target => |left_target| switch (right) {

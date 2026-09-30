@@ -481,8 +481,8 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     const StrFromUtf8LayoutInfo = struct {
-        ok_tag: u16,
-        err_tag: u16,
+        ok_tag: u32,
+        err_tag: u32,
         outer_disc_offset: u32,
         outer_disc_size: u32,
         err_index_offset: u32,
@@ -1134,15 +1134,121 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Debug type metadata for a layout, memoized per module build. A forward
     /// reference is registered before children are built so recursive layouts
-    /// (e.g. a tag union containing a list of itself) terminate.
-    fn debugTypeFor(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, idx: layout.Idx) Error!LlvmBuilder.Metadata {
-        if (self.debug_types.get(@intFromEnum(idx))) |existing| return existing;
+    /// (e.g. a tag union containing a list of itself) terminate. Layouts whose
+    /// component types are still being built wait on an explicit frame stack,
+    /// and every builder call happens in the order a direct walk makes it.
+    fn debugTypeFor(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, root: layout.Idx) Error!LlvmBuilder.Metadata {
+        if (self.debug_types.get(@intFromEnum(root))) |existing| return existing;
+        var frames: std.ArrayList(DebugTypeFrame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.members.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
+        try self.pushDebugTypeFrame(builder, &frames, root);
+        var component: ?LlvmBuilder.Metadata = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (try self.stepDebugType(builder, frame, component)) {
+                .component => |idx| {
+                    if (self.debug_types.get(@intFromEnum(idx))) |existing| {
+                        component = existing;
+                    } else {
+                        try self.pushDebugTypeFrame(builder, &frames, idx);
+                        component = null;
+                    }
+                },
+                .done => |resolved| {
+                    var finished = frames.pop().?;
+                    finished.members.deinit(self.allocator);
+                    builder.resolveDebugForwardReference(finished.fwd_ref, resolved);
+                    try self.debug_types.put(@intFromEnum(finished.idx), resolved);
+                    if (frames.items.len == 0) return resolved;
+                    component = resolved;
+                },
+            }
+        }
+    }
+
+    /// A layout whose debug type is being built.
+    const DebugTypeFrame = struct {
+        idx: layout.Idx,
+        fwd_ref: LlvmBuilder.Metadata,
+        /// For a struct: the sorted position after the field whose type is
+        /// being built, that field's member name, and the members so far.
+        next_field: usize = 0,
+        field_name: LlvmBuilder.Metadata.String = undefined,
+        members: std.ArrayList(LlvmBuilder.Metadata) = .empty,
+    };
+
+    const DebugTypeStep = union(enum) {
+        /// The frame needs this component's debug type next.
+        component: layout.Idx,
+        done: LlvmBuilder.Metadata,
+    };
+
+    fn pushDebugTypeFrame(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, frames: *std.ArrayList(DebugTypeFrame), idx: layout.Idx) Error!void {
+        try frames.ensureUnusedCapacity(self.allocator, 1);
         const fwd_ref = builder.debugForwardReference() catch return error.OutOfMemory;
         try self.debug_types.put(@intFromEnum(idx), fwd_ref);
-        const resolved = try self.buildDebugType(builder, idx);
-        builder.resolveDebugForwardReference(fwd_ref, resolved);
-        try self.debug_types.put(@intFromEnum(idx), resolved);
-        return resolved;
+        frames.appendAssumeCapacity(.{ .idx = idx, .fwd_ref = fwd_ref });
+    }
+
+    /// Advances a frame with the debug type of the component it last asked
+    /// for, if any.
+    fn stepDebugType(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        frame: *DebugTypeFrame,
+        component: ?LlvmBuilder.Metadata,
+    ) Error!DebugTypeStep {
+        const lay = self.layoutValue(frame.idx);
+        switch (lay.tag) {
+            .box, .ptr, .list => {
+                const elem = component orelse return .{ .component = lay.getIdx() };
+                return .{ .done = try self.buildDebugType(builder, frame.idx, elem) };
+            },
+            .struct_ => {
+                const struct_idx = lay.getStruct().idx;
+                const data = self.layouts().getStructData(struct_idx);
+                const sorted_fields = self.layouts().struct_fields.sliceRange(data.getFields());
+                if (component) |field_ty| {
+                    const sorted_index = frame.next_field - 1;
+                    const field = sorted_fields.get(@intCast(sorted_index));
+                    const field_offset = self.layouts().getStructFieldOffset(struct_idx, @intCast(sorted_index));
+                    const field_sa = self.sizeAlignOf(field.layout);
+                    try frame.members.append(self.allocator, builder.debugMemberType(
+                        frame.field_name,
+                        null,
+                        self.debug_compile_unit.unwrap(),
+                        0,
+                        field_ty,
+                        @as(u64, field_sa.size) * 8,
+                        @as(u64, @intCast(field_sa.alignment.toByteUnits())) * 8,
+                        @as(u64, field_offset) * 8,
+                    ) catch return error.OutOfMemory);
+                }
+                // Padding spacers are not real members; describe only named fields.
+                while (frame.next_field < sorted_fields.len) {
+                    const field = sorted_fields.get(@intCast(frame.next_field));
+                    frame.next_field += 1;
+                    if (field.is_padding) continue;
+                    frame.field_name = builder.metadataStringFmt("f{d}", .{field.index}) catch return error.OutOfMemory;
+                    return .{ .component = field.layout };
+                }
+                const sa = self.sizeAlignOf(frame.idx);
+                return .{ .done = builder.debugStructType(
+                    builder.metadataString("Record") catch return error.OutOfMemory,
+                    null,
+                    self.debug_compile_unit.unwrap(),
+                    0,
+                    null,
+                    @as(u64, sa.size) * 8,
+                    @as(u64, @intCast(sa.alignment.toByteUnits())) * 8,
+                    builder.metadataTuple(frame.members.items) catch return error.OutOfMemory,
+                ) catch return error.OutOfMemory };
+            },
+            .scalar, .box_of_zst, .erased_box, .list_of_zst, .tag_union, .closure, .erased_callable, .zst => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
+        }
     }
 
     fn debugUsizeType(self: *MonoLlvmCodeGen, builder: *LlvmBuilder) Error!LlvmBuilder.Metadata {
@@ -1211,7 +1317,9 @@ pub const MonoLlvmCodeGen = struct {
         ) catch return error.OutOfMemory;
     }
 
-    fn buildDebugType(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, idx: layout.Idx) Error!LlvmBuilder.Metadata {
+    /// The debug type of a layout that is not a struct, given its element's
+    /// debug type when it has one.
+    fn buildDebugType(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, idx: layout.Idx, elem: ?LlvmBuilder.Metadata) Error!LlvmBuilder.Metadata {
         const lay = self.layoutValue(idx);
         const sa = self.sizeAlignOf(idx);
         const size_bits: u64 = @as(u64, sa.size) * 8;
@@ -1306,10 +1414,7 @@ pub const MonoLlvmCodeGen = struct {
                 }
             },
             .box, .box_of_zst, .erased_box => {
-                const elem_ty: ?LlvmBuilder.Metadata = if (lay.tag == .box)
-                    try self.debugTypeFor(builder, lay.getIdx())
-                else
-                    null;
+                const elem_ty: ?LlvmBuilder.Metadata = if (lay.tag == .box) elem.? else null;
                 return builder.debugPointerType(
                     builder.metadataString("Box") catch return error.OutOfMemory,
                     null,
@@ -1322,7 +1427,7 @@ pub const MonoLlvmCodeGen = struct {
                 ) catch return error.OutOfMemory;
             },
             .ptr => {
-                const elem_ty = try self.debugTypeFor(builder, lay.getIdx());
+                const elem_ty = elem.?;
                 return builder.debugPointerType(
                     builder.metadataString("Ptr") catch return error.OutOfMemory,
                     null,
@@ -1336,7 +1441,7 @@ pub const MonoLlvmCodeGen = struct {
             },
             .list, .list_of_zst => {
                 const elem_ty: LlvmBuilder.Metadata = if (lay.tag == .list)
-                    try self.debugTypeFor(builder, lay.getIdx())
+                    elem.?
                 else
                     builder.debugUnsignedType(
                         builder.metadataString("U8") catch return error.OutOfMemory,
@@ -1354,47 +1459,7 @@ pub const MonoLlvmCodeGen = struct {
                 ) catch return error.OutOfMemory;
                 return try self.debugSequenceType(builder, "List", elem_ptr, "length", "capacity_or_alloc_ptr", size_bits, align_bits);
             },
-            .struct_ => {
-                const struct_idx = lay.getStruct().idx;
-                const data = self.layouts().getStructData(struct_idx);
-                const sorted_fields = self.layouts().struct_fields.sliceRange(data.getFields());
-                // Padding spacers are not real members; describe only named fields.
-                var named_count: usize = 0;
-                for (0..sorted_fields.len) |i| {
-                    if (!sorted_fields.get(@intCast(i)).is_padding) named_count += 1;
-                }
-                const members = try self.allocator.alloc(LlvmBuilder.Metadata, named_count);
-                defer self.allocator.free(members);
-                var member_index: usize = 0;
-                for (0..sorted_fields.len) |sorted_index| {
-                    const field = sorted_fields.get(@intCast(sorted_index));
-                    if (field.is_padding) continue;
-                    const field_layout = field.layout;
-                    const field_offset = self.layouts().getStructFieldOffset(struct_idx, @intCast(sorted_index));
-                    const field_sa = self.sizeAlignOf(field_layout);
-                    members[member_index] = builder.debugMemberType(
-                        builder.metadataStringFmt("f{d}", .{field.index}) catch return error.OutOfMemory,
-                        null,
-                        self.debug_compile_unit.unwrap(),
-                        0,
-                        try self.debugTypeFor(builder, field_layout),
-                        @as(u64, field_sa.size) * 8,
-                        @as(u64, @intCast(field_sa.alignment.toByteUnits())) * 8,
-                        @as(u64, field_offset) * 8,
-                    ) catch return error.OutOfMemory;
-                    member_index += 1;
-                }
-                return builder.debugStructType(
-                    builder.metadataString("Record") catch return error.OutOfMemory,
-                    null,
-                    self.debug_compile_unit.unwrap(),
-                    0,
-                    null,
-                    size_bits,
-                    align_bits,
-                    builder.metadataTuple(members) catch return error.OutOfMemory,
-                ) catch return error.OutOfMemory;
-            },
+            .struct_ => unreachable,
             .tag_union => {
                 const data = self.layouts().getTagUnionData(lay.getTagUnion().idx);
                 var members: std.ArrayList(LlvmBuilder.Metadata) = .empty;
@@ -3299,27 +3364,45 @@ pub const MonoLlvmCodeGen = struct {
         return subprogram;
     }
 
-    fn debugInlineCallsite(self: *MonoLlvmCodeGen, id: lir.LIR.InlineScopeId) Error!LlvmBuilder.Metadata {
-        const key = @intFromEnum(id);
-        if (self.debug_inline_callsites.get(key)) |existing| return existing;
-
+    /// The call-site location of an inline scope. A scope's call site is
+    /// located within its parent's call site, so the chain of unlocated
+    /// scopes is followed outward (making each parent's subprogram on the
+    /// way) and then located from the outermost scope inward.
+    fn debugInlineCallsite(self: *MonoLlvmCodeGen, root: lir.LIR.InlineScopeId) Error!LlvmBuilder.Metadata {
+        if (self.debug_inline_callsites.get(@intFromEnum(root))) |existing| return existing;
         const builder = self.builder orelse return error.CompilationFailed;
-        const scope = self.store.inlineScope(id);
-        const parent_scope = if (scope.parent == lir.LIR.InlineScopeId.none)
-            self.current_subprogram.unwrap().?
-        else
-            try self.debugInlineSubprogram(scope.parent);
-        const parent_callsite = if (scope.parent == lir.LIR.InlineScopeId.none)
-            null
-        else
-            try self.debugInlineCallsite(scope.parent);
-        const callsite = builder.debugLocation(
-            if (scope.call_site.hasLocation()) scope.call_site.line else 0,
-            if (scope.call_site.hasLocation()) scope.call_site.column else 0,
-            parent_scope,
-            parent_callsite,
-        ) catch return error.OutOfMemory;
-        try self.debug_inline_callsites.put(key, callsite);
+
+        const Pending = struct { id: lir.LIR.InlineScopeId, parent_scope: LlvmBuilder.Metadata };
+        var chain: std.ArrayList(Pending) = .empty;
+        defer chain.deinit(self.allocator);
+        var id = root;
+        while (true) {
+            const scope = self.store.inlineScope(id);
+            const parent_scope = if (scope.parent == lir.LIR.InlineScopeId.none)
+                self.current_subprogram.unwrap().?
+            else
+                try self.debugInlineSubprogram(scope.parent);
+            try chain.append(self.allocator, .{ .id = id, .parent_scope = parent_scope });
+            if (scope.parent == lir.LIR.InlineScopeId.none) break;
+            if (self.debug_inline_callsites.contains(@intFromEnum(scope.parent))) break;
+            id = scope.parent;
+        }
+
+        var callsite: LlvmBuilder.Metadata = undefined;
+        while (chain.pop()) |pending| {
+            const scope = self.store.inlineScope(pending.id);
+            const parent_callsite = if (scope.parent == lir.LIR.InlineScopeId.none)
+                null
+            else
+                self.debug_inline_callsites.get(@intFromEnum(scope.parent)).?;
+            callsite = builder.debugLocation(
+                if (scope.call_site.hasLocation()) scope.call_site.line else 0,
+                if (scope.call_site.hasLocation()) scope.call_site.column else 0,
+                pending.parent_scope,
+                parent_callsite,
+            ) catch return error.OutOfMemory;
+            try self.debug_inline_callsites.put(@intFromEnum(pending.id), callsite);
+        }
         return callsite;
     }
 
@@ -4486,13 +4569,13 @@ pub const MonoLlvmCodeGen = struct {
             const ptr_ty = try self.ptrType();
             try self.callBoxyVoid(
                 "roc_boxy_drop",
-                &.{ ptr_ty, .i32, ptr_ty, .i8, .i16, .i8 },
+                &.{ ptr_ty, .i32, ptr_ty, .i8, .i32, .i8 },
                 &.{
                     capture,
                     try self.boxyInt(.i32, @intFromEnum(entry.capture_layout)),
                     desc,
                     try self.boxyInt(.i8, @intFromEnum(layout.RcOp.decref)),
-                    try self.boxyInt(.i16, 1),
+                    try self.boxyInt(.i32, 1),
                     try self.boxyInt(.i8, @intFromEnum(RcAtomicity.atomic)),
                 },
             );
@@ -4559,7 +4642,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitTagLiteral(self: *MonoLlvmCodeGen, target: LocalId, discriminant: u16, payload: ?LocalId) Error!void {
+    fn emitTagLiteral(self: *MonoLlvmCodeGen, target: LocalId, discriminant: u32, payload: ?LocalId) Error!void {
         try self.prepareLocalWrite(target);
         if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
         const allocated = try self.allocAggregateTarget(target);
@@ -4595,7 +4678,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitStoreTag(self: *MonoLlvmCodeGen, dest: LocalId, tag_layout: layout.Idx, discriminant: u16, payload: ?LocalId) Error!void {
+    fn emitStoreTag(self: *MonoLlvmCodeGen, dest: LocalId, tag_layout: layout.Idx, discriminant: u32, payload: ?LocalId) Error!void {
         if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
 
         const dst = try self.loadPointer(self.slot(dest).ptr);
@@ -4656,6 +4739,7 @@ pub const MonoLlvmCodeGen = struct {
                 const not_value = (self.wip orelse return error.CompilationFailed).not(value, "") catch return error.OutOfMemory;
                 try self.storeBool(self.slot(target).ptr, not_value);
             },
+            .bool_likely => try self.storeBool(self.slot(target).ptr, try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr)),
             .num_is_eq => try self.storeBool(self.slot(target).ptr, try self.emitValueEqual(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(GuardedList.at(arg_locals, 1)).ptr, self.localLayout(GuardedList.at(arg_locals, 0)))),
             .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => try self.emitNumericCompare(target, op, arg_locals),
             .compare => try self.emitNumericOrderCompare(target, arg_locals),
@@ -4786,7 +4870,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
             .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
-            .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
+            .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_clear => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
@@ -7283,7 +7367,7 @@ pub const MonoLlvmCodeGen = struct {
         source: StrMatchSource,
         start_ptr: LlvmBuilder.Value,
         end_ptr: LlvmBuilder.Value,
-        pending_rc_count: u16,
+        pending_rc_count: u32,
         pending_rc_atomicity: RcAtomicity,
     };
 
@@ -8201,12 +8285,12 @@ pub const MonoLlvmCodeGen = struct {
         return wip.bin(.sub, try self.loadUsize(capture.end_ptr), try self.loadUsize(capture.start_ptr), "") catch return error.OutOfMemory;
     }
 
-    fn noteDeferredStrCaptureIncref(self: *MonoLlvmCodeGen, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn noteDeferredStrCaptureIncref(self: *MonoLlvmCodeGen, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         var capture = self.deferredStrCapture(local) orelse return error.CompilationFailed;
         if (count == 0) return;
         if (capture.pending_rc_count != 0 and capture.pending_rc_atomicity != atomicity) return error.CompilationFailed;
-        const total: u32 = @as(u32, capture.pending_rc_count) + count;
-        if (total > std.math.maxInt(u16)) return error.CompilationFailed;
+        const total: u64 = @as(u64, capture.pending_rc_count) + count;
+        if (total > std.math.maxInt(u32)) return error.OutOfMemory;
         capture.pending_rc_count = @intCast(total);
         capture.pending_rc_atomicity = atomicity;
         self.deferred_str_captures[@intFromEnum(local)] = capture;
@@ -9963,7 +10047,7 @@ pub const MonoLlvmCodeGen = struct {
         const elem_layout = abi.elem_layout_idx orelse return null;
         const elem_layout_value = self.layoutValue(elem_layout);
         const elem_is_erased_box = elem_layout_value.tag == .erased_box;
-        if (!elem_is_erased_box and elem_layout_value.tag != .box) return null;
+        if (!self.layouts().layoutTakesBoxyStructuralDesc(elem_layout)) return null;
 
         for (list_locals) |local| {
             if (self.store.getLocal(local).boxy_desc) |desc| {
@@ -10474,6 +10558,8 @@ pub const MonoLlvmCodeGen = struct {
             break :blk ListSlice{ .start = safe_start, .len = count };
         } else if (op == .list_sublist or op == .list_sublist_borrowed)
             try self.loadSublistStartLen(GuardedList.at(args, 1))
+        else if (op == .list_clear)
+            ListSlice{ .start = zero, .len = zero }
         else
             return error.UnsupportedLowLevel;
 
@@ -11413,7 +11499,7 @@ pub const MonoLlvmCodeGen = struct {
         helper: lir.LIR.RcHelper,
         op: layout.RcOp,
         local: LocalId,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         switch (helper) {
@@ -11422,13 +11508,13 @@ pub const MonoLlvmCodeGen = struct {
                 const ptr_ty = try self.ptrType();
                 try self.callBoxyVoid(
                     "roc_boxy_drop",
-                    &.{ ptr_ty, .i32, ptr_ty, .i8, .i16, .i8 },
+                    &.{ ptr_ty, .i32, ptr_ty, .i8, .i32, .i8 },
                     &.{
                         try self.boxyValuePtr(local),
                         try self.boxyInt(.i32, @intFromEnum(self.localLayout(local))),
                         try self.resolveBoxyDesc(desc),
                         try self.boxyInt(.i8, @intFromEnum(op)),
-                        try self.boxyInt(.i16, count),
+                        try self.boxyInt(.i32, count),
                         try self.boxyInt(.i8, @intFromEnum(atomicity)),
                     },
                 );
@@ -11440,7 +11526,7 @@ pub const MonoLlvmCodeGen = struct {
     /// wider than this pass their own slot pointer as before.
     const rc_arg_scratch_size = 64;
 
-    fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
 
@@ -11456,7 +11542,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitConcreteRcForLocal(helper_key, local, count, atomicity);
     }
 
-    fn emitConcreteRcForLocal(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn emitConcreteRcForLocal(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
 
@@ -12246,7 +12332,7 @@ pub const MonoLlvmCodeGen = struct {
         return data.discriminant_offset.get(self.layouts().targetUsize());
     }
 
-    fn writeTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, discriminant: u16) Error!void {
+    fn writeTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, discriminant: u32) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const layout_val = self.layoutValue(layout_idx);
@@ -12270,7 +12356,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.normal, store_value, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@max(data.discriminant_size, 1))) catch return error.OutOfMemory;
     }
 
-    fn tagPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, discriminant: u16) layout.Idx {
+    fn tagPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, discriminant: u32) layout.Idx {
         var tag_layout = self.layoutValue(layout_idx);
         if (tag_layout.tag == .box) tag_layout = self.layoutValue(tag_layout.getIdx());
         if (tag_layout.tag != .tag_union) return .zst;
@@ -12286,8 +12372,8 @@ pub const MonoLlvmCodeGen = struct {
         const tu_data = self.layouts().getTagUnionData(ret_layout_val.getTagUnion().idx);
         const variants = self.layouts().getTagUnionVariants(tu_data);
 
-        var ok_disc: ?u16 = null;
-        var err_disc: ?u16 = null;
+        var ok_disc: ?u32 = null;
+        var err_disc: ?u32 = null;
         var err_record_idx: ?layout.StructIdx = null;
         var inner_disc_offset: u32 = 0;
         var inner_disc_size: u32 = 0;
@@ -12439,7 +12525,7 @@ pub const MonoLlvmCodeGen = struct {
         return field.layout;
     }
 
-    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u16, struct_idx: layout.StructIdx } {
+    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u32, struct_idx: layout.StructIdx } {
         const variants = self.layouts().getTagUnionVariants(inner_tu);
         for (0..variants.len) |i| {
             const payload = variants.get(@intCast(i)).payload_layout;
@@ -12740,9 +12826,9 @@ pub const MonoLlvmCodeGen = struct {
                 return builder.structType(.normal, field_types) catch return error.OutOfMemory;
             },
             .integer => {
-                var byte_size: u16 = 0;
+                var byte_size: u32 = 0;
                 for (registers.pieces) |piece| byte_size = @max(byte_size, piece.offset + piece.size);
-                return builder.intType(@as(u24, byte_size) * 8) catch return error.OutOfMemory;
+                return builder.intType(@as(u24, @intCast(byte_size)) * 8) catch return error.OutOfMemory;
             },
             .array => {
                 std.debug.assert(registers.pieces.len > 0);

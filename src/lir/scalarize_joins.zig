@@ -58,12 +58,6 @@ pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?L
 /// body's calls, turning every in-place list update into a copy.
 const max_fields = 64;
 
-/// Backstop on scalarizations per proc; each round makes real progress (one
-/// parameter rewritten), so this only exists to bound a pass bug. It must
-/// comfortably exceed the number of loops a large hand-written proc can
-/// have, since every loop contributes one struct-typed join parameter.
-const max_rounds = 4096;
-
 /// Scalarizes eligible struct-typed join parameters across every proc in the
 /// store, repeating until no parameter qualifies.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!void {
@@ -104,6 +98,21 @@ const StructBuild = struct {
     /// Uses as an `initialize_join_param` value; a wrapper temporary
     /// qualifies with exactly one.
     init_uses: u32,
+    /// Whole-value uses: every use that is neither a field read, a
+    /// transparent alias, nor an `initialize_join_param` value.
+    whole_uses: u32 = 0,
+    /// Whole-value uses as another struct literal's operand.
+    operand_uses: u32 = 0,
+};
+
+/// A struct build whose every whole-value use was an operand of a build
+/// eliminated this round. The eliminated build's field reads at those
+/// operand positions now alias this build (`inherited`), so they are its
+/// remaining uses alongside its own field reads.
+const StructCascade = struct {
+    local: LIR.LocalId,
+    operand_uses: u32,
+    inherited: std.ArrayList(LIR.CFStmtId),
 };
 
 const BuildSite = struct {
@@ -119,8 +128,8 @@ const TagBuild = struct {
 
 const TagBuildSite = struct {
     stmt: LIR.CFStmtId,
-    variant_index: u16,
-    discriminant: u16,
+    variant_index: u32,
+    discriminant: u32,
     payload: ?LIR.LocalId,
 };
 
@@ -192,8 +201,9 @@ const Pass = struct {
     field_reads: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
     /// `initialize_join_param` writes per target local.
     init_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
-    /// Locals with any write other than an `initialize_join_param`.
-    write_other: collections.DenseMap(LIR.LocalId, void),
+    /// Locals with any write other than an `initialize_join_param`, with the
+    /// number of such writes.
+    write_other: collections.DenseMap(LIR.LocalId, u32),
     /// Struct-literal defs per target local.
     struct_builds: collections.DenseMap(LIR.LocalId, StructBuild),
     /// Tag payload/discriminant projections per source. Unlike a whole-value
@@ -241,6 +251,18 @@ const Pass = struct {
     /// Field-parameter locals created this round; they join the proc's
     /// frame locals so frame plans cover them.
     new_locals: std.ArrayList(LIR.LocalId) = .empty,
+    /// Operand builds pending elimination behind a build eliminated this round.
+    struct_cascade: std.ArrayList(StructCascade) = .empty,
+    /// Statements that join rewrites committed this round mutate or delete,
+    /// and the joins whose parameter spans they rewrite. A later rewrite
+    /// planned against the same analysis commits only when it touches none
+    /// of them; otherwise it waits for the next round's fresh analysis.
+    round_claimed: collections.DenseMap(LIR.CFStmtId, void),
+    /// Locals whose uses or definitions join rewrites committed this round
+    /// change: each rewritten parameter, its transparent aliases, and the
+    /// initializer values its writes seed field parameters from. A later
+    /// rewrite whose own analysis names any of them waits for the next round.
+    round_locals: collections.DenseMap(LIR.LocalId, void),
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, metrics: ?*Metrics) Pass {
         return .{
@@ -251,7 +273,7 @@ const Pass = struct {
             .use_other = collections.DenseMap(LIR.LocalId, void).init(allocator),
             .field_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
             .init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
-            .write_other = collections.DenseMap(LIR.LocalId, void).init(allocator),
+            .write_other = collections.DenseMap(LIR.LocalId, u32).init(allocator),
             .struct_builds = collections.DenseMap(LIR.LocalId, StructBuild).init(allocator),
             .tag_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
             .tag_builds = collections.DenseMap(LIR.LocalId, TagBuild).init(allocator),
@@ -265,12 +287,15 @@ const Pass = struct {
             .removed = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
             .visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
             .stack = .empty,
+            .round_claimed = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
+            .round_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
         };
     }
 
+    /// Every round that changes the procedure rewrites at least one
+    /// parameter or build out of existence, so the rounds reach a fixed point.
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ScalarizeError!void {
-        var rounds: usize = 0;
-        while (rounds < max_rounds) : (rounds += 1) {
+        while (true) {
             const body = rewritableProcBody(self.store, proc_id) orelse break;
             if (!try self.scalarizeProc(proc_id, body)) break;
         }
@@ -296,7 +321,11 @@ const Pass = struct {
         self.removed.deinit();
         self.visited.deinit();
         self.stack.deinit(self.allocator);
+        self.round_claimed.deinit();
+        self.round_locals.deinit();
         self.new_locals.deinit(self.allocator);
+        for (self.struct_cascade.items) |*item| item.inherited.deinit(self.allocator);
+        self.struct_cascade.deinit(self.allocator);
     }
 
     fn clearLists(self: *Pass) void {
@@ -340,12 +369,17 @@ const Pass = struct {
         self.removed.clearRetainingCapacity();
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
+        self.round_claimed.clearRetainingCapacity();
+        self.round_locals.clearRetainingCapacity();
         self.new_locals.clearRetainingCapacity();
     }
 
     fn noteUse(self: *Pass, local: LIR.LocalId) ScalarizeError!void {
         try self.use_other.put(local, {});
-        if (self.struct_builds.getPtr(local)) |build| build.uses += 1;
+        if (self.struct_builds.getPtr(local)) |build| {
+            build.uses += 1;
+            build.whole_uses += 1;
+        }
         if (self.tag_builds.getPtr(local)) |build| build.uses += 1;
     }
 
@@ -401,7 +435,8 @@ const Pass = struct {
     }
 
     fn noteWrite(self: *Pass, target: LIR.LocalId) ScalarizeError!void {
-        try self.write_other.put(target, {});
+        const entry = try self.write_other.getOrPut(target);
+        entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
     }
 
     fn noteStructBuild(self: *Pass, target: LIR.LocalId, stmt: LIR.CFStmtId, fields: LIR.LocalSpan) ScalarizeError!void {
@@ -491,6 +526,7 @@ const Pass = struct {
     /// scalarizes: the reads become aliases of the field parameters, and the
     /// alias definitions are deleted because their source disappears.
     const AliasClosure = struct {
+        locals: std.ArrayList(LIR.LocalId),
         stmts: std.ArrayList(LIR.CFStmtId),
         reads: std.ArrayList(LIR.CFStmtId),
         tag_reads: std.ArrayList(LIR.CFStmtId),
@@ -498,6 +534,7 @@ const Pass = struct {
         struct_forwards: std.ArrayList(LIR.CFStmtId),
 
         fn deinit(closure: *AliasClosure, allocator: Allocator) void {
+            closure.locals.deinit(allocator);
             closure.stmts.deinit(allocator);
             closure.reads.deinit(allocator);
             closure.tag_reads.deinit(allocator);
@@ -508,6 +545,7 @@ const Pass = struct {
 
     fn aliasClosureOf(self: *Pass, param: LIR.LocalId) ScalarizeError!AliasClosure {
         var closure = AliasClosure{
+            .locals = .empty,
             .stmts = .empty,
             .reads = .empty,
             .tag_reads = .empty,
@@ -520,6 +558,7 @@ const Pass = struct {
         while (self.alias_work.pop()) |target| {
             if (self.metrics) |metrics| metrics.alias_edges += 1;
             const def = self.alias_defs.get(target).?;
+            try closure.locals.append(self.allocator, target);
             try closure.stmts.append(self.allocator, def.stmt);
             if (def.next_sibling) |sibling| try self.alias_work.append(self.allocator, sibling);
             if (self.alias_children.get(target)) |child| try self.alias_work.append(self.allocator, child);
@@ -555,8 +594,10 @@ const Pass = struct {
         // Ordinary constructor candidates have disjoint definitions and
         // projections. A constructor used as another constructor's operand is
         // a whole-value use and cannot qualify in this analysis, so these
-        // deletions can be committed together. Join rewrites change edge ABIs
-        // and are considered only against a fresh analysis.
+        // deletions can be committed together. Join rewrites change edge ABIs:
+        // they are considered only against an analysis that no earlier
+        // rewrite in the round invalidated (`round_claimed`), and never
+        // alongside constructor deletions.
         var changed = false;
 
         // Eliminate ordinary constructor/projection temporaries before
@@ -583,22 +624,25 @@ const Pass = struct {
             self.visited.clearRetainingCapacity();
             self.stack.clearRetainingCapacity();
             try self.stack.append(self.allocator, body);
-            outer: while (self.stack.pop()) |current| {
+            while (self.stack.pop()) |current| {
                 if (self.visited.contains(current)) continue;
                 try self.visited.put(current, {});
                 switch (self.store.getCFStmt(current)) {
                     .join => |join_stmt| {
+                        // A rewrite replaces the join's parameter span, so
+                        // the join's remaining parameters wait for the next
+                        // round.
                         const params = self.store.getLocalSpan(join_stmt.params);
                         for (0..params.len) |position| {
                             const param = GuardedList.at(params, position);
                             const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
                             if (try self.tryScalarizeTag(param_is_proc_arg, current, param)) {
                                 changed = true;
-                                break :outer;
+                                break;
                             }
                             if (try self.tryScalarize(param_is_proc_arg, current, param)) {
                                 changed = true;
-                                break :outer;
+                                break;
                             }
                         }
                         try self.stack.append(self.allocator, join_stmt.body);
@@ -645,7 +689,49 @@ const Pass = struct {
     }
 
     fn tryEliminateLocalStruct(self: *Pass, local: LIR.LocalId, build: StructBuild) ScalarizeError!bool {
-        if (self.join_params.contains(local) or self.write_other.contains(local) or self.use_other.contains(local) or self.alias_defs.contains(local)) return false;
+        if (!try self.eliminateStruct(local, build, 0, &.{})) return false;
+        // Nested wrappers dissolve here rather than one layer per round: each
+        // eliminated build hands its operand builds the reads that now alias
+        // them.
+        while (self.struct_cascade.pop()) |item| {
+            var cascade = item;
+            defer cascade.inherited.deinit(self.allocator);
+            const operand_build = self.struct_builds.get(cascade.local).?;
+            _ = try self.eliminateStruct(cascade.local, operand_build, cascade.operand_uses, cascade.inherited.items);
+        }
+        return true;
+    }
+
+    /// Whether `alias` (an eliminated build's field read, now `alias = ref.local
+    /// source`) is a single-definition local observed only through field reads
+    /// and transparent aliases, exactly as `resolveAliases` would have found it
+    /// had the read been an alias when collected.
+    fn inheritedAliasIsTransparent(self: *const Pass, alias: LIR.LocalId) bool {
+        return (self.write_other.get(alias) orelse 0) == 1 and
+            !self.use_other.contains(alias) and
+            !self.join_params.contains(alias) and
+            !self.init_writes.contains(alias) and
+            !self.alias_defs.contains(alias) and
+            !self.struct_builds.contains(alias) and
+            !self.tag_builds.contains(alias) and
+            !self.tag_reads.contains(alias) and
+            !self.tag_forward_writes.contains(alias) and
+            !self.struct_forward_writes.contains(alias);
+    }
+
+    /// Eliminates `local`'s single literal build when its only uses are field
+    /// reads (direct, through transparent aliases, or through `inherited`
+    /// aliases) plus `operand_uses` whole-value uses as operands of a build
+    /// already eliminated this round.
+    fn eliminateStruct(
+        self: *Pass,
+        local: LIR.LocalId,
+        build: StructBuild,
+        operand_uses: u32,
+        inherited: []const LIR.CFStmtId,
+    ) ScalarizeError!bool {
+        if (self.join_params.contains(local) or self.write_other.contains(local) or self.alias_defs.contains(local)) return false;
+        if (build.whole_uses != operand_uses or build.operand_uses != operand_uses or build.init_uses != 0) return false;
         if (build.builds.items.len != 1) return false;
         const site = build.builds.items[0];
         const operands = self.store.getLocalSpan(site.fields);
@@ -653,6 +739,19 @@ const Pass = struct {
 
         var closure = try self.aliasClosureOf(local);
         defer closure.deinit(self.allocator);
+        for (inherited) |alias_stmt| {
+            const alias = self.store.getCFStmt(alias_stmt).assign_ref.target;
+            if (!self.inheritedAliasIsTransparent(alias)) return false;
+            try closure.stmts.append(self.allocator, alias_stmt);
+            if (self.field_reads.getPtr(alias)) |reads| try closure.reads.appendSlice(self.allocator, reads.items);
+            var alias_closure = try self.aliasClosureOf(alias);
+            defer alias_closure.deinit(self.allocator);
+            try closure.stmts.appendSlice(self.allocator, alias_closure.stmts.items);
+            try closure.reads.appendSlice(self.allocator, alias_closure.reads.items);
+            try closure.tag_reads.appendSlice(self.allocator, alias_closure.tag_reads.items);
+            try closure.tag_forwards.appendSlice(self.allocator, alias_closure.tag_forwards.items);
+            try closure.struct_forwards.appendSlice(self.allocator, alias_closure.struct_forwards.items);
+        }
         const direct_tag_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(local)) |reads| reads.items else &.{};
         const direct_tag_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(local)) |writes| writes.items else &.{};
         const direct_struct_forwards: []const LIR.CFStmtId = if (self.struct_forward_writes.getPtr(local)) |writes| writes.items else &.{};
@@ -661,18 +760,48 @@ const Pass = struct {
             direct_struct_forwards.len != 0 or closure.struct_forwards.items.len != 0) return false;
         const direct_reads: []const LIR.CFStmtId = if (self.field_reads.getPtr(local)) |reads| reads.items else &.{};
         if (direct_reads.len == 0 and closure.reads.items.len == 0) return false;
+        for (direct_reads) |read_stmt| {
+            if (self.store.getCFStmt(read_stmt).assign_ref.op.field.field_idx >= operands.len) return false;
+        }
+        for (closure.reads.items) |read_stmt| {
+            if (self.store.getCFStmt(read_stmt).assign_ref.op.field.field_idx >= operands.len) return false;
+        }
+
+        // Group this build's reads by operand before rewriting them, so each
+        // operand that is itself a build can inherit the reads that will alias
+        // it.
+        const cascade_start = self.struct_cascade.items.len;
+        errdefer for (self.struct_cascade.items[cascade_start..]) |*item| item.inherited.deinit(self.allocator);
+        errdefer self.struct_cascade.shrinkRetainingCapacity(cascade_start);
+        for (0..operands.len) |position| {
+            const operand = GuardedList.at(operands, position);
+            if (!self.struct_builds.contains(operand)) continue;
+            var seen_earlier = false;
+            var occurrences: u32 = 0;
+            for (0..operands.len) |other| {
+                if (GuardedList.at(operands, other) != operand) continue;
+                if (other < position) seen_earlier = true;
+                occurrences += 1;
+            }
+            if (seen_earlier) continue;
+            var item: StructCascade = .{ .local = operand, .operand_uses = occurrences, .inherited = .empty };
+            errdefer item.inherited.deinit(self.allocator);
+            for ([_][]const LIR.CFStmtId{ direct_reads, closure.reads.items }) |reads| for (reads) |read_stmt| {
+                const field = self.store.getCFStmt(read_stmt).assign_ref.op.field.field_idx;
+                if (GuardedList.at(operands, field) == operand) try item.inherited.append(self.allocator, read_stmt);
+            };
+            try self.struct_cascade.append(self.allocator, item);
+        }
 
         for (direct_reads) |read_stmt| {
             const read = self.store.getCFStmtPtr(read_stmt);
-            const field = read.assign_ref.op.field.field_idx;
-            if (field >= operands.len) return false;
-            read.assign_ref.op = .{ .local = GuardedList.at(operands, field) };
+            const operand = GuardedList.at(operands, read.assign_ref.op.field.field_idx);
+            read.assign_ref.op = .{ .local = operand };
         }
         for (closure.reads.items) |read_stmt| {
             const read = self.store.getCFStmtPtr(read_stmt);
-            const field = read.assign_ref.op.field.field_idx;
-            if (field >= operands.len) return false;
-            read.assign_ref.op = .{ .local = GuardedList.at(operands, field) };
+            const operand = GuardedList.at(operands, read.assign_ref.op.field.field_idx);
+            read.assign_ref.op = .{ .local = operand };
         }
         for (closure.stmts.items) |alias_stmt| {
             const alias = self.store.getCFStmt(alias_stmt).assign_ref;
@@ -797,6 +926,71 @@ const Pass = struct {
         return true;
     }
 
+    /// Whether a join rewrite planned against this round's analysis touches
+    /// a statement or join an earlier rewrite this round already committed to.
+    fn conflictsWithRound(
+        self: *Pass,
+        claimed: *collections.DenseMap(LIR.CFStmtId, void),
+        joins: []const LIR.CFStmtId,
+        extra: []const LIR.CFStmtId,
+    ) bool {
+        var keys = claimed.keyIterator();
+        while (keys.next()) |stmt| if (self.round_claimed.contains(stmt.*)) return true;
+        for (joins) |stmt| if (self.round_claimed.contains(stmt)) return true;
+        for (extra) |stmt| if (self.round_claimed.contains(stmt)) return true;
+        return false;
+    }
+
+    fn commitRoundClaims(
+        self: *Pass,
+        claimed: *collections.DenseMap(LIR.CFStmtId, void),
+        joins: []const LIR.CFStmtId,
+        extra: []const LIR.CFStmtId,
+        locals: []const LIR.LocalId,
+    ) ScalarizeError!void {
+        var keys = claimed.keyIterator();
+        while (keys.next()) |stmt| try self.round_claimed.put(stmt.*, {});
+        for (joins) |stmt| try self.round_claimed.put(stmt, {});
+        for (extra) |stmt| try self.round_claimed.put(stmt, {});
+        for (locals) |local| try self.round_locals.put(local, {});
+    }
+
+    /// Whether any of `lists` names a statement a rewrite committed earlier
+    /// this round claimed. Such a statement may already be rewritten in
+    /// place, so this round's analysis of it must not be read.
+    fn anyRoundClaimed(self: *Pass, lists: []const []const LIR.CFStmtId) bool {
+        for (lists) |stmts| {
+            for (stmts) |stmt| if (self.round_claimed.contains(stmt)) return true;
+        }
+        return false;
+    }
+
+    fn anyRoundClaimedBuild(self: *Pass, sites: anytype) bool {
+        for (sites) |site| if (self.round_claimed.contains(site.stmt)) return true;
+        return false;
+    }
+
+    /// The locals whose uses a join-parameter rewrite changes: the parameter,
+    /// its transparent aliases, and every initializer value its writes carry.
+    fn rewriteLocals(
+        self: *Pass,
+        out: *std.ArrayList(LIR.LocalId),
+        param: LIR.LocalId,
+        closure: *const AliasClosure,
+        writes: []const LIR.CFStmtId,
+        alias_writes: []const LIR.CFStmtId,
+    ) ScalarizeError!void {
+        try out.append(self.allocator, param);
+        try out.appendSlice(self.allocator, closure.locals.items);
+        for (writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmt(write_stmt).set_local.value);
+        for (alias_writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmt(write_stmt).assign_ref.op.local);
+    }
+
+    fn anyRoundLocal(self: *Pass, locals: []const LIR.LocalId) bool {
+        for (locals) |local| if (self.round_locals.contains(local)) return true;
+        return false;
+    }
+
     fn tryEliminateLocalTag(self: *Pass, local: LIR.LocalId, build: TagBuild) ScalarizeError!bool {
         if (self.join_params.contains(local) or self.write_other.contains(local) or self.use_other.contains(local) or self.alias_defs.contains(local)) return false;
         if (build.builds.items.len != 1) return false;
@@ -866,6 +1060,7 @@ const Pass = struct {
         const listing_joins: []const LIR.CFStmtId = if (self.join_params.getPtr(param)) |list| list.items else &.{};
         if (listing_joins.len == 0) return false;
         if (param_is_proc_arg and listing_joins.len != 1) return false;
+        if (self.anyRoundClaimed(&.{listing_joins})) return false;
         for (listing_joins) |listing_id| {
             const listing = self.store.getCFStmt(listing_id).join;
             const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
@@ -882,12 +1077,13 @@ const Pass = struct {
         const direct_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(param)) |writes| writes.items else &.{};
         if (direct_reads.len == 0 and closure.tag_reads.items.len == 0 and
             direct_forwards.len == 0 and closure.tag_forwards.items.len == 0) return false;
-        if (!self.validateSingleVariantReads(direct_reads, closure.tag_reads.items, payload_layout)) return false;
-
         const writes: []const LIR.CFStmtId = if (self.init_writes.getPtr(param)) |list| list.items else &.{};
         const alias_writes: []const LIR.CFStmtId = if (self.alias_init_writes.getPtr(param)) |list| list.items else &.{};
         const direct_builds: []const TagBuildSite = if (self.tag_builds.getPtr(param)) |builds| builds.builds.items else &.{};
         if (writes.len == 0 and alias_writes.len == 0 and direct_builds.len == 0) return false;
+        if (self.anyRoundClaimed(&.{ direct_reads, closure.tag_reads.items, direct_forwards, closure.tag_forwards.items, closure.stmts.items, writes, alias_writes }) or
+            self.anyRoundClaimedBuild(direct_builds)) return false;
+        if (!self.validateSingleVariantReads(direct_reads, closure.tag_reads.items, payload_layout)) return false;
 
         for (writes) |write_stmt| {
             const write = self.store.getCFStmt(write_stmt).set_local;
@@ -916,6 +1112,12 @@ const Pass = struct {
         for (direct_builds) |site| {
             if (!try self.claimMutationSite(&claimed, site.stmt)) return false;
         }
+        const entry_join = [_]LIR.CFStmtId{join_stmt_id};
+        var locals = std.ArrayList(LIR.LocalId).empty;
+        defer locals.deinit(self.allocator);
+        try self.rewriteLocals(&locals, param, &closure, writes, alias_writes);
+        if (self.conflictsWithRound(&claimed, listing_joins, &entry_join) or self.anyRoundLocal(locals.items)) return false;
+        try self.commitRoundClaims(&claimed, listing_joins, &entry_join, locals.items);
 
         const payload_param = try self.store.addLocal(.{ .layout_idx = payload_layout });
         try self.new_locals.append(self.allocator, payload_param);
@@ -1096,6 +1298,7 @@ const Pass = struct {
         const listing_joins: []const LIR.CFStmtId = if (self.join_params.getPtr(param)) |list| list.items else &.{};
         if (listing_joins.len == 0) return false;
         if (param_is_proc_arg and listing_joins.len != 1) return false;
+        if (self.anyRoundClaimed(&.{listing_joins})) return false;
         // A conditionally initialized parameter's metadata names the whole
         // local; splitting it is not modeled.
         for (listing_joins) |listing_id| {
@@ -1122,6 +1325,8 @@ const Pass = struct {
         const empty_builds: []const BuildSite = &.{};
         const direct_builds: []const BuildSite = if (self.struct_builds.getPtr(param)) |entry| entry.builds.items else empty_builds;
         if (writes.len == 0 and alias_writes.len == 0 and direct_builds.len == 0) return false;
+        if (self.anyRoundClaimed(&.{ direct_reads, closure.reads.items, closure.stmts.items, direct_forwards, closure.struct_forwards.items, writes, alias_writes }) or
+            self.anyRoundClaimedBuild(direct_builds)) return false;
 
         // A directly-built parameter's literals each become per-field
         // writes in place.
@@ -1162,6 +1367,24 @@ const Pass = struct {
         for (direct_builds) |site| {
             if (!try self.claimMutationSite(&claimed, site.stmt)) return false;
         }
+        // The qualifying initializer builds the rewrite deletes, and the
+        // entry join whose remainder a proc-argument seed extends.
+        var extra = std.ArrayList(LIR.CFStmtId).empty;
+        defer extra.deinit(self.allocator);
+        try extra.append(self.allocator, join_id);
+        for (writes) |write_stmt| {
+            const write = self.store.getCFStmt(write_stmt).set_local;
+            const build = self.struct_builds.get(write.value) orelse continue;
+            if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) continue;
+            if (self.write_other.contains(write.value)) continue;
+            if (self.join_params.contains(write.value)) continue;
+            try extra.append(self.allocator, build.builds.items[0].stmt);
+        }
+        var locals = std.ArrayList(LIR.LocalId).empty;
+        defer locals.deinit(self.allocator);
+        try self.rewriteLocals(&locals, param, &closure, writes, alias_writes);
+        if (self.conflictsWithRound(&claimed, listing_joins, extra.items) or self.anyRoundLocal(locals.items)) return false;
+        try self.commitRoundClaims(&claimed, listing_joins, extra.items, locals.items);
 
         // Create the per-field parameter locals.
         var field_locals_buffer: [max_fields]LIR.LocalId = undefined;
@@ -1806,7 +2029,11 @@ const Pass = struct {
                 },
                 .assign_struct => |assign| {
                     const fields = self.store.getLocalSpan(assign.fields);
-                    for (0..fields.len) |index| try self.noteUse(GuardedList.at(fields, index));
+                    for (0..fields.len) |index| {
+                        const field = GuardedList.at(fields, index);
+                        try self.noteUse(field);
+                        if (self.struct_builds.getPtr(field)) |build| build.operand_uses += 1;
+                    }
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_tag => |assign| {
@@ -2697,6 +2924,59 @@ test "scalarize batches independent constructors without recollecting each one" 
     var metrics = Metrics{};
     try runMeasured(store, &fixture.layouts, &metrics);
     try testing.expect(metrics.collected_statements < 5000);
+}
+
+test "scalarize dissolves nested wrappers in one round" {
+    var fixture = try ScalarizeTest.init(testing.allocator);
+    defer fixture.deinit();
+    const store = &fixture.store;
+    const depth = 1000;
+    var layouts: [depth + 1]layout_mod.Idx = undefined;
+    layouts[0] = .i64;
+    for (1..depth + 1) |level| {
+        layouts[level] = try fixture.layouts.putStructFields(&[_]layout_mod.StructField{
+            .{ .index = 0, .layout = layouts[level - 1] },
+        });
+    }
+    // wrappers[level] = struct(wrappers[level - 1]); reads[level] projects
+    // field 0 out of reads[level + 1], starting from the outermost wrapper.
+    var wrappers: [depth + 1]LIR.LocalId = undefined;
+    var reads: [depth]LIR.LocalId = undefined;
+    for (0..depth + 1) |level| wrappers[level] = try store.addLocal(.{ .layout_idx = layouts[level] });
+    for (0..depth) |level| reads[level] = try store.addLocal(.{ .layout_idx = layouts[level] });
+    var body = try store.addCFStmt(.{ .ret = .{ .value = reads[0] } }, .test_fixture);
+    for (0..depth) |level| {
+        body = try store.addCFStmt(.{ .assign_ref = .{
+            .target = reads[level],
+            .op = .{ .field = .{ .source = if (level + 1 == depth) wrappers[depth] else reads[level + 1], .field_idx = 0 } },
+            .next = body,
+        } }, .test_fixture);
+    }
+    var level: usize = depth;
+    while (level != 0) : (level -= 1) {
+        body = try store.addCFStmt(.{ .assign_struct = .{
+            .target = wrappers[level],
+            .fields = try store.addLocalSpan(&.{wrappers[level - 1]}),
+            .next = body,
+        } }, .test_fixture);
+    }
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
+        .args = try store.addLocalSpan(wrappers[0..1]),
+        .body = body,
+        .ret_layout = .i64,
+    }, .none);
+    var metrics = Metrics{};
+    try runMeasured(store, &fixture.layouts, &metrics);
+    // One eliminating round and one confirming round, each collecting the
+    // proc's statements twice.
+    try testing.expect(metrics.collected_statements <= 4 * (2 * depth + 1));
+    const final_body = store.getProcSpec(@enumFromInt(@as(u32, 0))).body.?;
+    const first = store.getCFStmt(final_body);
+    try testing.expect(first == .assign_ref);
+    try testing.expectEqual(reads[0], first.assign_ref.target);
+    try testing.expectEqual(LIR.RefOp{ .local = wrappers[0] }, first.assign_ref.op);
 }
 
 test "scalarize propagates escaping alias chains in linear work" {

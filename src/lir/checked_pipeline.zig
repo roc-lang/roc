@@ -167,12 +167,17 @@ pub const TargetConfig = struct {
     /// shape-comparison tests turn it off because promotion intentionally
     /// changes the loop skeleton of qualifying sides.
     promote_loop_appends: bool = true,
-    /// The rewrites that exist only to make the produced program faster:
-    /// tag-case fusion, join scalarization and box reuse. `--opt=dev` skips
-    /// them, since it trades program speed for compile speed; TRMC and loop
-    /// append promotion stay on everywhere because they bound stack depth and
-    /// list copying rather than shave constant factors.
+    /// Route each literal tag edge straight to the arm that matches it:
+    /// tag-case fusion and known-tag jump threading. Every runtime
+    /// optimization level runs them, as it does TRMC and loop append
+    /// promotion, because they bound list copying rather than shave constant
+    /// factors: while a tag's match is not resolved on its edge, a value the
+    /// other arms keep is live across the producer, so a list the producer
+    /// appends to is copied once per loop iteration.
     fuse_tag_cases: bool = true,
+    /// The rewrites that exist only to make the produced program faster:
+    /// join scalarization and box reuse. `--opt=dev` skips them, since it
+    /// trades program speed for compile speed.
     scalarize_joins: bool = true,
     reuse_boxes: bool = true,
     /// Build ConstStore materialization plans for requested layouts.
@@ -1633,6 +1638,9 @@ fn finishLoweredOutput(
         if (pass_target.lir_pass_parallel_metrics_out) |metrics| timing.addLirPassParallel(metrics.*);
     };
 
+    // Branch expectations are read off the lowered switches before any
+    // rewrite reshapes them.
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation);
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
@@ -1650,6 +1658,9 @@ fn finishLoweredOutput(
             try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion);
         }
     }
+    // Every mode: a join parameter nothing reads still keeps its written
+    // value alive past any consuming call on the entry path.
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params);
     if (target.scalarize_joins) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
     }

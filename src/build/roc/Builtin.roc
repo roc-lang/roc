@@ -4217,6 +4217,17 @@ Builtin :: [].{
 		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
 
 		## Add a single item to the beginning of a list.
+		##
+		## This is usually O(n), because every existing item has to move over by
+		## one to make room at the front. To build up a list one item at a time,
+		## `append` is much faster; if you need the items in the opposite order,
+		## `reverse` the list once at the end.
+		##
+		## The one exception is a list that is unique (nothing else refers to it)
+		## and has had items removed from its front, for example by `drop_first`.
+		## Removing items from the front leaves free space there, so prepending
+		## onto such a list is O(1). This makes a pop-then-push pattern like
+		## `list.drop_first(1).prepend(item)` fast.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
 		##
@@ -4244,7 +4255,7 @@ Builtin :: [].{
 		## expect [100, 200, 300].get(5) == Err(OutOfBounds)
 		## ```
 		get : List(item), U64 -> Try(item, [OutOfBounds])
-		get = |list, index| if index < List.len(list) {
+		get = |list, index| if bool_likely(index < List.len(list)) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
 			Try.Err(OutOfBounds)
@@ -4289,7 +4300,7 @@ Builtin :: [].{
 		## ```
 		set : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		set = |list, index, value|
-			if index < List.len(list) {
+			if bool_likely(index < List.len(list)) {
 				Ok(list_set_unsafe(list, index, value))
 			} else {
 				Err(OutOfBounds)
@@ -5022,9 +5033,7 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3].clear() == []
 		## ```
 		clear : List(a) -> List(a)
-		clear = |list| {
-			List.take_first(list, 0)
-		}
+		clear = |list| list_clear(list)
 
 		## Returns the given number of items from the end of the list.
 		## ```roc
@@ -24610,6 +24619,10 @@ append_utf8_code_point = |out, code_point|
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
 
+# Implemented by the compiler: the same Bool, marking the branch it decides as
+# the one taken in the common case, so the other branch is laid out cold.
+bool_likely : Bool -> Bool
+
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)
 
@@ -24703,6 +24716,10 @@ list_append_le_bytes : List(U8), U64, U64 -> List(U8)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
+
+# Implemented by the compiler: removes every item, keeping the allocation and
+# its capacity when the list is uniquely owned
+list_clear : List(item) -> List(item)
 
 # Implemented by the compiler. Consumes the list and sorts it stably using the
 # boxed comparator. The comparator allocation is borrowed for the whole call.

@@ -517,6 +517,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     };
     const boxy_rc_descs = try computeBoxyRcDescs(store);
     defer store.allocator.free(boxy_rc_descs);
+    var boxy_desc_users = try BoxyDescUsers.init(store.allocator, boxy_rc_descs);
+    defer boxy_desc_users.deinit(store.allocator);
 
     const borrow_anchor_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
     defer store.allocator.free(borrow_anchor_refcounted);
@@ -525,6 +527,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     const local_contains_refcounted = emission_refcounted.slice();
     inserter.local_contains_refcounted = local_contains_refcounted;
     inserter.boxy_rc_descs = boxy_rc_descs;
+    inserter.boxy_desc_users = boxy_desc_users;
 
     const uniqueness_options: arc_solve.UniquenessOptions = .{
         .executor = options.post_check_executor,
@@ -568,6 +571,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 
     const base_proc_count = store.procSpecCount();
+    try markVariantDemandableProcs(store, &solution, &dismantles, options.specialize);
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
@@ -681,6 +685,43 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             .outcomes = solution.outcomes,
             .ret_conditions = solution.ret_conditions,
         }, options.roots);
+    }
+}
+
+/// Sets `rc_variant_demandable` on every base proc whose borrowed parameter
+/// positions admit a variant demand at a direct call: the same capabilities
+/// `callArgOwnership` consults before upgrading a borrowed position, and the
+/// outcome spans it can select.
+fn markVariantDemandableProcs(
+    store: *LirStore,
+    solution: *const arc_solve.Solution,
+    dismantles: *const arc_dismantle.Dismantles,
+    specialize: bool,
+) ResourceError!void {
+    const proc_count = store.procSpecCount();
+    var tail_targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
+    defer tail_targets.deinit(store.allocator);
+    for (0..proc_count) |proc_index| {
+        const caller: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        for (solution.tailCallsOf(caller)) |tail_call| {
+            const callee = store.getCFStmt(tail_call.stmt).assign_call.proc;
+            if (callee != caller) tail_targets.set(@intFromEnum(callee));
+        }
+    }
+    for (0..proc_count) |proc_index| {
+        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const spec = store.getProcSpecPtr(proc);
+        spec.rc_variant_demandable = false;
+        if (spec.body == null or solution.isPinnedProc(proc)) continue;
+        const sig = solution.sigOf(proc);
+        const borrowed = sig.borrowed_params;
+        const specialized_demand = specialize and
+            ((solution.uniqueSeedMaskOf(proc) & borrowed) != 0 or
+                (sig.ret_mode == .borrowed and (sig.ret_lenders & borrowed) != 0));
+        spec.rc_variant_demandable = (dismantles.ownedOnlyParamBenefits(proc) & borrowed) != 0 or
+            !solution.availableOutcomeSpanOf(proc).isEmpty() or
+            (borrowed != 0 and tail_targets.isSet(proc_index)) or
+            specialized_demand;
     }
 }
 
@@ -972,6 +1013,51 @@ fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
     return descs;
 }
 
+/// The locals whose Boxy descriptor is each descriptor local, in ascending
+/// local order, so a descriptor update visits only the values it invalidates.
+const BoxyDescUsers = struct {
+    /// `locals[starts[d]..starts[d + 1]]` are the users of descriptor local `d`.
+    starts: []u32 = &.{},
+    locals: []LIR.LocalId = &.{},
+
+    fn init(allocator: Allocator, descs: []const ?LIR.BoxyDescRef) Allocator.Error!BoxyDescUsers {
+        const starts = try allocator.alloc(u32, descs.len + 1);
+        errdefer allocator.free(starts);
+        @memset(starts, 0);
+        var user_count: usize = 0;
+        for (descs) |maybe_desc| {
+            const desc = maybe_desc orelse continue;
+            const desc_local = desc.localOrNull() orelse continue;
+            starts[@intFromEnum(desc_local) + 1] += 1;
+            user_count += 1;
+        }
+        for (1..starts.len) |index| starts[index] += starts[index - 1];
+        const locals = try allocator.alloc(LIR.LocalId, user_count);
+        errdefer allocator.free(locals);
+        const cursors = try allocator.dupe(u32, starts[0..descs.len]);
+        defer allocator.free(cursors);
+        for (descs, 0..) |maybe_desc, index| {
+            const desc = maybe_desc orelse continue;
+            const desc_local = desc.localOrNull() orelse continue;
+            const cursor = &cursors[@intFromEnum(desc_local)];
+            locals[cursor.*] = @enumFromInt(@as(u32, @intCast(index)));
+            cursor.* += 1;
+        }
+        return .{ .starts = starts, .locals = locals };
+    }
+
+    fn deinit(self: *BoxyDescUsers, allocator: Allocator) void {
+        allocator.free(self.starts);
+        allocator.free(self.locals);
+    }
+
+    fn usersOf(self: BoxyDescUsers, desc_local: LIR.LocalId) []const LIR.LocalId {
+        const index: usize = @intFromEnum(desc_local);
+        if (index + 1 >= self.starts.len) return &.{};
+        return self.locals[self.starts[index]..self.starts[index + 1]];
+    }
+};
+
 fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
     const index = @intFromEnum(local);
     if (index >= descs.len) return null;
@@ -1086,13 +1172,13 @@ const QueuedVariant = struct {
 /// and outcome rows, which are exactly what selects the variant.
 fn variantIdentity(allocator: std.mem.Allocator, sig_table: arc_sig.SigTable, source: LIR.ProcIdentity, demanded: arc_sig.RcSig) ResourceError!LIR.ProcIdentity {
     const outcomes = sig_table.outcomesOf(demanded);
-    var key = try std.ArrayList(u8).initCapacity(allocator, 8 + outcomes.len * 4);
+    var key = try std.ArrayList(u8).initCapacity(allocator, 8 + outcomes.len * 6);
     defer key.deinit(allocator);
     key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.borrowed_params)));
     key.appendAssumeCapacity(@intFromEnum(demanded.ret_mode));
     key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.unique_params)));
     for (outcomes) |outcome| {
-        key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, outcome.discriminant)));
+        key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u32, outcome.discriminant)));
         key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, outcome.restituted_params)));
     }
     return source.derived("arc-variant", key.items);
@@ -1647,7 +1733,7 @@ const ArcPlanTerminal = union(enum) {
         stmt: LIR.CFStmtId,
         match_plan: u32,
         miss_plan: u32,
-        capture_retain_count: u16,
+        capture_retain_count: u32,
     },
     boxy_tag_match: struct {
         stmt: LIR.CFStmtId,
@@ -1658,7 +1744,7 @@ const ArcPlanTerminal = union(enum) {
         stmt: LIR.CFStmtId,
         match_plans: []u32,
         miss_plan: u32,
-        capture_retain_counts: []u16,
+        capture_retain_counts: []u32,
     },
     jump: struct {
         stmt: LIR.CFStmtId,
@@ -1712,6 +1798,7 @@ const Inserter = struct {
     options: InsertOptions,
     local_contains_refcounted: []const bool = &.{},
     boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
+    boxy_desc_users: BoxyDescUsers = .{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
     /// statement id, so base and variant emissions share one solve.
@@ -3840,7 +3927,7 @@ const Inserter = struct {
         const previous_terminal = self.arcPlan(plan_index).previous_terminal;
         var match_plans: []u32 = undefined;
         var miss_plan: u32 = undefined;
-        var retain_counts: []u16 = undefined;
+        var retain_counts: []u32 = undefined;
         switch (previous_terminal) {
             .str_match_set => |previous| {
                 if (previous.stmt != stmt or previous.match_plans.len != arms.len) {
@@ -3861,7 +3948,7 @@ const Inserter = struct {
             .terminal,
             => {
                 match_plans = try self.solve_allocator.alloc(u32, arms.len);
-                retain_counts = try self.solve_allocator.alloc(u16, arms.len);
+                retain_counts = try self.solve_allocator.alloc(u32, arms.len);
                 for (0..arms.len) |index| match_plans[index] = try self.newArcPlan(GuardedList.at(arms, index).on_match);
                 miss_plan = try self.newArcPlan(miss_start);
             },
@@ -3918,17 +4005,31 @@ const Inserter = struct {
     /// Rebuilds a stop chain with contributions disabled: segments inside a
     /// join frame that reach an enclosing switch continuation end silently.
     fn stripStopContributions(self: *Inserter, stops: ?*const SolveStop) ResourceError!?*const SolveStop {
-        const entry = stops orelse return null;
-        const parent = try self.stripStopContributions(entry.parent);
-        if (!entry.contributes and parent == entry.parent) return entry;
-        const node = try self.solve_allocator.create(SolveStop);
-        node.* = .{
-            .stmt = entry.stmt,
-            .summary = entry.summary,
-            .contributes = false,
-            .parent = parent,
-        };
-        return node;
+        // The chain is rebuilt from its outermost entry inward; an entry is
+        // shared when neither it nor anything outside it changes.
+        var chain = std.ArrayList(*const SolveStop).empty;
+        defer chain.deinit(self.solve_allocator);
+        var cursor = stops;
+        while (cursor) |entry| : (cursor = entry.parent) try chain.append(self.solve_allocator, entry);
+        var parent: ?*const SolveStop = null;
+        var index = chain.items.len;
+        while (index > 0) {
+            index -= 1;
+            const entry = chain.items[index];
+            if (!entry.contributes and parent == entry.parent) {
+                parent = entry;
+                continue;
+            }
+            const node = try self.solve_allocator.create(SolveStop);
+            node.* = .{
+                .stmt = entry.stmt,
+                .summary = entry.summary,
+                .contributes = false,
+                .parent = parent,
+            };
+            parent = node;
+        }
+        return parent;
     }
 
     fn registerLoopKeep(
@@ -4464,7 +4565,24 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
-        const move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
+        var move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
+        if (!move_value and self.ownsUnit(owned, source) and self.localContainsRefcounted(source)) {
+            // The source stays live, but the alias may be the argument of a
+            // checked call whose outcome switch restores the source's unit on
+            // every path that reads the source again. The alias then carries
+            // the source's only unit into that call, as an ownership-complete
+            // field read carries its root's unit. The call must then admit
+            // its outcome convention, and admission is atomic over every
+            // restitutable position; when the alias's position is the only
+            // one, everything admission checks is proven here already.
+            const unit = self.unitOf(source);
+            if (try self.carriedRootRestitution(target, unit, next)) |claim| {
+                if (self.outcomeRestitutableMask(claim.sig) == arc_sig.paramBit(claim.position).?) {
+                    try self.setOutcomeRestoration(claim, true);
+                    move_value = true;
+                }
+            }
+        }
         const release_old_target = try self.takeRebindTarget(owned, target);
         if (move_value) _ = try self.takeUnit(owned, source);
         try self.placeUnit(owned, target);
@@ -4500,7 +4618,7 @@ const Inserter = struct {
         const root_used = try self.ownershipPlaceUsedInPath(next, unit);
         const has_unit = owned.contains(unit);
         const restitution = if (root_used)
-            try self.completeProjectionRestitution(target, unit, next)
+            try self.carriedRootRestitution(target, unit, next)
         else
             null;
         const move_root = has_unit and (!root_used or restitution != null);
@@ -4526,14 +4644,15 @@ const Inserter = struct {
         return false;
     }
 
-    /// Exact initial ownership-place composition rule: between a complete
-    /// projection and its checked direct call, only same-container aliases,
-    /// non-RC field reads, and statements that do not mention the container
-    /// may intervene. The call's explicit outcome switch must then guard every
-    /// later use of the root with restitution.
-    fn completeProjectionRestitution(
+    /// Exact initial ownership-place composition rule: between a binding that
+    /// carries the root's unit (an ownership-complete field read or a pure
+    /// same-value alias of the root) and its checked direct call, only
+    /// same-container aliases, non-RC field reads, and statements that do not
+    /// mention the container may intervene. The call's explicit outcome switch
+    /// must then guard every later use of the root with restitution.
+    fn carriedRootRestitution(
         self: *Inserter,
-        projection: LIR.LocalId,
+        carrier: LIR.LocalId,
         root: LIR.LocalId,
         next: LIR.CFStmtId,
     ) ResourceError!?OutcomeRestitution {
@@ -4571,17 +4690,17 @@ const Inserter = struct {
                 cursor = stmt.assign_low_level.next;
             } else if (stmt == .assign_call) {
                 const args = self.store.getLocalSpan(stmt.assign_call.args);
-                var projection_position: ?usize = null;
+                var carrier_position: ?usize = null;
                 for (0..GuardedList.borrowLen(args)) |position| {
                     const arg = GuardedList.at(args, position);
-                    if (arg == projection) {
-                        if (projection_position != null) return null;
-                        projection_position = position;
+                    if (arg == carrier) {
+                        if (carrier_position != null) return null;
+                        carrier_position = position;
                     } else if (aliasesContain(aliases.items, arg)) {
                         return null;
                     }
                 }
-                if (projection_position) |position| {
+                if (carrier_position) |position| {
                     var sig = self.solution.sigOf(stmt.assign_call.proc);
                     sig.outcomes = self.solution.availableOutcomeSpanOf(stmt.assign_call.proc);
                     if (!self.outcomeArgumentsHaveDistinctPlaces(stmt.assign_call.args, sig)) return null;
@@ -4846,6 +4965,11 @@ const Inserter = struct {
         return true;
     }
 
+    /// A descriptor update releases each dead value its previous binding
+    /// described. A procedure parameter refers to its descriptor local for its
+    /// whole life, and a descriptor local is never rebound while a value
+    /// refers to it, so assigning a parameter's descriptor local defines it in
+    /// the procedure's prelude and invalidates no parameter.
     fn planValuesInvalidatedByDescriptorUpdate(
         self: *Inserter,
         desc_local: LIR.LocalId,
@@ -4854,18 +4978,21 @@ const Inserter = struct {
         loop_keep: ?LoopKeep,
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
-        for (owned.domain.frame_locals) |local| {
+        const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_source_proc).args);
+        for (self.boxy_desc_users.usersOf(desc_local)) |local| {
             if (!owned.contains(local)) continue;
-            if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
+            if (localSpanContains(params, local)) continue;
             if (try self.valueUsedInPath(next, local, loop_keep)) continue;
             if (!try self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
             try releases.append(self.solve_allocator, self.releaseDecision(local));
         }
     }
 
-    fn localUsesDescriptorLocal(self: *const Inserter, local: LIR.LocalId, desc_local: LIR.LocalId) bool {
-        const desc = boxyDescForLocal(self.boxy_rc_descs, local) orelse return false;
-        return if (desc.localOrNull()) |local_desc| local_desc == desc_local else false;
+    fn localSpanContains(locals: anytype, local: LIR.LocalId) bool {
+        for (0..GuardedList.borrowLen(locals)) |index| {
+            if (GuardedList.at(locals, index) == local) return true;
+        }
+        return false;
     }
 
     /// Computes which low-level argument positions in `span` (restricted to
@@ -5247,6 +5374,11 @@ const Inserter = struct {
                     },
                     .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
                 }
+            } else if (stmt == .join) {
+                // Declaring a continuation does not execute it; a statement
+                // `match` over the result declares its merge join first and
+                // switches in the join's remainder.
+                cursor = stmt.join.remainder;
             } else if (stmt == .switch_stmt) {
                 if (discriminant == null or stmt.switch_stmt.cond != discriminant.?) return null;
                 return .{ .stmt = cursor };
@@ -5257,9 +5389,9 @@ const Inserter = struct {
     }
 
     fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
-        if (value > std.math.maxInt(u16)) return null;
+        if (value > std.math.maxInt(u32)) return null;
         for (outcomes) |outcome| {
-            if (outcome.discriminant == @as(u16, @intCast(value))) return outcome.restituted_params;
+            if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
         }
         return null;
     }
@@ -7255,7 +7387,7 @@ const Inserter = struct {
         return try self.retainLocalIfRcCount(local, 1, cause, next);
     }
 
-    fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u16, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u32, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
         const rc = self.rcHelperForLocal(.incref, local);
@@ -7263,8 +7395,8 @@ const Inserter = struct {
         return try addCanonicalRetain(self.store, local, rc, atomicity, count, self.rcOrigin(cause, .incref, local), next);
     }
 
-    fn strMatchCaptureRetainCount(self: *const Inserter, steps: LIR.StrMatchStepSpan) u16 {
-        var count: u16 = 0;
+    fn strMatchCaptureRetainCount(self: *const Inserter, steps: LIR.StrMatchStepSpan) u32 {
+        var count: u32 = 0;
         const step_borrow = self.store.getStrMatchSteps(steps);
         for (0..GuardedList.borrowLen(step_borrow)) |step_index| {
             const step = GuardedList.at(step_borrow, step_index);
@@ -7272,7 +7404,7 @@ const Inserter = struct {
                 .discard => {},
                 .view => |local| {
                     if (self.localContainsRefcounted(local) and !self.isBindingBorrowed(local)) {
-                        count +|= 1;
+                        count += 1;
                     }
                 },
             }
@@ -7494,12 +7626,15 @@ const Inserter = struct {
         return LIR.RcHelper.fromConcrete(helper);
     }
 
-    fn rcHelperForLayout(self: *const Inserter, op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
-        const layout_val = self.layouts.getLayout(layout_idx);
-        if (layout_val.tag == .closure) {
-            return self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx);
+    fn rcHelperForLayout(self: *const Inserter, root_op: layout_mod.RcOp, root_layout: layout_mod.Idx) layout_mod.RcHelper {
+        var op = root_op;
+        var layout_idx = root_layout;
+        while (true) {
+            const layout_val = self.layouts.getLayout(layout_idx);
+            if (layout_val.tag != .closure) return .{ .op = op, .layout_idx = layout_idx };
+            op = nestedDropOp(op);
+            layout_idx = layout_val.getClosure().captures_layout_idx;
         }
-        return .{ .op = op, .layout_idx = layout_idx };
     }
 
     fn nestedDropOp(op: layout_mod.RcOp) layout_mod.RcOp {
@@ -7692,7 +7827,7 @@ fn addCanonicalRetain(
     local: LIR.LocalId,
     rc: LIR.RcHelper,
     atomicity: LIR.RcAtomicity,
-    count: u16,
+    count: u32,
     origin: LIR.StmtOrigin,
     next: LIR.CFStmtId,
 ) ResourceError!LIR.CFStmtId {
@@ -7917,7 +8052,7 @@ test "RC elision lowers adjacent multi retain count" {
         release,
     );
     const stmt = f.store.getCFStmt(retain).incref;
-    try testing.expectEqual(@as(u16, 2), stmt.count);
+    try testing.expectEqual(@as(u32, 2), stmt.count);
     try testing.expectEqual(ret, stmt.next);
 }
 
@@ -8104,7 +8239,7 @@ const ArcTest = struct {
         } }, .test_fixture);
     }
 
-    fn assignTag(self: *ArcTest, target: LIR.LocalId, discriminant: u16, payload: ?LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    fn assignTag(self: *ArcTest, target: LIR.LocalId, discriminant: u32, payload: ?LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = discriminant,
@@ -8130,7 +8265,7 @@ const ArcTest = struct {
         } }, .test_fixture);
     }
 
-    fn assignRefField(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u16, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    fn assignRefField(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
@@ -14000,6 +14135,93 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
 }
 
+test "RC outcome restitution moves an argument alias's source unit through a match join" {
+    // `match f(list) { Ok(_) => ..., Err(_) => list }` evaluates the argument
+    // into an alias of `list` and declares the match's merge join before
+    // reading the result's discriminant. When only the restoring arm reads
+    // `list` again, the alias carries its only unit into the outcome variant;
+    // when the consuming arm reads it too, the alias must retain.
+    for ([_]bool{ false, true }) |success_reads_input| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+            try f.layouts.ensureZstLayout(),
+            f.list_str,
+        });
+
+        const param = try f.local(f.list_str);
+        const choose_success = try f.local(.i64);
+        const changed = try f.local(f.list_str);
+        const callee_result = try f.local(try_list);
+        const success_ret = try f.ret(callee_result);
+        const success_tag = try f.assignTag(callee_result, 1, changed, success_ret);
+        const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = changed,
+            .op = .list_reverse,
+            .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+            .args = try f.span(&.{param}),
+            .next = success_tag,
+        } }, .test_fixture);
+        const failure_ret = try f.ret(callee_result);
+        const failure_tag = try f.assignTag(callee_result, 0, null, failure_ret);
+        const callee_body = try f.switchStmt(choose_success, mutate, failure_tag, null);
+        const callee = try f.addProc(&.{ param, choose_success }, callee_body, try_list);
+
+        const item = try f.local(.str);
+        const input = try f.local(f.list_str);
+        const argument = try f.local(f.list_str);
+        const caller_choose = try f.local(.i64);
+        const call_result = try f.local(try_list);
+        const discriminant = try f.local(.u8);
+        const merged = try f.local(.i64);
+        const success_value = try f.local(.i64);
+        const failure_value = try f.local(.i64);
+        const merge = f.freshJoinPointId();
+        const merge_ret = try f.ret(merged);
+        const success_jump = try f.store.addCFStmt(.{ .jump = .{ .target = merge } }, .test_fixture);
+        const success_set = try f.store.addCFStmt(.{ .set_local = .{ .target = merged, .value = success_value, .mode = .initialize_join_param, .next = success_jump } }, .test_fixture);
+        const success_done = try f.assignI64(success_value, 1, success_set);
+        const success_body = if (success_reads_input) try f.expectStmt(input, success_done) else success_done;
+        const failure_jump = try f.store.addCFStmt(.{ .jump = .{ .target = merge } }, .test_fixture);
+        const failure_set = try f.store.addCFStmt(.{ .set_local = .{ .target = merged, .value = failure_value, .mode = .initialize_join_param, .next = failure_jump } }, .test_fixture);
+        const failure_done = try f.assignI64(failure_value, 0, failure_set);
+        const failure_body = try f.expectStmt(input, failure_done);
+        const refine = try f.switchStmt(discriminant, success_body, failure_body, null);
+        const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+        const merge_join = try f.store.addCFStmt(.{ .join = .{
+            .id = merge,
+            .params = try f.span(&.{merged}),
+            .body = merge_ret,
+            .remainder = read_discriminant,
+        } }, .test_fixture);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = call_result,
+            .proc = callee,
+            .args = try f.span(&.{ argument, caller_choose }),
+            .next = merge_join,
+        } }, .test_fixture);
+        const choose = try f.assignI64(caller_choose, 1, call);
+        const alias_input = try f.assignRefLocal(argument, input, choose);
+        const make_input = try f.assignList(input, &.{item}, alias_input);
+        const caller_body = try f.assignStr(item, "nested", make_input);
+        _ = try f.addProc(&.{}, caller_body, .i64);
+
+        const base_proc_count = f.store.procSpecCount();
+        try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+        var outcome_call = false;
+        for (0..f.store.cfStmtCount()) |stmt_index| {
+            const stmt = f.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            if (stmt == .assign_call and stmt.assign_call.target == call_result) {
+                outcome_call = stmt.assign_call.proc != callee;
+            }
+        }
+        try testing.expectEqual(!success_reads_input, outcome_call);
+        try testing.expectEqual(base_proc_count + @intFromBool(!success_reads_input), f.store.procSpecCount());
+        try testing.expectEqual(@as(usize, @intFromBool(success_reads_input)), f.countRc(input, .incref) + f.countRc(argument, .incref));
+    }
+}
+
 test "RC outcome restitution spends retained arguments through aliases only on success" {
     for ([_]bool{ false, true }) |specialize| {
         var f = try ArcTest.init(testing.allocator);
@@ -14809,9 +15031,9 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
         try testing.expectEqual(@as(u32, 2), span.len);
         const failure = solution.outcomes[span.start];
         const success = solution.outcomes[span.start + 1];
-        try testing.expectEqual(@as(u16, 0), failure.discriminant);
+        try testing.expectEqual(@as(u32, 0), failure.discriminant);
         try testing.expectEqual(@as(arc_sig.ParamMask, 1), failure.restituted_params);
-        try testing.expectEqual(@as(u16, 1), success.discriminant);
+        try testing.expectEqual(@as(u32, 1), success.discriminant);
         try testing.expectEqual(@as(arc_sig.ParamMask, 0), success.restituted_params);
     }
     return arc_solve.outcome_scratch_entries - before;
