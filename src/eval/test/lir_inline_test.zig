@@ -5018,13 +5018,15 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
             const loop_params = store.getLocalSpan(loop_join.params);
             try std.testing.expect(loop_params.len >= 2);
 
-            // Scalarized record fields preserve source order, so the second
-            // loop param is `state.b`. Slack versioning adds a self-looping
-            // unchecked copy with the same params. In both versions, this
-            // field must be released once on entry and never in the body.
-            const invariant_b = GuardedList.at(loop_params, 1);
-            try std.testing.expectEqual(@as(usize, 1), try countLocalDecrefs(store, root_body, invariant_b));
-            try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, invariant_b));
+            // The loop never reads `state.b`, so join-parameter pruning keeps
+            // it out of the loop's params and it is released before entry.
+            // Slack versioning adds a self-looping unchecked copy with the
+            // same params. In both versions no loop param is released in the
+            // body: `state.a` is loop-invariant and `acc` moves into the append.
+            for (0..GuardedList.borrowLen(loop_params)) |index| {
+                const param = GuardedList.at(loop_params, index);
+                try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, param));
+            }
         }
         try std.testing.expectEqual(@as(usize, if (promote_loop_appends) 2 else 1), loop_count);
     }
@@ -8726,7 +8728,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
 
 fn bareListIterCollectLoopIsScalar(shape: ProcShape) bool {
     return shape.join_count >= 1 and
-        shape.max_join_param_count >= 5 and
+        shape.max_join_param_count >= 4 and
         shape.list_get_unsafe_count >= 1 and
         shape.list_append_unsafe_count >= 1 and
         shape.erased_call_count == 0 and
