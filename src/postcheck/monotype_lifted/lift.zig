@@ -151,6 +151,8 @@ pub fn run(
     try lifter.lowerDefsAndRoots();
     program.next_symbol = lifter.symbols.next;
 
+    try @import("normalize.zig").run(&program);
+
     verifyCaptureInvariants(&program);
 
     owned.deinit();
