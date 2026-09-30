@@ -563,7 +563,7 @@ const Normalizer = struct {
             },
             .structural_eq => |equal| try group.values.appendSlice(allocator, &.{ equal.lhs, equal.rhs }),
             .structural_hash => |hash| try group.values.appendSlice(allocator, &.{ hash.value, hash.hasher }),
-            else => return false,
+            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .inline_expects_enabled, .static_data_candidate, .comptime_value, .typed_boundary, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => return false,
         }
         return true;
     }
@@ -604,7 +604,7 @@ const Normalizer = struct {
                 hash.value = values[0];
                 hash.hasher = values[1];
             },
-            else => unreachable,
+            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .inline_expects_enabled, .static_data_candidate, .comptime_value, .typed_boundary, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable,
         }
     }
 
@@ -633,12 +633,12 @@ const Normalizer = struct {
             return switch (frame.data) {
                 // A loop's body keeps its own scope after its initial values.
                 .loop_ => |loop| .{ .request = .{ .scope = loop.body } },
-                else => try self.finishExpr(frame),
+                .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .continue_, .jump, .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .inline_expects_enabled, .static_data_candidate, .comptime_value, .typed_boundary, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => try self.finishExpr(frame),
             };
         }
         switch (frame.data) {
             .loop_ => |*loop| loop.body = delivered.?,
-            else => unreachable,
+            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .continue_, .jump, .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .inline_expects_enabled, .static_data_candidate, .comptime_value, .typed_boundary, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable,
         }
         return try self.finishExpr(frame);
     }

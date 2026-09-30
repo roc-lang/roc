@@ -47387,28 +47387,6 @@ const BodyContext = struct {
         return null;
     }
 
-    fn lowerClosureAtNode(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        closure: anytype,
-        request_fn_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
-        const capture_nodes = try self.graph.arena().alloc(NodeId, capture_span.len);
-        for (self.fnDefCaptureSpan(capture_span), capture_nodes) |capture, *node| {
-            node.* = try self.exprTypeCell(capture.value).toGraphNode(self.graph);
-        }
-        const fn_id = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, capture_nodes);
-        const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(fn_node),
-            .{ .fn_def = .{
-                .fn_id = fn_id,
-                .captures = capture_span,
-            } },
-        );
-    }
-
     fn ensureClosureAtNode(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
