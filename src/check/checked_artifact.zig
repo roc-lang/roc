@@ -30725,12 +30725,10 @@ fn collectPublicApiDependencies(
             };
             try appendPublicApiTypeDependencies(
                 allocator,
-                names,
-                module_identity,
                 artifact_key,
                 checked_types,
                 root,
-                &active_types,
+                &visited_types,
                 imports,
                 available_artifacts,
                 &keys,

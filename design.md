@@ -3895,10 +3895,16 @@ fire only in structurally unguarded positions of runtime bodies, and the checker
 must carry that position as explicit checking context while computing
 hoistability in the normal recursive traversal. Eager child expressions inherit
 their parent's position. Branch bodies, match guards, expect bodies, loop bodies,
-statements after a prior effect/divergence blocker, block finals after such a
-blocker, and conditions reached only after earlier conditional branches are
-suppressed: they may still prove top-level-equivalent for enclosing expressions
-or warnings, but they must not become independent roots. Ordinary top-level
+statements and block finals after an unconditionally diverging statement
+(`return`, `crash`, `break`, an infinite loop, or an all-crash conditional), and
+conditions reached only after earlier conditional branches are suppressed: they
+may still prove top-level-equivalent for enclosing expressions or warnings, but
+they must not become independent roots. An earlier effectful call, `dbg`,
+`expect`, or loop in the same block does not change a later statement's
+position. A selected root has no observable effect of its own, and whether an
+unguarded root is evaluated never depends on whether its enclosing procedure is
+reached at runtime, so a preceding effect is not a guard. Otherwise inserting a
+`dbg` or an effect would decide whether a later refutable destructure compiles. Ordinary top-level
 constant bodies use a stronger compile-time-root context that suppresses nested
 root selection and nested eligibility entirely, because the enclosing body is
 already evaluated at compile time.

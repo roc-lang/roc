@@ -3770,13 +3770,6 @@ fn markCurrentHoistObservableEffect(self: *Self) void {
     self.hoist_frames.items[self.hoist_frames.items.len - 1].has_observable_effect = true;
 }
 
-fn checkedExprBlocksLaterHoists(self: *const Self, expr: CIR.Expr.Idx, does_fx: bool) bool {
-    if (does_fx) return true;
-    const completed = self.last_hoist_result orelse return false;
-    if (completed.expr != expr) return false;
-    return completed.has_observable_effect;
-}
-
 fn warnIfComptimeConditionalExpr(
     self: *Self,
     expr: CIR.Expr.Idx,
@@ -23890,7 +23883,7 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, state: *BlockCheck, env: *Env,
     state.saved_call_position = self.scopeChildCallPosition(frame.is_call_arg, frame.is_immediate_callee);
     return .{ .child = .{
         .expr = block.final_expr,
-        .expected = if (state.statements.blocks_later_hoists)
+        .expected = if (state.statements.diverges)
             nested_expected.suppressHoistSelection()
         else
             nested_expected,
@@ -23915,7 +23908,6 @@ const BlockStatementsCheck = struct {
     expected: Expected,
     does_fx: bool = false,
     diverges: bool = false,
-    blocks_later_hoists: bool = false,
     warn_unreachable: bool = false,
     offset: u32 = 0,
     current: ?StatementCheck = null,
@@ -23933,7 +23925,6 @@ const StatementCheck = struct {
     /// checking still finishes from the payload it started with.
     stmt: CIR.Statement,
     statement_expected: Expected,
-    blocks_later_hoists: bool = false,
     phase: u8 = 0,
     kind: union(enum) {
         single,
@@ -23976,7 +23967,7 @@ fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CI
         state.current = .{
             .stmt_idx = stmt_idx,
             .stmt = self.cir.store.getStatement(stmt_idx),
-            .statement_expected = if (state.blocks_later_hoists)
+            .statement_expected = if (state.diverges)
                 base_statement_expected.suppressHoistSelection()
             else
                 base_statement_expected,
@@ -23997,7 +23988,6 @@ fn resumeBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: 
 }
 
 fn completeStatement(_: *Self, state: *BlockStatementsCheck) void {
-    state.blocks_later_hoists = state.current.?.blocks_later_hoists or state.blocks_later_hoists;
     state.current = null;
     state.offset += 1;
 }
@@ -24220,9 +24210,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
         },
         .s_for => |for_stmt| {
             self.markCurrentHoistObservableEffect();
-            statement.blocks_later_hoists = true;
             const for_region = self.cir.store.getStatementRegion(stmt_idx);
-            const for_expected = if (block_state.blocks_later_hoists) block_state.expected.forStatement() else statement_expected;
             statement.kind = .{ .for_ = .{
                 .kind = for_stmt.kind,
                 .loop_node = ModuleEnv.nodeIdxFrom(stmt_idx),
@@ -24231,13 +24219,12 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 .iterable = for_stmt.expr,
                 .body = for_stmt.body,
                 .loop_region = for_region,
-                .expected = for_expected,
+                .expected = statement_expected,
             } };
             return try self.startForLoop(&statement.kind.for_, env);
         },
         inline .s_while, .s_breakable_loop, .s_infinite_loop => |while_stmt| {
             self.markCurrentHoistObservableEffect();
-            statement.blocks_later_hoists = true;
             // Check the condition
             // while $count < 10 {
             //       ^^^^^^^^^^^
@@ -24248,24 +24235,20 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
         },
         .s_dbg => |expr| {
             self.markCurrentHoistObservableEffect();
-            statement.blocks_later_hoists = true;
             return .{ .expr = expr.expr, .expected = statement_expected };
         },
         .s_expect => |expr_stmt| {
             self.markCurrentHoistObservableEffect();
-            statement.blocks_later_hoists = true;
             statement.kind = .{ .expect = try self.beginExpectBody(stmt_region) };
             return .{ .expr = expr_stmt.body, .expected = expectBodyExpected(statement_expected) };
         },
         .s_crash => {
-            statement.blocks_later_hoists = true;
             try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
             block_state.diverges = true;
             return null;
         },
         .s_return => |ret| {
             self.markCurrentHoistObservableEffect();
-            statement.blocks_later_hoists = true;
             // Type check the return expression
             const expected_return = self.expectedReturnResultFor(ret.lambda);
             return .{ .expr = ret.expr, .expected = block_state.expected.forReturnValue(expected_return) };
@@ -24293,7 +24276,6 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             return null;
         },
         .s_break => {
-            statement.blocks_later_hoists = true;
             block_state.diverges = true;
             return null;
         },
@@ -24324,7 +24306,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                     env,
                 );
             }
-            statement.blocks_later_hoists = self.checkedExprBlocksLaterHoists(decl_stmt.expr, child_does_fx);
             try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr, decl.expectation.hoist_position);
             if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                 try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -24421,7 +24402,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         },
         .s_var => |var_stmt| {
             const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
-            statement.blocks_later_hoists = self.checkedExprBlocksLaterHoists(var_stmt.expr, child_does_fx);
             self.discardHoistBindingCandidate(var_stmt.pattern_idx);
             if (var_stmt.anno == null and self.erroneous_value_exprs.contains(var_stmt.expr)) {
                 try self.erroneous_value_patterns.put(self.gpa, var_stmt.pattern_idx, {});
@@ -24443,7 +24423,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         },
         .s_reassign => |reassign| {
             const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
-            statement.blocks_later_hoists = self.checkedExprBlocksLaterHoists(reassign.expr, child_does_fx);
             const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
             try self.closeAbsentConstructedPayloadVars(reassign.expr, reassign_expr_var);
 
@@ -24509,7 +24488,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             return null;
         },
         .s_expr => |expr| {
-            statement.blocks_later_hoists = self.checkedExprBlocksLaterHoists(expr.expr, child_does_fx);
             const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
             // Statements must evaluate to {}. The statement only consults its
