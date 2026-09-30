@@ -42,6 +42,8 @@ tokenize_diagnostics: std.ArrayList(tokenize.Diagnostic),
 parse_diagnostics: std.ArrayList(AST.Diagnostic),
 /// Tokenization failure independent of stored diagnostic capacity.
 tokenize_had_errors: bool = false,
+/// Explicit tokenizer fact; carriage-return normalization is the sole migration.
+tokenize_has_non_carriage_return_errors: bool = false,
 /// Source policy rejection forbids compilation of even independent roots.
 source_rejected: bool = false,
 

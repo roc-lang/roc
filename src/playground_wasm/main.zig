@@ -1377,7 +1377,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         try result.parse_reports.append(report);
     }
 
-    if (parse_ast.tokenize_had_errors or parse_ast.tokenize_diagnostics.items.len != 0) return result;
+    if (parse_ast.source_rejected) return result;
 
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing

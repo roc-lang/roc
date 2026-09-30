@@ -1547,7 +1547,8 @@ Consumers must honor source-policy rejection before executing source, producing
 a CheckedModule, formatting, or acting on header metadata. Formatting rejects the
 input before opening an output file. The existing explicit carriage-return
 normalization migration is the only tokenizer-error exception in formatting;
-it never permits a bidi diagnostic or omitted diagnostics. Source-policy
+the tokenizer explicitly records non-carriage-return errors independently of
+diagnostic capacity, so omitted errors cannot enable the migration. Source-policy
 rejection completes the module and its dependents with failure
 before import registration or canonicalization, so rejected source never
 produces a canonicalized or checked cache entry. Source-policy changes

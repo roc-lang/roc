@@ -728,6 +728,7 @@ pub const Cursor = struct {
     pos: u32,
     messages: []Diagnostic,
     message_count: u32,
+    has_non_carriage_return_errors: bool = false,
     tab_width: u8 = 4, // TODO: make this configurable
 
     /// Initialize a Cursor with the given input buffer and a pre-allocated messages slice.
@@ -745,6 +746,7 @@ pub const Cursor = struct {
     }
 
     fn pushMessage(self: *Cursor, tag: Diagnostic.Tag, begin: u32, end: u32) void {
+        if (tag != .MisplacedCarriageReturn) self.has_non_carriage_return_errors = true;
         if (self.message_count < self.messages.len) {
             self.messages[self.message_count] = Diagnostic{
                 .tag = tag,
@@ -1298,6 +1300,8 @@ pub const TokenOutput = struct {
     extra_messages_dropped: usize,
     /// Fatal status survives diagnostic buffer exhaustion.
     has_errors: bool,
+    /// Formatting eligibility is independent of the diagnostic buffer capacity.
+    has_non_carriage_return_errors: bool,
     /// Literal bidi controls reject the whole module, independently of recovery.
     source_rejected: bool,
 };
@@ -1348,6 +1352,7 @@ pub const Tokenizer = struct {
             .messages = self.cursor.messages[0..actual_message_count],
             .extra_messages_dropped = self.cursor.message_count - actual_message_count,
             .has_errors = self.cursor.message_count != 0,
+            .has_non_carriage_return_errors = self.cursor.has_non_carriage_return_errors,
             .source_rejected = self.source_rejected,
         };
     }
@@ -3456,5 +3461,22 @@ test "bidi escapes and ordinary right to left text remain legal" {
         var output = tokenizer.finishAndDeinit();
         defer output.tokens.deinit(gpa);
         try std.testing.expect(!output.has_errors);
+    }
+}
+
+test "carriage return classification survives zero diagnostic capacity" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ "\r42", "\r0X42", "\r42 # \u{202e}" }, 0..) |source, i| {
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+        var diagnostics: [0]Diagnostic = .{};
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        try tokenizer.tokenize(gpa);
+        var output = tokenizer.finishAndDeinit();
+        defer output.tokens.deinit(gpa);
+        try std.testing.expect(output.has_errors);
+        try std.testing.expectEqual(i != 0, output.has_non_carriage_return_errors);
+        try std.testing.expectEqual(i == 2, output.source_rejected);
+        try std.testing.expectEqual(@as(usize, 0), output.messages.len);
     }
 }

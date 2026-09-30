@@ -73,6 +73,7 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
         .root_node_idx = idx,
         .tokenize_diagnostics = tokenize_diagnostics,
         .tokenize_had_errors = result.has_errors,
+        .tokenize_has_non_carriage_return_errors = result.has_non_carriage_return_errors,
         .source_rejected = result.source_rejected,
         .parse_diagnostics = parser.diagnostics,
     };

@@ -68,14 +68,9 @@ pub const FormattingResult = struct {
 };
 
 /// Carriage-return normalization is an existing explicit formatter migration.
-/// Every other tokenizer error, including omitted diagnostics, blocks output.
+/// The tokenizer records other errors even when their diagnostics are omitted.
 fn tokenizationPermitsFormatting(ast: AST) bool {
-    if (ast.source_rejected) return false;
-    if (ast.tokenize_had_errors and ast.tokenize_diagnostics.items.len == 0) return false;
-    for (ast.tokenize_diagnostics.items) |diagnostic| {
-        if (diagnostic.tag != .MisplacedCarriageReturn) return false;
-    }
-    return true;
+    return !ast.source_rejected and !ast.tokenize_has_non_carriage_return_errors;
 }
 
 /// Parse diagnostics whose recovery AST is an explicit source migration that
@@ -6836,5 +6831,29 @@ test "bidi tokenizer errors prevent every AST formatting entrypoint from writing
             try std.testing.expectError(error.ParsingFailed, format(ast.*, &output.writer));
             try std.testing.expectEqual(@as(usize, 0), output.written().len);
         }
+    }
+}
+
+test "carriage return migration survives diagnostic overflow without hiding other errors" {
+    const gpa = std.testing.allocator;
+    const prefix = "value = " ++ "\r" ** 140;
+    const migrated = try moduleFmtsStable(gpa, prefix ++ "42\n", false);
+    defer gpa.free(migrated);
+    try std.testing.expectEqualStrings("value = 42\n", migrated);
+
+    // The uppercase-base error follows the full diagnostic buffer. It must
+    // still block formatting even though the displayed diagnostics are CRs.
+    for ([_][]const u8{ "0X42\n", "42 # \u{202e}\n" }) |suffix| {
+        const source = try std.mem.concat(gpa, u8, &.{ prefix, suffix });
+        defer gpa.free(source);
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+        const ast = try parse.file(gpa, &env.common);
+        defer ast.deinit();
+        try std.testing.expectEqual(@as(usize, 129), ast.tokenize_diagnostics.items.len);
+        var output = std.Io.Writer.Allocating.init(gpa);
+        defer output.deinit();
+        try std.testing.expectError(error.ParsingFailed, formatAst(ast.*, &output.writer));
+        try std.testing.expectEqual(@as(usize, 0), output.written().len);
     }
 }

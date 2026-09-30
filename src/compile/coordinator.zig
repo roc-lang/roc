@@ -1718,8 +1718,6 @@ pub const Coordinator = struct {
         arena: Allocator,
         opts: AppDiscoveryOptions,
     ) AppDiscoveryError!void {
-        const header_info = try app_header_mod.parseAppHeader(self.roc_ctx, self.gpa, arena, opts.entry_path);
-
         const app_dir = std.fs.path.dirname(opts.entry_path) orelse ".";
 
         const app_identity = try package_identity.packageIdentityFor(
@@ -1740,6 +1738,19 @@ pub const Coordinator = struct {
         app_pkg.modules.items[app_module_id].depth = 0;
         app_pkg.remaining_modules += 1;
         self.total_remaining += 1;
+
+        // Allocate the root report destination before parsing its header. No
+        // platform or import metadata is consumed until tokenization succeeds.
+        const header_info = app_header_mod.parseAppHeaderReporting(
+            self.roc_ctx,
+            self.gpa,
+            arena,
+            opts.entry_path,
+            &app_pkg.modules.items[app_module_id].reports,
+        ) catch |err| {
+            try self.completeModulesWithFailure(&.{.{ .pkg_name = app_pkg.name, .module_id = app_module_id }});
+            return err;
+        };
 
         switch (header_info.platform_ref) {
             .none => {},
@@ -10431,4 +10442,40 @@ test "bidi rejected dependencies fail identically with cold warm and disabled ca
     }
     try std.testing.expectEqualSlices([32]u8, cold.artifact_keys, warm.artifact_keys);
     try std.testing.expectEqualSlices([32]u8, cold.artifact_keys, uncached.artifact_keys);
+}
+
+test "app discovery retains tokenizer rejection reports before platform resolution" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const ctx = CoreCtx.os(gpa, gpa, std.testing.io);
+    const builtin_modules = try sharedBuiltinModules();
+    for ([_][]const u8{ "42 # \u{202e}", "0X42" }, 0..) |expression, i| {
+        const source = try std.fmt.allocPrint(gpa, "app [main!] {{ pf: platform \"./missing/main.roc\" }}\nmain! = {s}\n", .{expression});
+        defer gpa.free(source);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "main.roc", .data = source });
+        const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+        defer gpa.free(app_path);
+        var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
+        var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_version, &cache_manager, ctx);
+        defer coord.deinit();
+        var arena = base.SingleThreadArena.init(gpa);
+        defer arena.deinit();
+        try std.testing.expectError(error.SourceTokenizationFailed, coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path }));
+        try std.testing.expect(coord.hasUserErrors());
+        try std.testing.expectEqual(@as(usize, 0), coord.total_remaining);
+        try std.testing.expectEqual(@as(u32, 1), coord.packages.count());
+        var reports = coord.iterReports();
+        const entry = reports.next().?;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try std.testing.expectEqualStrings(if (i == 0) "Bidirectional Control in Source" else "Uppercase Base", entry.report.title);
+        var rendered = std.Io.Writer.Allocating.init(gpa);
+        defer rendered.deinit();
+        try reporting.renderReportToPlain(entry.report, &rendered.writer, reporting.ReportingConfig.initForTesting());
+        if (i == 0) {
+            try std.testing.expect(std.mem.find(u8, rendered.written(), "U+202E") != null);
+            try std.testing.expect(std.mem.find(u8, rendered.written(), "main.roc:2:") != null);
+        }
+        try std.testing.expect(reports.next() == null);
+    }
 }
