@@ -1548,7 +1548,7 @@ fn boxyListElementDescForLocals(
     const elem_layout = list_abi.elem_layout_idx orelse return null;
     const elem_layout_value = self.getLayoutStore().getLayout(elem_layout);
     const elem_is_erased_box = elem_layout_value.tag == .erased_box;
-    if (!elem_is_erased_box and elem_layout_value.tag != .box) return null;
+    if (!self.getLayoutStore().layoutTakesBoxyStructuralDesc(elem_layout)) return null;
 
     for (list_locals) |local| {
         if (self.store.getLocal(local).boxy_desc) |desc| return .{ .elem_layout = elem_layout, .desc = desc };

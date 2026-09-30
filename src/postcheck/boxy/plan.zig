@@ -611,6 +611,9 @@ pub const StaticFnPlan = struct {
     rep: TypeRepId,
     worker: WorkerPlanId,
     capture_sources: Span = .{},
+    /// The worker's hidden descriptors at the stored value's type, when the
+    /// stored value is an instance of a polymorphic worker.
+    hidden_desc_args: Span = .{},
 };
 
 /// One checked static-dispatch constraint requiring a runtime dictionary slot.
@@ -3598,6 +3601,15 @@ const Builder = struct {
     plan: ProgramPlan,
     by_type: std.AutoHashMap(CheckedTypeIdentity, TypeBindingId),
     quantified_variables: std.AutoHashMap(CheckedTypeIdentity, void),
+    /// The stored function whose use is having its dictionaries planned.
+    active_stored_fn: ?StoredFnSource = null,
+    /// The scheme substitution relating that stored function's worker to its
+    /// use's type, standing in for the site substitution checking records
+    /// at an instantiating use.
+    active_stored_substitution: ?Span = null,
+    /// Variable bindings of a stored-type instance check in progress.
+    stored_instance_bindings: ?*StoredInstanceBindings = null,
+    stored_use_substitutions: std.AutoHashMapUnmanaged(u64, Span) = .empty,
     nominal_declaration_formals: std.AutoHashMap(NominalDeclarationKey, Span),
     optional_slots: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
     by_stored_type: std.AutoHashMap(StoredTypeIdentity, TypeRepId),
@@ -3739,6 +3751,7 @@ const Builder = struct {
         self.optional_slots.deinit();
         self.by_type.deinit();
         self.quantified_variables.deinit();
+        self.stored_use_substitutions.deinit(self.allocator);
         self.nominal_declaration_formals.deinit();
         self.generated_callable_uses.deinit(self.allocator);
         self.observed_numeral_evidence.deinit(self.allocator);
@@ -5418,8 +5431,43 @@ const Builder = struct {
                                 .encoding_type = encoding_type,
                             } });
                         },
+                        .try_ => {
+                            const try_payloads = checkedTryPayloads(view, shape.ty) orelse
+                                boxyPlanInvariant("Builtin.Try generated encoder type had no payloads");
+                            const kinds = checkedTryErrorKinds(view, try_payloads.err) orelse
+                                boxyPlanInvariant("generated Try encoder had unsupported error tags");
+                            if (kinds.other) {
+                                boxyPlanInvariant("generated Try encoder had unsupported error tags");
+                            }
+                            if (kinds.missing) {
+                                boxyPlanInvariant("generated root Try encoder included Missing");
+                            }
+                            var found = false;
+                            for (self.plan.generated_encoder_try_plans.items) |planned| {
+                                if (planned.worker == worker and typeRefEql(planned.try_type, shape)) {
+                                    if (!typeRefEql(planned.ok_type, typeRef(view, try_payloads.ok)) or
+                                        planned.missing != kinds.missing or planned.null != kinds.null)
+                                    {
+                                        boxyPlanInvariant("generated Try encoder shape had conflicting plans");
+                                    }
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) try self.plan.generated_encoder_try_plans.append(self.allocator, .{
+                                .worker = worker,
+                                .try_type = shape,
+                                .ok_type = typeRef(view, try_payloads.ok),
+                                .missing = kinds.missing,
+                                .null = kinds.null,
+                            });
+                            const ok_type = typeRef(view, try_payloads.ok);
+                            const start = beginPlanSequence(actions);
+                            defer finishPlanSequence(actions, start);
+                            if (kinds.null) try actions.append(self.allocator, codecCallAction(worker, encoding_type, "encode_null", null));
+                            try actions.append(self.allocator, .{ .encoder_shape = .{ .worker = worker, .contract_worker = contract_worker, .shape = ok_type, .subject_type = ok_type, .encoding_type = encoding_type } });
+                        },
                         .bool,
-                        .try_,
                         .str,
                         .u8,
                         .i8,
@@ -5480,42 +5528,6 @@ const Builder = struct {
                             }
                         }
                     }
-                }
-
-                if (checkedTryPayloads(view, shape.ty)) |try_payloads| {
-                    const kinds = checkedTryErrorKinds(view, try_payloads.err) orelse
-                        boxyPlanInvariant("generated Try encoder had unsupported error tags");
-                    if (kinds.other) {
-                        boxyPlanInvariant("generated Try encoder had unsupported error tags");
-                    }
-                    if (kinds.missing) {
-                        boxyPlanInvariant("generated root Try encoder included Missing");
-                    }
-                    var found = false;
-                    for (self.plan.generated_encoder_try_plans.items) |planned| {
-                        if (planned.worker == worker and typeRefEql(planned.try_type, shape)) {
-                            if (!typeRefEql(planned.ok_type, typeRef(view, try_payloads.ok)) or
-                                planned.missing != kinds.missing or planned.null != kinds.null)
-                            {
-                                boxyPlanInvariant("generated Try encoder shape had conflicting plans");
-                            }
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) try self.plan.generated_encoder_try_plans.append(self.allocator, .{
-                        .worker = worker,
-                        .try_type = shape,
-                        .ok_type = typeRef(view, try_payloads.ok),
-                        .missing = kinds.missing,
-                        .null = kinds.null,
-                    });
-                    const ok_type = typeRef(view, try_payloads.ok);
-                    const start = beginPlanSequence(actions);
-                    defer finishPlanSequence(actions, start);
-                    if (kinds.null) try actions.append(self.allocator, codecCallAction(worker, encoding_type, "encode_null", null));
-                    try actions.append(self.allocator, .{ .encoder_shape = .{ .worker = worker, .contract_worker = contract_worker, .shape = ok_type, .subject_type = ok_type, .encoding_type = encoding_type } });
-                    return;
                 }
 
                 const shape_rep = try self.analyzeType(view, shape.ty);
@@ -7176,6 +7188,7 @@ const Builder = struct {
                     requested_type.ty,
                     .parser_runtime,
                     .parser,
+                    fn_value,
                 ) };
             },
             .encoder_for_runtime => |runtime| blk: {
@@ -7186,6 +7199,7 @@ const Builder = struct {
                     requested_type.ty,
                     .encoder_runtime,
                     .encoder,
+                    fn_value,
                 ) };
             },
         };
@@ -7232,9 +7246,10 @@ const Builder = struct {
             view,
             selected.expr,
             selected.derivation_kind,
+            fn_value,
         );
         const derivation = selected_contract.derivation;
-        if (!try self.storedTypeMatchesCheckedType(store_view, stored_type, view, derivation.source_runtime_ty)) {
+        if (!try self.storedTypeInstantiatesCheckedType(store_view, stored_type, view, selected_contract.runtime_ty)) {
             boxyPlanInvariant("stored generated codec runtime type disagreed with its checked contract");
         }
         return .{ .generated_codec = .{
@@ -7289,6 +7304,152 @@ const Builder = struct {
         return true;
     }
 
+    /// Whether a stored type is an instance of a checked type: equal except
+    /// that each of the checked type's variables stands for one stored type,
+    /// and an open tag row's extension for the stored row's other variants.
+    fn storedTypeInstantiatesCheckedType(
+        self: *Builder,
+        store_view: ModuleView,
+        stored_type: check.ConstStore.ConstTypeId,
+        checked_view: ModuleView,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!bool {
+        var bindings = StoredInstanceBindings{};
+        defer bindings.deinit(self.allocator);
+        const outer = self.stored_instance_bindings;
+        self.stored_instance_bindings = &bindings;
+        defer self.stored_instance_bindings = outer;
+        return try self.storedTypeMatchesCheckedType(store_view, stored_type, checked_view, checked_ty);
+    }
+
+    const StoredInstanceBinding = union(enum) {
+        type: check.ConstStore.ConstTypeId,
+        row: []const check.ConstStore.TypeTag,
+    };
+
+    const StoredInstanceBindings = struct {
+        entries: std.AutoHashMapUnmanaged(CheckedTypeIdentity, StoredInstanceBinding) = .empty,
+
+        fn deinit(self: *StoredInstanceBindings, allocator: Allocator) void {
+            var it = self.entries.valueIterator();
+            while (it.next()) |binding| switch (binding.*) {
+                .row => |tags| allocator.free(tags),
+                .type => {},
+            };
+            self.entries.deinit(allocator);
+        }
+    };
+
+    fn bindStoredInstanceVariable(
+        self: *Builder,
+        bindings: *StoredInstanceBindings,
+        store_view: ModuleView,
+        variable: CheckedTypeIdentity,
+        binding: StoredInstanceBinding,
+    ) Allocator.Error!bool {
+        const store = store_view.const_store orelse boxyPlanInvariant("stored instance binding had no ConstStore");
+        if (bindings.entries.get(variable)) |existing| {
+            const same = switch (existing) {
+                .type => |existing_type| switch (binding) {
+                    .type => |new_type| storedTypesEqual(store, existing_type, new_type, 0),
+                    .row => false,
+                },
+                .row => |existing_tags| switch (binding) {
+                    .row => |new_tags| storedTagRowsEqual(store, existing_tags, new_tags, 0),
+                    .type => false,
+                },
+            };
+            switch (binding) {
+                .row => |tags| self.allocator.free(tags),
+                .type => {},
+            }
+            return same;
+        }
+        try bindings.entries.put(self.allocator, variable, binding);
+        return true;
+    }
+
+    fn storedTypesEqual(
+        store: anytype,
+        left: check.ConstStore.ConstTypeId,
+        right: check.ConstStore.ConstTypeId,
+        depth: u32,
+    ) bool {
+        if (left == right) return true;
+        if (depth > 1024) boxyPlanInvariant("stored type comparison exceeded its depth limit");
+        const a = store.type_store.get(left);
+        const b = store.type_store.get(right);
+        if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+        return switch (a) {
+            .primitive => |primitive| primitive == b.primitive,
+            .erased => |digest| std.meta.eql(digest, b.erased),
+            .zst => true,
+            .list => |item| storedTypesEqual(store, item, b.list, depth + 1),
+            .box => |payload| storedTypesEqual(store, payload, b.box, depth + 1),
+            .func => |function| storedTypeSpansEqual(store, store.type_store.typeSpan(function.args), store.type_store.typeSpan(b.func.args), depth) and
+                storedTypesEqual(store, function.ret, b.func.ret, depth + 1),
+            .tuple => |range| storedTypeSpansEqual(store, store.type_store.typeSpan(range), store.type_store.typeSpan(b.tuple), depth),
+            .record => |range| blk: {
+                const left_fields = store.type_store.fieldSpan(range);
+                const right_fields = store.type_store.fieldSpan(b.record);
+                if (left_fields.len != right_fields.len) break :blk false;
+                for (left_fields, right_fields) |left_field, right_field| {
+                    if (left_field.name != right_field.name or
+                        !std.meta.eql(left_field.default, right_field.default) or
+                        !storedTypesEqual(store, left_field.ty, right_field.ty, depth + 1)) break :blk false;
+                    if ((left_field.value_ty == null) != (right_field.value_ty == null)) break :blk false;
+                    if (left_field.value_ty) |left_value| {
+                        if (!storedTypesEqual(store, left_value, right_field.value_ty.?, depth + 1)) break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tag_union => |range| storedTagRowsEqual(store, store.type_store.tagSpan(range), store.type_store.tagSpan(b.tag_union), depth),
+            .named => |named| blk: {
+                const other = b.named;
+                if (!std.meta.eql(named.named_type, other.named_type) or
+                    !std.meta.eql(named.def, other.def) or
+                    named.kind != other.kind or
+                    named.builtin_owner != other.builtin_owner) break :blk false;
+                if (!storedTypeSpansEqual(store, store.type_store.typeSpan(named.args), store.type_store.typeSpan(other.args), depth)) break :blk false;
+                if ((named.backing == null) != (other.backing == null)) break :blk false;
+                if (named.backing) |backing| {
+                    if (!storedTypesEqual(store, backing.ty, other.backing.?.ty, depth + 1)) break :blk false;
+                }
+                break :blk true;
+            },
+        };
+    }
+
+    fn storedTypeSpansEqual(
+        store: anytype,
+        left: []const check.ConstStore.ConstTypeId,
+        right: []const check.ConstStore.ConstTypeId,
+        depth: u32,
+    ) bool {
+        if (left.len != right.len) return false;
+        for (left, right) |left_type, right_type| {
+            if (!storedTypesEqual(store, left_type, right_type, depth + 1)) return false;
+        }
+        return true;
+    }
+
+    fn storedTagRowsEqual(
+        store: anytype,
+        left: []const check.ConstStore.TypeTag,
+        right: []const check.ConstStore.TypeTag,
+        depth: u32,
+    ) bool {
+        if (left.len != right.len) return false;
+        for (left) |left_tag| {
+            const right_tag = for (right) |candidate| {
+                if (candidate.name == left_tag.name) break candidate;
+            } else return false;
+            if (!storedTypeSpansEqual(store, store.type_store.typeSpan(left_tag.payloads), store.type_store.typeSpan(right_tag.payloads), depth)) return false;
+        }
+        return true;
+    }
+
     /// A stored type and checked type still to be compared.
     const StoredTypeMatch = struct {
         stored: check.ConstStore.ConstTypeId,
@@ -7324,6 +7485,12 @@ const Builder = struct {
         if (payload == .alias and stored != .named) {
             return try self.pushStoredTypeMatch(pending, stored_type, checked_view, payload.alias.backing);
         }
+
+        if (self.stored_instance_bindings) |bindings| switch (payload) {
+            // An instance binds each of its type's variables to one stored type.
+            .flex, .rigid => return try self.bindStoredInstanceVariable(bindings, store_view, typeRef(checked_view, checked_ty), .{ .type = stored_type }),
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => {},
+        };
 
         return switch (stored) {
             .func => |function| switch (payload) {
@@ -7581,6 +7748,7 @@ const Builder = struct {
         defer checked_tags.deinit(self.allocator);
         try checked_tags.appendSlice(self.allocator, root.tags);
         var extension = root.ext;
+        var extension_variable: ?checked.CheckedTypeId = null;
         while (true) {
             switch (checked_view.checked_types.payload(extension)) {
                 .alias => |alias| extension = alias.backing,
@@ -7590,19 +7758,26 @@ const Builder = struct {
                 },
                 .empty_tag_union => break,
                 .flex, .rigid => |variable| {
+                    // An instance fills the extension with its other variants.
+                    if (self.stored_instance_bindings != null) {
+                        extension_variable = extension;
+                        break;
+                    }
                     if (variable.row_default != .empty_tag_union) return false;
                     break;
                 },
                 .pending, .err, .record, .tuple, .nominal, .function, .empty_record => return false,
             }
         }
-        if (stored_tags.len != checked_tags.items.len) return false;
+        if (extension_variable == null and stored_tags.len != checked_tags.items.len) return false;
         const store = store_view.const_store orelse
             boxyPlanInvariant("stored tag type comparison had no ConstStore");
         const store_names = store_view.canonical_names orelse
             boxyPlanInvariant("stored tag type comparison had no ConstStore names");
         const checked_names_store = checked_view.canonical_names orelse
             boxyPlanInvariant("stored tag type comparison had no checked names");
+        var extension_tags = std.ArrayList(check.ConstStore.TypeTag).empty;
+        defer extension_tags.deinit(self.allocator);
         for (stored_tags) |stored_tag| {
             const stored_name = store_names.tagLabelText(stored_tag.name);
             var matched: ?checked.CheckedTag = null;
@@ -7612,13 +7787,28 @@ const Builder = struct {
                     matched = checked_tag;
                 }
             }
-            const checked_tag = matched orelse return false;
+            const checked_tag = matched orelse {
+                if (extension_variable != null) {
+                    try extension_tags.append(self.allocator, stored_tag);
+                    continue;
+                }
+                return false;
+            };
             const stored_payloads = store.type_store.typeSpan(stored_tag.payloads);
             const checked_payloads = checked_tag.argsSlice(checked_view.checked_types);
             if (stored_payloads.len != checked_payloads.len) return false;
             for (stored_payloads, checked_payloads) |stored_payload, checked_payload| {
                 if (!try self.pushStoredTypeMatch(pending, stored_payload, checked_view, checked_payload)) return false;
             }
+        }
+        if (extension_variable) |variable| {
+            if (stored_tags.len - extension_tags.items.len != checked_tags.items.len) return false;
+            return try self.bindStoredInstanceVariable(
+                self.stored_instance_bindings.?,
+                store_view,
+                typeRef(checked_view, variable),
+                .{ .row = try extension_tags.toOwnedSlice(self.allocator) },
+            );
         }
         return true;
     }
@@ -7630,10 +7820,11 @@ const Builder = struct {
         stored_runtime_ty: checked.CheckedTypeId,
         kind: GeneratedCodecKind,
         derivation_kind: static_dispatch.GeneratedCodecDerivationKind,
+        stored: check.ConstStore.ConstFn,
     ) GeneratedCodecSource {
-        const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind);
+        const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind, stored);
         const derivation = selected.derivation;
-        if (derivation.source_runtime_ty != stored_runtime_ty or
+        if (selected.runtime_ty != stored_runtime_ty or
             checkedFunctionPayload(view, derivation.source_constructor_ty).args.len != 1)
         {
             boxyPlanInvariant("stored generated codec runtime disagreed with its checked contract");
@@ -7651,39 +7842,150 @@ const Builder = struct {
     const GeneratedCodecContract = struct {
         id: static_dispatch.GeneratedCodecDerivationId,
         derivation: static_dispatch.GeneratedCodecDerivation,
+        /// The runtime function type the stored value instantiates: the
+        /// contract's own source runtime for a structural source plan, or the
+        /// runtime result of the callable its retained evidence names.
+        runtime_ty: checked.CheckedTypeId,
     };
 
+    /// The checked codec contract a stored generated runtime was produced
+    /// from. A structural source plan names it directly. An evidence-dependent
+    /// source plan (a `parser_for` dispatched through a `where` requirement)
+    /// names it through the structural evidence the stored function retained
+    /// from the use that produced it.
     fn generatedCodecContractForRuntimeExpr(
         self: *Builder,
         view: ModuleView,
         expr_id: checked.CheckedExprId,
         expected_kind: static_dispatch.GeneratedCodecDerivationKind,
+        stored: check.ConstStore.ConstFn,
     ) GeneratedCodecContract {
         const dispatch = self.dispatchPlanForGeneratedRuntime(view, expr_id);
-        const structural_kind = switch (dispatch.resolution) {
-            .structural => |derivation| derivation.kind(),
-            .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => boxyPlanInvariant("stored generated codec source plan was not structural"),
+        const selected: struct {
+            kind: static_dispatch.StructuralKind,
+            derivation: ?static_dispatch.GeneratedCodecDerivationId,
+            callable_ty: checked.CheckedTypeId,
+            dispatcher_ty: checked.CheckedTypeId,
+            from_evidence: bool,
+        } = switch (dispatch.resolution) {
+            .structural => |derivation| .{
+                .kind = derivation.kind(),
+                .derivation = dispatch.generated_codec_derivation,
+                .callable_ty = dispatch.callable_ty,
+                .dispatcher_ty = dispatch.dispatcher_ty,
+                .from_evidence = false,
+            },
+            .evidence_dependent => |dependent| blk: {
+                const evidence = storedStructuralEvidence(stored, dependent.index, dependent.callable_contract);
+                const checked_evidence = evidence.checked orelse
+                    boxyPlanInvariant("stored generated codec evidence had no checked structural identity");
+                if (!std.meta.eql(checked_evidence.view.bytes, view.key.bytes)) {
+                    boxyPlanInvariant("stored generated codec evidence named a contract outside its runtime's module");
+                }
+                break :blk .{
+                    .kind = evidence.derivation.kind(),
+                    .derivation = checked_evidence.generated_codec_derivation,
+                    .callable_ty = checked_evidence.callable_ty,
+                    .dispatcher_ty = checked_evidence.dispatcher_ty,
+                    .from_evidence = true,
+                };
+            },
+            .direct_pending, .direct_closed, .direct_parametric, .checked_error, .@"unreachable" => boxyPlanInvariant("stored generated codec source plan did not select a structural codec"),
         };
         const expected_structural: static_dispatch.StructuralKind = switch (expected_kind) {
             .parser => .parser,
             .encoder => .encoder,
         };
-        if (structural_kind != expected_structural) {
+        if (selected.kind != expected_structural) {
             boxyPlanInvariant("stored generated codec source plan had the wrong structural kind");
         }
-        const derivation_id = dispatch.generated_codec_derivation orelse
+        const derivation_id = selected.derivation orelse
             boxyPlanInvariant("stored generated codec source plan had no checked contract identity");
         if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
             boxyPlanInvariant("stored generated codec source plan referenced a missing checked contract");
         }
         const derivation = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
         if (derivation.kind != expected_kind or
-            !std.meta.eql(view.checked_types.rootKey(derivation.source_constructor_ty), view.checked_types.rootKey(dispatch.callable_ty)) or
-            !std.meta.eql(view.checked_types.structuralRootKey(derivation.source_shape_ty), view.checked_types.structuralRootKey(dispatch.dispatcher_ty)))
+            !std.meta.eql(view.checked_types.rootKey(derivation.source_constructor_ty), view.checked_types.rootKey(selected.callable_ty)) or
+            !std.meta.eql(view.checked_types.structuralRootKey(derivation.source_shape_ty), view.checked_types.structuralRootKey(selected.dispatcher_ty)))
         {
             boxyPlanInvariant("stored generated codec source plan disagreed with its checked contract");
         }
-        return .{ .id = derivation_id, .derivation = derivation };
+        return .{
+            .id = derivation_id,
+            .derivation = derivation,
+            .runtime_ty = if (selected.from_evidence)
+                checkedFunctionPayload(view, selected.callable_ty).ret
+            else
+                derivation.source_runtime_ty,
+        };
+    }
+
+    /// The structural evidence entry a stored function retained at a checked
+    /// evidence coordinate: `depth` frames out from its innermost frame, the
+    /// `index`th root there, or that root's selected callable contract.
+    fn storedStructuralEvidence(
+        stored: check.ConstStore.ConstFn,
+        coordinate: static_dispatch.EvidenceChainIndex,
+        callable_contract: ?u32,
+    ) check.ConstStore.ConstFnStructuralEvidence {
+        var frame_index = stored.evidence_frame_head orelse
+            boxyPlanInvariant("stored generated codec had no retained evidence for its evidence-dependent source");
+        if (frame_index >= stored.evidence_frames.len) boxyPlanInvariant("stored function evidence head was outside its frames");
+        var depth = coordinate.depth;
+        while (depth > 0) : (depth -= 1) {
+            frame_index = stored.evidence_frames[frame_index].parent orelse
+                boxyPlanInvariant("stored function evidence coordinate escaped its outermost frame");
+        }
+        const frame = stored.evidence_frames[frame_index];
+        if (coordinate.index >= frame.roots_len) boxyPlanInvariant("stored function evidence index exceeded its frame");
+        var cursor: usize = frame.roots_start;
+        skipStoredEvidenceEntries(stored.evidence, &cursor, coordinate.index);
+        if (cursor >= stored.evidence.len) boxyPlanInvariant("stored function evidence ended before its selected entry");
+        var entry = stored.evidence[cursor];
+        if (callable_contract) |contract_index| {
+            const contracts_len = storedEvidenceCallableContractCount(entry);
+            if (contracts_len != 0) {
+                if (contract_index >= contracts_len) boxyPlanInvariant("stored function callable contract index exceeded its entry");
+                var contract_cursor = cursor + 1;
+                if (entry == .target) switch (entry.target.nested) {
+                    .resolved => |resolved| contract_cursor += resolved.subtree_len,
+                    .from_callable => {},
+                };
+                skipStoredEvidenceEntries(stored.evidence, &contract_cursor, contract_index);
+                if (contract_cursor >= stored.evidence.len) boxyPlanInvariant("stored function evidence ended before its selected contract");
+                entry = stored.evidence[contract_cursor];
+            }
+        }
+        return switch (entry) {
+            .structural => |structural| structural,
+            .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => boxyPlanInvariant("stored generated codec evidence did not select a structural codec"),
+        };
+    }
+
+    fn storedEvidenceCallableContractCount(entry: check.ConstStore.ConstFnEvidence) u32 {
+        return switch (entry) {
+            .target => |target| target.callable_contracts,
+            .structural => |structural| structural.callable_contracts,
+            .from_callable => |use| use.callable_contracts,
+            .from_scheme, .unreachable_value, .checked_error => 0,
+        };
+    }
+
+    /// Advance past `count` stored evidence entries, each with its nested
+    /// evidence and callable contracts.
+    fn skipStoredEvidenceEntries(nodes: []const check.ConstStore.ConstFnEvidence, cursor: *usize, count: u32) void {
+        var remaining = count;
+        while (remaining > 0) : (remaining -= 1) {
+            if (cursor.* >= nodes.len) boxyPlanInvariant("stored function evidence ended inside a skipped entry");
+            const entry = nodes[cursor.*];
+            cursor.* += 1;
+            if (entry == .target) switch (entry.target.nested) {
+                .resolved => |resolved| cursor.* += resolved.subtree_len,
+                .from_callable => {},
+            };
+            skipStoredEvidenceEntries(nodes, cursor, storedEvidenceCallableContractCount(entry));
+        }
     }
 
     fn dispatchPlanForGeneratedRuntime(
@@ -10925,17 +11227,31 @@ const Builder = struct {
         defer edges.deinit(self.allocator);
         var edge_substitutions = std.ArrayList(?SchemeCallSubstitution).empty;
         defer edge_substitutions.deinit(self.allocator);
+        var edge_stored_substitutions = std.ArrayList(?Span).empty;
+        defer edge_stored_substitutions.deinit(self.allocator);
         for (self.plan.nested_callable_uses.items) |use| {
             try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
             try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
+            try edge_stored_substitutions.append(self.allocator, null);
         }
         for (self.plan.callable_uses.items) |use| {
             try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
             try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
+            // A stored function value's use fixes every variable of its
+            // worker's type, including those of the scope that created it.
+            try edge_stored_substitutions.append(self.allocator, if (use.stored_fn != null)
+                try self.storedUseSchemeRepSubstitutions(
+                    self.plan.workers.items[@intFromEnum(use.worker)].rep,
+                    self.plan.repForSourceType(use.callable_ty) orelse
+                        boxyPlanInvariant("boxy stored callable use type was not analyzed"),
+                )
+            else
+                null);
         }
         for (self.plan.direct_calls.items) |call| {
             try edges.append(self.allocator, .{ .caller = call.caller, .callee = call.worker });
             try edge_substitutions.append(self.allocator, self.directCallSchemeSubstitution(call));
+            try edge_stored_substitutions.append(self.allocator, null);
         }
 
         var scopes = try self.computeWorkerScopeChains(edges.items);
@@ -10996,14 +11312,26 @@ const Builder = struct {
         defer image_leaves.deinit(self.allocator);
         var caller_images = std.ArrayList(TypeRepId).empty;
         defer caller_images.deinit(self.allocator);
-        for (edges.items, edge_substitutions.items, edge_images) |edge, substitution, *images| {
+        var edge_pairs = std.ArrayList(SchemeRepSubstitution).empty;
+        defer edge_pairs.deinit(self.allocator);
+        for (edges.items, edge_substitutions.items, edge_stored_substitutions.items, edge_images) |edge, substitution, stored_substitution, *images| {
             images.* = .empty;
-            const sub = substitution orelse continue;
-            for (sub.scheme_vars, sub.site_types) |variable, site_type| {
-                if (sub.site_view.checked_types.payload(site_type) == .err) continue;
-                const scheme_rep = self.plan.repForSourceType(typeRef(sub.callee_view, variable)) orelse continue;
-                const site_rep = self.plan.repForSourceType(typeRef(sub.site_view, site_type)) orelse
-                    boxyPlanInvariant("callable use substitution type was not analyzed");
+            edge_pairs.clearRetainingCapacity();
+            if (substitution) |sub| {
+                for (sub.scheme_vars, sub.site_types) |variable, site_type| {
+                    if (sub.site_view.checked_types.payload(site_type) == .err) continue;
+                    const scheme_rep = self.plan.repForSourceType(typeRef(sub.callee_view, variable)) orelse continue;
+                    const site_rep = self.plan.repForSourceType(typeRef(sub.site_view, site_type)) orelse
+                        boxyPlanInvariant("callable use substitution type was not analyzed");
+                    try edge_pairs.append(self.allocator, .{ .scheme_rep = scheme_rep, .site_rep = site_rep });
+                }
+            }
+            if (stored_substitution) |stored| {
+                try edge_pairs.appendSlice(self.allocator, self.plan.schemeRepSubstitutionSlice(stored));
+            }
+            for (edge_pairs.items) |pair| {
+                const scheme_rep = pair.scheme_rep;
+                const site_rep = pair.site_rep;
                 seen.clearRetainingCapacity();
                 image_leaves.set.clearRetainingCapacity();
                 image_leaves.order.clearRetainingCapacity();
@@ -11027,12 +11355,20 @@ const Builder = struct {
         var changed = true;
         while (changed) {
             changed = false;
-            for (edges.items, edge_images) |edge, images| {
+            for (edges.items, edge_stored_substitutions.items, edge_images) |edge, stored_substitution, images| {
                 if (edge.caller == edge.callee) continue;
                 const callee = @intFromEnum(edge.callee);
                 const caller = &needs[@intFromEnum(edge.caller)];
                 for ([_][]const TypeRepId{ signature[callee].order.items, needs[callee].order.items }) |leaves| {
                     for (leaves) |leaf| {
+                        if (stored_substitution) |stored| {
+                            if (schemeRepSubstitutionFor(self.plan.schemeRepSubstitutionSlice(stored), leaf) != null) {
+                                for (images.get(leaf) orelse &.{}) |image_leaf| {
+                                    if (try caller.add(self.allocator, image_leaf)) changed = true;
+                                }
+                                continue;
+                            }
+                        }
                         if (own_scheme[callee].contains(leaf)) {
                             // A scheme variable the callee's signature names
                             // is described by the use's own argument and
@@ -11050,6 +11386,13 @@ const Builder = struct {
             }
         }
         return needs;
+    }
+
+    fn schemeRepSubstitutionFor(pairs: []const SchemeRepSubstitution, scheme_rep: TypeRepId) ?TypeRepId {
+        for (pairs) |pair| {
+            if (pair.scheme_rep == scheme_rep) return pair.site_rep;
+        }
+        return null;
     }
 
     const WorkerEdge = struct { caller: WorkerPlanId, callee: WorkerPlanId };
@@ -11176,15 +11519,6 @@ const Builder = struct {
             // A hosted worker's signature can hold its declaration's type
             // variable slots, so its caller describes them like any other
             // worker's; only the extern boundary it calls is descriptor-free.
-            if (worker.source == .generated_field_iterator) {
-                self.plan.workers.items[worker_index].hidden_descs = .{};
-                self.plan.workers.items[worker_index].body_hidden_descs = .{};
-                self.plan.workers.items[worker_index].enclosing_descs = .{};
-                self.plan.workers.items[worker_index].evidence_only_descs = .{};
-                self.plan.workers.items[worker_index].evidence_descs = .{};
-                continue;
-            }
-
             var pending = std.ArrayList(HiddenDescriptorParam).empty;
             defer pending.deinit(self.allocator);
             var seen_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
@@ -12997,6 +13331,8 @@ const Builder = struct {
                 evidence.view,
                 evidence.entries,
                 self.useSchemeSubstitution(use.worker, use.use),
+                if (use.stored_fn != null) try self.storedUseSchemeRepSubstitutions(worker.rep, self.plan.repForSourceType(use.callable_ty) orelse
+                    boxyPlanInvariant("boxy stored callable use type was not analyzed")) else null,
             );
         }
         for (self.plan.nested_callable_uses.items) |*use| {
@@ -13010,6 +13346,37 @@ const Builder = struct {
                 evidence.view,
                 evidence.entries,
                 self.useSchemeSubstitution(use.worker, use.use),
+                null,
+            );
+        }
+
+        for (self.plan.static_fns.items) |*static_fn| {
+            const worker = self.plan.workers.items[@intFromEnum(static_fn.worker)];
+            if (worker.hidden_descs.len == 0) continue;
+            // The stored value is described at its own stored type.
+            const call_rep = static_fn.rep;
+            const function = (self.repQuery().functionChildren(call_rep)) orelse
+                boxyPlanInvariant("stored function value representation was not callable");
+            const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+            const arg_reps = try self.allocator.alloc(TypeRepId, function.arg_count);
+            defer self.allocator.free(arg_reps);
+            const arg_types = try self.allocator.alloc(CheckedTypeIdentity, function.arg_count);
+            defer self.allocator.free(arg_types);
+            for (arg_reps, arg_types, children[function.args_start..][0..function.arg_count]) |*arg_rep, *arg_type, child| {
+                arg_rep.* = child.rep;
+                arg_type.* = child.source_type;
+            }
+            static_fn.hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(
+                static_fn.worker,
+                arg_reps,
+                arg_reps,
+                function.ret,
+                arg_types,
+                self.plan.representations.items[@intFromEnum(function.ret)].source_type,
+                null,
+                null,
+                null,
+                try self.storedUseSchemeRepSubstitutions(worker.rep, call_rep),
             );
         }
 
@@ -13048,6 +13415,7 @@ const Builder = struct {
                 evidence_view,
                 inspectUseNestedEvidence(evidence_view, method.evidence.node),
                 try self.inspectUseSchemeSubstitution(method, &bindings),
+                null,
             );
             self.plan.inspect_methods.items[index].hidden_desc_args = hidden_desc_args;
         }
@@ -13060,6 +13428,7 @@ const Builder = struct {
         view: ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
         scheme_substitution: ?SchemeCallSubstitution,
+        stored_substitution: ?Span,
     ) Allocator.Error!Span {
         const callable_rep = self.plan.repForSourceType(callable_type) orelse
             boxyPlanInvariant("boxy callable use type was not analyzed for descriptor captures");
@@ -13072,7 +13441,7 @@ const Builder = struct {
             arg_type.* = self.plan.representations.items[@intFromEnum(child.rep)].source_type;
         }
         const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
-        return try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
+        return try self.materializeWorkerCallHiddenDescriptorArgsWithStoredSubstitution(
             worker,
             arg_types,
             arg_types,
@@ -13080,6 +13449,7 @@ const Builder = struct {
             view,
             evidence,
             scheme_substitution,
+            stored_substitution,
         );
     }
 
@@ -13505,6 +13875,29 @@ const Builder = struct {
         evidence: ?[]const static_dispatch.CheckedEvidence,
         scheme_substitution: ?SchemeCallSubstitution,
     ) Allocator.Error!Span {
+        return try self.materializeWorkerCallHiddenDescriptorArgsWithStoredSubstitution(
+            worker_id,
+            call_arg_types,
+            operand_arg_types,
+            ret_type,
+            evidence_view,
+            evidence,
+            scheme_substitution,
+            null,
+        );
+    }
+
+    fn materializeWorkerCallHiddenDescriptorArgsWithStoredSubstitution(
+        self: *Builder,
+        worker_id: WorkerPlanId,
+        call_arg_types: []const CheckedTypeIdentity,
+        operand_arg_types: []const CheckedTypeIdentity,
+        ret_type: CheckedTypeIdentity,
+        evidence_view: ?ModuleView,
+        evidence: ?[]const static_dispatch.CheckedEvidence,
+        scheme_substitution: ?SchemeCallSubstitution,
+        stored_substitution: ?Span,
+    ) Allocator.Error!Span {
         if (call_arg_types.len != operand_arg_types.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping saw mismatched function arity");
         }
@@ -13531,6 +13924,7 @@ const Builder = struct {
             evidence_view,
             evidence,
             scheme_substitution,
+            stored_substitution,
         );
     }
 
@@ -13545,6 +13939,7 @@ const Builder = struct {
         evidence_view: ?ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
         scheme_substitution: ?SchemeCallSubstitution,
+        stored_substitution: ?Span,
     ) Allocator.Error!Span {
         if (call_arg_reps.len != operand_arg_reps.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping saw mismatched operand arity");
@@ -13580,6 +13975,14 @@ const Builder = struct {
                 // A bound site can be the scheme variable itself.
                 if (call_rep == worker_var_rep) continue;
                 try substitutions.put(self.allocator, worker_var_rep, call_rep);
+            }
+        }
+        // A stored function value was produced at the one instantiation of its
+        // worker that its use's type fixes, including the variables of the
+        // scope that created it.
+        if (stored_substitution) |stored| {
+            for (self.plan.schemeRepSubstitutionSlice(stored)) |pair| {
+                try substitutions.put(self.allocator, pair.scheme_rep, pair.site_rep);
             }
         }
         substitutions.scheme_entries_len = substitutions.entries.items.len;
@@ -14420,7 +14823,10 @@ const Builder = struct {
         const arg_types = try self.allocator.dupe(CheckedTypeIdentity, request.arg_types);
         var arg_types_owned = true;
         defer if (arg_types_owned) self.allocator.free(arg_types);
-        const requirement_substitution = try self.appendSchemeRepSubstitutions(request.scheme_substitution);
+        const requirement_substitution = if (self.active_stored_substitution) |stored|
+            stored
+        else
+            try self.appendSchemeRepSubstitutions(request.scheme_substitution);
 
         const worker_function = (self.repQuery().functionChildren(worker.rep)) orelse
             boxyPlanInvariant("boxy worker call target with hidden dictionaries was not a function worker");
@@ -14667,6 +15073,15 @@ const Builder = struct {
         planned_method_evidence: Span,
     ) Allocator.Error!void {
         const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.param_index];
+        if (self.active_stored_substitution) |stored| {
+            // A stored function's use relates the worker's variables
+            // to the use's types exactly as a checked site substitution
+            // does, so its dictionaries' adapters read the same pairs.
+            for (0..planned_method_evidence.len) |index| {
+                const method = &self.plan.dictionary_method_evidence.items[planned_method_evidence.start + index];
+                if (method.requirement_substitution.len == 0) method.requirement_substitution = stored;
+            }
+        }
         try self.registerStructuralDictionaryDerivations(state.caller_id, source_rep, source_env, planned_method_evidence);
         try state.pending.append(self.allocator, .{
             .worker_dictionaries = param.dictionaries,
@@ -15784,8 +16199,16 @@ const Builder = struct {
             // variable's call type. Wrapper arguments do not replace it.
             if (substitutions.hasVisibleSchemeSubstitution(worker_child.rep)) continue;
             const call_arg_rep = if (worker_child.role == .nominal_arg)
-                self.nominalBackingArgActualRep(call_rep_id, worker_child.role.nominal_arg) orelse
-                    boxyPlanInvariant("checked nominal call was missing a type argument substitution")
+                self.nominalBackingArgActualRep(call_rep_id, worker_child.role.nominal_arg) orelse blk: {
+                    // A stored nominal records its arguments only as its own
+                    // argument children, in declaration order.
+                    if (call_rep.nominal_backing_arg_substitutions.len != 0) {
+                        boxyPlanInvariant("checked nominal call was missing a type argument substitution");
+                    }
+                    const call_child = self.namedQuery().findMatchingChildByRole(call_children, worker_child) orelse
+                        boxyPlanInvariant("stored nominal call was missing a type argument");
+                    break :blk call_child.rep;
+                }
             else blk: {
                 const call_child = self.namedQuery().findMatchingChildByRole(call_children, worker_child) orelse
                     boxyPlanInvariant("checked wrapper call was missing a type argument substitution");
@@ -16230,6 +16653,124 @@ const Builder = struct {
 
     /// A call's checked substitution for its callee scheme, as representation
     /// pairs.
+    /// Each variable of a worker's type paired with what a use's type puts in
+    /// its position, as checking's site substitution pairs them: a variable
+    /// with the call's type, and an open row's extension with the call row's
+    /// variants that the row does not list.
+    fn storedUseSchemeRepSubstitutions(self: *Builder, worker_rep: TypeRepId, call_rep: TypeRepId) Allocator.Error!Span {
+        // Planning passes repeat until they reach a fixpoint; the relation of
+        // one worker to one use's type is computed once.
+        const key = (@as(u64, @intFromEnum(worker_rep)) << 32) | @as(u64, @intFromEnum(call_rep));
+        if (self.stored_use_substitutions.get(key)) |existing| return existing;
+        const span = try self.computeStoredUseSchemeRepSubstitutions(worker_rep, call_rep);
+        try self.stored_use_substitutions.put(self.allocator, key, span);
+        return span;
+    }
+
+    fn computeStoredUseSchemeRepSubstitutions(self: *Builder, worker_rep: TypeRepId, call_rep: TypeRepId) Allocator.Error!Span {
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        var seen = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen.deinit();
+        try self.collectStoredUseSchemeRepSubstitutions(worker_rep, call_rep, start, &seen);
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
+    }
+
+    fn collectStoredUseSchemeRepSubstitutions(
+        self: *Builder,
+        worker_rep_id: TypeRepId,
+        call_rep_id: TypeRepId,
+        start: u32,
+        seen: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        const seen_key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) | @as(u64, @intFromEnum(call_rep_id));
+        if ((try seen.getOrPut(seen_key)).found_existing) return;
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        if (worker_rep.kind == .dynamic and !worker_rep.is_open_tag_row) {
+            try self.appendStoredUseSchemePair(worker_rep_id, call_rep_id, start);
+            return;
+        }
+        if (worker_rep.children.len == 0) return;
+
+        var wrapper_bindings: CallWrapperBindings = .{};
+        defer wrapper_bindings.deinit(self.allocator);
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, call_rep_id, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != call_rep_id;
+        const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+        const call_children = self.plan.childSlice(structure_rep.children);
+
+        for (0..worker_rep.children.len) |index| {
+            // Read by index: analysis below can grow the child table.
+            const worker_child = self.plan.children.items[worker_rep.children.start + index];
+            if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
+            if (worker_rep.is_open_tag_row and worker_child.role == .tag_ext) {
+                const rest = try self.callRowVariantsOutside(worker_rep, structure_call_rep_id);
+                try self.collectStoredUseSchemeRepSubstitutions(worker_child.rep, rest, start, seen);
+                continue;
+            }
+            if (worker_child.role == .nominal_arg) {
+                if (self.nominalBackingArgActualRep(call_rep_id, worker_child.role.nominal_arg)) |exact_call_arg_rep| {
+                    try self.collectStoredUseSchemeRepSubstitutions(worker_child.rep, exact_call_arg_rep, start, seen);
+                    continue;
+                }
+            }
+            if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
+                try self.collectStoredUseSchemeRepSubstitutions(worker_child.rep, structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), start, seen);
+            }
+        }
+    }
+
+    fn appendStoredUseSchemePair(self: *Builder, scheme_rep: TypeRepId, site_rep: TypeRepId, start: u32) Allocator.Error!void {
+        for (self.plan.scheme_rep_substitutions.items[start..]) |pair| {
+            if (pair.scheme_rep != scheme_rep) continue;
+            if (pair.site_rep != site_rep) boxyPlanInvariant("a stored function's use put two types in one variable's position");
+            return;
+        }
+        try self.plan.scheme_rep_substitutions.append(self.allocator, .{ .scheme_rep = scheme_rep, .site_rep = site_rep });
+    }
+
+    /// The closed row of the call row's variants that `row` does not list.
+    fn callRowVariantsOutside(self: *Builder, row: TypeRepresentation, call_row_id: TypeRepId) Allocator.Error!TypeRepId {
+        const call_row = self.plan.representations.items[@intFromEnum(call_row_id)];
+        const children_start: u32 = @intCast(self.plan.children.items.len);
+        const variants_start: u32 = @intCast(self.plan.tag_variants.items.len);
+        var variant_count: u32 = 0;
+        var empty_ext: ?TypeRepId = null;
+        for (0..call_row.tag_variants.len) |index| {
+            const variant = self.plan.tag_variants.items[call_row.tag_variants.start + index];
+            if (self.namedQuery().tagRowNamesVariant(row, variant)) continue;
+            const payload_start: u32 = @intCast(self.plan.children.items.len);
+            for (0..variant.payloads.len) |payload_index| {
+                try self.plan.children.append(self.allocator, self.plan.children.items[variant.payloads.start + payload_index]);
+            }
+            var copied = variant;
+            copied.payloads = .{ .start = payload_start, .len = variant.payloads.len };
+            try self.plan.tag_variants.append(self.allocator, copied);
+            variant_count += 1;
+        }
+        const rest_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+        if (variant_count == 0) {
+            try self.plan.representations.append(self.allocator, .{ .source_type = call_row.source_type, .kind = .empty_tag_union });
+            return rest_id;
+        }
+        for (0..call_row.children.len) |index| {
+            const child = self.plan.children.items[call_row.children.start + index];
+            if (child.role == .tag_ext) empty_ext = child.rep;
+        }
+        const ext = empty_ext orelse boxyPlanInvariant("call tag row representation had no extension child");
+        try self.plan.children.append(self.allocator, .{
+            .role = .tag_ext,
+            .source_type = self.plan.representations.items[@intFromEnum(ext)].source_type,
+            .rep = ext,
+        });
+        try self.plan.representations.append(self.allocator, .{
+            .source_type = call_row.source_type,
+            .kind = .tag_union,
+            .children = .{ .start = children_start, .len = @as(u32, @intCast(self.plan.children.items.len)) - children_start },
+            .tag_variants = .{ .start = variants_start, .len = variant_count },
+        });
+        return rest_id;
+    }
+
     fn appendSchemeRepSubstitutions(self: *Builder, maybe_substitution: ?SchemeCallSubstitution) Allocator.Error!Span {
         const substitution = maybe_substitution orelse return .{};
         const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
@@ -16382,7 +16923,7 @@ const Builder = struct {
                     const arg_types = try self.allocator.alloc(CheckedTypeIdentity, call_shape.arg_reps.len);
                     defer self.allocator.free(arg_types);
                     for (call_shape.arg_reps, arg_types) |rep, *ty| ty.* = self.plan.representations.items[@intFromEnum(rep)].source_type;
-                    break :blk try self.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(worker, call_shape.arg_reps, call_shape.arg_reps, call_shape.ret_rep, arg_types, self.plan.representations.items[@intFromEnum(call_shape.ret_rep)].source_type, null, null, null);
+                    break :blk try self.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(worker, call_shape.arg_reps, call_shape.arg_reps, call_shape.ret_rep, arg_types, self.plan.representations.items[@intFromEnum(call_shape.ret_rep)].source_type, null, null, null, null);
                 } else if (method.instantiation_ret_type) |ret_type| blk: {
                     const arg_types = try self.allocator.dupe(CheckedTypeIdentity, self.plan.dictionaryMethodCallTypeSlice(method.instantiation_arg_types));
                     defer self.allocator.free(arg_types);
@@ -16579,6 +17120,35 @@ const Builder = struct {
         const encoding_key = requirement_view.checked_types.rootKey(constructor.args[0]);
         const state_key = requirement_view.checked_types.rootKey(state_type);
         const error_key = requirement_view.checked_types.rootKey(try_payloads.err);
+        if (self.active_stored_fn) |stored| {
+            // A stored function carries the evidence its value was produced
+            // with. Its structural entry for this shape is the dictionary's
+            // method, exactly as the same entry is at a live checked use.
+            if (self.storedCodecEvidenceForShape(stored, source_view, expected_kind, shape_key)) |evidence| {
+                const derivation_id = evidence.generated_codec_derivation.?;
+                const derivation = source_view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+                if (!std.meta.eql(encoding_key, source_view.checked_types.rootKey(derivation.encoding_ty)) or
+                    !std.meta.eql(state_key, source_view.checked_types.rootKey(derivation.state_ty)))
+                {
+                    boxyPlanInvariant("stored codec evidence named a contract for another format");
+                }
+                const callable_type = typeRef(source_view, evidence.callable_ty);
+                _ = try self.analyzeType(source_view, evidence.callable_ty);
+                return .{
+                    .requirement_type = requirement.fn_ty,
+                    .callable_type = callable_type,
+                    .resolution = .{ .worker = try self.ensureWorker(
+                        .{ .generated_codec = .{
+                            .kind = if (expected_kind == .parser) .parser_constructor else .encoder_constructor,
+                            .shape = typeRef(source_view, evidence.dispatcher_ty),
+                            .contract_derivation = derivation_id,
+                        } },
+                        callable_type,
+                        null,
+                    ) },
+                };
+            }
+        }
         var found: ?struct {
             id: static_dispatch.GeneratedCodecDerivationId,
             derivation: static_dispatch.GeneratedCodecDerivation,
@@ -16607,19 +17177,67 @@ const Builder = struct {
         const selected = found orelse
             boxyPlanInvariant("generated codec dictionary had no matching checked derivation contract");
         const callable_type = typeRef(source_view, selected.derivation.constructor_ty);
+        const shape = source_rep.source_type;
         return .{
             .requirement_type = requirement.fn_ty,
             .callable_type = callable_type,
             .resolution = .{ .worker = try self.ensureWorker(
                 .{ .generated_codec = .{
                     .kind = if (expected_kind == .parser) .parser_constructor else .encoder_constructor,
-                    .shape = source_rep.source_type,
+                    .shape = shape,
                     .contract_derivation = selected.id,
                 } },
                 callable_type,
                 null,
             ) },
         };
+    }
+
+    /// The structural codec evidence a stored function retained for this
+    /// dispatcher shape: the entry its value was produced with.
+    fn storedCodecEvidenceForShape(
+        self: *Builder,
+        stored: StoredFnSource,
+        shape_view: ModuleView,
+        kind: static_dispatch.GeneratedCodecDerivationKind,
+        shape_key: anytype,
+    ) ?static_dispatch.StructuralEvidence {
+        const store_view = self.moduleForId(stored.module);
+        const fn_value = (store_view.const_store orelse boxyPlanInvariant("stored function had no ConstStore")).getFn(stored.fn_id);
+        const expected: static_dispatch.StructuralKind = switch (kind) {
+            .parser => .parser,
+            .encoder => .encoder,
+        };
+        var selected: ?static_dispatch.StructuralEvidence = null;
+        for (fn_value.evidence) |entry| {
+            const structural = switch (entry) {
+                .structural => |structural| structural,
+                .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => continue,
+            };
+            if (structural.derivation.kind() != expected) continue;
+            const checked_evidence = structural.checked orelse continue;
+            if (checked_evidence.generated_codec_derivation == null) continue;
+            if (!std.meta.eql(checked_evidence.view.bytes, shape_view.key.bytes)) {
+                boxyPlanInvariant("stored codec evidence named a contract outside its shape's module");
+            }
+            if (!std.meta.eql(shape_view.checked_types.rootKey(checked_evidence.dispatcher_ty), shape_key)) continue;
+            const evidence = static_dispatch.StructuralEvidence{
+                .derivation = structural.derivation,
+                .dispatcher_ty = checked_evidence.dispatcher_ty,
+                .callable_ty = checked_evidence.callable_ty,
+                .generated_codec_derivation = checked_evidence.generated_codec_derivation,
+            };
+            if (selected) |existing| {
+                if (existing.generated_codec_derivation != evidence.generated_codec_derivation or
+                    !std.meta.eql(shape_view.checked_types.rootKey(existing.callable_ty), shape_view.checked_types.rootKey(evidence.callable_ty)))
+                {
+                    boxyPlanInvariant("stored codec evidence named two contracts for one shape");
+                }
+            } else {
+                selected = evidence;
+            }
+        }
+        return selected;
     }
 
     fn structuralKindForRequirement(
@@ -17466,6 +18084,7 @@ const Builder = struct {
                 requested_type.ty,
                 codec.kind,
                 codec.derivation_kind,
+                fn_value,
             )
         else
             self.storedGeneratedCodecSource(
@@ -17474,6 +18093,7 @@ const Builder = struct {
                 requested_type.ty,
                 codec.kind,
                 codec.derivation_kind,
+                fn_value,
             );
         return .{ .generated_codec = source };
     }
@@ -17487,10 +18107,11 @@ const Builder = struct {
         requested_runtime_type: checked.CheckedTypeId,
         kind: GeneratedCodecKind,
         derivation_kind: static_dispatch.GeneratedCodecDerivationKind,
+        stored: check.ConstStore.ConstFn,
     ) Allocator.Error!GeneratedCodecSource {
-        const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind);
+        const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind, stored);
         const derivation = selected.derivation;
-        if (derivation.source_runtime_ty != requested_runtime_type or
+        if (selected.runtime_ty != requested_runtime_type or
             !try self.storedTypeMatchesCheckedType(store_view, stored_encoding_type, view, derivation.encoding_ty))
         {
             boxyPlanInvariant("stored generated codec encoding disagreed with its checked contract");
@@ -17556,6 +18177,20 @@ const Builder = struct {
                 continue;
             }
             const evidence = self.checkedEvidenceForProcedureUse(use.use);
+            const outer_stored_fn = self.active_stored_fn;
+            const outer_stored_substitution = self.active_stored_substitution;
+            self.active_stored_fn = use.stored_fn;
+            // A stored function's value was produced at one instantiation of
+            // its worker, which its use's type fixes: the substitution checking
+            // records at an instantiating use comes from relating the two.
+            self.active_stored_substitution = if (use.stored_fn != null)
+                try self.storedUseSchemeRepSubstitutions(worker.rep, callable_rep)
+            else
+                null;
+            defer {
+                self.active_stored_fn = outer_stored_fn;
+                self.active_stored_substitution = outer_stored_substitution;
+            }
             self.plan.callable_uses.items[callable_index].hidden_dict_args =
                 try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
                     use.worker,
