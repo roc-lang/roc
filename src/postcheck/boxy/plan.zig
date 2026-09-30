@@ -10951,7 +10951,12 @@ const Builder = struct {
                 .local_proc => |local| self.nestedExprEvidenceParams(view, self.nestedCallableSiteExprForExpr(view, local.expr) orelse local.expr),
                 .structural => null,
             };
-            try cursors.append(self.allocator, .{ .view = view, .entries = view.static_dispatch_plans.nestedEvidence(node), .schema = nested_schema });
+            switch (node.nested) {
+                .resolved => try cursors.append(self.allocator, .{ .view = view, .entries = view.static_dispatch_plans.nestedEvidence(node), .schema = nested_schema }),
+                // The target's nested evidence travels with the callable value
+                // and is observed through that callable's own use.
+                .from_callable => {},
+            }
         }
     }
 

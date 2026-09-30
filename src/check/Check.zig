@@ -37760,13 +37760,22 @@ fn deferredDispatchRelationWasRetained(
 /// their committed constraints are revisited by the ordinary post-commit pass.
 /// Whether every relation of a queued entry was already consumed by an entry
 /// attributing its failure to the same use, so consuming it again could
-/// neither decide nor report anything new.
+/// neither decide, record, nor report anything new. On a concrete receiver,
+/// consuming a relation that is not a generated codec selects its method
+/// target and records that target's instantiation; a relation consumed
+/// before its target was selected is not settled for this entry, which
+/// selects it.
 fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintCheck) bool {
     const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
     if (constraints.len == 0) return false;
+    const concrete_receiver = self.types.resolveVar(deferred.var_).desc.content == .structure;
     for (constraints) |constraint| {
         const failure_expr = self.settled_static_dispatch_failure_exprs.get(constraint.fn_var) orelse return false;
         if (failure_expr != deferred.failure_expr) return false;
+        const generated_codec = constraint.fn_name.eql(self.cir.idents.parser_for) or
+            constraint.fn_name.eql(self.cir.idents.encoder_for);
+        if (concrete_receiver and !generated_codec and
+            !self.dispatch_target_instantiation_by_fn_var.contains(constraint.fn_var)) return false;
     }
     return true;
 }
