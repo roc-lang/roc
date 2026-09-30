@@ -1633,6 +1633,9 @@ fn finishLoweredOutput(
         if (pass_target.lir_pass_parallel_metrics_out) |metrics| timing.addLirPassParallel(metrics.*);
     };
 
+    // Branch expectations are read off the lowered switches before any
+    // rewrite reshapes them.
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation);
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).

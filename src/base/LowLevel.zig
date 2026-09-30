@@ -97,6 +97,10 @@ pub const LowLevel = enum(u16) {
 
     // Bool operations
     bool_not,
+    /// The same Bool, marking the branch it decides as the one control is
+    /// expected to take. `if` lowering erases it into the switch's cold
+    /// default arm; anywhere else it is the identity.
+    bool_likely,
 
     // Hasher operations
     dict_pseudo_seed,
@@ -1090,6 +1094,7 @@ pub const LowLevel = enum(u16) {
             .list_capacity,
             .list_slack_unique,
             .bool_not,
+            .bool_likely,
             .dict_pseudo_seed,
             .hasher_finish,
             .hasher_write_bool,

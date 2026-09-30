@@ -4739,6 +4739,7 @@ pub const MonoLlvmCodeGen = struct {
                 const not_value = (self.wip orelse return error.CompilationFailed).not(value, "") catch return error.OutOfMemory;
                 try self.storeBool(self.slot(target).ptr, not_value);
             },
+            .bool_likely => try self.storeBool(self.slot(target).ptr, try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr)),
             .num_is_eq => try self.storeBool(self.slot(target).ptr, try self.emitValueEqual(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(GuardedList.at(arg_locals, 1)).ptr, self.localLayout(GuardedList.at(arg_locals, 0)))),
             .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => try self.emitNumericCompare(target, op, arg_locals),
             .compare => try self.emitNumericOrderCompare(target, arg_locals),

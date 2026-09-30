@@ -7294,6 +7294,11 @@ pub const Interpreter = struct {
                 val.write(u8, if (args[0].read(u8) == 0) 1 else 0);
                 break :blk val;
             },
+            .bool_likely => blk: {
+                const val = try self.alloc(.bool);
+                val.write(u8, args[0].read(u8));
+                break :blk val;
+            },
 
             // ── Hasher ──
             .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, switch (self.dict_seed_mode) {

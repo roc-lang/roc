@@ -36,6 +36,7 @@ pub const TagCaseFusion = @import("tag_case_fusion.zig");
 pub const LoopAppendPromote = @import("loop_append_promote.zig");
 /// Always-safe check elision from proven unsigned value-range facts.
 pub const RangeProve = @import("range_prove.zig");
+pub const BranchExpectation = @import("branch_expectation.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.
