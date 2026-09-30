@@ -12478,19 +12478,37 @@ No `for` node exists after Monotype IR.
 
 ## Monotype Lifted IR
 
+The lifting boundary sequences strict expression operands before outputting lifted
+bodies. A block or `let` used as an operand contributes its bindings to the
+enclosing continuation, so a mutable variable version named by later source
+expressions is explicitly in lexical scope. Operands are evaluated from left to
+right; opaque computations are named at their original position before any
+following operand's bindings. This transformation does not speculate or reorder
+work. Branches, loop bodies, joins, expect contexts, and compile-time evidence
+retain their own execution scopes. Later `if` conditions remain inside the
+preceding false continuation. State-merge patterns emitted by Monotype carry
+branch mutations into the enclosing continuation; sequencing consumes those
+explicit patterns rather than rediscovering writes or declining optimization.
+A strict operand that transfers control terminates its sequence explicitly; no
+consumer binding is emitted for its absent value, and an `unreachable` marker
+remains only the final expression of the terminated block.
+
 Monotype Lifted IR is `.lss`-only. It removes closures and local functions from
 expression position. Its type store is the Monotype type store.
 
 The expression language is intentionally close to Monotype IR, and the
-implementation consumes Monotype expression storage in place. Expression,
-pattern, statement, and side-array ids are preserved across the Monotype to
-Monotype Lifted boundary. Patterns and statements are the same storage. Most
-expressions are the same storage. Lifting rewrites only the expression variants
-whose callable meaning changes:
+implementation takes ownership of Monotype's expression, pattern, statement,
+and side-array storage, preserving their original ids in the transferred prefix.
+Callable lifting rewrites the expression variants whose callable meaning changes:
 
 - `lambda`, `def_ref`, and `fn_def` become `fn_ref`
 - a direct-call callee changes from a Monotype function template to a lifted
   function id
+
+Operand sequencing then appends the explicit ordered bodies, retaining source
+patterns and local identities and propagating source locations and regions.
+Function definitions refer to the sequenced body roots. Literal and local leaves
+can continue to reference the transferred prefix.
 
 This is a representation-sharing rule, not a license for later stages to accept
 pre-lift callable forms. After lifting, a valid lifted program has no reachable
@@ -12501,7 +12519,7 @@ Monotype Lifted API is a compiler bug.
 
 The lifted stage output adds only the data that lifting owns:
 
-- every function body is a top-level lifted definition
+- every function body is a top-level lifted definition with sequenced operands
 - each lifted function definition declares its capture symbols explicitly
 - roots and layout requests refer to lifted function ids
 - capture spans appended by lifting are stored in the shared typed-local side
