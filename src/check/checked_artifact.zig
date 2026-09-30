@@ -22332,6 +22332,11 @@ pub const CheckedProcedureTemplate = struct {
     nested_proc_sites: NestedProcSiteTableRef,
     target: ProcTarget,
     hosted_try_adapter: ?HostedTryAdapterCapability = null,
+    /// The low-level operation this template's body runs over its parameters,
+    /// for a Builtin definition the Builtin low-level transform produced.
+    /// Post-check stages read the operation from here; they never recognize a
+    /// low-level wrapper from its body.
+    provided_low_level: ?base.LowLevel = null,
     /// The scheme's dispatch obligations in canonical order (a range into
     /// `CheckedProcedureTemplateTable.evidence_params_pool`). Every
     /// specialization of this template receives one evidence entry per param.
@@ -22742,6 +22747,7 @@ pub const CheckedProcedureTemplateTable = struct {
                     .hosted
                 else
                     .roc,
+                .provided_low_level = module.moduleEnvConst().providedLowLevelForDef(def_idx),
                 // The `Try` capability is published for every template whose
                 // published result row is closed, not only hosted ones: a Roc
                 // implementation reached at a row that includes its own is

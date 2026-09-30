@@ -260,13 +260,18 @@ pub fn runBorrowed(
 
     const source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
     defer allocator.free(source_digests);
-    for (source_digests, 0..) |*digest, index| {
-        digest.* = solved.lifted.fnSourceDigest(@enumFromInt(@as(u32, @intCast(index))));
+    const layout_keyed_source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
+    defer allocator.free(layout_keyed_source_digests);
+    for (source_digests, layout_keyed_source_digests, 0..) |*digest, *layout_keyed, index| {
+        const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+        digest.* = solved.lifted.fnSourceDigest(fn_id);
+        layout_keyed.* = solved.lifted.fnLayoutKeyedSourceDigest(fn_id);
     }
 
     var lowerer = try Lowerer.init(allocator, target_usize, solved, options);
     errdefer lowerer.deinit();
     lowerer.source_digests = source_digests;
+    lowerer.layout_keyed_source_digests = layout_keyed_source_digests;
 
     try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
     try lowerer.result.setLoweringModules(solved.lifted.loweringModules());
@@ -698,6 +703,14 @@ const Lowerer = struct {
     /// Checked source digest per lifted function, borrowed for the whole
     /// lowering; see `proc_identity.Renderer`.
     source_digests: []const ?proc_identity.Identity = &.{},
+    /// `Lifted.Program.fnLayoutKeyedSourceDigest` per lifted function,
+    /// borrowed for the whole lowering; see `layoutKeyedIdentity`.
+    layout_keyed_source_digests: []const ?proc_identity.Identity = &.{},
+    /// Content digests of committed layouts, for layout-keyed procedure
+    /// identities. Rebuilt whenever the layout store interns another
+    /// recursive graph, since a new graph key can rename an existing layout.
+    layout_digests: ?layout.Digests = null,
+    layout_digests_recursive_graphs: usize = 0,
     post_check_executor: ?base.post_check_task_executor.Executor,
     types: Type.Store,
     result: LirProgram.Result,
@@ -1166,6 +1179,7 @@ const Lowerer = struct {
         self.capture_types.deinit();
         self.source_symbols.deinit();
         self.identity_memo.deinit();
+        if (self.layout_digests) |*digests| digests.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
@@ -1230,6 +1244,7 @@ const Lowerer = struct {
         self.capture_types.deinit();
         self.source_symbols.deinit();
         self.identity_memo.deinit();
+        if (self.layout_digests) |*digests| digests.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
@@ -2746,7 +2761,7 @@ const Lowerer = struct {
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
         if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
-        const identity = try self.specIdentity(spec);
+        const identity = try self.procIdentity(spec, entry);
         const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
         var cached: ?Common.SpecCacheHit = null;
         // Monotype completed a cached template's record without a body. That
@@ -2790,6 +2805,11 @@ const Lowerer = struct {
             // owner or this spec is the first one an emitted reference reaches.
             const existing = self.fn_entries.items[@intFromEnum(owner)].proc orelse
                 Common.invariant("direct LIR proc identity owner had no proc");
+            // The shared procedure is this specialization's procedure too, so
+            // the object cache may serve it under this specialization's key.
+            if (plain_spec) if (source_fn.source) |template| if (template.spec_key) |key| {
+                try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = existing });
+            };
             entry.proc = existing;
             entry.proc_owner = owner;
             self.fn_entries.items[index] = entry;
@@ -4986,6 +5006,57 @@ const Lowerer = struct {
         const slots = task.slots;
         task.slots = &.{};
         return .{ .ret = .{ .capture_slots = slots } };
+    }
+
+    /// Identity of the procedure a specialization lowers to. The plain
+    /// procedure of a layout-keyed Builtin template is named by its layouts
+    /// (`layoutKeyedIdentity`); every other procedure by its solved types.
+    fn procIdentity(self: *Lowerer, spec: FnSpec, entry: FnEntry) Common.LowerError!LIR.ProcIdentity {
+        if (spec.abi == .finite and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled()) {
+            if (self.layout_keyed_source_digests[@intFromEnum(spec.source)]) |source_digest| {
+                return try self.layoutKeyedIdentity(source_digest, entry.args, entry.ret);
+            }
+        }
+        return try self.specIdentity(spec);
+    }
+
+    /// Identity of the plain procedure of a layout-keyed Builtin template
+    /// (design.md "Layout-Keyed Builtin Procedures"). Its body is one
+    /// allow-listed low-level operation over its parameters, whose lowering
+    /// reads only the operand and result layouts, so the template's source
+    /// identity together with those layouts' content digests determines the
+    /// procedure's code. Specializations whose types differ but commit the
+    /// same layouts render one identity and share one procedure.
+    fn layoutKeyedIdentity(
+        self: *Lowerer,
+        source_digest: proc_identity.Identity,
+        args: Type.Span,
+        ret_ty: Type.TypeId,
+    ) Common.LowerError!LIR.ProcIdentity {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.layout-keyed.v1");
+        hasher.update(&source_digest);
+        const arg_count: u32 = @intCast(self.types.span(args).len);
+        hasher.update(&[_]u8{ @truncate(arg_count), @truncate(arg_count >> 8), @truncate(arg_count >> 16), @truncate(arg_count >> 24) });
+        for (0..arg_count) |i| {
+            const arg_ty = GuardedList.at(self.types.span(args), i);
+            hasher.update(&try self.layoutDigest(try self.layoutOfType(arg_ty)));
+        }
+        hasher.update(&try self.layoutDigest(try self.layoutOfType(ret_ty)));
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    fn layoutDigest(self: *Lowerer, layout_idx: layout.Idx) std.mem.Allocator.Error!layout.LayoutDigest {
+        const recursive_graphs = self.result.layouts.interned_recursive_graphs.count();
+        if (self.layout_digests != null and self.layout_digests_recursive_graphs != recursive_graphs) {
+            self.layout_digests.?.deinit();
+            self.layout_digests = null;
+        }
+        if (self.layout_digests == null) {
+            self.layout_digests = try layout.Digests.init(self.allocator, &self.result.layouts);
+            self.layout_digests_recursive_graphs = recursive_graphs;
+        }
+        return try self.layout_digests.?.get(layout_idx);
     }
 
     /// Identity of a specialization procedure, from its lifted source and the

@@ -6217,6 +6217,7 @@ const Builder = struct {
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
             const key = Ast.specIdentityKey(spec_identity);
             fn_template.spec_key = key;
+            if (template.provided_low_level) |op| fn_template.procedure_keyed_by_layout = op.procedureKeyedByLayout();
             if (@import("builtin").link_libc and std.c.getenv("ROC_SPEC_CENSUS") != null) {
                 const proc_base = view.names.procBase(template_ref.proc_base);
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";

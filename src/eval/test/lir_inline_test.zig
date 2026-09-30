@@ -4217,6 +4217,47 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(found_mul3);
 }
 
+fn countProcsNamed(store: *const lir.LirStore, name: []const u8) usize {
+    var count: usize = 0;
+    for (0..store.getProcSpecs().len) |i| {
+        const proc_name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, proc_name, name)) count += 1;
+    }
+    return count;
+}
+
+test "layout-keyed builtin specializations share one procedure per layout" {
+    const allocator = std.testing.allocator;
+
+    // `List.len` wraps `list_len`, which is on the layout-keyed allow list, so
+    // its specializations at `List({ a : U64 })` and `List({ b : U64 })`,
+    // whose item types differ but commit the same layout, are one
+    // procedure, while `List(Str)` gets its own. `List.is_empty` has a Roc
+    // body and no provided low-level operation, so it keeps one type-keyed
+    // procedure per item type even where the layouts agree.
+    const source =
+        \\count_all : List({ a : U64 }), List({ b : U64 }), List(Str) -> U64
+        \\count_all = |xs, ys, strs| List.len(xs) + List.len(ys) + List.len(strs)
+        \\
+        \\no_items : List({ a : U64 }), List({ b : U64 }) -> Bool
+        \\no_items = |xs, ys| List.is_empty(xs) and List.is_empty(ys)
+        \\
+        \\main : U64
+        \\main = {
+        \\    xs = [{ a: 1 }, { a: 2 }]
+        \\    ys = [{ b: 3 }]
+        \\    if no_items(xs, ys) 0 else count_all(xs, ys, ["x", "y"])
+        \\}
+    ;
+
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(store, "Builtin.List.len"));
+    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(store, "Builtin.List.is_empty"));
+}
+
 test "referenced but uncalled function does not materialize a proc" {
     const allocator = std.testing.allocator;
 
