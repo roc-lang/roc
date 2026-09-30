@@ -4574,13 +4574,31 @@ Builtin :: [].{
 		## ```
 		keep_until : List(item), (item -> Bool) -> List(item)
 		keep_until = |items, predicate| {
-			var $result = []
-			for item in items {
-				if predicate(item) == False {
-					$result = $result.append(item)
-				} else return $result
-			}
-			$result
+		  var $result = List.reserve([], items.len
+		  for item in items {
+		  	    if predicate(item) == False {
+		  	        $result = $result.append(item)
+		  	    } else return $result
+		  }
+		  $result
+		}
+		
+        ## Run the given function on each item and keep every item
+		## until the function returns `Bool.False`.
+		## ```roc
+		## expect [1, 2, 3].keep_while(|item| item == 1) |> List.is_eq([1])
+		## expect [1, 2, 3].keep_while(|item| item < 3) |> List.is_eq([1, 2])
+		## expect [1, 2, 3].keep_while(|item| item < 1) |> List.is_empty()
+		## ```
+		keep_while : List(item), (item -> Bool) -> List(item)
+		keep_while = |items, predicate| {
+		  var $result = List.reserve([], items.len
+		  for item in items {
+		  	    if predicate(item) {
+		  	        $result = $result.append(item)
+		  	    } else return $result
+		  }
+		  $result  
 		}
 
 		## Run the given function on each item of a list, and return a list of
