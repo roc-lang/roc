@@ -6137,6 +6137,34 @@ const Lowerer = struct {
         return .{ .expr = .{ .parent = parent, .target = target, .expr = expr, .ty = ty, .next = next } };
     }
 
+    /// Lowers one branch of an `if`/`match` value join whose parameter is
+    /// `target`; `jump` is the branch's jump to that join. A struct result
+    /// holding refcounted fields is computed into a branch-local and written
+    /// to the parameter by an explicit `initialize_join_param`, the definition
+    /// form that lets ARC take the fields of the dying joined record instead
+    /// of retaining each one and releasing the record whole.
+    fn valueJoinBranchTask(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        body: Lifted.ExprId,
+        result_ty: Type.TypeId,
+        jump: LIR.CFStmtId,
+    ) Common.LowerError!LowerTask {
+        const target_layout = self.result.layouts.getLayout(self.result.store.getLocal(target).layout_idx);
+        if (target_layout.tag != .struct_ or !self.result.layouts.layoutContainsRefcounted(target_layout)) {
+            return exprTask(where, target, body, result_ty, jump);
+        }
+        const branch_value = try self.addTemp(result_ty);
+        const initialize = try self.result.store.addCFStmt(.{ .set_local = .{
+            .target = target,
+            .value = branch_value,
+            .mode = .initialize_join_param,
+            .next = jump,
+        } }, where.glue());
+        return exprTask(where, branch_value, body, result_ty, initialize);
+    }
+
     fn lowerExprIntoAtType(
         self: *Lowerer,
         parent: LowerSite,
@@ -8108,7 +8136,7 @@ const Lowerer = struct {
             // Emitting the decision tree; `input` answers its request.
             0 => switch (try task.emitter.advance(input)) {
                 .request => |request| switch (request) {
-                    .body => |body| return .{ .call = exprTask(task.where, task.target, body.body, task.result_ty, body.next) },
+                    .body => |body| return .{ .call = try self.valueJoinBranchTask(task.where, task.target, body.body, task.result_ty, body.next) },
                     .bindings => |bindings| {
                         const stmts = self.solved.lifted.stmtSpan(bindings.bindings);
                         const items = try self.allocator.alloc(ChainItem, stmts.len);
@@ -8143,7 +8171,7 @@ const Lowerer = struct {
                 task.done = self.freshJoinPointId();
                 frame.index = self.solved.lifted.ifBranchSpan(task.branches).len;
                 frame.cursor = 1;
-                return .{ .call = exprTask(task.where, task.target, task.final_else, task.result_ty, try self.joinJump(task.where, task.done)) };
+                return .{ .call = try self.valueJoinBranchTask(task.where, task.target, task.final_else, task.result_ty, try self.joinJump(task.where, task.done)) };
             },
             // A lowered branch body; lower its condition before the switch.
             2 => {
@@ -8160,7 +8188,7 @@ const Lowerer = struct {
             frame.index -= 1;
             const branch = GuardedList.at(self.solved.lifted.ifBranchSpan(task.branches), frame.index);
             frame.cursor = 2;
-            return .{ .call = exprTask(task.where, task.target, branch.body, task.result_ty, try self.joinJump(task.where, task.done)) };
+            return .{ .call = try self.valueJoinBranchTask(task.where, task.target, branch.body, task.result_ty, try self.joinJump(task.where, task.done)) };
         }
         return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
             .id = task.done,
