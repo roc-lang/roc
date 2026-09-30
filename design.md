@@ -16839,6 +16839,36 @@ versioned loop is not such a loop, and cloning it would double the emitted
 body for every level of nesting to remove one predictable branch per site;
 it keeps its flag-dispatched sets instead.
 
+`List.clear` is its own low-level, `list_clear`, run by every backend as the
+zero-length sublist from index zero: that window is never a slice, so unlike
+`list_sublist` its result is born unique, and a list cleared and refilled
+each iteration keeps both its allocation and its unique birth. Modeled as a
+sublist, the clear left the chain unborn, the parameter it emptied borrowed,
+and the retained parameter's clear returned an empty list with no capacity.
+
+An append-only promoted loop versions on its slack instead. The fill limit
+answers whether the next append fits; a bound on the loop's remaining
+iterations answers whether every remaining append does, once. The bound is
+read off a `u64` counter parameter the loop head tests, before anything
+else branches, against a literal or a value the body never defines,
+continuing while the counter is unequal to, below or above it; every back
+edge steps the counter by one toward that value and nothing else defines
+it, so the remaining iterations are exactly the distance between them. Each
+chain's spare, its limit less its list's length, divided by the appends one
+iteration performs on it, must cover that distance; a counter already past
+its limit wraps the distance to one no spare covers. When every chain
+fits, the head enters a copy of the body in which each append site is the
+unchecked append with its limit carried through, and whose back edges
+return to the copy, since consuming one iteration and its appends keeps the
+cover. Otherwise the body runs as promoted. A chain reaching several loops
+gives each its own bound and its own copy. The copy nests no other promoted
+loop, every append site in the body belongs to a checked chain, the chains
+carry only plain appends, no list enters a chain inside the loop, and no
+append site sits before the head test or inside a nested loop, where it
+would run more than once per iteration. A procedure call in the body is no
+obstacle: the copy removes a carried limit and a branch per append whether
+or not the backend can schedule the loop as one block.
+
 `List.map` may overwrite a uniquely owned input list's buffer instead of
 allocating an output list when the input and output item representations are
 interchangeable in one allocation. Fully concrete items require the same

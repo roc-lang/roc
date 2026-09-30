@@ -2932,6 +2932,17 @@ const Pass = struct {
                 // statically known bound.
                 try self.bindFresh(s.target);
             },
+            .list_clear => {
+                // The cleared list has no items: its length term is zero.
+                if (try self.unknownFor(self.localLayout(s.target))) |out_node| {
+                    if (try self.constNode(0)) |zero| {
+                        try self.len_terms.put(out_node, zero);
+                        try self.bind(s.target, .{ .node = out_node });
+                        return;
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
             .list_set, .list_set_in_place_unsafe => {
                 // Replacing one element preserves the list's length on every
                 // continuing path, so the result shares the input's length

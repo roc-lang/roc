@@ -5022,9 +5022,7 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3].clear() == []
 		## ```
 		clear : List(a) -> List(a)
-		clear = |list| {
-			List.take_first(list, 0)
-		}
+		clear = |list| list_clear(list)
 
 		## Returns the given number of items from the end of the list.
 		## ```roc
@@ -24707,6 +24705,10 @@ list_append_le_bytes : List(U8), U64, U64 -> List(U8)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
+
+# Implemented by the compiler: removes every item, keeping the allocation and
+# its capacity when the list is uniquely owned
+list_clear : List(item) -> List(item)
 
 # Implemented by the compiler. Consumes the list and sorts it stably using the
 # boxed comparator. The comparator allocation is borrowed for the whole call.

@@ -7126,6 +7126,32 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_clear => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const source_list = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    break :blk self.rocListToValue(canonicalZstList(0), ll.ret_layout);
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                const result = builtins.list.listSublist(
+                    source_list,
+                    info.alignment,
+                    info.width,
+                    elems_rc,
+                    0,
+                    0,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    updateModeForArg0(ll.unique_args),
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
             .list_release_excess_capacity => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
