@@ -129,6 +129,7 @@ pub const CommonIdents = extern struct {
     str: Ident.Idx,
     list: Ident.Idx,
     iter: Ident.Idx,
+    stream: Ident.Idx,
     box: Ident.Idx,
     dict: Ident.Idx,
     set: Ident.Idx,
@@ -152,6 +153,7 @@ pub const CommonIdents = extern struct {
 
     // Fully-qualified type identifiers for type checking and layout generation
     builtin_iter: Ident.Idx,
+    builtin_stream: Ident.Idx,
     builtin_range: Ident.Idx,
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
@@ -270,6 +272,7 @@ pub const CommonIdents = extern struct {
             .str = try common.insertIdent(gpa, Ident.for_text("Str")),
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .iter = try common.insertIdent(gpa, Ident.for_text("Iter")),
+            .stream = try common.insertIdent(gpa, Ident.for_text("Stream")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
             .dict = try common.insertIdent(gpa, Ident.for_text("Dict")),
             .set = try common.insertIdent(gpa, Ident.for_text("Set")),
@@ -290,6 +293,7 @@ pub const CommonIdents = extern struct {
             .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
             .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
             .builtin_iter = try common.insertIdent(gpa, Ident.for_text("Builtin.Iter")),
+            .builtin_stream = try common.insertIdent(gpa, Ident.for_text("Builtin.Stream")),
             .builtin_range = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Range")),
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
@@ -406,6 +410,7 @@ pub const CommonIdents = extern struct {
             .str = common.findIdent("Str") orelse unreachable,
             .list = common.findIdent("List") orelse unreachable,
             .iter = common.findIdent("Iter") orelse unreachable,
+            .stream = common.findIdent("Stream") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
             .dict = common.findIdent("Dict") orelse unreachable,
             .set = common.findIdent("Set") orelse unreachable,
@@ -426,6 +431,7 @@ pub const CommonIdents = extern struct {
             .f64 = common.findIdent("F64") orelse unreachable,
             .dec = common.findIdent("Dec") orelse unreachable,
             .builtin_iter = common.findIdent("Builtin.Iter") orelse unreachable,
+            .builtin_stream = common.findIdent("Builtin.Stream") orelse unreachable,
             .builtin_range = common.findIdent("Builtin.Num.Range") orelse unreachable,
             .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
@@ -646,6 +652,10 @@ pub const ForLoopDispatchPlan = extern struct {
     step_var: u32,
     iter_fn_var: u32,
     next_fn_var: u32,
+    /// The method dispatched on the loop operand: `iter` for `for`, `stream` for `for!`.
+    iter_method_ident: u32,
+    /// The method that pulls each step: `next` for `for`, `next!` for `for!`.
+    next_method_ident: u32,
     step_topology: IteratorStepTopology,
 
     pub const SafeList = collections.SafeList(@This());
@@ -4818,6 +4828,8 @@ pub fn recordForLoopDispatchPlan(
     step_var: TypeVar,
     iter_fn_var: TypeVar,
     next_fn_var: TypeVar,
+    iter_method: Ident.Idx,
+    next_method: Ident.Idx,
     step_topology: IteratorStepTopology,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
@@ -4833,6 +4845,8 @@ pub fn recordForLoopDispatchPlan(
             .step_var = @intFromEnum(step_var),
             .iter_fn_var = @intFromEnum(iter_fn_var),
             .next_fn_var = @intFromEnum(next_fn_var),
+            .iter_method_ident = @bitCast(iter_method),
+            .next_method_ident = @bitCast(next_method),
             .step_topology = step_topology,
         };
         return;
@@ -4845,6 +4859,8 @@ pub fn recordForLoopDispatchPlan(
         .step_var = @intFromEnum(step_var),
         .iter_fn_var = @intFromEnum(iter_fn_var),
         .next_fn_var = @intFromEnum(next_fn_var),
+        .iter_method_ident = @bitCast(iter_method),
+        .next_method_ident = @bitCast(next_method),
         .step_topology = step_topology,
     });
 }

@@ -1,16 +1,39 @@
 //! Cryptographic digest helpers for compiler-owned crypto builtins.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const list = @import("list.zig");
 const utils = @import("utils.zig");
+const sha256 = @import("sha256.zig");
 
 const RocList = list.RocList;
 const RocOps = utils.RocOps;
-const Sha256 = std.crypto.hash.sha2.Sha256;
 const Blake3 = std.crypto.hash.Blake3;
 
 const digest_len = 32;
 
+/// SHA-256 over the rounds the target's CPU features select, never over a
+/// runtime CPU probe.
+///
+/// A builtins object compiled for a real target compresses with
+/// `sha256.compressForTarget`, fixed by the features it is compiled with. The
+/// LLVM builtins bitcode is compiled for wasm64 and retargeted, so its rounds
+/// are not known when it is compiled: it references `sha256.compress_symbol`
+/// instead, and the LLVM backend links the definition built for the target's
+/// `sha256.Rounds` (see `sha256_rounds_lib.zig`).
+const Sha256 = sha256.Hasher(if (builtin.target.cpu.arch == .wasm64) compressLinkedForTarget else sha256.compressForTarget);
+
+fn compressLinkedForTarget(state: *sha256.State, blocks: []const sha256.Block) void {
+    const compress = @extern(*const sha256.CompressAbi, .{ .name = sha256.compress_symbol });
+    compress(state, blocks.ptr, blocks.len);
+}
+
+/// The serialized incremental SHA-256 state is the builtin's own format, not
+/// any hasher's memory layout: a version byte, the eight chaining words
+/// (little-endian), the pending partial block zero-padded to 64 bytes, the
+/// pending byte count, and the message length so far (little-endian u64).
+/// Programs keep these bytes, so the format is stable across rounds
+/// implementations and compiler versions.
 const sha256_state_version: u8 = 1;
 const sha256_state_len = 1 + 8 * 4 + Sha256.block_length + 1 + 8;
 
@@ -70,7 +93,7 @@ fn serializeSha256(hasher: *const Sha256, roc_ops: *RocOps) RocList {
     state[0] = sha256_state_version;
 
     var offset: usize = 1;
-    for (hasher.s) |word| {
+    for (hasher.state) |word| {
         writeU32(state[offset..][0..4], word);
         offset += 4;
     }
@@ -92,13 +115,12 @@ fn deserializeSha256(state: []const u8, roc_ops: *RocOps) Sha256 {
 
     var hasher = Sha256.init(.{});
     var offset: usize = 1;
-    for (&hasher.s) |*word| {
+    for (&hasher.state) |*word| {
         word.* = readU32(state[offset..][0..4]);
         offset += 4;
     }
 
-    hasher.buf = @splat(0);
-    @memcpy(hasher.buf[0..Sha256.block_length], state[offset..][0..Sha256.block_length]);
+    @memcpy(&hasher.buf, state[offset..][0..Sha256.block_length]);
     offset += Sha256.block_length;
 
     hasher.buf_len = state[offset];
@@ -270,7 +292,7 @@ fn expectDigestEqual(actual: RocList, expected: []const u8) error{TestExpectedEq
 
 fn sha256Digest(input: []const u8) [digest_len]u8 {
     var digest: [digest_len]u8 = undefined;
-    Sha256.hash(input, &digest, .{});
+    std.crypto.hash.sha2.Sha256.hash(input, &digest, .{});
     return digest;
 }
 
@@ -373,4 +395,50 @@ test "crypto null pointer with zero length hashes empty input" {
     const blake_expected = blake3Digest("");
     try expectDigestEqual(sha256HashBytes(null, 0, ops), &sha_expected);
     try expectDigestEqual(blake3HashBytes(null, 0, ops), &blake_expected);
+}
+
+/// The version 1 state bytes as the builtin wrote them from the standard
+/// library hasher's fields, so saved states from any compiler version compare
+/// against the current serializer byte for byte.
+fn stdSha256StateV1(hasher: *const std.crypto.hash.sha2.Sha256) [sha256_state_len]u8 {
+    var state: [sha256_state_len]u8 = undefined;
+    state[0] = 1;
+    var offset: usize = 1;
+    for (hasher.s) |word| {
+        writeU32(state[offset..][0..4], word);
+        offset += 4;
+    }
+    @memset(state[offset..][0..64], 0);
+    @memcpy(state[offset..][0..hasher.buf_len], hasher.buf[0..hasher.buf_len]);
+    offset += 64;
+    state[offset] = hasher.buf_len;
+    offset += 1;
+    writeU64(state[offset..][0..8], hasher.total_len);
+    return state;
+}
+
+test "SHA256 hasher state keeps the version 1 bytes" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    var input: [200]u8 = undefined;
+    for (&input, 0..) |*byte, i| byte.* = @truncate(i *% 0x45 +% 0x3);
+
+    // Every prefix length crosses a different mix of whole blocks and a
+    // pending partial block, so the chaining words, buffer, and lengths are
+    // all pinned. States written before the builtin owned its hasher must
+    // resume to the same digest, and fresh states must be the same bytes.
+    for ([_]usize{ 0, 1, 63, 64, 65, 128, 130, 200 }) |len| {
+        var reference = std.crypto.hash.sha2.Sha256.init(.{});
+        reference.update(input[0..len]);
+        const saved = stdSha256StateV1(&reference);
+
+        const written = sha256HasherWrite(sha256HasherEmpty(ops).bytes, sha256_state_len, &input, len, ops);
+        try std.testing.expectEqualSlices(u8, &saved, listBytes(written));
+
+        const resumed = sha256HasherWrite(&saved, saved.len, input[len..].ptr, input.len - len, ops);
+        const expected = sha256Digest(&input);
+        try expectDigestEqual(sha256HasherFinish(resumed.bytes, resumed.length, ops), &expected);
+    }
 }

@@ -240,7 +240,24 @@ pub const Constants = struct {
     /// 109: Every source node replaced by a runtime error, patterns included,
     ///      stays readable through the node store's `replaced_source_nodes`,
     ///      named by the `.malformed` payload.
-    pub const CACHE_VERSION = 109;
+    /// 110: Expect roots reaching checked errors are ineligible for execution,
+    ///      including errors in referenced procedures and constants.
+    /// 111: Checked type keys refer to each context-free subtree by its own
+    ///      key, use one-byte tags and varint integers, and a synthetic
+    ///      function over composed children shares its source key.
+    /// 112: `for` nodes carry their `ForKind`, `ForLoopDispatchPlan` records its
+    ///      dispatched method names, and common idents include `Builtin.Stream`.
+    /// 113: `Stream` is a checked builtin nominal, so every module interns its
+    ///      unqualified and fully qualified type names as common identifiers.
+    /// 114: Combined with the Stream loop format, derived-method markers record
+    ///      their owner type declaration, and a type-rooted dispatch call can
+    ///      dispatch on an explicit type var. Version 113 is reserved for the
+    ///      separate Stream builtin change.
+    /// 115: Reserved for wide-representation-capacity.
+    /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
+    /// 117: Raw alias types record the source argument boundary before their
+    ///      hidden polarity parameters.
+    pub const CACHE_VERSION = 117;
 };
 
 /// Configuration for the Roc cache system.

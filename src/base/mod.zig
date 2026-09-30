@@ -2,6 +2,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Shared declaration polarity equations for AST and CIR producers.
+pub const annotation_positions = @import("annotation_positions.zig");
+
 pub const SExprTree = @import("SExprTree.zig");
 pub const TextRankCache = @import("TextRankCache.zig");
 pub const Ident = @import("Ident.zig");
@@ -33,6 +36,8 @@ pub const SerialStringInterner = @import("SerialStringInterner.zig");
 pub const InternedBytes = @import("InternedBytes.zig");
 pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
 pub const TypeDigestHasher = @import("TypeDigestHasher.zig");
+/// SHA-256 on the CPU's SHA-256 instructions, interchangeable with `std.crypto.hash.sha2.Sha256`.
+pub const Sha256 = @import("sha256.zig").Sha256;
 pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
@@ -52,6 +57,8 @@ pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 pub const CommonEnv = @import("CommonEnv.zig");
+/// Exact Unicode bidi-control source policy and visible display helpers.
+pub const bidi = @import("bidi.zig");
 pub const source_utils = @import("source_utils.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
@@ -90,6 +97,7 @@ test {
     std.testing.refAllDecls(LargeBlockAllocator);
     std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(TypeDigestHasher);
+    std.testing.refAllDecls(@import("sha256.zig"));
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }

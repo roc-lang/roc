@@ -23,7 +23,7 @@ TYPE MISMATCH - effectful_callback_through_pure_callback_annotation.md:9:8:9:8
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 9 8) (end 9 23))
+		(region (start 9 19) (end 9 22))
 		(headline
 			(reflow "The")
 			(reflow " ")

@@ -178,7 +178,7 @@ pub const JoinParamIndex = struct {
         }
     }
 
-    fn get(self: *const JoinParamIndex, id: LIR.JoinPointId) ?LIR.LocalSpan {
+    pub fn get(self: *const JoinParamIndex, id: LIR.JoinPointId) ?LIR.LocalSpan {
         return self.params.get(id);
     }
 };
@@ -264,7 +264,6 @@ pub fn appendSuccessorsWithAllocator(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -440,11 +439,6 @@ pub fn forEachStmtRead(
             note(ctx, s.source);
             emitDesc(ctx, note, s.source_desc);
         },
-        .assign_boxy_eq => |s| {
-            note(ctx, s.lhs);
-            note(ctx, s.rhs);
-            emitDesc(ctx, note, s.source_desc);
-        },
         .assign_boxy_tag => |s| {
             emitDesc(ctx, note, s.target_desc);
             if (s.payload) |payload| note(ctx, payload);
@@ -581,7 +575,6 @@ pub fn forEachStmtDef(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_call_dict,
         .assign_low_level,
@@ -807,7 +800,6 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
-        .assign_boxy_eq,
         .assign_boxy_tag,
         .assign_call_dict,
         .assign_low_level,
@@ -887,6 +879,118 @@ pub fn chainIsSingleUse(store: *LirStore, proc_body: CFStmtId, chain: []const Lo
         if (reads.get(local) != 1) return false;
     }
     return true;
+}
+
+/// The statements a subtree clone must copy when its rewriter changes only
+/// `seeds`. A copy defines fresh locals and declares fresh join identities,
+/// so every reader of a local a copied statement defines and every jump to a
+/// join a copied statement declares is copied too, and every predecessor of a
+/// copied statement is copied so it can point at the copy. A jump reads its
+/// target's parameters: its arguments are those locals, which a copied jump
+/// bridges back to the target when the copy renamed them. Every other
+/// statement reachable from `root` is shared unchanged by the clone: it stays
+/// reachable through its original predecessors as well, and copying it would
+/// duplicate code the rewrite leaves identical.
+pub fn collectCopiedStmts(
+    store: *LirStore,
+    root: CFStmtId,
+    seeds: []const CFStmtId,
+    join_params: *const JoinParamIndex,
+    allocator: Allocator,
+) Allocator.Error!collections.DenseMap(CFStmtId, void) {
+    const Edge = struct {
+        key: u32,
+        stmt: CFStmtId,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            return a.key < b.key;
+        }
+    };
+    const ReaderCollector = struct {
+        edges: *std.ArrayList(Edge),
+        stmt: CFStmtId,
+        allocator: Allocator,
+        failure: ?Allocator.Error = null,
+
+        fn note(self: *@This(), local: LocalId) void {
+            if (self.failure != null) return;
+            self.edges.append(self.allocator, .{ .key = @intFromEnum(local), .stmt = self.stmt }) catch |err| {
+                self.failure = err;
+            };
+        }
+    };
+
+    // Reverse edges of the region, keyed by the statement, local, or join
+    // each one leads back from.
+    var predecessors = std.ArrayList(Edge).empty;
+    defer predecessors.deinit(allocator);
+    var readers = std.ArrayList(Edge).empty;
+    defer readers.deinit(allocator);
+    var jumps = std.ArrayList(Edge).empty;
+    defer jumps.deinit(allocator);
+    var successors = std.ArrayList(CFStmtId).empty;
+    defer successors.deinit(allocator);
+    var walk = try ReachableStmts.initWithAllocator(store, root, allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        successors.clearRetainingCapacity();
+        try appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        for (successors.items) |successor| {
+            try predecessors.append(allocator, .{ .key = @intFromEnum(successor), .stmt = stmt_id });
+        }
+        const stmt = store.getCFStmt(stmt_id);
+        var collector: ReaderCollector = .{ .edges = &readers, .stmt = stmt_id, .allocator = allocator };
+        forEachStmtRead(store, stmt, &collector, ReaderCollector.note);
+        if (stmt == .jump) {
+            const params = join_params.get(stmt.jump.target) orelse
+                @panic("subtree copy plan found a jump to an unknown join");
+            emitSpan(store, &collector, ReaderCollector.note, params);
+            try jumps.append(allocator, .{ .key = @intFromEnum(stmt.jump.target), .stmt = stmt_id });
+        }
+        if (collector.failure) |err| return err;
+    }
+    std.mem.sort(Edge, predecessors.items, {}, Edge.lessThan);
+    std.mem.sort(Edge, readers.items, {}, Edge.lessThan);
+    std.mem.sort(Edge, jumps.items, {}, Edge.lessThan);
+
+    var copied = collections.DenseMap(CFStmtId, void).init(allocator);
+    errdefer copied.deinit();
+    var work = std.ArrayList(CFStmtId).empty;
+    defer work.deinit(allocator);
+    try work.appendSlice(allocator, seeds);
+    var defined: ReadCounts = .{ .counts = collections.DenseMap(LocalId, u32).init(allocator) };
+    defer defined.deinit();
+    while (work.pop()) |stmt_id| {
+        const entry = try copied.getOrPut(stmt_id);
+        if (entry.found_existing) continue;
+        try appendEdgeStmts(Edge, &work, predecessors.items, @intFromEnum(stmt_id), allocator);
+        defined.counts.clearRetainingCapacity();
+        try markStmtDefinitionsSparse(store, &defined, stmt_id);
+        var defined_locals = defined.counts.keyIterator();
+        while (defined_locals.next()) |local| {
+            try appendEdgeStmts(Edge, &work, readers.items, @intFromEnum(local.*), allocator);
+        }
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .join) try appendEdgeStmts(Edge, &work, jumps.items, @intFromEnum(stmt.join.id), allocator);
+    }
+    return copied;
+}
+
+fn appendEdgeStmts(
+    comptime Edge: type,
+    work: *std.ArrayList(CFStmtId),
+    edges: []const Edge,
+    key: u32,
+    allocator: Allocator,
+) Allocator.Error!void {
+    var index = std.sort.lowerBound(Edge, edges, key, struct {
+        fn order(target: u32, edge: Edge) std.math.Order {
+            return std.math.order(target, edge.key);
+        }
+    }.order);
+    while (index < edges.len and edges[index].key == key) : (index += 1) {
+        try work.append(allocator, edges[index].stmt);
+    }
 }
 
 /// What a cloned call variant adds to the proc it was cloned from.
@@ -1176,6 +1280,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_literal => |s| try self.store.addCFStmt(.{ .assign_literal = .{
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
+                    .fresh_alternative = s.fresh_alternative,
                     .next = try self.cloneStmt(s.next),
                 } }, origin),
                 .assign_call => |s| try self.store.addCFStmt(.{ .assign_call = .{
@@ -1265,14 +1370,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_boxy_inspect => |s| try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
-                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
-                    .source_mode = s.source_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }, origin),
-                .assign_boxy_eq => |s| try self.store.addCFStmt(.{ .assign_boxy_eq = .{
-                    .target = try self.mapLocal(s.target),
-                    .lhs = try self.mapLocal(s.lhs),
-                    .rhs = try self.mapLocal(s.rhs),
                     .source_desc = try self.mapBoxyDescRef(s.source_desc),
                     .source_mode = s.source_mode,
                     .next = try self.cloneStmt(s.next),

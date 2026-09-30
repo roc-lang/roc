@@ -21,6 +21,7 @@ pub const NodeStore = @import("NodeStore.zig");
 pub const Node = @import("Node.zig");
 pub const Expr = @import("Expression.zig").Expr;
 pub const DerivedMethodKind = @import("Expression.zig").DerivedMethodKind;
+pub const TypeDispatchOwner = @import("Expression.zig").TypeDispatchOwner;
 pub const AnnotationOnlyKind = @import("Expression.zig").AnnotationOnlyKind;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
@@ -779,6 +780,14 @@ pub const IntValue = struct {
         const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable;
         try tree.pushReservedStringPair(key, begin, value_str);
     }
+};
+
+/// Which iteration protocol a source `for` loop uses.
+pub const ForKind = enum(u32) {
+    /// `for`: calls `iter` on the operand and pulls items with the pure `next`.
+    iter,
+    /// `for!`: calls `stream` on the operand and pulls items with the effectful `next!`.
+    stream,
 };
 
 /// Canonical information about a number

@@ -409,7 +409,7 @@ fn pushContent(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
                 .source = alias,
                 .translated_ident = translated_ident,
                 .backing = ctx.source_store.getAliasBackingVar(alias),
-                .args = ctx.source_store.sliceAliasArgs(alias),
+                .args = ctx.source_store.sliceAliasAllArgs(alias),
                 .values_base = @intCast(machine.values.items.len),
             } });
             return false;
@@ -677,6 +677,7 @@ fn stepAlias(ctx: *CopyContext, frame: *AliasFrame) std.mem.Allocator.Error!bool
                     .vars = .{ .nonempty = dest_vars_span },
                     .origin_module = translated_origin,
                     .source_decl = frame.source.source_decl,
+                    .source_arg_count = frame.source.source_arg_count,
                 } });
                 return true;
             },

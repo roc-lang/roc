@@ -906,7 +906,7 @@ pub const SyntaxChecker = struct {
     }
 
     fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) (Allocator.Error || error{WriteFailed})!Diagnostics.Diagnostic {
-        const range = self.rangeFromReport(rep);
+        const range = rangeFromReport(rep);
         const severity: u32 = switch (rep.severity) {
             .warning => 2,
             .runtime_error, .fatal => 1,
@@ -927,51 +927,57 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    fn rangeFromReport(_: *SyntaxChecker, rep: reporting.Report) Diagnostics.Range {
-        var start = Diagnostics.Position{ .line = 0, .character = 0 };
-        var end = Diagnostics.Position{ .line = 0, .character = 0 };
-
-        var idx: usize = 0;
-        while (idx < rep.document.elementCount()) : (idx += 1) {
-            const maybe_element = rep.document.getElement(idx) orelse break;
-            switch (maybe_element) {
-                .source_code_region => |region| {
-                    start = .{ .line = saturatingMinusOne(region.start_line), .character = saturatingMinusOne(region.start_column) };
-                    end = .{ .line = saturatingMinusOne(region.end_line), .character = saturatingMinusOne(region.end_column) };
-                    break;
-                },
-                .source_code_with_underlines => |region| {
-                    start = .{ .line = saturatingMinusOne(region.display_region.start_line), .character = saturatingMinusOne(region.display_region.start_column) };
-                    end = .{ .line = saturatingMinusOne(region.display_region.end_line), .character = saturatingMinusOne(region.display_region.end_column) };
-                    break;
-                },
-                .source_code_multi_region => |multi| {
-                    if (multi.regions.len > 0) {
-                        const region = multi.regions[0];
-                        start = .{ .line = saturatingMinusOne(region.start_line), .character = saturatingMinusOne(region.start_column) };
-                        end = .{ .line = saturatingMinusOne(region.end_line), .character = saturatingMinusOne(region.end_column) };
-                        break;
-                    }
-                },
-                .line_break,
-                .indent,
-                .space,
-                .horizontal_rule,
-                .annotation_start,
-                .annotation_end,
-                .text,
-                .annotated,
-                .raw,
-                .reflowing_text,
-                .link,
-                .vertical_stack,
-                .horizontal_concat,
-                .source_location,
-                => {},
+    fn rangeFromReport(rep: reporting.Report) Diagnostics.Range {
+        if (rep.getRegionInfo()) |region| {
+            // Convert the original source bytes, never the visible diagnostic
+            // text: escaping a control must not move its editor highlight.
+            for (rep.document.elements.items) |element| {
+                const source, const first_line = switch (element) {
+                    .source_code_region => |display| .{ display.line_text, display.start_line },
+                    .source_code_with_underlines => |underlines| if (underlines.underline_regions.len > 0)
+                        .{ underlines.display_region.line_text, underlines.display_region.start_line }
+                    else
+                        continue,
+                    .source_code_multi_region => |multi| if (multi.regions.len > 0)
+                        .{ multi.source, @as(u32, 1) }
+                    else
+                        continue,
+                    .text,
+                    .annotated,
+                    .line_break,
+                    .indent,
+                    .space,
+                    .horizontal_rule,
+                    .annotation_start,
+                    .annotation_end,
+                    .raw,
+                    .reflowing_text,
+                    .link,
+                    .vertical_stack,
+                    .horizontal_concat,
+                    .source_location,
+                    => continue,
+                };
+                return .{
+                    .start = reportPosition(source, first_line, region.start_line_idx, region.start_col_idx),
+                    .end = reportPosition(source, first_line, region.end_line_idx, region.end_col_idx),
+                };
             }
         }
+        return .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 0 } };
+    }
 
-        return .{ .start = start, .end = end };
+    fn reportPosition(source: []const u8, first_line: u32, line: u32, column: u32) Diagnostics.Position {
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var current = first_line;
+        while (lines.next()) |text| : (current += 1) {
+            if (current == line) return .{
+                .line = saturatingMinusOne(line),
+                .character = pos.byteOffsetToUtf16Column(text, saturatingMinusOne(column)),
+            };
+        }
+        // Reports can point immediately past the available source at EOF.
+        return .{ .line = saturatingMinusOne(line), .character = 0 };
     }
 
     fn saturatingMinusOne(value: u32) u32 {
@@ -4341,4 +4347,21 @@ fn truncateTypeLabel(rendered: []const u8) []const u8 {
     // Back off any UTF-8 continuation bytes so the cut lands on a boundary.
     while (end > 0 and (rendered[end] & 0xC0) == 0x80) : (end -= 1) {}
     return rendered[0..end];
+}
+
+test "bidi diagnostic range uses original UTF-16 source positions" {
+    const source = "# \u{1F642} \u{5D0}\u{5D1}\u{202E}\n";
+    const start = std.mem.find(u8, source, "\u{202E}").?;
+    var report = try reporting.Report.init(std.testing.allocator, "Bidi Test", "A control is forbidden.", .runtime_error);
+    defer report.deinit();
+    try report.document.addSourceRegion(.{
+        .start_line_idx = 0,
+        .start_col_idx = @intCast(start),
+        .end_line_idx = 0,
+        .end_col_idx = @intCast(start + "\u{202E}".len),
+    }, .error_highlight, "Probe.roc", source, &.{0});
+    const range = SyntaxChecker.rangeFromReport(report);
+    try std.testing.expectEqual(@as(u32, 0), range.start.line);
+    try std.testing.expectEqual(@as(u32, 7), range.start.character);
+    try std.testing.expectEqual(@as(u32, 8), range.end.character);
 }

@@ -15,6 +15,14 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
 
+/// The dispatcher type var of a checked type-dispatch call.
+pub fn typeDispatchCallDispatcherVar(module: anytype, owner: CIR.TypeDispatchOwner) Var {
+    return switch (owner) {
+        .statement => |stmt_idx| typeDispatchOwnerVar(module, stmt_idx),
+        .dispatcher => |dispatcher| dispatcher,
+    };
+}
+
 /// The type var that owns a type-dispatch call's statement.
 pub fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
     return switch (module.getStatement(stmt_idx)) {
@@ -70,7 +78,7 @@ pub fn forEachStaticDispatchTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR
         try visitor.visitRequired(interpolation.constraint_fn_var, "checked interpolation expression had no static dispatch constraint type");
         try visitor.visitRequired(interpolation.step_fn_var, "checked interpolation expression had no generated step function type");
     } else if (expr == .e_type_dispatch_call) {
-        try visitor.visit(typeDispatchOwnerVar(&module_env.store, expr.e_type_dispatch_call.type_dispatch_stmt));
+        try visitor.visit(typeDispatchCallDispatcherVar(&module_env.store, expr.e_type_dispatch_call.owner));
         try visitor.visit(expr.e_type_dispatch_call.constraint_fn_var);
     } else if (expr == .e_method_eq) {
         try visitor.visit(ModuleEnv.varFrom(expr.e_method_eq.lhs));

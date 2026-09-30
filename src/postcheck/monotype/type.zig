@@ -303,6 +303,7 @@ pub const Store = struct {
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
     equality_digests: StoreList(?names.TypeDigest, "equality_digests"),
+    representation_digests: StoreList(?names.TypeDigest, "representation_digests"),
     /// Newly reserved recursive slots may be referenced while their content is
     /// being built, but they are not observable types until filled. Filled
     /// nodes are immutable, which makes their cached digests permanently valid.
@@ -355,11 +356,12 @@ pub const Store = struct {
     pub const ReadSharingQueries = struct {
         full: bool = false,
         equality: bool = false,
+        representation: bool = false,
         specialization: bool = false,
         iterator: bool = false,
 
-        pub const spec_constr: ReadSharingQueries = .{ .full = true, .equality = true };
-        pub const all: ReadSharingQueries = .{ .full = true, .equality = true, .specialization = true, .iterator = true };
+        pub const spec_constr: ReadSharingQueries = .{ .equality = true, .representation = true };
+        pub const all: ReadSharingQueries = .{ .full = true, .equality = true, .representation = true, .specialization = true, .iterator = true };
     };
 
     pub fn init(allocator: std.mem.Allocator) Store {
@@ -369,6 +371,7 @@ pub const Store = struct {
             .type_digests = .empty,
             .specialization_digests = .empty,
             .equality_digests = .empty,
+            .representation_digests = .empty,
             .constructing = .empty,
             .unfinished_type_count = 0,
             .active_transaction = null,
@@ -395,7 +398,7 @@ pub const Store = struct {
         if (!self.frozen) Common.invariant("Monotype type cloning requires a frozen graph");
         var result = Store.init(allocator);
         errdefer result.deinit();
-        inline for (.{ "types", "type_digests", "specialization_digests", "equality_digests", "constructing", "iterator_interface_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         // Traversal history is local, but every cloned type still needs a slot
@@ -434,7 +437,7 @@ pub const Store = struct {
         if (self.borrowed_read_only) Common.invariant("cannot prepare a borrowed Monotype type store");
         if (self.hasSpeculativeConstruction()) Common.invariant("Monotype read sharing requires completed construction");
         self.read_sharing_prepared = false;
-        inline for (.{ "full", "equality", "specialization", "iterator" }) |query| {
+        inline for (.{ "full", "equality", "representation", "specialization", "iterator" }) |query| {
             if (@field(queries, query) and !@field(self.read_sharing_coverage, query)) {
                 for (0..self.types.len()) |index| {
                     const ty: TypeId = @enumFromInt(index);
@@ -445,6 +448,8 @@ pub const Store = struct {
                             .full
                         else if (std.mem.eql(u8, query, "equality"))
                             .equality
+                        else if (std.mem.eql(u8, query, "representation"))
+                            .representation
                         else
                             .identity_only;
                         const digest = try self.computeDigest(name_store, ty, mode, null);
@@ -493,6 +498,7 @@ pub const Store = struct {
         self.iterator_interface_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
         self.equality_digests.deinit(self.allocator);
+        self.representation_digests.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
@@ -581,6 +587,8 @@ pub const Store = struct {
         errdefer _ = self.specialization_digests.pop();
         try self.equality_digests.append(self.allocator, null);
         errdefer _ = self.equality_digests.pop();
+        try self.representation_digests.append(self.allocator, null);
+        errdefer _ = self.representation_digests.pop();
         try self.constructing.append(self.allocator, false);
         errdefer _ = self.constructing.pop();
         try self.iterator_interface_cache.append(self.allocator, null);
@@ -805,6 +813,7 @@ pub const Store = struct {
         type_digests: []?names.TypeDigest,
         specialization_digests: []?names.TypeDigest,
         equality_digests: []?names.TypeDigest,
+        representation_digests: []?names.TypeDigest,
         spans: []TypeId,
         fields: []Field,
         tags: []Tag,
@@ -837,6 +846,11 @@ pub const Store = struct {
                 source.equality_digests.unsafeRawItemsForView()[begin.types..end.types],
             );
             errdefer allocator.free(equality_digests);
+            const representation_digests = try allocator.dupe(
+                ?names.TypeDigest,
+                source.representation_digests.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(representation_digests);
             const spans = try allocator.dupe(
                 TypeId,
                 source.spans.unsafeRawItemsForView()[begin.spans..end.spans],
@@ -864,6 +878,7 @@ pub const Store = struct {
                 .type_digests = type_digests,
                 .specialization_digests = specialization_digests,
                 .equality_digests = equality_digests,
+                .representation_digests = representation_digests,
                 .spans = spans,
                 .fields = fields,
                 .tags = tags,
@@ -892,6 +907,7 @@ pub const Store = struct {
                 self.end.types,
             );
             try destination.equality_digests.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.representation_digests.ensureTotalCapacity(destination.allocator, self.end.types);
             try destination.constructing.ensureTotalCapacity(destination.allocator, self.end.types);
             try destination.iterator_interface_cache.ensureTotalCapacity(
                 destination.allocator,
@@ -935,6 +951,10 @@ pub const Store = struct {
                     @intFromEnum(added),
                     self.equality_digests[offset],
                 );
+                destination.representation_digests.set(
+                    @intFromEnum(added),
+                    self.representation_digests[offset],
+                );
             }
             std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
         }
@@ -953,6 +973,7 @@ pub const Store = struct {
             self.allocator.free(self.tags);
             self.allocator.free(self.fields);
             self.allocator.free(self.spans);
+            self.allocator.free(self.representation_digests);
             self.allocator.free(self.equality_digests);
             self.allocator.free(self.specialization_digests);
             self.allocator.free(self.type_digests);
@@ -972,6 +993,7 @@ pub const Store = struct {
         std.debug.assert(self.type_digests.len() == self.types.len());
         std.debug.assert(self.specialization_digests.len() == self.types.len());
         std.debug.assert(self.equality_digests.len() == self.types.len());
+        std.debug.assert(self.representation_digests.len() == self.types.len());
         std.debug.assert(begin.types <= end.types and end.types <= self.types.len());
         std.debug.assert(begin.spans <= end.spans and end.spans <= self.spans.len());
         std.debug.assert(begin.fields <= end.fields and end.fields <= self.fields.len());
@@ -1041,6 +1063,7 @@ pub const Store = struct {
         type_digests_len: usize,
         specialization_digests_len: usize,
         equality_digests_len: usize,
+        representation_digests_len: usize,
         constructing_len: usize,
         unfinished_type_count: usize,
         iterator_interface_cache_len: usize,
@@ -1057,6 +1080,7 @@ pub const Store = struct {
             .type_digests_len = self.type_digests.len(),
             .specialization_digests_len = self.specialization_digests.len(),
             .equality_digests_len = self.equality_digests.len(),
+            .representation_digests_len = self.representation_digests.len(),
             .constructing_len = self.constructing.len(),
             .unfinished_type_count = self.unfinished_type_count,
             .iterator_interface_cache_len = self.iterator_interface_cache.len(),
@@ -1074,6 +1098,7 @@ pub const Store = struct {
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
         self.equality_digests.restoreLen(mark_.equality_digests_len);
+        self.representation_digests.restoreLen(mark_.representation_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
         self.unfinished_type_count = mark_.unfinished_type_count;
         self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
@@ -1365,12 +1390,14 @@ pub const Store = struct {
                 }
             }
             if (interned == null) {
-                for (group.value_ptr.items) |earlier| {
-                    const earlier_ty: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + earlier)));
-                    if (try self.typeEql(name_store, earlier_ty, candidate)) {
-                        interned = interned_original[earlier];
-                        break;
+                // Digest-equal candidates are one type; see `bucketHit`.
+                if (group.value_ptr.items.len != 0) {
+                    const earlier = group.value_ptr.items[0];
+                    if (std.debug.runtime_safety) {
+                        const earlier_ty: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + earlier)));
+                        std.debug.assert(try self.typeEql(name_store, earlier_ty, candidate));
                     }
+                    interned = interned_original[earlier];
                 }
             }
             if (interned) |found| {
@@ -1594,7 +1621,7 @@ pub const Store = struct {
         // digest its source already computed. Seeding the copies lets the
         // commit intern them by lookup instead of hashing each one again.
         for (closure.items, reserved) |source_ty, destination_ty| {
-            inline for (.{ NamedDigestMode.full, NamedDigestMode.identity_only, NamedDigestMode.equality }) |mode| {
+            inline for (.{ NamedDigestMode.full, NamedDigestMode.identity_only, NamedDigestMode.equality, NamedDigestMode.representation }) |mode| {
                 if (source.cachedDigest(source_ty, mode)) |digest| self.setCachedDigest(destination_ty, mode, digest);
             }
         }
@@ -2182,7 +2209,7 @@ pub const Store = struct {
     }
 
     pub fn verify(self: *const Store, name_store: *const names.NameStore) ?VerifyError {
-        if (self.specialization_digests.len() != self.types.len() or self.equality_digests.len() != self.types.len()) {
+        if (self.specialization_digests.len() != self.types.len() or self.equality_digests.len() != self.types.len() or self.representation_digests.len() != self.types.len()) {
             return .type_digest_count_mismatch;
         }
         return self.view().verify(name_store);
@@ -2222,6 +2249,19 @@ pub const Store = struct {
         stats: ?*DigestStats,
     ) names.TypeDigest {
         return self.computeDigest(name_store, ty, .equality, stats) catch digestOutOfMemory();
+    }
+
+    /// Digest of a type's stored content without its checked provenance
+    /// (`named_type.ty`, the checked-store re-entry reference of a named
+    /// type). Two ids with the same representation digest have the same
+    /// runtime representation, whichever checked occurrence produced them.
+    pub fn representationDigestCached(
+        self: *Store,
+        name_store: *const names.NameStore,
+        ty: TypeId,
+        stats: ?*DigestStats,
+    ) names.TypeDigest {
+        return self.computeDigest(name_store, ty, .representation, stats) catch digestOutOfMemory();
     }
 
     /// Exact structural equality for closed Monotype types.
@@ -2615,14 +2655,12 @@ pub const Store = struct {
         existing: TypeId,
         candidate: TypeId,
     ) std.mem.Allocator.Error!bool {
-        if (!try self.typeEql(name_store, existing, candidate)) return false;
+        // The full digest is a cryptographic encoding of everything `typeEql`
+        // compares (design.md, "Type digests"), so a bucket entry is the type.
         if (std.debug.runtime_safety) {
-            // Allocation failure inside these checks propagates like any
-            // other digest or equality allocation failure; the entry's digest
-            // is already cached from interning, so this does not allocate in
-            // practice.
             const existing_digest = try self.computeDigest(name_store, existing, .full, null);
             std.debug.assert(std.mem.eql(u8, &existing_digest.bytes, &key.bytes));
+            std.debug.assert(try self.typeEql(name_store, existing, candidate));
             std.debug.assert(try self.typeEql(name_store, candidate, existing));
         }
         return true;
@@ -2655,6 +2693,7 @@ pub const Store = struct {
         full,
         identity_only,
         equality,
+        representation,
     };
 
     /// Versioned digest-domain prefix written at the start of every node
@@ -2665,6 +2704,7 @@ pub const Store = struct {
             .full => "roc.monotype.type.identity.v3",
             .identity_only => "roc.monotype.type.interface.v3",
             .equality => "roc.monotype.type.equality.v3",
+            .representation => "roc.monotype.type.representation.v1",
         };
     }
 
@@ -2755,6 +2795,7 @@ pub const Store = struct {
             .full => self.type_digests.unsafeRawItemsForView(),
             .identity_only => self.specialization_digests.unsafeRawItemsForView(),
             .equality => self.equality_digests.unsafeRawItemsForView(),
+            .representation => self.representation_digests.unsafeRawItemsForView(),
         };
         if (index >= slots.len) return null;
         return slots[index];
@@ -2772,6 +2813,7 @@ pub const Store = struct {
             .full => self.type_digests.set(index, digest),
             .identity_only => self.specialization_digests.set(index, digest),
             .equality => self.equality_digests.set(index, digest),
+            .representation => self.representation_digests.set(index, digest),
         }
     }
 
@@ -2841,11 +2883,12 @@ pub const Store = struct {
     ///
     /// Aliases are opaque named nodes rather than digesting as their backing.
     /// `def.type_name` text is always hashed (also when `source_decl` is
-    /// present), `named_type.ty` is hashed because it survives into
-    /// `ConstStore`, and `tag.checked_name` is hashed in addition to
-    /// `tag.name`. The interface mode omits exactly declared field order and
-    /// checked-public backing details; backing children always digest in full
-    /// mode because a backing is a stored type identity, not an interface.
+    /// present), `named_type.ty` is hashed in full and interface modes because
+    /// it survives into `ConstStore`, and `tag.checked_name` is hashed in
+    /// addition to `tag.name`. The interface mode omits exactly declared field
+    /// order and checked-public backing details; backing children digest in
+    /// full mode because a backing is a stored type identity, not an
+    /// interface. Representation mode is full mode without `named_type.ty`.
     fn encodeTypeNode(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -2862,7 +2905,7 @@ pub const Store = struct {
             .named => |named| {
                 try sink.writeBytes("named");
                 try sink.writeBytes(&named.named_type.module.bytes);
-                if (mode != .equality) try sink.writeU32(@intFromEnum(named.named_type.ty));
+                if (mode == .full or mode == .identity_only) try sink.writeU32(@intFromEnum(named.named_type.ty));
                 try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
                 try sinkOptionalU32(sink, named.def.source_decl);
                 if (mode != .equality or named.def.source_decl == null) {
@@ -2882,13 +2925,13 @@ pub const Store = struct {
                 }
                 try self.encodeTypeSpan(sink, named.args, mode);
                 switch (mode) {
-                    .full => {
-                        try encodeNamedBacking(sink, named.backing);
-                        try self.encodeDeclaredOrder(name_store, sink, named.declared_order);
+                    .full, .representation => {
+                        try encodeNamedBacking(sink, named.backing, mode);
+                        try self.encodeDeclaredOrder(name_store, sink, named.declared_order, mode);
                     },
                     .identity_only => if (specializationUsesBacking(named.backing)) {
                         try sink.writeBytes("specialization-generated-backing");
-                        try encodeNamedBacking(sink, named.backing);
+                        try encodeNamedBacking(sink, named.backing, .full);
                     } else {
                         try sink.writeBytes("specialization-named-identity");
                     },
@@ -2975,6 +3018,7 @@ pub const Store = struct {
         name_store: *const names.NameStore,
         sink: anytype,
         declared_order: Span,
+        mode: NamedDigestMode,
     ) std.mem.Allocator.Error!void {
         try sink.writeBytes("declared_order");
         const entries = self.declaredFieldSpan(declared_order);
@@ -2987,7 +3031,7 @@ pub const Store = struct {
                 },
                 .padding => |padding_ty| {
                     try sink.writeBytes("padding");
-                    try sink.child(padding_ty, .full);
+                    try sink.child(padding_ty, mode);
                 },
             }
         }
@@ -3869,13 +3913,14 @@ fn sinkIteratorTopology(
 }
 
 /// A named backing is a stored type identity, never an interface, so its
-/// child always digests in full mode regardless of the enclosing mode.
-fn encodeNamedBacking(sink: anytype, backing: ?NamedBacking) std.mem.Allocator.Error!void {
+/// child digests in full mode, or in representation mode when that is the
+/// enclosing mode.
+fn encodeNamedBacking(sink: anytype, backing: ?NamedBacking, mode: Store.NamedDigestMode) std.mem.Allocator.Error!void {
     try sink.writeBytes("backing");
     if (backing) |named_backing| {
         try sink.writeBytes(@tagName(named_backing.use));
         try sink.writeBytes(@tagName(named_backing.authority));
-        try sink.child(named_backing.ty, .full);
+        try sink.child(named_backing.ty, mode);
     } else {
         try sink.writeBytes("none");
     }
@@ -3923,7 +3968,7 @@ test "monotype iterator relation uses complete minted producer identity" {
     try std.testing.expectEqual(IteratorRelation.ordinary, iteratorRelation(list, list));
 
     var other = list;
-    other.def.iterator_kind = .range;
+    other.def.iterator_kind = .numeric_to;
     try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(list, other));
     try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(other, list));
     other = list;
@@ -4442,6 +4487,7 @@ test "monotype cross-store import is atomic under allocation failure" {
             type_digests: usize,
             specialization_digests: usize,
             equality_digests: usize,
+            representation_digests: usize,
             constructing: usize,
             iterator_interface_cache: usize,
             iterator_interface_visit_epochs: usize,
@@ -4456,6 +4502,7 @@ test "monotype cross-store import is atomic under allocation failure" {
                     .type_digests = store.type_digests.len(),
                     .specialization_digests = store.specialization_digests.len(),
                     .equality_digests = store.equality_digests.len(),
+                    .representation_digests = store.representation_digests.len(),
                     .constructing = store.constructing.len(),
                     .iterator_interface_cache = store.iterator_interface_cache.len(),
                     .iterator_interface_visit_epochs = store.iterator_interface_visit_epochs.len(),
@@ -6309,14 +6356,14 @@ test "monotype read sharing explicit queries leave omitted caches cold and inval
     var stats: Store.DigestStats = .{};
     store.digest_stats = &stats;
     try store.prepareForReadSharingQueries(&name_store, .spec_constr);
-    try store.prepareForReadSharingQueries(&name_store, .{ .full = true });
+    try store.prepareForReadSharingQueries(&name_store, .{ .representation = true });
     try std.testing.expectEqualDeep(Store.DigestStats{}, stats);
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
     {
         var borrowed = store.borrowReadOnly(failing.allocator());
         defer borrowed.deinit();
         for ([_]TypeId{ recursive, alias }) |ty| {
-            try std.testing.expectEqual(store.cachedDigest(ty, .full).?, borrowed.typeDigestCached(&name_store, ty, null));
+            try std.testing.expectEqual(store.cachedDigest(ty, .representation).?, borrowed.representationDigestCached(&name_store, ty, null));
             try std.testing.expectEqual(store.cachedDigest(ty, .equality).?, borrowed.equalityDigest(&name_store, ty));
         }
         try std.testing.expect(try borrowed.view().typeEql(std.testing.allocator, &name_store, recursive, alias));
@@ -6357,7 +6404,7 @@ test "monotype read sharing selected queries retry after every allocation failur
             failing.fail_index = std.math.maxInt(usize);
             try store.prepareForReadSharingQueries(&name_store, .spec_constr);
             store.digest_stats = null;
-            const remaining_modes = @as(usize, @intFromBool(!coverage.full)) + @intFromBool(!coverage.equality);
+            const remaining_modes = @as(usize, @intFromBool(!coverage.equality)) + @intFromBool(!coverage.representation);
             try std.testing.expectEqual(store.types.len() * remaining_modes, retry_stats.root_requests);
             break :blk false;
         };
@@ -6367,7 +6414,7 @@ test "monotype read sharing selected queries retry after every allocation failur
         failing.fail_index = failing.alloc_index;
         var borrowed = store.borrowReadOnly(failing.allocator());
         defer borrowed.deinit();
-        try std.testing.expectEqual(borrowed.typeDigest(&name_store, first), borrowed.typeDigest(&name_store, unfolded));
+        try std.testing.expectEqual(borrowed.representationDigestCached(&name_store, first, null), borrowed.representationDigestCached(&name_store, unfolded, null));
         try std.testing.expectEqual(borrowed.equalityDigest(&name_store, first), borrowed.equalityDigest(&name_store, unfolded));
         if (completed) break;
     }

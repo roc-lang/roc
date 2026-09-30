@@ -2198,7 +2198,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 64 2) (end 94 3))
+		(region (start 70 22) (end 70 43))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -2742,133 +2742,6 @@ EndOfFile,
 						(s-decl
 							(p-ident (raw "list"))
 							(e-malformed (reason "expected_expr_close_square_or_comma")))))))))
-~~~
-# FORMATTED
-~~~roc
-# Thnt!
-app [main!] { pf: platform "c" }
-
-import pf.Stdout exposing [line!, e!]
-
-import Stdot # Cose
-
-import pkg.S exposing [func as fry, Custom.*]
-
-import Bae as Gooe
-import
-	Ba
-Map(a, b) : List(a), (a -> b) -> List(b)
-
-MapML( # Cere
-	a, # Anre
-	b,
-) # Ag
-	: # Aon
-		List( # rg
-		),
-		(a -> b) -> # row
-			List(b) #
-
-Foo : (Bar, Baz)
-
-line : ( # Cpen
-	Bar, #
-	Baz, # m
-) # Co
-
-Some(a) : { foo : Ok(a), bar : g }
-
-Ml(a) : { # d
-	bar : Som, # Afld
-}
-
-Soine(a) : { # d
-	bar : Som,
-}
-#
-# se
-
-Func(a) : Maybe(a), a -> Maybe(a)
-
-ane = |num| if num 2 else 5
-
-add_one : U64 -> U64
-add_one = |num| {
-	other = 1
-	if num {
-		dbg # bug
-			() # r
-		0
-	} else {
-		dbg 123
-		other
-	}
-}
-
-match_time = |
-	a, # rg
-	b,
-| # As
-	match a {
-		lue | Red => {
-			x
-			x
-		}
-		Blue => 1
-		"foo" => # ent
-			00
-		"foo" | "bar" => 20
-		[1, 2, 3, .. as rest] # Aftet
-			=> ment
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[ist] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
-		{ # Afrd open
-			foo #
-				: # ue
-					1, # Aftd field
-			bar: 2,
-			..,
-		} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-		} => 12
-		Ok(123) => 121000
-	}
-
-expect # Commeneyword
-	blah == 1 # Commnt
-
-main! : List(String) -> Try({}, _)
-main! = |_| { # Yeah Ie
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return
-
-	# Jusnt!
-
-		
-	match_time(
-		..., #
-	)
-	some_func(
-		dbg # bug
-			42, # Aft expr
-	)
-	crash "Unreachtement"
-	tag_with = Ok(number)
-	ited = "Hello, ${world}"
-	list =
-		
-}
 ~~~
 # CANONICALIZE
 ~~~clojure

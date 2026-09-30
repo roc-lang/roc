@@ -169,6 +169,10 @@ pub const Store = struct {
     /// Sorted (origin module identity, statement) -> declaration index. Kept
     /// sorted on insert; lookups binary-search.
     nominal_decl_index: NominalDeclIndexEntry.SafeList,
+    /// False only while no entry of `nominal_decls` has ever been invalid.
+    /// Stores whose history is unknown (zero-copy views of serialized data)
+    /// keep the default.
+    invalid_nominal_decl_written: bool = true,
 
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
@@ -231,6 +235,7 @@ pub const Store = struct {
             // nominal declaration table (modules typically declare few types)
             .nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16),
             .nominal_decl_index = try NominalDeclIndexEntry.SafeList.initCapacity(gpa, 16),
+            .invalid_nominal_decl_written = false,
         };
     }
 
@@ -284,7 +289,7 @@ pub const Store = struct {
         return .{
             .gpa = gpa,
             .slots = .{ .backing = try self.slots.backing.clone(gpa) },
-            .descs = .{ .backing = try self.descs.backing.clone(gpa) },
+            .descs = .{ .backing = try self.descs.backing.clone(gpa), .err_written = self.descs.err_written },
             .root_metas = try self.root_metas.clone(gpa),
             .union_ranks = try self.union_ranks.clone(gpa),
             .vars = try self.vars.clone(gpa),
@@ -294,7 +299,15 @@ pub const Store = struct {
             .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
             .nominal_decls = try self.nominal_decls.clone(gpa),
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
+            .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
         };
+    }
+
+    /// False only when no variable in this store can reach the error state:
+    /// no descriptor has ever held `.err` and no nominal declaration has ever
+    /// been invalid (applications of invalid declarations are erroneous).
+    pub fn mayContainErrorState(self: *const Self) bool {
+        return self.descs.err_written or self.invalid_nominal_decl_written;
     }
 
     /// Return the number of type variables in the store.
@@ -930,6 +943,7 @@ pub const Store = struct {
             ident,
             backing_var,
             args,
+            @intCast(args.len),
             origin_module,
             source_decl,
             false,
@@ -941,10 +955,12 @@ pub const Store = struct {
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
+        source_arg_count: u32,
         origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
         builtin_origin: bool,
     ) std.mem.Allocator.Error!Content {
+        std.debug.assert(source_arg_count <= args.len);
         const packed_source_decl = try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin);
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
@@ -957,6 +973,7 @@ pub const Store = struct {
             .alias = Alias{
                 .ident = ident,
                 .vars = .{ .nonempty = span },
+                .source_arg_count = source_arg_count,
                 .origin_module = origin_module,
                 .source_decl = packed_source_decl,
             },
@@ -1216,18 +1233,28 @@ pub const Store = struct {
         return self.vars.get(alias.vars.nonempty.start).*;
     }
 
-    /// Get the arg vars for this alias type
+    /// Source arguments only; hidden row parameters are not source arity.
     pub fn sliceAliasArgs(self: *const Self, alias: Alias) []Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(alias.vars.nonempty);
-        return slice[1..];
+        return slice[1..][0..alias.source_arg_count];
     }
 
-    /// Get the an iterator arg vars for this alias type
+    /// All alias parameters, including hidden implicit-row parameters.
+    pub fn sliceAliasAllArgs(self: *const Self, alias: Alias) []Var {
+        return self.vars.sliceRange(alias.vars.nonempty)[1..];
+    }
+
+    pub fn sliceAliasHiddenArgs(self: *const Self, alias: Alias) []Var {
+        return self.sliceAliasAllArgs(alias)[alias.source_arg_count..];
+    }
+
+    /// Iterate source arguments only.
     pub fn iterAliasArgs(self: *const Self, alias: Alias) VarSafeList.Iterator {
         std.debug.assert(alias.vars.nonempty.count > 0);
         var span = alias.vars.nonempty;
         span.dropFirstElem();
+        span.count = alias.source_arg_count;
         return self.vars.iterRange(span);
     }
 
@@ -1286,12 +1313,14 @@ pub const Store = struct {
                 .gt => lo = mid + 1,
                 .eq => {
                     const existing = entries[mid].decl;
+                    self.noteNominalDeclWrite(decl);
                     self.nominal_decls.set(existing, decl);
                     return existing;
                 },
             }
         }
 
+        self.noteNominalDeclWrite(decl);
         const decl_idx = try self.nominal_decls.append(self.gpa, decl);
         try self.nominal_decl_index.items.insert(self.gpa, lo, .{
             .origin_module = decl.origin_module,
@@ -1341,7 +1370,12 @@ pub const Store = struct {
     /// fill a reserved entry once its formals and backing have been copied).
     pub fn setNominalDecl(self: *Self, idx: NominalDecl.Idx, decl: NominalDecl) void {
         std.debug.assert(!self.savepoint_active);
+        self.noteNominalDeclWrite(decl);
         self.nominal_decls.set(idx, decl);
+    }
+
+    fn noteNominalDeclWrite(self: *Self, decl: NominalDecl) void {
+        if (!decl.isValid()) self.invalid_nominal_decl_written = true;
     }
 
     /// Mark a nominal declaration invalid (malformed backing or invalid
@@ -1350,6 +1384,7 @@ pub const Store = struct {
         std.debug.assert(!self.savepoint_active);
         var decl = self.nominal_decls.get(idx).*;
         decl.flags.valid = false;
+        self.invalid_nominal_decl_written = true;
         self.nominal_decls.set(idx, decl);
     }
 
@@ -1789,7 +1824,7 @@ pub const Store = struct {
         /// Deserialize into a Store value with fresh memory allocation.
         /// The returned Store owns its memory and can be safely grown/mutated.
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
-            return Store{
+            var store = Store{
                 .gpa = gpa,
                 .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
                 .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
@@ -1803,6 +1838,9 @@ pub const Store = struct {
                 .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
                 .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
             };
+            store.invalid_nominal_decl_written = false;
+            for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
+            return store;
         }
     };
 
@@ -1819,7 +1857,7 @@ pub const Store = struct {
         offset_self.* = .{
             .gpa = allocator,
             .slots = (try self.slots.serialize(allocator, writer)).*,
-            .descs = (try self.descs.serialize(allocator, writer)).*,
+            .descs = try self.descs.serialize(allocator, writer),
             .root_metas = (try self.root_metas.serialize(allocator, writer)).*,
             .union_ranks = (try self.union_ranks.serialize(allocator, writer)).*,
             .vars = (try self.vars.serialize(allocator, writer)).*,
@@ -1829,6 +1867,7 @@ pub const Store = struct {
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
             .nominal_decls = (try self.nominal_decls.serialize(allocator, writer)).*,
             .nominal_decl_index = (try self.nominal_decl_index.serialize(allocator, writer)).*,
+            .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
         };
 
         return @constCast(offset_self);
@@ -1962,10 +2001,22 @@ const DescStore = struct {
     const DescSafeMultiList = collections.SafeMultiList(Desc);
 
     backing: DescSafeMultiList,
+    /// False only while no descriptor in `backing` has ever held `.err`.
+    /// Stores whose history is unknown (zero-copy views of serialized data)
+    /// keep the default.
+    err_written: bool = true,
 
     /// Init & allocated memory
     fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
-        return .{ .backing = try DescSafeMultiList.initCapacity(gpa, capacity) };
+        return .{ .backing = try DescSafeMultiList.initCapacity(gpa, capacity), .err_written = false };
+    }
+
+    fn fromContents(backing: DescSafeMultiList) Self {
+        var err_written = false;
+        for (backing.items.items(.content)) |content| {
+            if (content == .err) err_written = true;
+        }
+        return .{ .backing = backing, .err_written = err_written };
     }
 
     /// Deinit & free allocated memory
@@ -1999,26 +2050,27 @@ const DescStore = struct {
         /// Deserialize into a DescStore value with fresh memory allocation.
         /// The returned DescStore owns its memory and can be safely grown/mutated.
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!DescStore {
-            return DescStore{
-                .backing = try self.backing.deserializeWithCopy(base_addr, gpa),
-            };
+            return DescStore.fromContents(try self.backing.deserializeWithCopy(base_addr, gpa));
         }
     };
 
     /// Insert a value into the store
     fn insert(self: *Self, gpa: Allocator, typ: Desc) std.mem.Allocator.Error!Idx {
+        if (typ.content == .err) self.err_written = true;
         const safe_idx = try self.backing.append(gpa, typ);
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
     /// Appends a value to the store assuming there is capacity
     fn appendAssumeCapacity(self: *Self, typ: Desc) Idx {
+        if (typ.content == .err) self.err_written = true;
         const safe_idx = self.backing.appendAssumeCapacity(typ);
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
     /// Set a value in the store
     fn set(self: *Self, idx: Idx, val: Desc) void {
+        if (val.content == .err) self.err_written = true;
         self.backing.set(@enumFromInt(@intFromEnum(idx)), val);
     }
 
@@ -2032,11 +2084,11 @@ const DescStore = struct {
         self: *const Self,
         allocator: Allocator,
         writer: *collections.CompactWriter,
-    ) std.mem.Allocator.Error!*const Self {
-        // Since DescStore is just a wrapper around SafeMultiList, serialize the backing directly
-        const serialized_backing = try self.backing.serialize(allocator, writer);
-        // Cast the serialized SafeMultiList pointer to a DescStore pointer
-        return @ptrCast(serialized_backing);
+    ) std.mem.Allocator.Error!Self {
+        return .{
+            .backing = (try self.backing.serialize(allocator, writer)).*,
+            .err_written = self.err_written,
+        };
     }
 
     /// Add the given offset to the memory addresses of all pointers in `self`.
@@ -2051,8 +2103,7 @@ const DescStore = struct {
 
     /// Deserialize a DescStore from the provided buffer
     pub fn deserializeFrom(buffer: []align(@alignOf(Desc)) const u8, allocator: Allocator) Allocator.Error!Self {
-        const backing = try DescSafeMultiList.deserializeFrom(buffer, allocator);
-        return Self{ .backing = backing };
+        return fromContents(try DescSafeMultiList.deserializeFrom(buffer, allocator));
     }
 
     /// A type-safe index into the store
@@ -2636,6 +2687,17 @@ test "Store comprehensive CompactWriter roundtrip" {
     const tag_union_content = try original.mkTagUnion(&[_]Tag{ tag1, tag2 }, tag_union_ext);
     const tag_union_var = try original.freshFromContent(tag_union_content);
 
+    const alias_content = try original.mkAliasWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = list_ident_idx },
+        tag_union_var,
+        &.{ flex, tag_union_ext },
+        1,
+        builtin_module_idx,
+        null,
+        false,
+    );
+    const alias_var = try original.freshFromContent(alias_content);
+
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -2719,6 +2781,12 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqual(arg2, tag2_args[1]);
 
     try std.testing.expectEqual(tag_union_ext, tag_union.ext);
+    const alias = deserialized.resolveVar(alias_var).desc.content.alias;
+    try std.testing.expectEqual(@as(u32, 1), alias.source_arg_count);
+    try std.testing.expectEqualSlices(Var, &.{flex}, deserialized.sliceAliasArgs(alias));
+    try std.testing.expectEqualSlices(Var, &.{tag_union_ext}, deserialized.sliceAliasHiddenArgs(alias));
+    const backing = deserialized.resolveVar(deserialized.getAliasBackingVar(alias)).desc.content.structure.tag_union;
+    try std.testing.expectEqual(backing.ext, deserialized.sliceAliasHiddenArgs(alias)[0]);
 }
 
 test "SlotStore.Serialized roundtrip" {
@@ -3087,4 +3155,30 @@ test "Store annotation tag provenance follows flex equivalence classes" {
         try store.union_(inferred_ext, empty, .{ .content = .{ .structure = .empty_tag_union }, .rank = .outermost });
         try std.testing.expect(!store.resolveVar(annotation_ext).desc.flags.annotation_tag_ext);
     }
+}
+
+test "mayContainErrorState tracks error descriptors and invalid nominal declarations" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const backing = try store.fresh();
+    const decl_idx = try store.registerNominalDecl(try testNominalDecl(@enumFromInt(1), 3, backing));
+    try std.testing.expect(!store.mayContainErrorState());
+
+    store.markNominalDeclInvalid(decl_idx);
+    try std.testing.expect(store.mayContainErrorState());
+
+    var errs = try Store.init(gpa);
+    defer errs.deinit();
+    const b = try errs.fresh();
+    try std.testing.expect(!errs.mayContainErrorState());
+    try errs.setVarContent(b, .err);
+    try std.testing.expect(errs.mayContainErrorState());
+    try errs.setVarContent(b, .{ .flex = Flex.init() });
+    try std.testing.expect(errs.mayContainErrorState());
+
+    var copy = try errs.clone(gpa);
+    defer copy.deinit();
+    try std.testing.expect(copy.mayContainErrorState());
 }

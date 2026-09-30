@@ -4,13 +4,13 @@ const TestEnv = @import("./TestEnv.zig");
 
 test "issue 10690: match branch mismatch through wrapped try reports a type mismatch" {
     const source =
-        \\wrapped : (Str -> Try(Str, [FetchFailed(Str), ..])), Str -> Try(Str, _)
+        \\wrapped : (Str -> Try(Str, [FetchFailed(Str)])), Str -> Try(Str, _)
         \\wrapped = |fetch, key| {
         \\    v = fetch(key) ? Wrap
         \\    Ok(v)
         \\}
         \\
-        \\dispatch : (Str -> Try(Str, [FetchFailed(Str), ..])), Str -> Try(Str, _)
+        \\dispatch : (Str -> Try(Str, [FetchFailed(Str)])), Str -> Try(Str, _)
         \\dispatch = |fetch, path|
         \\    match path {
         \\        "a" => fetch("x")

@@ -224,6 +224,16 @@ test "NodeStore round trip - Statement" {
     });
     try statements.append(gpa, AST.Statement{
         .@"for" = .{
+            .kind = .iter,
+            .patt = rand_idx(random, AST.Pattern.Idx),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .body = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
+        },
+    });
+    try statements.append(gpa, AST.Statement{
+        .@"for" = .{
+            .kind = .stream,
             .patt = rand_idx(random, AST.Pattern.Idx),
             .expr = rand_idx(random, AST.Expr.Idx),
             .body = rand_idx(random, AST.Expr.Idx),
@@ -941,6 +951,16 @@ test "NodeStore round trip - Expr" {
     });
     try expressions.append(gpa, AST.Expr{
         .for_expr = .{
+            .kind = .iter,
+            .patt = rand_idx(random, AST.Pattern.Idx),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .body = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .for_expr = .{
+            .kind = .stream,
             .patt = rand_idx(random, AST.Pattern.Idx),
             .expr = rand_idx(random, AST.Expr.Idx),
             .body = rand_idx(random, AST.Expr.Idx),
@@ -959,6 +979,8 @@ test "NodeStore round trip - Expr" {
 
     // We don't include .malformed variant
     expected_test_count -= 1;
+    // `for_expr` is covered once per `ForKind`
+    expected_test_count += 1;
 
     for (expressions.items) |expr| {
         const idx = try store.addExpr(expr);

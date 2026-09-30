@@ -137,7 +137,7 @@ MOD NOT FOUND - everything.md:6:1:9:2
 NOT A WHERE ALIAS - everything.md:60:4:60:6
 NOT A WHERE ALIAS - everything.md:61:4:61:6
 DECLARATION HAS NO VALUE - everything.md:58:1:62:3
-NON EXHAUSTIVE MATCH - everything.md:90:2:113:3
+NON EXHAUSTIVE MATCH - everything.md:90:2:90:7
 # PROBLEMS
 ~~~clojure
 (reports
@@ -371,11 +371,11 @@ NON EXHAUSTIVE MATCH - everything.md:90:2:113:3
 	(report
 		(severity runtime_error)
 		(title "Non Exhaustive Match")
-		(region (start 90 2) (end 113 3))
+		(region (start 90 2) (end 90 7))
 		(headline
 			(reflow "This match expression doesn't cover all possible cases."))
 		(document
-			(source-region (file "everything.md") (start 90 2) (end 113 3) (annotation error) (line-text "\tmatch x {\n\t\tZ1(\n\t\t\t(\n\t\t\t\ta,\n\t\t\t\tb\n\t\t\t)\n\t\t) => a\n\t\tZ2(\n\t\t\ta,\n\t\t\tb\n\t\t) => a\n\t\tZ3(\n\t\t\t{\n\t\t\t\ta,\n\t\t\t\tb\n\t\t\t}\n\t\t) => a\n\t\tZ4(\n\t\t\t[\n\t\t\t\ta,\n\t\t\t\tb\n\t\t\t]\n\t\t) => a\n\t}"))
+			(source-region (file "everything.md") (start 90 2) (end 90 7) (annotation error) (line-text "\tmatch x {"))
 			(line-break)
 			(reflow "The value being matched on has type:")
 			(line-break)

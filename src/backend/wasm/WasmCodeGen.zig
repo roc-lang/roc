@@ -8761,7 +8761,6 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_unbox", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_adapt", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_inspect", &.{ .i32, .i32, .i32, .i32 }, &.{});
-    try self.registerBoxySymbol("roc_boxy_eq", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_tag", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_tag_payload", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_tag_match", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
@@ -9077,14 +9076,6 @@ fn generateBoxyInspect(self: *Self, assign: anytype) Allocator.Error!void {
     try self.resolveBoxyDesc(assign.source_desc);
     try self.emitBoxyCall("roc_boxy_inspect");
     try self.emitBoxyOutValue(target_layout, out_ptr);
-}
-
-fn generateBoxyEq(self: *Self, assign: anytype) Allocator.Error!void {
-    try self.emitBoxyValuePtr(assign.lhs);
-    try self.emitBoxyValuePtr(assign.rhs);
-    try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.lhs))));
-    try self.resolveBoxyDesc(assign.source_desc);
-    try self.emitBoxyCall("roc_boxy_eq");
 }
 
 fn generateBoxyTag(self: *Self, assign: anytype) Allocator.Error!void {
@@ -9885,11 +9876,6 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .assign_boxy_inspect => |assign| {
             try self.generateBoxyInspect(assign);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
-        .assign_boxy_eq => |assign| {
-            try self.generateBoxyEq(assign);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },

@@ -273,7 +273,10 @@ pub const CpuLevel = enum {
     /// - x86-64: `x86-64-v3` (AVX2, BMI2, POPCNT, LZCNT) plus AES and
     ///   PCLMULQDQ, which the psABI level omits and the SIMD builtins use.
     /// - aarch64: Armv8.0-A plus AES and DotProd, the two extensions the SIMD
-    ///   builtins lower to. Armv8.0 already provides the rest via NEON.
+    ///   builtins lower to, and SHA-256, which the `Crypto` builtins use and
+    ///   which every CPU with AES implements alongside it (both are the
+    ///   Armv8 Cryptographic Extension). Armv8.0 already provides the rest
+    ///   via NEON.
     /// - wasm32: the `simd128` proposal.
     default,
 };
@@ -783,8 +786,11 @@ pub const RocTarget = enum {
             },
             .aarch64, .aarch64_be => {
                 // Every Apple Silicon CPU implements the macOS target floor.
+                // AES and SHA-256 are the Armv8 Cryptographic Extension,
+                // which CPUs implement together.
                 if (self.toOsTag() != .macos) {
                     contract.instruction_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.aes));
+                    contract.instruction_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2));
                     contract.instruction_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.dotprod));
                 }
             },
@@ -1193,21 +1199,24 @@ test "x86 scheduling model cannot silently raise the instruction floor" {
     try std.testing.expect(RocTarget.x64musl.llvmTargetFeatures().isEnabled(@intFromEnum(std.Target.x86.Feature.avx2)));
 }
 
-test "arm64 keeps its floor at Armv8.0 plus the SIMD builtins' extensions" {
+test "arm64 keeps its floor at Armv8.0 plus the builtins' extensions" {
     // Raspberry Pi 3 and 4 are Cortex-A53/A72, i.e. Armv8.0-A. A CPU model
     // above that floor makes arm64musl binaries fault on them.
     const query = RocTarget.arm64musl.llvmTargetQuery();
     try std.testing.expectEqual(&std.Target.aarch64.cpu.generic, query.cpu_model.explicit);
 
     const aes = @intFromEnum(std.Target.aarch64.Feature.aes);
+    const sha2 = @intFromEnum(std.Target.aarch64.Feature.sha2);
     const dotprod = @intFromEnum(std.Target.aarch64.Feature.dotprod);
     try std.testing.expect(query.cpu_features_add.isEnabled(aes));
+    try std.testing.expect(query.cpu_features_add.isEnabled(sha2));
     try std.testing.expect(query.cpu_features_add.isEnabled(dotprod));
 
     // Nothing else: every other extension a CPU model would drag in costs
-    // hardware without giving the SIMD builtins an instruction.
+    // hardware without giving the builtins an instruction.
     var expected = std.Target.Cpu.Feature.Set.empty;
     expected.addFeature(aes);
+    expected.addFeature(sha2);
     expected.addFeature(dotprod);
     try std.testing.expect(query.cpu_features_add.eql(expected));
 

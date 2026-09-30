@@ -281,7 +281,7 @@ Builtin :: [].{
 						} else {
 							Err(Json.invalid_json)
 						}
-					}
+				}
 			}
 
 			parse_trailing_commas : Str -> Try(a, [InvalidJson(Str), ..errs])
@@ -298,7 +298,7 @@ Builtin :: [].{
 						} else {
 							Err(Json.invalid_json)
 						}
-					}
+				}
 			}
 
 			parser_camel : () -> (Str -> Try(a, [InvalidJson(Str), ..errs]))
@@ -317,7 +317,7 @@ Builtin :: [].{
 							} else {
 								Err(Json.invalid_json)
 							}
-						}
+					}
 				}
 			}
 
@@ -523,7 +523,7 @@ Builtin :: [].{
 							Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
 							Err(NotFound) => Err(NotFound)
 						}
-					}
+				}
 
 			dec_from_json_exponent_parts : Str, Str -> Try(Dec, [BadNumStr])
 			dec_from_json_exponent_parts = |mantissa, exponent_text| {
@@ -3364,7 +3364,7 @@ Builtin :: [].{
 								One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
 							},
 					)
-				}
+			}
 
 		## Returns an iterator that pairs each item with its position among the
 		## items this iterator yields. The first yielded item gets index `0`, and
@@ -3391,7 +3391,7 @@ Builtin :: [].{
 							} else {
 								Skip({ rest: Iter.keep_if(rest, predicate) })
 							}
-						},
+					},
 			)
 
 		drop_if : Iter(a), (a -> Bool) -> Iter(a)
@@ -3408,16 +3408,19 @@ Builtin :: [].{
 							} else {
 								One({ item, rest: Iter.drop_if(rest, predicate) })
 							}
-						},
+					},
 			)
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
-		fold = |iterator, acc, step|
-			match Iter.next(iterator) {
-				Done => acc
-				Skip({ rest }) => Iter.fold(rest, acc, step)
-				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
+		fold = |iterator, init, step| {
+			var $state = init
+
+			for item in iterator {
+				$state = step($state, item)
 			}
+
+			$state
+		}
 
 		## Sum the items of an iterator, without collecting them into a list first.
 		## Works for any type that implements `plus` and `default` methods, such as the
@@ -3516,7 +3519,8 @@ Builtin :: [].{
 		}
 
 		## Lift this pure iterator into an effectful [Stream], so it can be combined
-		## with effectful operations like [Stream.map].
+		## with effectful operations like [Stream.map]. A `for!` loop calls this on
+		## the iterator it loops over.
 		stream : Iter(item) -> Stream(item)
 		stream = |iterator| Stream.from_iter(iterator)
 
@@ -3557,7 +3561,7 @@ Builtin :: [].{
 								}
 							},
 					)
-				}
+			}
 
 		## Returns an iterator that skips the first `n` items of this iterator.
 		## If the source has `n` or fewer items, the result is empty.
@@ -3591,9 +3595,9 @@ Builtin :: [].{
 									} else {
 										Skip({ rest: Iter.drop_first(rest, n - 1) })
 									}
-								},
+							},
 					)
-				}
+			}
 
 		## Returns an iterator that yields the first item and then every `n`th item
 		## after it, skipping the `n - 1` items in between. A step of `0` yields an
@@ -3608,9 +3612,10 @@ Builtin :: [].{
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
-	## effectful, so combinators like [Stream.map!] can run effects per item while
-	## staying lazy. Produced from an [Iter] via [Iter.map!], or from an effectful source
-	## via [Stream.custom], and driven by [Stream.collect!].
+	## effectful, so combinators like [Stream.map] can run effects per item while
+	## staying lazy. Produced from an [Iter] via [Iter.stream], or from an effectful
+	## source via [Stream.custom], and consumed by a `for!` loop, [Stream.fold!],
+	## [Stream.for_each!], or [Stream.collect!].
 	Stream(item) :: {
 		len_if_known : [Known(U64), Unknown],
 		step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
@@ -3621,15 +3626,15 @@ Builtin :: [].{
 		## Carries the source's length forward so [Stream.collect!] can pre-size.
 		from_iter : Iter(item) -> Stream(item)
 		from_iter = |iterator|
-			{
-				len_if_known: Iter.size_hint(iterator),
-				step!: ||
+			stream_from_step(
+				Iter.size_hint(iterator),
+				||
 					match Iter.next(iterator) {
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
 					},
-			}
+			)
 
 		## Build a lazy, effectful stream from a seed; the effectful counterpart of [Iter.custom].
 		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
@@ -3643,9 +3648,9 @@ Builtin :: [].{
 		## resource is released rather than retained by the rest of the stream.
 		custom : state, [Known(U64), Unknown], (state => Try((item, state), [NoMore])) -> Stream(item)
 		custom = |seed, len_if_known, advance!|
-			{
+			stream_from_step(
 				len_if_known,
-				step!: ||
+				||
 					match advance!(seed) {
 						Ok((item, next_seed)) =>
 							One({
@@ -3664,68 +3669,187 @@ Builtin :: [].{
 							})
 						Err(NoMore) => Done
 					},
-			}
+			)
 
 		## Transform each item of this stream. The transform may run effects; because
 		## the stream's steps are already effectful, building the mapped stream stays
 		## lazy (the transform runs only as the stream is driven).
 		map : Stream(a), (a => b) -> Stream(b)
-		map = |stream, transform!|
-			match stream {
-				{ len_if_known, step! } => {
-					len_if_known,
-					step!: ||
-						match step!() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
-							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
-						},
-				}
+		map = |source, transform!|
+			match source {
+				{ len_if_known, .. } =>
+					stream_from_step(
+						len_if_known,
+						||
+							match Stream.next!(source) {
+								Done => Done
+								Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
+								One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
+							},
+					)
 			}
 
 		## Transform each item of this stream with an effectful function.
 		map! : Stream(a), (a => b) => Stream(b)
-		map! = |stream, transform!|
-			match stream {
-				{ len_if_known, step! } => {
-					len_if_known,
-					step!: ||
-						match step!() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Stream.map!(rest, transform!) })
-							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map!(rest, transform!) })
+		map! = |stream, transform!| Stream.map(stream, transform!)
+
+		## Returns a stream that pairs each item with its position among the items
+		## this stream yields. The first yielded item gets index `0`, and the index
+		## only advances for items that are actually yielded.
+		with_index : Stream(a) -> Stream((U64, a))
+		with_index = |source| stream_with_index(source, 0)
+
+		## Returns a stream of only the items for which `predicate!` returns `Bool.True`.
+		## The predicate may run effects; it runs once per item as the stream is driven.
+		keep_if : Stream(a), (a => Bool) -> Stream(a)
+		keep_if = |source, predicate!|
+			stream_from_step(
+				Unknown,
+				||
+					match Stream.next!(source) {
+						Done => Done
+						Skip({ rest }) => Skip({ rest: Stream.keep_if(rest, predicate!) })
+						One({ item, rest }) =>
+							if predicate!(item) {
+								One({ item, rest: Stream.keep_if(rest, predicate!) })
+							} else {
+								Skip({ rest: Stream.keep_if(rest, predicate!) })
+							}
+					},
+			)
+
+		## Returns a stream without the items for which `predicate!` returns `Bool.True`.
+		## The predicate may run effects; it runs once per item as the stream is driven.
+		drop_if : Stream(a), (a => Bool) -> Stream(a)
+		drop_if = |source, predicate!|
+			stream_from_step(
+				Unknown,
+				||
+					match Stream.next!(source) {
+						Done => Done
+						Skip({ rest }) => Skip({ rest: Stream.drop_if(rest, predicate!) })
+						One({ item, rest }) =>
+							if predicate!(item) {
+								Skip({ rest: Stream.drop_if(rest, predicate!) })
+							} else {
+								One({ item, rest: Stream.drop_if(rest, predicate!) })
+							}
+					},
+			)
+
+		## Returns a stream that yields at most the first `n` items of this stream.
+		## Once `n` items have been yielded, the source is not pulled again.
+		take_first : Stream(item), U64 -> Stream(item)
+		take_first = |source, n|
+			match source {
+				{ len_if_known, .. } => stream_from_step(
+					match len_if_known {
+						Known(len) => Known(
+							if len < n {
+								len
+							} else {
+								n
+							},
+						)
+						Unknown => if n == 0 {
+							Known(0)
+						} else {
+							Unknown
+						}
+					},
+					||
+						if n == 0 {
+							Done
+						} else {
+							match Stream.next!(source) {
+								Done => Done
+								Skip({ rest }) => Skip({ rest: Stream.take_first(rest, n) })
+								One({ item, rest }) => One({ item, rest: Stream.take_first(rest, n - 1) })
+							}
 						},
-				}
+				)
+			}
+
+		## Returns a stream that skips the first `n` items of this stream. The skipped
+		## items are still pulled from the source, so their effects still run.
+		drop_first : Stream(item), U64 -> Stream(item)
+		drop_first = |source, n|
+			match source {
+				{ len_if_known, .. } => stream_from_step(
+					match len_if_known {
+						Known(len) => Known(
+							if len < n {
+								0
+							} else {
+								len - n
+							},
+						)
+						Unknown => Unknown
+					},
+					||
+						match Stream.next!(source) {
+							Done => Done
+							Skip({ rest }) => Skip({ rest: Stream.drop_first(rest, n) })
+							One({ item, rest }) =>
+								if n == 0 {
+									One({ item, rest: Stream.drop_first(rest, 0) })
+								} else {
+									Skip({ rest: Stream.drop_first(rest, n - 1) })
+								}
+						},
+				)
+			}
+
+		## Returns this stream unchanged. A `for!` loop calls `stream` on the value it
+		## loops over, so this is what lets `for!` consume a [Stream] directly.
+		stream : Stream(item) -> Stream(item)
+		stream = |self| self
+
+		## Drive the stream to completion, combining its items into one value.
+		fold! : Stream(a), acc, (acc, a => acc) => acc
+		fold! = |source, init, step!| {
+			var $acc = init
+			for! item in source {
+				$acc = step!($acc, item)
+			}
+			$acc
+		}
+
+		## Drive the stream to completion, running `f!` on each item in order.
+		for_each! : Stream(a), (a => {}) => {}
+		for_each! = |source, f!|
+			for! item in source {
+				f!(item)
 			}
 
 		## Advance the stream by one step.
 		next! : Stream(item) => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]
-		next! = |stream| match stream {
+		next! = |source| match source {
 			{ step!, .. } => step!()
 		}
 
 		## Returns the stream's length if it is known up front.
 		size_hint : Stream(item) -> [Known(U64), Unknown]
-		size_hint = |stream| match stream {
+		size_hint = |source| match source {
 			{ len_if_known, .. } => len_if_known
 		}
 
 		## Drive the stream to completion with an explicit loop, collecting its items
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
-		collect! = |stream| {
+		collect! = |source| {
 			# `Known(n)` promises n items (count-changing combinators report
 			# `Unknown`), so reserve up front and use the unchecked append while
 			# the reservation lasts. `Stream.custom` hints come from the caller and
 			# may undercount, so past `cap` use the reserving append instead: the
 			# unchecked append would write past the list's capacity.
-			length = Stream.size_hint(stream)
+			length = Stream.size_hint(source)
 			cap = match length {
 				Known(n) => n
 				Unknown => 0
 			}
 			var $list = List.with_capacity(cap)
-			var $rest = stream
+			var $rest = source
 			while Bool.True {
 				match Stream.next!($rest) {
 					Done => {
@@ -5314,7 +5438,7 @@ Builtin :: [].{
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
-				}
+			}
 
 		## Find the maximum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `max`.
@@ -5333,7 +5457,7 @@ Builtin :: [].{
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
-				}
+			}
 
 		## Build an encoder for a list using a format that provides a list encoding method.
 		encoder_for : encoding -> (List(item), state -> Try(state, err))
@@ -6413,7 +6537,7 @@ Builtin :: [].{
 						Try.Ok(new_value) => HashMap(dict_insert_absent_data(data, missing, key, new_value))
 						Try.Err(Missing) => dict
 					}
-				}
+			}
 		}
 	}
 
@@ -23155,7 +23279,7 @@ from_numeral_with = |numeral, parse|
 				Ok(num) => Ok(num)
 				Err(_) => Err(InvalidNumeral("invalid numeric literal"))
 			}
-		}
+	}
 
 numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str)])
 numeral_to_str = |numeral|
@@ -23596,7 +23720,7 @@ dec_from_digits = |digits, parse| {
 					}
 				}
 			}
-		}
+	}
 }
 
 digits_to_str : List(U8) -> Try(Str, [OutOfRange])
@@ -23890,7 +24014,7 @@ unsigned_div_ceil_try = |zero, one, a, b|
 			} else {
 				Ok(quotient + one)
 			}
-		}
+	}
 
 signed_div_ceil_try : item, item, item, item, item, item -> Try(item, [DivByZero, Overflow])
 	where [
@@ -23930,7 +24054,7 @@ signed_div_ceil_try = |lowest, zero, one, neg_one, a, b|
 			} else {
 				Ok(quotient)
 			}
-		}
+	}
 
 list_append_if_ok : List(a), Try(a, err) -> List(a)
 list_append_if_ok = |list, maybe_item|
@@ -24018,7 +24142,7 @@ signed_times_saturated_rescaled = |lowest, highest, zero, neg_one, a, b|
 			} else {
 				highest
 			}
-		}
+	}
 
 integer_is_even : item, item, item -> Bool
 	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
@@ -24307,6 +24431,15 @@ iter_from_step = |len_if_known, step| {
 	step,
 }
 
+# The `Stream` counterpart of `iter_from_step`: every `Stream` source and
+# adapter builds its value through this one registered constructor, so Monotype
+# can give the result its exact minted representation.
+stream_from_step : [Known(U64), Unknown], (() => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]) -> Stream(item)
+stream_from_step = |len_if_known, step!| {
+	len_if_known,
+	step!,
+}
+
 range_done : () -> Iter(item)
 range_done = || iter_from_step(
 	Known(0),
@@ -24326,6 +24459,20 @@ iter_with_index = |src, index|
 				Done => Done
 				Skip({ rest }) => Skip({ rest: iter_with_index(rest, index) })
 				One({ item, rest }) => One({ item: (index, item), rest: iter_with_index(rest, index + 1) })
+			},
+	)
+
+# The recursive worker behind `Stream.with_index`; the public `with_index` is
+# the arity-1 wrapper that seeds the counter.
+stream_with_index : Stream(a), U64 -> Stream((U64, a))
+stream_with_index = |src, index|
+	stream_from_step(
+		Stream.size_hint(src),
+		||
+			match Stream.next!(src) {
+				Done => Done
+				Skip({ rest }) => Skip({ rest: stream_with_index(rest, index) })
+				One({ item, rest }) => One({ item: (index, item), rest: stream_with_index(rest, index + 1) })
 			},
 	)
 
@@ -24364,7 +24511,7 @@ iter_step_by = |src, (stride, pending)|
 						} else {
 							Skip({ rest: iter_step_by(rest, (stride, pending - 1)) })
 						}
-					}
+				}
 			},
 	)
 

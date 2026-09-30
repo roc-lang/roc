@@ -40,6 +40,7 @@ pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_i
 
 const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
+const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
 const reporting = @import("reporting");
 const parse = @import("parse");
@@ -71,7 +72,7 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
     pub const WatchEvent = struct { path: []const u8 };
     pub const WatchCallbackWithContext = *const fn (context: ?*anyopaque, event: WatchEvent) void;
     pub const Watcher = struct {
-        pub fn initAllFiles(
+        pub fn initInputs(
             _: std.mem.Allocator,
             _: std.Io,
             _: []const []const u8,
@@ -86,6 +87,15 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
         }
 
         pub fn deinit(_: *Watcher) void {}
+        pub fn takeInputChange(_: *Watcher, _: usize) bool {
+            return false;
+        }
+        pub fn takeCoverageChange(_: *Watcher) bool {
+            return false;
+        }
+        pub fn hasBackendFailed(_: *Watcher) bool {
+            return false;
+        }
     };
 } else @import("watch");
 
@@ -423,6 +433,7 @@ const CliMainError =
         NoCacheDir,
         NoPlatformSource,
         NotAnAppHeader,
+        SourceTokenizationFailed,
         PathAlreadyExists,
         PlatformNotSupported,
         ProcessCreationFailed,
@@ -484,11 +495,30 @@ fn shimLibraryBytes(kind: ShimLibraryKind, target: ?RocTarget) []const u8 {
     };
 }
 
+/// The SHA-256 digest of an embedded link input, computed when `roc` was built
+/// (see src/build/embedded_digests.zig). Test builds embed empty files.
+fn embeddedDigest(comptime name: []const u8) [32]u8 {
+    // The SHA-256 of an empty file.
+    if (builtin.is_test) return .{
+        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+    };
+    return @field(@import("embedded_digests"), name);
+}
+
+/// The digest of `shimLibraryBytes(kind, target)`.
+fn shimLibraryBytesDigest(kind: ShimLibraryKind, _: ?RocTarget) [32]u8 {
+    return switch (kind) {
+        .lir => embeddedDigest("interpreter_shim"),
+        .machine_code => embeddedDigest("machine_code_shim"),
+    };
+}
+
 fn shimLibraryDigest(kind: ShimLibraryKind, target: ?RocTarget) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-shim-library-cache-v1");
+    var hasher = base.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-shim-library-cache-v2");
     updateHashBytes(&hasher, @tagName(kind));
-    hasher.update(shimLibraryBytes(kind, target));
+    hasher.update(&shimLibraryBytesDigest(kind, target));
     var out: [32]u8 = undefined;
     hasher.final(&out);
     return out;
@@ -751,6 +781,88 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
 
 const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
 const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
+
+/// The digest of `DefaultPlatformRuntimeObjects.forTarget(requested)`.
+fn defaultRuntimeDigest(requested: RocTarget) ?[32]u8 {
+    return switch (requested.defaultCpuTarget()) {
+        inline .x64musl,
+        .arm64musl,
+        .x64glibc,
+        .arm64glibc,
+        .x64mac,
+        .arm64mac,
+        .x64win,
+        .x64mingw,
+        .arm64win,
+        .arm64mingw,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        => |target| embeddedDigest("default_runtime_" ++ @tagName(target)),
+        .x64linux => embeddedDigest("default_runtime_x64glibc"),
+        .arm64linux => embeddedDigest("default_runtime_arm64glibc"),
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1mingw,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64v1win,
+        .arm64v1mingw,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => null,
+    };
+}
+
+/// The digest of `DefaultPlatformCompilerRtObjects.forTarget(requested)`.
+fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
+    return switch (requested.defaultCpuTarget()) {
+        inline .x64musl, .arm64musl, .x64glibc, .arm64glibc => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
+        .x64linux => embeddedDigest("default_compiler_rt_x64glibc"),
+        .arm64linux => embeddedDigest("default_compiler_rt_arm64glibc"),
+        .x64mac,
+        .arm64mac,
+        .x64win,
+        .arm64win,
+        .x64mingw,
+        .arm64mingw,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1mingw,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64v1win,
+        .arm64v1mingw,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => null,
+    };
+}
 
 const DefaultPlatformCompilerRtObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_compiler_rt.o");
@@ -1905,17 +2017,17 @@ fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.Cre
     };
 }
 
-fn updateHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn updateHashU32(hasher: *base.Sha256, value: u32) void {
     var buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &buf, value, .little);
     hasher.update(&buf);
 }
 
-fn updateHashBool(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
+fn updateHashBool(hasher: *base.Sha256, value: bool) void {
     hasher.update(if (value) "\x01" else "\x00");
 }
 
-fn updateHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn updateHashBytes(hasher: *base.Sha256, bytes: []const u8) void {
     var len_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &len_buf, @intCast(bytes.len), .little);
     hasher.update(&len_buf);
@@ -1923,7 +2035,7 @@ fn updateHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void
 }
 
 fn bytesDigest(bytes: []const u8) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return hasher.finalResult();
 }
@@ -1937,7 +2049,7 @@ fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
     };
     defer file.close(ctx.io.std_io);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     var read_buf: [64 * 1024]u8 = undefined;
     while (true) {
         const bytes_read = file.readStreaming(ctx.io.std_io, &.{&read_buf}) catch |err| switch (err) {
@@ -1967,7 +2079,7 @@ fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
 }
 
 fn platformHostShimIdentity(target: RocTarget, entrypoint_names: []const []const u8, debug: bool) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-platform-host-shim-v1");
     updateHashBytes(&hasher, target.toTriple());
     updateHashBool(&hasher, debug);
@@ -2182,7 +2294,7 @@ const LayoutHashContext = struct {
 
     fn hashIdx(
         self: *LayoutHashContext,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: *base.Sha256,
         idx: layout.Idx,
     ) Allocator.Error!void {
         if (idx == layout.Idx.none) {
@@ -2253,7 +2365,7 @@ const LayoutHashContext = struct {
 
 fn updateLayoutFingerprint(
     allocator: Allocator,
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     layouts: *const layout.Store,
     layout_idx: layout.Idx,
 ) Allocator.Error!void {
@@ -2263,7 +2375,7 @@ fn updateLayoutFingerprint(
 }
 
 fn updatePlatformAppRelationIdentity(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) void {
     // Host-boundary fingerprint: hash the relation/binding SHAPE only, never
@@ -2299,7 +2411,7 @@ fn updatePlatformAppRelationIdentity(
 
 fn updateHostCallableLayoutIdentity(
     allocator: Allocator,
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     store: *const lir.LirStore,
     layouts: *const layout.Store,
     platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
@@ -2329,7 +2441,7 @@ fn checkedInterpreterHostIdentity(
     target_usize: base.target.TargetUsize,
     hosted_table: CheckedHostedTable,
 ) Allocator.Error![32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v2");
     updateHashU32(&hasher, @intFromEnum(target_usize));
 
@@ -2357,7 +2469,7 @@ fn checkedInterpreterHostIdentity(
 }
 
 fn updateInterpreterExeFileLinkInput(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     declared_path: []const u8,
     resolved_path: []const u8,
     content_digest: [32]u8,
@@ -2369,7 +2481,7 @@ fn updateInterpreterExeFileLinkInput(
 }
 
 fn updateInterpreterExeAppLinkInput(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: *base.Sha256,
     shim_kind: ShimLibraryKind,
     target: RocTarget,
     entrypoint_names: []const []const u8,
@@ -2405,11 +2517,11 @@ fn entrypointAbiDigestFromLirData(
     else
         return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } });
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-entrypoint-abi-v1");
 
     const hashPlacement = struct {
-        fn go(h: *std.crypto.hash.sha2.Sha256, placement: layout.abi.Placement) void {
+        fn go(h: *base.Sha256, placement: layout.abi.Placement) void {
             switch (placement) {
                 .none => updateHashU32(h, 0),
                 .indirect => updateHashU32(h, 1),
@@ -2469,7 +2581,7 @@ fn interpreterExeLinkInputsIdentity(
     entrypoint_names: []const []const u8,
     debug: bool,
 ) (Allocator.Error || CliError)![32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
 
@@ -2494,7 +2606,7 @@ fn defaultRunCheckedHostIdentity(
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-checked-host-v1");
     updateHashBytes(&hasher, @tagName(target));
     updateHashBytes(&hasher, echo_platform.run_shim_platform_main_source);
@@ -2514,14 +2626,14 @@ fn defaultRunCheckedHostIdentity(
 }
 
 fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
-    const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const compiler_rt_bytes = DefaultPlatformCompilerRtObjects.forTarget(target) orelse return null;
+    const runtime_digest = defaultRuntimeDigest(target) orelse return null;
+    const compiler_rt_digest = defaultCompilerRtDigest(target) orelse return null;
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
-    hasher.update(&bytesDigest(runtime_bytes));
-    hasher.update(&bytesDigest(compiler_rt_bytes));
+    hasher.update(&runtime_digest);
+    hasher.update(&compiler_rt_digest);
 
     return hasher.finalResult();
 }
@@ -2535,7 +2647,7 @@ const ShimHostExeCacheInputs = struct {
 };
 
 fn shimHostExeCacheDigest(inputs: ShimHostExeCacheInputs) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-shim-host-cache-v3");
     updateHashBytes(&hasher, build_options.compiler_version);
     updateHashBytes(&hasher, @tagName(inputs.shim_kind));
@@ -2581,7 +2693,7 @@ fn testLinkInputsIdentityForFiles(
     second_resolved: []const u8,
     second_contents: []const u8,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-link-inputs-v1");
     updateHashBytes(&hasher, @tagName(RocTarget.x64linux));
     updateInterpreterExeFileLinkInput(&hasher, first_declared, first_resolved, bytesDigest(first_contents));
@@ -5959,7 +6071,7 @@ fn renderSummaryHeaderLine(
     if (sanitised_path.len > 0) {
         try writer.writeByte(' ');
         try writer.writeAll(palette.primary);
-        try writer.writeAll(sanitised_path);
+        try base.bidi.writeVisible(writer, sanitised_path);
     }
     try writer.writeAll(palette.reset);
     try writer.writeAll("\n\n");
@@ -7123,7 +7235,21 @@ pub fn resolvePlatformPaths(ctx: *CliCtx, roc_file_path: []const u8) (CliError |
 }
 
 fn parseCliAppHeader(ctx: *CliCtx, app_file_path: []const u8) (Allocator.Error || error{CliError})!compile.app_header.AppHeaderInfo {
-    return compile.app_header.parseAppHeader(ctx.coreCtx(), ctx.gpa, ctx.arena, app_file_path) catch |err| switch (err) {
+    var source_reports = std.ArrayList(reporting.Report).empty;
+    defer {
+        for (source_reports.items) |*report| report.deinit();
+        source_reports.deinit(ctx.gpa);
+    }
+    return compile.app_header.parseAppHeaderReporting(ctx.coreCtx(), ctx.gpa, ctx.arena, app_file_path, &source_reports) catch |err| switch (err) {
+        error.SourceTokenizationFailed => blk: {
+            for (source_reports.items) |*report| {
+                reporting.renderReportWithConfig(report, ctx.io.stderr(), ctx.reportConfig(.stderr)) catch |render_err| switch (render_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => return error.CliError,
+                };
+            }
+            break :blk error.CliError;
+        },
         error.OutOfMemory => error.OutOfMemory,
         error.NotAnAppHeader => ctx.fail(.{ .expected_app_header = .{
             .path = app_file_path,
@@ -7918,10 +8044,10 @@ fn discoverAndAddBundleModules(
             for (mod.reports) |report| {
                 switch (report.severity) {
                     .runtime_error, .fatal => {
-                        try stderr.print("{s}: error in module\n", .{mod.abs_path});
+                        try stderr.print("{f}: error in module\n", .{base.bidi.Display{ .bytes = mod.abs_path }});
                     },
                     .warning => {
-                        try stderr.print("{s}: warning in module\n", .{mod.abs_path});
+                        try stderr.print("{f}: warning in module\n", .{base.bidi.Display{ .bytes = mod.abs_path }});
                     },
                 }
             }
@@ -8031,17 +8157,13 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
 
     // Determine output directory
     var output_dir = if (args.output_dir) |dir|
-        try cwd.openDir(ctx.io.std_io, dir, .{})
+        cwd.openDir(ctx.io.std_io, dir, .{}) catch |err| {
+            try stderr.print("Error: Could not open bundle output directory '{s}': {}\n", .{ dir, err });
+            return err;
+        }
     else
         cwd;
     defer if (args.output_dir != null) output_dir.close(ctx.io.std_io);
-
-    // Create a temporary directory for the output file
-    var tmp_dir = try std.Io.Dir.cwd().createDirPathOpen(ctx.io.std_io, ".roc_bundle_tmp", .{});
-    defer {
-        tmp_dir.close(ctx.io.std_io);
-        std.Io.Dir.cwd().deleteTree(ctx.io.std_io, ".roc_bundle_tmp") catch {};
-    }
 
     // Collect canonical source paths separately from their eventual archive
     // names. A command-line spelling is only a way to find a file; it must not
@@ -8146,14 +8268,32 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     };
     defer bundle_root_dir.close(ctx.io.std_io);
 
-    // Create temporary output file
-    const temp_filename = "temp_bundle.tar.zst";
-    const temp_file = try tmp_dir.createFile(ctx.io.std_io, temp_filename, .{
-        // Allow querying metadata (stat) on the handle, necessary for windows
-        .read = true,
-        .truncate = true,
-    });
-    defer temp_file.close(ctx.io.std_io);
+    // The content-addressed name is only known after compression finishes.
+    // Stage in the destination so publication never crosses filesystems, and
+    // exclusively create a unique file so concurrent invocations own their data.
+    var temp_name_buffer: [64]u8 = undefined;
+    var temp_filename: []const u8 = undefined;
+    const temp_file = while (true) {
+        var random: [16]u8 = undefined;
+        ctx.io.std_io.random(&random);
+        const hex = std.fmt.bytesToHex(random, .lower);
+        temp_filename = std.fmt.bufPrint(&temp_name_buffer, ".roc-bundle-{s}.tmp", .{hex}) catch unreachable;
+        break output_dir.createFile(ctx.io.std_io, temp_filename, .{
+            // Allow querying metadata (stat) on the handle, necessary for Windows.
+            .read = true,
+            .exclusive = true,
+        }) catch |err| switch (err) {
+            error.PathAlreadyExists => continue,
+            else => {
+                try stderr.print("Error: Could not create temporary bundle in '{s}': {}\n", .{ args.output_dir orelse ".", err });
+                return err;
+            },
+        };
+    };
+    var temp_file_exists = true;
+    defer if (temp_file_exists) output_dir.deleteFile(ctx.io.std_io, temp_filename) catch {};
+    var temp_file_open = true;
+    defer if (temp_file_open) temp_file.close(ctx.io.std_io);
 
     const EntryIterator = struct {
         entries: []const bundle.Entry,
@@ -8216,8 +8356,15 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     const compressed_stat = try temp_file.stat(ctx.io.std_io);
     const compressed_size = compressed_stat.size;
 
-    // Move the temp file to the final location
-    try tmp_dir.rename(temp_filename, output_dir, final_filename, ctx.io.std_io);
+    // Close before publication for Windows. Rename publishes the complete
+    // archive atomically, replacing an existing bundle with the same name.
+    temp_file.close(ctx.io.std_io);
+    temp_file_open = false;
+    output_dir.rename(temp_filename, output_dir, final_filename, ctx.io.std_io) catch |err| {
+        try stderr.print("Error: Could not publish bundle '{s}' in '{s}': {}\n", .{ final_filename, args.output_dir orelse ".", err });
+        return err;
+    };
+    temp_file_exists = false;
 
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
@@ -9030,7 +9177,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .entry = 0,
             .frame = null,
             .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_eq", .scope = .program, .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .function }},
             .data = &.{},
         },
     };
@@ -10118,6 +10265,27 @@ test "LLVM fuzz output uses position-independent code" {
     try std.testing.expect(!llvmObjectUsesPic(.x64musl, .exe, false));
 }
 
+test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
+    const expected = [_]struct { RocTarget, Sha256Rounds }{
+        // x86-64-v3 has no SHA extension, so no x86_64 feature level carries it.
+        .{ .x64musl, .portable },
+        .{ .x64v1musl, .portable },
+        .{ .x64mac, .portable },
+        .{ .arm64musl, .aarch64_sha2 },
+        .{ .arm64glibc, .aarch64_sha2 },
+        .{ .arm64win, .aarch64_sha2 },
+        .{ .arm64mac, .aarch64_sha2 },
+        .{ .arm64v1musl, .portable },
+        .{ .arm64v1win, .portable },
+        .{ .arm32musl, .portable },
+        .{ .wasm32, .portable },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[1], Sha256Rounds.forCpu(std_target.cpu));
+    }
+}
+
 test "wasm32 LLVM objects are always position-independent" {
     try std.testing.expect(llvmObjectUsesPic(.wasm32, .archive, false));
     try std.testing.expect(llvmObjectUsesPic(.wasm32, .exe, false));
@@ -10230,11 +10398,13 @@ fn compileLlvmAppObject(
         .features = llvm_features,
         .debug = args.debug,
         .fuzz = args.fuzz,
-        .link_builtins = true,
+        .link_builtins = .{
+            // Linked LLVM output uses the symbol ABI: builtins reach the host
+            // through extern symbols, never through a RocOps parameter.
+            .host_call_extern = true,
+            .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+        },
         .pic = pic,
-        // Linked LLVM output uses the symbol ABI: builtins reach the host
-        // through extern symbols, never through a RocOps parameter.
-        .host_call_extern = true,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
@@ -11871,7 +12041,7 @@ fn cliTestCacheKey(
     artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
     specialization_strategy: base.SpecializationStrategy,
 ) [32]u8 {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(cli_test_cache_magic);
     hasher.update(build_options.compiler_version);
     hasher.update(@tagName(specialization_strategy));
@@ -12201,15 +12371,15 @@ fn buildCliTestPlan(
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
 
-        // Root requests deliberately exclude erroneous bodies. The checked
-        // roots still retain their identities and the checker's diagnostic
+        // Root requests deliberately exclude roots reaching checked errors.
+        // The checked roots retain their identities and the checker's diagnostic
         // facts, so rejected tests can participate in result aggregation
         // without being lowered, executed, or stored in the execution cache.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots) |root| {
             if (root.kind != .expect) continue;
-            if (!artifact.checked_bodies.exprContainsDiagnosticError(root.expr)) continue;
+            if (!artifact.compileTimeRootReachesCheckedError(root)) continue;
             std.debug.assert(root.request_eligibility == .ineligible);
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
@@ -12740,7 +12910,7 @@ fn lowerCheckedSourceToLir(
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
-) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
+) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
         .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -14084,10 +14254,9 @@ const WatchSnapshotError = Allocator.Error;
 const WatchCollectInputSetError = WatchCollectPathsError || WatchSnapshotError;
 const WatchWriteInputsError = WatchCollectInputSetError || std.Io.Dir.WriteFileError;
 const WatchReadInputsError = WatchCollectPathsError || WatchSnapshotError || error{ WatchInputsMissing, WatchInputsReadFailed, WatchInputsMalformed };
-const WatchDirectoryError = Allocator.Error;
 const WatcherStartError = std.Thread.SpawnError || error{ AlreadyStarted, UnsupportedWatchMode, WatchBackendFailed };
-const WatchRefreshError = WatchSnapshotError || WatchDirectoryError || WatcherStartError;
-const WatchChangeError = WatchSnapshotError;
+const WatchRefreshError = WatchSnapshotError || WatcherStartError;
+const WatchChangeError = WatchRefreshError;
 const WatchInputsPathError = Allocator.Error || std.Io.Dir.CreateDirPathError;
 const WatchSpawnChildError = Allocator.Error || std.process.SpawnError || std.Thread.SpawnError;
 const CliOutputWriteError = error{WriteFailed};
@@ -14776,7 +14945,7 @@ fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFi
     };
     defer ctx.gpa.free(bytes);
 
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return .{ .hash = hasher.finalResult() };
 }
@@ -14800,54 +14969,6 @@ fn watchSnapshotChanged(a: []const WatchSnapshotEntry, b: []const WatchSnapshotE
     return false;
 }
 
-fn existingDirectory(ctx: *CliCtx, path: []const u8) bool {
-    var dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, path, .{}) catch return false;
-    dir.close(ctx.io.std_io);
-    return true;
-}
-
-fn nearestExistingAncestor(ctx: *CliCtx, path: []const u8) WatchDirectoryError![]const u8 {
-    var candidate = try ctx.gpa.dupe(u8, std.fs.path.dirname(path) orelse path);
-    errdefer ctx.gpa.free(candidate);
-
-    while (!existingDirectory(ctx, candidate)) {
-        const parent = std.fs.path.dirname(candidate) orelse break;
-        if (parent.len == candidate.len) break;
-
-        const parent_copy = try ctx.gpa.dupe(u8, parent);
-        ctx.gpa.free(candidate);
-        candidate = parent_copy;
-    }
-
-    return candidate;
-}
-
-fn collectWatchDirectories(ctx: *CliCtx, paths: []const []const u8) WatchDirectoryError![]const []const u8 {
-    var dirs = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (dirs.items) |dir| ctx.gpa.free(dir);
-        dirs.deinit(ctx.gpa);
-    }
-
-    var seen: std.StringHashMapUnmanaged(void) = .{};
-    defer seen.deinit(ctx.gpa);
-
-    for (paths) |path| {
-        const dir = try nearestExistingAncestor(ctx, path);
-        errdefer ctx.gpa.free(dir);
-
-        if (seen.contains(dir)) {
-            ctx.gpa.free(dir);
-            continue;
-        }
-
-        try seen.put(ctx.gpa, dir, {});
-        try dirs.append(ctx.gpa, dir);
-    }
-
-    return dirs.toOwnedSlice(ctx.gpa);
-}
-
 fn refreshWatchState(
     ctx: *CliCtx,
     state: *WatchState,
@@ -14857,13 +14978,10 @@ fn refreshWatchState(
     var owned_input_set = new_input_set;
     errdefer owned_input_set.deinit(ctx);
 
-    const watch_dirs = try collectWatchDirectories(ctx, owned_input_set.inputs);
-    defer freeOwnedPathSlice(ctx.gpa, watch_dirs);
-
     var new_watcher: ?*watch_mod.Watcher = null;
-    if (watch_dirs.len > 0) {
-        new_watcher = try watch_mod.Watcher.initAllFiles(ctx.gpa, ctx.io.std_io, watch_dirs, signal, watchCallback);
-        errdefer if (new_watcher) |watcher| watcher.deinit();
+    errdefer if (new_watcher) |watcher| watcher.deinit();
+    if (owned_input_set.inputs.len > 0) {
+        new_watcher = try watch_mod.Watcher.initInputs(ctx.gpa, ctx.io.std_io, owned_input_set.inputs, signal, watchCallback);
         new_watcher.?.start() catch |err| switch (err) {
             error.WatchBackendFailed => {
                 ctx.io.stderr().writeAll("Error: failed to start filesystem watching for source inputs.\n") catch {};
@@ -14914,7 +15032,34 @@ fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *
     if (!signal.dirty.swap(false, .seq_cst)) return false;
     std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
     _ = signal.dirty.swap(false, .seq_cst);
-    return try watchStateHasByteChanges(ctx, state);
+    const watcher = state.watcher orelse return false;
+    if (watcher.hasBackendFailed()) return error.WatchBackendFailed;
+    if (watcher.takeCoverageChange()) {
+        // Coverage must advance even if creating a directory did not yet change
+        // an input's bytes. Keep the old baseline through registration so edits
+        // during the handoff are detected by refreshWatchState's snapshot check.
+        const input_set = blk: {
+            const paths = try ctx.gpa.alloc([]const u8, state.inputs.len);
+            errdefer ctx.gpa.free(paths);
+            var copied: usize = 0;
+            errdefer for (paths[0..copied]) |path| ctx.gpa.free(path);
+            for (state.inputs, 0..) |path, i| {
+                paths[i] = try ctx.gpa.dupe(u8, path);
+                copied += 1;
+            }
+            const snapshot = try ctx.gpa.dupe(WatchSnapshotEntry, state.snapshot);
+            break :blk WatchInputSet{ .inputs = paths, .snapshot = snapshot };
+        };
+        return refreshWatchState(ctx, state, signal, input_set);
+    }
+    var changed = false;
+    for (state.inputs, state.snapshot, 0..) |path, *entry, index| {
+        if (!watcher.takeInputChange(index)) continue;
+        const current = try readWatchFileState(ctx, path);
+        changed = changed or !entry.state.eql(current);
+        entry.state = current;
+    }
+    return changed;
 }
 
 fn waitForWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!void {
@@ -16336,7 +16481,7 @@ fn renderCliTestResultEntry(
             const region_info = source_env.calcRegionInfo(entry.result.region);
             const green = if (report_config.shouldUseColors()) ansi_term.green else "";
             const reset = if (report_config.shouldUseColors()) ansi_term.reset else "";
-            try stdout_body.print("{s}PASS{s}: {s}:{}\n", .{ green, reset, source_path, region_info.start_line_idx + 1 });
+            try stdout_body.print("{s}PASS{s}: {f}:{}\n", .{ green, reset, base.bidi.Display{ .bytes = source_path }, region_info.start_line_idx + 1 });
         },
         .failed => {
             const region_info = source_env.calcRegionInfo(entry.result.region);
@@ -16777,7 +16922,9 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     const stderr = ctx.io.stderr();
     // Formatting a file brings its `roc` version pin up to date when this
     // compiler is a newer nightly than the one it names.
-    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version };
+    var builtin_facts = fmt.BuiltinFacts{ .allocator = ctx.gpa };
+    defer builtin_facts.deinit();
+    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version, .builtin_facts = &builtin_facts };
     if (args.stdin) {
         fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
@@ -16790,13 +16937,18 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
     if (args.check) {
         var unformatted_files = std.ArrayList([]const u8).empty;
-        defer unformatted_files.deinit(ctx.gpa);
+        defer {
+            for (unformatted_files.items) |path| ctx.gpa.free(path);
+            unformatted_files.deinit(ctx.gpa);
+        }
 
         for (args.paths) |path| {
             var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, format_options, ctx.io.std_io, stderr);
             defer result.deinit();
-            if (result.unformatted_files) |files| {
+            if (result.unformatted_files) |*files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
+                // Transfer the owned paths so they survive result.deinit().
+                files.clearRetainingCapacity();
             }
             failure_count += result.failure;
         }
@@ -16805,11 +16957,11 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         if (unformatted_files.items.len > 0) {
             try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.print("    {s}\n", .{file_name});
+                try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = file_name }});
             }
             try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
             had_errors = true;
-        } else {
+        } else if (failure_count == 0) {
             try stdout.print("All formatting valid.\n", .{});
         }
         if (failure_count > 0) {
@@ -17696,7 +17848,7 @@ fn printBuildSuccess(
         error_color, error_count, reset, errors_word, warning_color, warning_count, reset, warnings_word,
     });
     try progress.writeDuration(stdout, elapsed_ns);
-    try stdout.print(" while successfully building:\n\n    {s}\n", .{final_output_path});
+    try stdout.print(" while successfully building:\n\n    {f}\n", .{base.bidi.Display{ .bytes = final_output_path }});
 
     if (verbose) {
         try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
@@ -17754,7 +17906,7 @@ const ProcessFileError = ReturnErrorSet(@TypeOf(rocCheckDefaultAppPreserved)) ||
     ReturnErrorSet(@TypeOf(checkFileWithBuildEnv));
 
 fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const u8) ProcessFileError!void {
-    stderr.print("Failed to check {s}: ", .{path}) catch {};
+    stderr.print("Failed to check {f}: ", .{base.bidi.Display{ .bytes = path }}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
         error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
@@ -18476,7 +18628,7 @@ fn finishRocCheck(
         writeNoErrors(stdout, ctx.usesColor(.stdout)) catch {};
         stdout.writeAll(" found in ") catch {};
         formatElapsedTimeMs(stdout, elapsed) catch {};
-        stdout.print(" for {s}\n", .{args.path}) catch {};
+        stdout.print(" for {f}\n", .{base.bidi.Display{ .bytes = args.path }}) catch {};
 
         if (args.verbose) {
             printVerboseStats(stdout, check_result);
@@ -20137,6 +20289,64 @@ test "watch byte change advances snapshot before rebuild completes" {
     try testing.expect(!try watchStateHasByteChanges(&ctx, &state));
 }
 
+test "watch exact inputs recover missing directories and atomic replacement" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(root);
+    const input = try std.fs.path.join(allocator, &.{ root, "generated/deep/data.txt" });
+    defer allocator.free(input);
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, try collectWatchInputSet(&ctx, null, &.{input})));
+
+    // Directory creation must advance coverage without requiring byte changes.
+    for ([_][]const u8{ "generated", "generated/deep" }) |relative| {
+        try tmp.dir.createDirPath(testing.io, relative);
+        const directory = try std.fs.path.join(allocator, &.{ root, relative });
+        defer allocator.free(directory);
+        const start = std.Io.Clock.now(.awake, testing.io);
+        while (true) {
+            try testing.expect(!try consumeDebouncedWatchChange(&ctx, &signal, &state));
+            if (state.watcher.?.input_plan.?.nodes.get(directory)) |node| {
+                if (node.kind == .directory) break;
+            }
+            try testing.expect(start.durationTo(std.Io.Clock.now(.awake, testing.io)).toMilliseconds() < 5000);
+            std.Thread.yield() catch {};
+        }
+    }
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "generated/deep/data.txt", .data = "first" });
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "replacement", .data = "second" });
+    try tmp.dir.rename("replacement", tmp.dir, "generated/deep/data.txt", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+
+    // Moving an ancestor removes the logical input even though its inode lives.
+    try tmp.dir.rename("generated", tmp.dir, "moved", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+    // Moving a populated tree into place must discover the file immediately.
+    try tmp.dir.rename("moved", tmp.dir, "generated", testing.io);
+    try expectWatchChangeForTest(&ctx, &signal, &state);
+}
+
+fn expectWatchChangeForTest(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) (WatchChangeError || error{TestUnexpectedResult})!void {
+    const start = std.Io.Clock.now(.awake, ctx.io.std_io);
+    while (!try consumeDebouncedWatchChange(ctx, signal, state)) {
+        try std.testing.expect(start.durationTo(std.Io.Clock.now(.awake, ctx.io.std_io)).toMilliseconds() < 5000);
+        std.Thread.yield() catch {};
+    }
+}
+
 test "appendWindowsQuotedArg" {
     const testing = std.testing;
 
@@ -20257,4 +20467,15 @@ test "bundle archive paths are relative to the entry point directory" {
     try testing.expectEqualStrings("internal/Helper.roc", nested_archive_path);
 
     try testing.expectError(error.InvalidPath, bundleArchivePath(allocator, root, outside));
+}
+
+test "bidi controls in diagnostic summary paths remain visible" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    for (base.bidi.controls) |control| {
+        try renderSummaryHeaderLine(&output.writer, 1, 0, control.utf8, reporting.ReportingConfig.initForTesting());
+        try std.testing.expect(std.mem.find(u8, output.written(), control.visible) != null);
+    }
+    var iter = base.bidi.Iterator{ .bytes = output.written() };
+    try std.testing.expect(iter.next() == null);
 }

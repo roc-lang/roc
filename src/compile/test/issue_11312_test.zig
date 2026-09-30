@@ -97,6 +97,35 @@ test "issue 11312: a root calling a function whose crash message is not a Str is
     , null, "poly() == poly()");
 }
 
+test "issue 11366: an expect calling a function with an erroneous inline expect is not evaluated" {
+    try expectRecovery(
+        \\xs : List(U64)
+        \\xs = [1, 2, 3]
+        \\f = |n| {
+        \\    expect 3 >= xs.len
+        \\    n
+        \\}
+        \\expect f(1) == 1
+        \\
+    , null, "f(1) == 1");
+}
+
+test "issue 11366: an expect calling an imported function with an erroneous inline expect is not evaluated" {
+    try expectRecovery(
+        \\import Broken
+        \\expect Broken.f(1) == 1
+        \\
+    ,
+        \\module [f]
+        \\f : U64 -> U64
+        \\f = |n| {
+        \\    expect n == "bad"
+        \\    n
+        \\}
+        \\
+    , "Broken.f(1) == 1");
+}
+
 test "issue 11312: a root calling a function whose crash message is erroneous is not evaluated" {
     try expectRecovery(
         \\f : U64 -> Str

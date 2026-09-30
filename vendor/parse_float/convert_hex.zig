@@ -41,7 +41,7 @@ pub fn convertHex(comptime T: type, n_: Number(T)) T {
         n.mantissa <<= 1;
         n.exponent -= 1;
     }
-    if (n.many_digits) {
+    if (n.truncated_nonzero) {
         n.mantissa |= 1;
     }
     while (n.mantissa >> (1 + fractional_bits + 2) != 0) {

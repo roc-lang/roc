@@ -666,7 +666,6 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
-            .assign_boxy_eq,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -1189,7 +1188,6 @@ fn collectAssignCallProcs(
             .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
             .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
@@ -2334,8 +2332,8 @@ test "interface summaries relocate across bodies and executor lanes" {
     defer second.deinit(allocator);
     try std.testing.expect(first_diagnostics.specialization.interface_summary_hits > 0);
     try std.testing.expect(first_diagnostics.specialization.interface_summary_expansions > 0);
-    try std.testing.expect(first_diagnostics.specialization.interface_summary_verifications > 0);
-    try std.testing.expect(second_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expectEqual(std.debug.runtime_safety, first_diagnostics.specialization.interface_summary_verifications > 0);
+    try std.testing.expectEqual(std.debug.runtime_safety, second_diagnostics.specialization.interface_summary_verifications > 0);
     try std.testing.expect(first.mono.types.digest_stats == null);
     const first_specs = first.mono.specsView();
     const second_specs = second.mono.specsView();
@@ -4122,7 +4120,6 @@ test "LIR statements and procs carry resolved source locations" {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
-            .assign_boxy_eq,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -4457,7 +4454,6 @@ fn collectLirResultProcShape(
             .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
             .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
@@ -5252,6 +5248,93 @@ test "issue 10429 numeric range spellings in one body have no heap or RC operati
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_if_initialized_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "free_count", 0);
+    }
+}
+
+test "issue 11784 range pipelines consumed by Iter.fold and Iter.sum fuse into call-free loops" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8 }{
+        .{ .name = "sum", .source =
+        \\main : U64 -> U64
+        \\main = |n| (0..<n).iter().sum()
+        },
+        .{ .name = "fold", .source =
+        \\main : U64 -> U64
+        \\main = |n| (0..<n).iter().fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "map then fold", .source =
+        \\main : U64 -> U64
+        \\main = |n| (0..<n).iter().map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "two maps then sum", .source =
+        \\main : U64 -> U64
+        \\main = |n| (0..=n).iter().map(|x| x * 2).map(|x| x + 1).sum()
+        },
+        .{ .name = "custom source folded by Iter.fold", .source =
+        \\main : U64 -> U64
+        \\main = |n| Iter.custom(0, Known(n), |i| if i < n { Ok((i, i + 1)) } else { Err(NoMore) }).map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "pipeline passed to a looping consumer", .source =
+        \\total : Iter(U64) -> U64
+        \\total = |iterator| {
+        \\    var $sum = 0
+        \\    for item in iterator {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| total((0..<n).iter().map(|x| x * 3))
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{ .proc_debug_names = true });
+        defer optimized.deinit(allocator);
+
+        const per_element = try perElementProcSummary(allocator, &optimized.lowered, null);
+        if (per_element.count != 0) {
+            std.debug.print("{s}: range pipeline kept {d} per-element callees\n", .{ case.name, per_element.count });
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+    }
+}
+
+test "issue 11784 iterators returned through destructured parameters keep their representation" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8 }{
+        .{ .name = "record parameter destructure", .source =
+        \\count_up = |{ lo, hi }| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\
+        \\main : U64 -> U64
+        \\main = |n| count_up({ lo: 0, hi: n }).map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "tuple parameter destructure", .source =
+        \\count_up = |(lo, hi)| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\
+        \\main : U64 -> U64
+        \\main = |n| count_up((0, n)).map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+        .{ .name = "nominal method destructuring its receiver", .source =
+        \\Span := { lo : U64, hi : U64 }.{
+        \\    iter : Span -> Iter(U64)
+        \\    iter = |Span.{ lo, hi }| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| Span.{ lo: 0, hi: n }.iter().map(|x| x * 2).fold(0, |acc, x| acc + x)
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModuleWithOptions(allocator, case.source, .wrappers, .{ .proc_debug_names = true });
+        defer optimized.deinit(allocator);
+        expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered) catch |err| {
+            std.debug.print("{s}: iterator pipeline allocated\n", .{case.name});
+            return err;
+        };
     }
 }
 
@@ -6162,9 +6245,10 @@ fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_u
 
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
-    // Exact single-use inlining exposes the empty initial list, so promoted
-    // appends carry their fill count directly without reading the list length.
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
+    // Promotion uses the list length as its fill cursor: it reads the length
+    // on entry, after the known-length append, at the grow guard, and after
+    // reserve to establish the new fill limit.
+    try std.testing.expectEqual(@as(usize, 4), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
@@ -7113,6 +7197,196 @@ test "static primitive list iter append loop avoids direct-list append allocatio
     try expectStaticListIterAppendLoopAvoidsListAppendAllocation(primitive_iter_source, primitive_list_source);
 }
 
+/// One fused pipeline for an iterator operation on one public iterator type.
+/// Each pipeline also maps, so an unfused representation would have to box an
+/// iterator that holds another iterator of its own type.
+const SharedIteratorOperationCase = struct {
+    operation: check.StaticDispatchRegistry.IteratorProcedureId,
+    owner: check.StaticDispatchRegistry.IteratorOwner,
+    source: []const u8,
+};
+
+/// Every operation that both `Iter` and `Stream` provide shares one Monotype
+/// producer path. Each such operation has a pipeline per type here, and the
+/// comptime check below derives the required rows from the registry, so an
+/// operation cannot become shared without both types' pipelines being held to
+/// the same fused, allocation-free lowering.
+const shared_iterator_operation_cases = [_]SharedIteratorOperationCase{
+    .{ .operation = .identity, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().iter().map(|x| x + 1))
+    },
+    .{ .operation = .identity, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().stream().map(|x| x + 1))
+    },
+    .{ .operation = .keep_if, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().keep_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .keep_if, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().keep_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_if, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().drop_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_if, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().drop_if(|x| x > 1).map(|x| x + 1))
+    },
+    .{ .operation = .take_first, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().take_first(2).map(|x| x + 1))
+    },
+    .{ .operation = .take_first, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().take_first(2).map(|x| x + 1))
+    },
+    .{ .operation = .drop_first, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().drop_first(1).map(|x| x + 1))
+    },
+    .{ .operation = .drop_first, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().drop_first(1).map(|x| x + 1))
+    },
+    .{ .operation = .with_index, .owner = .iter, .source =
+    \\main : List(U64) => List((U64, U64))
+    \\main = |items| List.from_iter(items.iter().map(|x| x + 1).with_index())
+    },
+    .{ .operation = .with_index, .owner = .stream, .source =
+    \\main : List(U64) => List((U64, U64))
+    \\main = |items| Stream.collect!(items.iter().stream().map(|x| x + 1).with_index())
+    },
+
+    .{ .operation = .next, .owner = .iter, .source =
+    \\main : () => U64
+    \\main = || {
+    \\    var $rest = [1.U64, 2, 3].iter().map(|x| x + 1)
+    \\    var $sum = 0.U64
+    \\    while Bool.True {
+    \\        match Iter.next($rest) {
+    \\            Done => {
+    \\                break
+    \\            }
+    \\            Skip({ rest }) => {
+    \\                $rest = rest
+    \\            }
+    \\            One({ item, rest }) => {
+    \\                $sum = $sum + item
+    \\                $rest = rest
+    \\            }
+    \\        }
+    \\    }
+    \\    $sum
+    \\}
+    },
+    .{ .operation = .next, .owner = .stream, .source =
+    \\main : () => U64
+    \\main = || {
+    \\    var $rest = [1.U64, 2, 3].iter().stream().map(|x| x + 1)
+    \\    var $sum = 0.U64
+    \\    while Bool.True {
+    \\        match Stream.next!($rest) {
+    \\            Done => {
+    \\                break
+    \\            }
+    \\            Skip({ rest }) => {
+    \\                $rest = rest
+    \\            }
+    \\            One({ item, rest }) => {
+    \\                $sum = $sum + item
+    \\                $rest = rest
+    \\            }
+    \\        }
+    \\    }
+    \\    $sum
+    \\}
+    },
+    .{ .operation = .custom, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter(Iter.custom(0.U64, Known(3), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    },
+    .{ .operation = .custom, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!(Stream.custom(0.U64, Known(3), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    },
+    .{ .operation = .map, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().map(|x| x * 2).map(|x| x + 1))
+    },
+    .{ .operation = .map, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || [1.U64, 2, 3].iter().stream().map(|x| x * 2).map!(|x| x + 1).collect!()
+    },
+    .{ .operation = .from_iter, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!([1.U64, 2, 3].iter().stream().map(|x| x + 1))
+    },
+    .{ .operation = .from_iter, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!(Stream.from_iter([1.U64, 2, 3].iter()).map(|x| x + 1))
+    },
+    .{ .operation = .from_step, .owner = .iter, .source =
+    \\main : () => List(U64)
+    \\main = || List.from_iter([1.U64, 2, 3].iter().map(|x| x + 1))
+    },
+    .{ .operation = .from_step, .owner = .stream, .source =
+    \\main : () => List(U64)
+    \\main = || Stream.collect!(Stream.custom(0.U64, Unknown, |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    },
+};
+
+comptime {
+    const Registry = check.StaticDispatchRegistry;
+    for (std.enums.values(Registry.IteratorProcedureId)) |operation| {
+        const names = operation.builtinNames();
+        if (names.iter.len == 0 or names.stream.len == 0) continue;
+        for (std.enums.values(Registry.IteratorOwner)) |owner| {
+            var covered = false;
+            for (shared_iterator_operation_cases) |case| {
+                if (case.operation == operation and case.owner == owner) covered = true;
+            }
+            if (!covered) {
+                @compileError("shared iterator operation ." ++ @tagName(operation) ++ " has no ." ++ @tagName(owner) ++ " fusion case");
+            }
+        }
+    }
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/11783: a `Stream` pipeline
+// must fuse exactly like its `Iter` counterpart, with no per-item boxed
+// iterator state or erased step dispatch in either inline mode.
+test "operations shared by Iter and Stream fuse without boxed or erased iterator state" {
+    var failures: usize = 0;
+    for (shared_iterator_operation_cases) |case| {
+        expectSharedIteratorOperationFuses(case.source) catch |err| {
+            std.debug.print("shared iterator operation .{s} on .{s} did not fuse: {s}\n", .{ @tagName(case.operation), @tagName(case.owner), @errorName(err) });
+            failures += 1;
+        };
+    }
+    try std.testing.expectEqual(@as(usize, 0), failures);
+}
+
+fn expectSharedIteratorOperationFuses(source: []const u8) TestError!void {
+    const allocator = std.testing.allocator;
+    {
+        var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+        defer ordinary.deinit(allocator);
+        try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &ordinary.lowered);
+    }
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .proc_debug_names = true,
+        .tag_reachability = true,
+    });
+    defer optimized.deinit(allocator);
+    try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &optimized.lowered);
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Stream.next!"));
+}
+
 test "stream from iterator collect keeps finite step callables" {
     const allocator = std.testing.allocator;
     const source =
@@ -7123,7 +7397,7 @@ test "stream from iterator collect keeps finite step callables" {
         \\            .iter()
         \\            .append(3)
         \\            .stream()
-        \\            .map!(|n| n + 1)
+        \\            .map(|n| n + 1)
         \\
         \\    Stream.collect!(stream)
         \\}
@@ -7957,7 +8231,7 @@ test "iterdiff: coarse custom is_eq set dedup keeps same representative across i
 test "iterdiff: stream per-element effects agree across inline modes" {
     // Design invariant 5: a Stream pipeline's observable effect trace is the
     // per-element, innermost-first pull order, and every lowering must
-    // reproduce it exactly. The effectful `map!` step `dbg`s each element as it
+    // reproduce it exactly. The `map` step `dbg`s each element as it
     // is pulled, so the ordered trace pins effect order across inline modes.
     try expectSameObservationsAcrossInlineModes(
         \\main : () => List(I64)
@@ -7966,7 +8240,7 @@ test "iterdiff: stream per-element effects agree across inline modes" {
         \\        [1.I64, 2, 3]
         \\            .iter()
         \\            .stream()
-        \\            .map!(|n| {
+        \\            .map(|n| {
         \\                dbg n
         \\                n * 2
         \\            })
@@ -8396,6 +8670,103 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
 }
 
+test "literal conversion ownership includes nested codec evidence" {
+    const allocator = std.testing.allocator;
+    const prefix =
+        \\Fmt := {}.{
+        \\    parse_record_start = |_, s| Ok(Uncounted(s))
+        \\    parse_record_field = |_, _, s| Ok(Done(s))
+        \\    parse_record_after_field = |_, s| Ok(Continue(s))
+        \\    skip_record_field = |_, s| Ok(s)
+        \\}
+        \\
+    ;
+    inline for (.{
+        .{ "from_quote", "Str", "BadQuotedBytes", "\"\"" },
+        .{ "from_numeral", "Numeral", "InvalidNumeral", "0" },
+    }) |conversion| {
+        const source = prefix ++ "\n" ++
+            "Sql(row) := {}.{\n" ++
+            "    " ++ conversion[0] ++ " : " ++ conversion[1] ++ " -> Try(Sql(row), [" ++ conversion[2] ++ "(Str)])\n" ++
+            "        where [row.parser_for : Fmt -> ({} -> Try({ value : row, rest : {} }, _))]\n" ++
+            "    " ++ conversion[0] ++ " = |_| Ok(Sql.({}))\n" ++
+            "}\n" ++
+            "query : Sql(row) -> [Nope, Yes(row)]\n" ++
+            "query = |_| Nope\n" ++
+            "run : {} -> [Nope, Yes({})]\n" ++
+            "run = |_| query(" ++ conversion[3] ++ ")\n" ++
+            "main = run({})\n";
+        var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+            allocator,
+            .module,
+            source,
+            &.{},
+            try sharedPrePublishedBuiltin(),
+        );
+        defer helpers.cleanupParseAndCanonical(allocator, resources);
+        const artifact = &resources.checked_artifact;
+        try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
+        try std.testing.expect(artifact.validateDispatchEvidence() == null);
+        var dependent_conversions: usize = 0;
+        for (artifact.checked_bodies.stored_exprs.items) |expr| {
+            const plan_id = switch (expr.data) {
+                .numeral => |numeral| numeral.plan orelse continue,
+                .str_from_quote => |quote| quote.plan orelse continue,
+                .pending,
+                .str_segment,
+                .str,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .list,
+                .empty_list,
+                .tuple,
+                .match_,
+                .if_,
+                .call,
+                .record,
+                .empty_record,
+                .block,
+                .tag,
+                .nominal,
+                .zero_argument_tag,
+                .closure,
+                .lambda,
+                .binop,
+                .unary_minus,
+                .unary_not,
+                .field_access,
+                .dispatch_call,
+                .interpolation,
+                .structural_eq,
+                .structural_hash,
+                .method_eq,
+                .type_dispatch_call,
+                .tuple_access,
+                .runtime_error,
+                .crash,
+                .dbg,
+                .expect_err,
+                .expect,
+                .ellipsis,
+                .anno_only,
+                .break_,
+                .return_,
+                .for_,
+                .hosted_lambda,
+                .run_low_level,
+                => continue,
+            };
+            const plan = artifact.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            try std.testing.expect(plan.resolution == .direct_parametric);
+            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr.id) == null);
+            dependent_conversions += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
+    }
+}
+
 test "custom literal field default gets an ordinary conversion root" {
     const allocator = std.testing.allocator;
     const source =
@@ -8443,6 +8814,67 @@ test "custom literal field default gets an ordinary conversion root" {
     }
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);
     try std.testing.expectEqual(@as(usize, 1), quote_roots);
+
+    // A root link cannot outlive its proof of independence. Pin validation
+    // here as well as checking that both kinds of closed literal retain roots.
+    const artifact = &resources.checked_artifact;
+    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    const expr_id = artifact.checked_bodies.default_exprs.items[0].checked_expr;
+    const plan_id = switch (artifact.checked_bodies.expr(expr_id).data) {
+        .numeral => |numeral| numeral.plan.?,
+        .str_from_quote => |quote| quote.plan.?,
+        .pending,
+        .str_segment,
+        .str,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .list,
+        .empty_list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .empty_record,
+        .block,
+        .tag,
+        .nominal,
+        .zero_argument_tag,
+        .closure,
+        .lambda,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .structural_hash,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .break_,
+        .return_,
+        .for_,
+        .hosted_lambda,
+        .run_low_level,
+        => unreachable,
+    };
+    const plan = &artifact.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+    const saved = plan.resolution;
+    defer plan.resolution = saved;
+    plan.resolution = .{ .direct_parametric = saved.direct_closed };
+    const failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.literal_conversion_root_invalid, failure.kind);
 }
 
 test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {
@@ -9819,7 +10251,7 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
             .expect_err,
@@ -9942,7 +10374,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -10188,7 +10620,7 @@ fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) b
                     top += 1;
                 }
             },
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -11865,7 +12297,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
                     try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
                     decrefs += 1;
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
             }
         }
     }

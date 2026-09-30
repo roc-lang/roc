@@ -40,6 +40,12 @@ decl_index: DeclIndex,
 root_node_idx: u32 = 0,
 tokenize_diagnostics: std.ArrayList(tokenize.Diagnostic),
 parse_diagnostics: std.ArrayList(AST.Diagnostic),
+/// Tokenization failure independent of stored diagnostic capacity.
+tokenize_had_errors: bool = false,
+/// Explicit tokenizer fact; carriage-return normalization is the sole migration.
+tokenize_has_non_carriage_return_errors: bool = false,
+/// Source policy rejection forbids compilation of even independent roots.
+source_rejected: bool = false,
 
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
@@ -66,7 +72,7 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
 
 /// Returns whether this AST has any diagnostic errors.
 pub fn hasErrors(self: *const AST) bool {
-    return self.tokenize_diagnostics.items.len > 0 or self.parse_diagnostics.items.len > 0;
+    return self.source_rejected or self.tokenize_had_errors or self.tokenize_diagnostics.items.len > 0 or self.parse_diagnostics.items.len > 0;
 }
 
 /// Returns diagnostic position information for the given region.
@@ -188,7 +194,7 @@ pub fn resolvedDiagnosticToReport(
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering
-pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) Allocator.Error!reporting.Report {
+pub fn tokenizeDiagnosticToReport(self: *const AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) Allocator.Error!reporting.Report {
     return tokenizeReport(diagnostic.tag, diagnostic.region, self.env, allocator, filename);
 }
 
@@ -210,13 +216,21 @@ fn tokenizeReport(
         .UnclosedString => "Unclosed String",
         .NonPrintableUnicodeInStrLiteral => "Nonprintable Unicode in String Literal",
         .InvalidUtf8InSource => "Invalid UTF-8",
+        .BidiControlInSource => "Bidirectional Control in Source",
+        .TooManyTokenizationErrors => "Additional Tokenization Errors",
         .DollarInMiddleOfIdentifier => "Stray Dollar Sign",
         .SingleQuoteTooLong => "Single Quote Too Long",
         .SingleQuoteEmpty => "Single Quote Empty",
         .SingleQuoteUnclosed => "Unclosed Single Quote",
     };
 
+    var bidi_body: [512]u8 = undefined;
     const body = switch (diagnostic.tag) {
+        .BidiControlInSource => blk: {
+            const control = base.bidi.at(source_env.source[region.start.offset..]).?;
+            break :blk std.fmt.bufPrint(&bidi_body, "Literal U+{X:0>4} ({s}) can make source appear different from what Roc executes. Use \\u({X:0>4}) in a literal, or remove the control from source text.", .{ control.codepoint, control.name, control.codepoint }) catch unreachable;
+        },
+        .TooManyTokenizationErrors => "Additional tokenization errors were omitted because the diagnostic limit was reached.",
         .MisplacedCarriageReturn => "Carriage return characters (\\r) are not allowed in Roc source code.",
         .AsciiControl => "ASCII control characters are not allowed in Roc source code.",
         .LeadingZero => "Numbers cannot have leading zeros.",
@@ -238,7 +252,10 @@ fn tokenizeReport(
         diagnostic.region.end.offset <= source_env.source.len)
     {
         var env = source_env.*;
-        if (env.line_starts.items.items.len == 0) {
+        const owns_line_starts = env.line_starts.items.items.len == 0;
+        if (owns_line_starts) env.line_starts = try @TypeOf(env.line_starts).initCapacity(allocator, 0);
+        defer if (owns_line_starts) env.line_starts.deinit(allocator);
+        if (owns_line_starts) {
             try env.calcLineStarts(allocator);
         }
 
@@ -370,6 +387,7 @@ fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Alloca
         token_tag == .KwExposes or
         token_tag == .KwExposing or
         token_tag == .KwFor or
+        token_tag == .KwForBang or
         token_tag == .KwGenerates or
         token_tag == .KwHas or
         token_tag == .KwHosted or
@@ -1002,6 +1020,14 @@ pub const TypeDeclKind = enum {
     where_alias,
 };
 
+/// Which iteration protocol a `for` loop uses.
+pub const ForKind = enum(u8) {
+    /// `for`: calls `iter` on the operand and pulls items with the pure `next`.
+    iter,
+    /// `for!`: calls `stream` on the operand and pulls items with the effectful `next!`.
+    stream,
+};
+
 /// Represents a statement.  Not all statements are valid in all positions.
 pub const Statement = union(enum) {
     decl: Decl,
@@ -1028,6 +1054,7 @@ pub const Statement = union(enum) {
         region: TokenizedRegion,
     },
     @"for": struct {
+        kind: ForKind,
         patt: Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
@@ -1276,7 +1303,10 @@ pub const Statement = union(enum) {
             },
             .@"for" => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-for");
+                try tree.pushStaticAtom(switch (a.kind) {
+                    .iter => "s-for",
+                    .stream => "s-for-bang",
+                });
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
@@ -2510,7 +2540,7 @@ pub const RequiresEntry = struct {
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = struct { span: base.DataSpan, region: TokenizedRegion = TokenizedRegion.empty() };
 };
 
 /// TODO
@@ -3078,6 +3108,7 @@ pub const Expr = union(enum) {
     },
     block: Block,
     for_expr: struct {
+        kind: ForKind,
         patt: Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
@@ -3656,7 +3687,10 @@ pub const Expr = union(enum) {
             },
             .for_expr => |f| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-for");
+                try tree.pushStaticAtom(switch (f.kind) {
+                    .iter => "e-for",
+                    .stream => "e-for-bang",
+                });
                 try ast.appendRegionInfoToSexprTree(env, tree, f.region);
                 const attrs = tree.beginNode();
 

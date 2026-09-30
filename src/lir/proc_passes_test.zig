@@ -50,11 +50,20 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
             .next = internal_jump,
         } }, .test_fixture);
+        // Tag fusion copies only arm statements that depend on the matched
+        // union. Releasing it makes each fused variant copy the nested join;
+        // neither variant has a payload, so the copies drop the release.
+        const arm_start = if (phase == .tag_fusion) try store.addCFStmt(.{ .decref = .{
+            .value = outer,
+            .rc = core.LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .bool }),
+            .atomicity = .single_thread,
+            .next = initialize,
+        } }, .test_fixture) else initialize;
         const arm = try store.addCFStmt(.{ .join = .{
             .id = joins.nested,
             .params = try store.addLocalSpan(&.{result}),
             .body = external_jump,
-            .remainder = initialize,
+            .remainder = arm_start,
         } }, .test_fixture);
         const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }, .test_fixture);
         var consumer = arm;
@@ -653,7 +662,8 @@ test "LIR proc pass no-op workers do not append duplicate source bodies" {
     var metrics: passes.ParallelMetrics = .{};
     // Constructor and field projection have no arithmetic facts to prove.
     try passes.run(testing.allocator, &fixture.store, &fixture.layouts, .range, mock.interface(), &metrics);
-    try testing.expectEqual(@as(u64, 8), metrics.tasks_submitted);
+    // Excluded bodies are checked by verification workers only in Debug.
+    try testing.expectEqual(@as(u64, if (@import("builtin").mode == .Debug) 8 else 0), metrics.tasks_submitted);
     try testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
     try testing.expectEqual(@as(u64, 0), metrics.changed_by_phase[@intFromEnum(passes.Phase.range)]);
     try testing.expectEqual(@as(u64, 0), metrics.appended_statements);

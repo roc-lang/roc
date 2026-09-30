@@ -176,6 +176,74 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
     }
 }
 
+test "range prove retargets jumps inside unreached join bodies when threading a Bool join" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const bool_join = fixture_join_ids.freshJoinPoint();
+    const unreached_join = fixture_join_ids.freshJoinPoint();
+
+    // join 0(flag) = switch flag { 1 => ret, _ => ret }
+    const ret_true = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const ret_false = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const bool_body = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = flag,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_true }}),
+        .default_branch = ret_false,
+    } }, .test_fixture);
+    // join 1() has no jump to it, so the prescan never scans its body.
+    const unreached_jump = try store.addCFStmt(.{ .jump = .{ .target = bool_join } }, .test_fixture);
+    const reached_jump = try store.addCFStmt(.{ .jump = .{ .target = bool_join } }, .test_fixture);
+    const unreached = try store.addCFStmt(.{ .join = .{
+        .id = unreached_join,
+        .params = try store.addLocalSpan(&.{}),
+        .body = unreached_jump,
+        .remainder = reached_jump,
+    } }, .test_fixture);
+    const set_result = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = unreached,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = bool_join,
+        .params = try store.addLocalSpan(&.{flag}),
+        .body = bool_body,
+        .remainder = set_result,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(0),
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{flag}),
+        .body = body,
+        .ret_layout = .u64,
+    }, .none);
+
+    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    defer scratch.deinit();
+    try runProc(&store, &layouts, proc, scratch.allocator());
+
+    var join_ids = collections.DenseMap(LIR.JoinPointId, void).init(testing.allocator);
+    defer join_ids.deinit();
+    var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
+    defer jump_targets.deinit(testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt| {
+        const cf = store.getCFStmt(stmt);
+        if (cf == .join) try join_ids.put(cf.join.id, {});
+        if (cf == .jump) try jump_targets.append(testing.allocator, cf.jump.target);
+    }
+    try testing.expect(!join_ids.contains(bool_join));
+    for (jump_targets.items) |target| try testing.expect(join_ids.contains(target));
+}
+
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
 /// root: control reaching the defining statement guarantees
@@ -1058,10 +1126,6 @@ const Pass = struct {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
-                .assign_boxy_eq => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
                 .assign_boxy_tag => |s| {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
@@ -1256,7 +1320,6 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -2107,8 +2170,16 @@ const Pass = struct {
     /// two fresh parameterless joins that wrap the original arms, so each
     /// site's own knowledge of the parameter reaches the arms directly.
     /// Returns the number of joins threaded.
-    fn threadBoolJoins(self: *Pass) ResourceError!u32 {
+    fn threadBoolJoins(self: *Pass, body: CFStmtId) ResourceError!u32 {
         var threaded: u32 = 0;
+        // Jump records cover only code the prescan reached, and it never scans
+        // a join body without a reachable jump. Retargeting must still cover
+        // every structural jump, or an unscanned one would keep the join id
+        // this rewrite retires. Most procedures thread nothing, so the walk
+        // waits for the first join that qualifies.
+        var structural_jumps = std.ArrayList(JumpRecord).empty;
+        defer structural_jumps.deinit(self.allocator);
+        var structural_jumps_ready = false;
         for (self.joins_in_order.items) |join_stmt| {
             const join = switch (self.store.getCFStmt(join_stmt)) {
                 .join => |j| j,
@@ -2151,7 +2222,6 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -2205,7 +2275,6 @@ const Pass = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
-                .assign_boxy_eq,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -2228,6 +2297,16 @@ const Pass = struct {
                 }
             }
             if (!shape_ok) continue;
+
+            if (!structural_jumps_ready) {
+                var walk = try BodyClone.ReachableStmts.initWithAllocator(self.store, body, self.allocator);
+                defer walk.deinit();
+                while (try walk.next()) |stmt| {
+                    const cf = self.store.getCFStmt(stmt);
+                    if (cf == .jump) try structural_jumps.append(self.allocator, .{ .target = cf.jump.target, .stmt = stmt });
+                }
+                structural_jumps_ready = true;
+            }
 
             const true_id: JoinPointId = @enumFromInt(self.max_join_id);
             const false_id: JoinPointId = @enumFromInt(self.max_join_id + 1);
@@ -2252,7 +2331,7 @@ const Pass = struct {
                 .remainder = false_join,
             } }, join_origin);
 
-            for (self.jump_records.items) |record| {
+            for (structural_jumps.items) |record| {
                 if (record.target != join.id) continue;
                 // A site already rewritten for an earlier join no longer
                 // holds a jump; skip anything that changed shape.
@@ -2297,7 +2376,6 @@ const Pass = struct {
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
-                    .assign_boxy_eq,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -2411,7 +2489,7 @@ const Pass = struct {
             // Threading restructures control flow, so a round that threads
             // stops there and the next round re-derives the graph facts.
             self.new_loop_bounds = false;
-            if (try self.threadBoolJoins() == 0) {
+            if (try self.threadBoolJoins(proc.body.?) == 0) {
                 try self.walkRegions(proc.body.?);
                 try self.certifyRound(proc.body.?);
                 try self.persistLoopBounds();
@@ -2603,11 +2681,6 @@ const Pass = struct {
                         current = s.next;
                     },
                     .assign_boxy_inspect => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_eq => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.target);
                         current = s.next;
@@ -4063,7 +4136,6 @@ const RangeProveCertify = struct {
                 .assign_boxy_unbox => |t| try list.append(allocator, t.next),
                 .assign_boxy_adapt => |t| try list.append(allocator, t.next),
                 .assign_boxy_inspect => |t| try list.append(allocator, t.next),
-                .assign_boxy_eq => |t| try list.append(allocator, t.next),
                 .assign_boxy_tag => |t| try list.append(allocator, t.next),
                 .assign_boxy_tag_payload => |t| try list.append(allocator, t.next),
                 .assign_call_dict => |t| try list.append(allocator, t.next),

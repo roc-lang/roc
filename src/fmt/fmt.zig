@@ -17,10 +17,12 @@ const SafeList = collections.SafeList;
 
 const tokenize = parse.tokenize;
 const OpenRows = @import("open_rows.zig").OpenRows;
+/// Owned builtin facts reusable across sequential formatter operations.
+pub const BuiltinFacts = @import("open_rows.zig").BuiltinFacts;
 const StatementScope = @import("open_rows.zig").StatementScope;
 
 /// Errors that can occur while formatting an already-parsed AST.
-pub const FormatAstError = Allocator.Error || std.Io.Writer.Error;
+pub const FormatAstError = Allocator.Error || std.Io.Writer.Error || error{ParsingFailed};
 /// Errors that can occur while formatting a Roc source file.
 pub const FormatFileError = Allocator.Error || std.Io.File.OpenError || std.Io.File.ReadPositionalError || FormatAstError || error{ NotRocFile, FileSizeChangedDuringRead, ReadFailed, ParsingFailed };
 /// Errors that can occur while walking and formatting a path.
@@ -49,21 +51,31 @@ pub const Options = struct {
     /// formatter's own round-trip tests must not produce output that changes
     /// with whichever compiler built them.
     compiler_version: ?[]const u8 = null,
+    /// Borrowed, invocation-owned builtin facts. Never shared between threads.
+    builtin_facts: ?*BuiltinFacts = null,
 };
 
 /// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
 pub const FormattingResult = struct {
     success: usize,
     failure: usize,
-    /// Only relevant when using `roc fmt --check`
+    /// Owned paths, relative to the supplied base directory (or absolute).
+    /// Only relevant when using `roc fmt --check`.
     unformatted_files: ?std.array_list.Managed([]const u8),
 
     pub fn deinit(self: *@This()) void {
         if (self.unformatted_files) |files| {
+            for (files.items) |path| files.allocator.free(path);
             files.deinit();
         }
     }
 };
+
+/// Carriage-return normalization is an existing explicit formatter migration.
+/// The tokenizer records other errors even when their diagnostics are omitted.
+fn tokenizationPermitsFormatting(ast: AST) bool {
+    return !ast.source_rejected and !ast.tokenize_has_non_carriage_return_errors;
+}
 
 /// Parse diagnostics whose recovery AST is an explicit source migration that
 /// the formatter owns. Every other parse diagnostic still blocks formatting so
@@ -79,13 +91,18 @@ fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
 pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, options: Options, io: std.Io, stderr: *std.Io.Writer) FormatPathError!FormattingResult {
-    // TODO: update this to use the filesystem abstraction
-    // When doing so, add a mock filesystem and some tests.
-
+    var builtin_facts = BuiltinFacts{ .allocator = gpa };
+    defer builtin_facts.deinit();
+    var shared_options = options;
+    if (shared_options.builtin_facts == null) shared_options.builtin_facts = &builtin_facts;
     var success_count: usize = 0;
     var failed_count: usize = 0;
     // Only used for `roc fmt --check`. If we aren't doing check, don't bother allocating
     var unformatted_files = if (check) std.array_list.Managed([]const u8).init(gpa) else null;
+    errdefer if (unformatted_files) |files| {
+        for (files.items) |file_path| files.allocator.free(file_path);
+        files.deinit();
+    };
 
     // First try as a directory.
     if (base_dir.openDir(io, path, .{ .iterate = true })) |const_dir| {
@@ -96,7 +113,10 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
         defer walker.deinit();
         while (try walker.next(io)) |entry| {
             if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
+                if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".roc")) continue;
+                const file_path = try std.fs.path.join(gpa, &.{ path, entry.path });
+                defer gpa.free(file_path);
+                if (formatFilePath(gpa, base_dir, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) |_| {
                     success_count += 1;
                 } else |err| switch (err) {
                     error.NotRocFile => {},
@@ -135,14 +155,14 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                     error.WouldBlock,
                     error.WriteFailed,
                     => {
-                        try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
+                        try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = entry.path }, err });
                         failed_count += 1;
                     },
                 }
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
+        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) |_| {
             success_count += 1;
         } else |err| switch (err) {
             error.NotRocFile => {},
@@ -181,7 +201,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             error.WouldBlock,
             error.WriteFailed,
             => {
-                try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
+                try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = path }, err });
                 failed_count += 1;
             },
         }
@@ -285,8 +305,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
 
     // Explicit formatter migrations may consume their parser recovery AST.
     // Every other parsing problem is reported and leaves the file untouched.
-    if (!parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
-        try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
+    if (!tokenizationPermitsFormatting(parse_ast.*) or !parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
@@ -298,7 +317,10 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         defer formatted.deinit();
         try formatAstWithOptions(parse_ast.*, &formatted.writer, options);
         if (!std.mem.eql(u8, formatted.written(), module_env.common.source)) {
-            try unformatted_files.?.append(path);
+            const files = unformatted_files.?;
+            const owned_path = try files.allocator.dupe(u8, path);
+            errdefer files.allocator.free(owned_path);
+            try files.append(owned_path);
         }
     } else { // Otherwise actually format it
         const output_file = try base_dir.createFile(io, path, .{});
@@ -307,7 +329,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         var output_writer = output_file.writer(io, &output_buffer);
         try formatAstWithOptions(parse_ast.*, &output_writer.interface, options);
         if (migrates_optional_field_syntax) {
-            try stderr.print("Migrated legacy optional field syntax `:?` to `?:` in {s}.\n", .{path});
+            try stderr.print("Migrated legacy optional field syntax `:?` to `?:` in {f}.\n", .{base.bidi.Display{ .bytes = path }});
         }
     }
 }
@@ -339,8 +361,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: 
 
     // Keep stdin behavior identical to file formatting: only explicit source
     // migrations may proceed through a parser recovery AST.
-    if (!parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
-        try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
+    if (!tokenizationPermitsFormatting(parse_ast.*) or !parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
@@ -379,6 +400,11 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
         }
     }
 
+    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+        var report = try parse_ast.tokenizeDiagnosticToReport(diagnostic, gpa, null);
+        defer report.deinit();
+        try @import("reporting").renderReportToPlain(&report, stderr, @import("reporting").ReportingConfig.initForTesting());
+    }
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
@@ -402,7 +428,7 @@ fn formatIRNode(ast: AST, writer: *std.Io.Writer, options: Options, formatter: *
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
-/// Only returns an error if the underlying writer returns an error.
+/// Rejects tokenizer errors before emitting source.
 pub fn formatAst(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
     return formatAstWithOptions(ast, writer, .{});
 }
@@ -436,7 +462,7 @@ pub fn redundantOpenExtensions(gpa: std.mem.Allocator, ast: AST) FormatAstError!
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
-/// Only returns an error if the underlying writer returns an error.
+/// Rejects tokenizer errors before emitting source.
 pub fn formatHeader(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
     return formatIRNode(ast, writer, .{}, formatHeaderInner);
 }
@@ -446,7 +472,7 @@ fn formatHeaderInner(fmt: *Formatter) FormatAstError!void {
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
-/// Only returns an error if the underlying writer returns an error.
+/// Rejects tokenizer errors before emitting source.
 pub fn formatStatement(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
     return formatIRNode(ast, writer, .{}, formatStatementInner);
 }
@@ -456,7 +482,7 @@ fn formatStatementInner(fmt: *Formatter) FormatAstError!void {
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
-/// Only returns an error if the underlying writer returns an error.
+/// Rejects tokenizer errors before emitting source.
 pub fn formatExpr(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
     return formatIRNode(ast, writer, .{}, formatExprNode);
 }
@@ -499,7 +525,8 @@ const Formatter = struct {
     pending_spaces: usize = 0,
 
     /// Creates a new Formatter for the given parse IR.
-    fn init(ast: AST, writer: *std.Io.Writer, options: Options) Allocator.Error!Formatter {
+    fn init(ast: AST, writer: *std.Io.Writer, options: Options) FormatAstError!Formatter {
+        if (!tokenizationPermitsFormatting(ast)) return error.ParsingFailed;
         const type_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
         @memset(type_layouts, .unknown);
 
@@ -526,6 +553,7 @@ const Formatter = struct {
     pub fn formatFile(fmt: *Formatter) FormatAstError!void {
         var open_rows = try OpenRows.init(fmt.ast.gpa, &fmt.ast);
         defer open_rows.deinit();
+        open_rows.shared_builtins = fmt.options.builtin_facts;
         try fmt.formatFileWithOpenRows(&open_rows);
     }
 
@@ -834,7 +862,15 @@ const Formatter = struct {
                     try fmt.formatWhereConstraint(w, where_multiline);
                 }
                 if (d.associated) |assoc| {
-                    try fmt.pushAll(".");
+                    const open_curly = assoc.region.start;
+                    const dot = open_curly - 1;
+                    if (fmt.hasCommentBefore(dot) and try fmt.flushCommentsBefore(dot)) {
+                        try fmt.pushIndent();
+                    }
+                    try fmt.push('.');
+                    if (fmt.hasCommentBefore(open_curly) and try fmt.flushCommentsBefore(open_curly)) {
+                        try fmt.pushIndent();
+                    }
                     try fmt.push('{');
                     if (assoc.statements.span.len > 0) {
                         fmt.curr_indent += 1;
@@ -851,6 +887,12 @@ const Formatter = struct {
                         try fmt.flushCommentsBeforeDiscard(assoc.region.end - 1);
                         try fmt.ensureNewline();
                         fmt.curr_indent -= 1;
+                        try fmt.pushIndent();
+                    } else if (fmt.regionHasInteriorComment(assoc.region)) {
+                        fmt.curr_indent += 1;
+                        try fmt.flushCommentsBeforeDiscard(fmt.regionClosingToken(assoc.region).?);
+                        fmt.curr_indent -= 1;
+                        try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
                     try fmt.push('}');
@@ -899,7 +941,7 @@ const Formatter = struct {
                 try fmt.formatExprDiscard(e.body);
             },
             .@"for" => |f| {
-                try fmt.pushAll("for");
+                try fmt.pushAll(forKeyword(f.kind));
                 const patt_region = fmt.nodeRegion(@intFromEnum(f.patt));
                 if (multiline and try fmt.flushCommentsBefore(patt_region.start)) {
                     fmt.curr_indent += 1;
@@ -1547,7 +1589,15 @@ const Formatter = struct {
         }
         switch (expr) {
             .apply => |a| {
-                try fmt.formatExprInnerDiscard(a.@"fn", .{ .starts_pipe_target = format_context.starts_pipe_target });
+                // A field followed directly by arguments parses as a method
+                // call. Group the callee to preserve application of its value,
+                // including applications nested inside a pipe target.
+                if (fmt.ast.store.getExpr(a.@"fn") == .field_access) {
+                    const callee = try fmt.formatParenthesizedExpr(null, a.@"fn", false);
+                    Formatter.discardRegion(callee.region);
+                } else {
+                    try fmt.formatExprInnerDiscard(a.@"fn", .{ .starts_pipe_target = format_context.starts_pipe_target });
+                }
                 const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
                 try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ei), fmt.ast.store.exprSlice(a.args));
@@ -1957,7 +2007,12 @@ const Formatter = struct {
 
                 if (empty_has_comment) {
                     fmt.curr_indent += 1;
-                    try fmt.flushCommentsBeforeDiscard(fmt.regionClosingToken(r.region).?);
+                    // A comment-only `{ }` parses as an empty record; its braces
+                    // trim boundary blank lines exactly as a block's do.
+                    _ = try fmt.flushCommentsBeforeWithSpacing(fmt.regionClosingToken(r.region).?, .{
+                        .after_block_open = true,
+                        .before_block_close = true,
+                    });
                     fmt.curr_indent -= 1;
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
@@ -2202,7 +2257,8 @@ const Formatter = struct {
                     }
                     try fmt.formatExprDiscard(branch.body);
                 }
-                fmt.curr_indent -= 1;
+                // Multiline arms can increase curr_indent beyond the branch level.
+                fmt.curr_indent = branch_indent - 1;
                 try fmt.newline();
                 try fmt.pushIndent();
                 try fmt.push('}');
@@ -2233,7 +2289,8 @@ const Formatter = struct {
                 try fmt.formatBlock(b);
             },
             .for_expr => |f| {
-                try fmt.pushAll("for ");
+                try fmt.pushAll(forKeyword(f.kind));
+                try fmt.push(' ');
                 try fmt.formatPatternDiscard(f.patt);
                 try fmt.pushAll(" in ");
                 try fmt.formatExprDiscard(f.expr);
@@ -2658,6 +2715,7 @@ const Formatter = struct {
     fn formatTargetsSection(fmt: *Formatter, targets_idx: AST.TargetsSection.Idx) (Allocator.Error || error{WriteFailed})!void {
         const targets = fmt.ast.store.getTargetsSection(targets_idx);
         const start_indent = fmt.curr_indent;
+        defer fmt.curr_indent = start_indent;
 
         try fmt.pushAll("targets: {");
 
@@ -2666,8 +2724,10 @@ const Formatter = struct {
         // Format inputs_dir: directory directive if present
         if (targets.inputs_dir) |inputs_token| {
             has_content = true;
-            try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
+            // inputs_token is the StringPart in `inputs_dir: "..."`.
+            try fmt.flushCommentsBeforeDiscard(inputs_token - 3);
+            try fmt.ensureNewline();
             try fmt.pushIndent();
             try fmt.pushAll("inputs_dir: ");
             try fmt.push('"');
@@ -2679,14 +2739,19 @@ const Formatter = struct {
         // Format per-target entries
         for (fmt.ast.store.targetEntrySlice(targets.entries)) |entry_idx| {
             has_content = true;
-            try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
+            const entry = fmt.ast.store.getTargetEntry(entry_idx);
+            try fmt.flushCommentsBeforeDiscard(entry.region.start);
+            try fmt.ensureNewline();
             try fmt.pushIndent();
             try fmt.formatTargetEntry(entry_idx);
             try fmt.push(',');
         }
 
-        if (has_content) {
+        fmt.curr_indent = start_indent + 1;
+        const closing_token = fmt.regionClosingToken(targets.region).?;
+        if (has_content or fmt.hasCommentBefore(closing_token)) {
+            try fmt.flushCommentsBeforeDiscard(closing_token);
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent;
             try fmt.pushIndent();
@@ -2725,6 +2790,7 @@ const Formatter = struct {
             return;
         }
         try fmt.push('{');
+        fmt.curr_indent = base_indent + 1;
         for (entries) |entry_idx| {
             const entry = fmt.ast.store.getSymbolMapEntry(entry_idx);
             try fmt.flushCommentsBeforeDiscard(entry.region.start);
@@ -3146,11 +3212,13 @@ const Formatter = struct {
                 try fmt.pushAll("requires {");
                 // Format requires entries with for-clause syntax
                 const entries = fmt.ast.store.requiresEntrySlice(p.requires_entries);
-                if (entries.len > 0) {
-                    try fmt.ensureNewline();
+                const requires_closing = fmt.regionClosingToken(p.requires_entries.region).?;
+                if (entries.len > 0 or fmt.hasCommentBefore(requires_closing)) {
                     fmt.curr_indent = start_indent + 2;
                     for (entries, 0..) |entry_idx, entry_i| {
                         const entry = fmt.ast.store.getRequiresEntry(entry_idx);
+                        try fmt.flushCommentsBeforeDiscard(entry.region.start);
+                        try fmt.ensureNewline();
                         try fmt.pushIndent();
 
                         // Format type aliases: [Model : model] for ...
@@ -3180,8 +3248,9 @@ const Formatter = struct {
                         if (entry_i < entries.len - 1) {
                             try fmt.push(',');
                         }
-                        try fmt.ensureNewline();
                     }
+                    try fmt.flushCommentsBeforeDiscard(requires_closing);
+                    try fmt.ensureNewline();
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
                 }
@@ -3277,13 +3346,13 @@ const Formatter = struct {
             try fmt.markRedundantOpenRows(fmt.ast.store.statementSlice(block.statements), .block);
             for (fmt.ast.store.statementSlice(block.statements), 0..) |s, i| {
                 const region = fmt.nodeRegion(@intFromEnum(s));
-                try fmt.flushCommentsBeforeDiscard(region.start);
+                _ = try fmt.flushCommentsBeforeWithSpacing(region.start, .{ .after_block_open = i == 0 });
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
                 try fmt.formatStatement(s);
 
                 if (i == block.statements.span.len - 1) {
-                    try fmt.flushCommentsBeforeDiscard(region.end);
+                    _ = try fmt.flushCommentsBeforeWithSpacing(region.end, .{ .before_block_close = true });
                 }
             }
             try fmt.ensureNewline();
@@ -3293,7 +3362,10 @@ const Formatter = struct {
         } else if (fmt.regionHasInteriorComment(block.region)) {
             try fmt.push('{');
             fmt.curr_indent += 1;
-            try fmt.flushCommentsBeforeDiscard(fmt.regionClosingToken(block.region).?);
+            _ = try fmt.flushCommentsBeforeWithSpacing(fmt.regionClosingToken(block.region).?, .{
+                .after_block_open = true,
+                .before_block_close = true,
+            });
             fmt.curr_indent -= 1;
             try fmt.ensureNewline();
             try fmt.pushIndent();
@@ -3673,15 +3745,25 @@ const Formatter = struct {
     /// are emitted before any comment or trailing content. Used to insert blank lines
     /// between top-level defs.
     fn flushCommentsBeforeMin(fmt: *Formatter, tokenIdx: Token.Idx, min_leading_newlines: u8) error{WriteFailed}!bool {
+        return fmt.flushCommentsBeforeWithSpacing(tokenIdx, .{ .min_leading_newlines = min_leading_newlines });
+    }
+
+    const CommentSpacing = struct {
+        min_leading_newlines: u8 = 0,
+        after_block_open: bool = false,
+        before_block_close: bool = false,
+    };
+
+    fn flushCommentsBeforeWithSpacing(fmt: *Formatter, tokenIdx: Token.Idx, spacing: CommentSpacing) error{WriteFailed}!bool {
         const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
-        return fmt.flushComments(start, fmt.ast.env.source[start..end], min_leading_newlines);
+        return fmt.flushComments(start, fmt.ast.env.source[start..end], spacing);
     }
 
     fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!bool {
         const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
-        return fmt.flushComments(start, fmt.ast.env.source[start..end], 0);
+        return fmt.flushComments(start, fmt.ast.env.source[start..end], .{});
     }
 
     fn flushCommentsEOF(fmt: *Formatter) error{WriteFailed}!void {
@@ -3739,48 +3821,36 @@ const Formatter = struct {
         return offset == 0 and comment_text.len > 0 and comment_text[0] == '!';
     }
 
-    /// `start_offset` is the absolute source offset that `between_text` begins at.
-    fn flushComments(fmt: *Formatter, start_offset: usize, between_text: []const u8, min_leading_newlines: u8) error{WriteFailed}!bool {
+    /// Delay whitespace until its following comment or token is known, so block
+    /// edges can trim blank lines without changing gaps inside the block.
+    /// `start_offset` is the absolute source offset of `between_text`.
+    fn flushComments(fmt: *Formatter, start_offset: usize, between_text: []const u8, spacing: CommentSpacing) error{WriteFailed}!bool {
         var newline_count: usize = 0;
-        var prev_was_comment: bool = false;
-        // True once we've either upgraded a source newline into a blank line
-        // or padded up front to satisfy `min_leading_newlines`. Used to decide
-        // whether we still owe a trailing blank line at the end.
-        var leading_blank_satisfied: bool = (min_leading_newlines == 0);
+        var prev_was_comment = false;
+        var leading_blank_satisfied = spacing.min_leading_newlines == 0;
         var i: usize = 0;
         while (i < between_text.len) {
             if (between_text[i] == '#') {
-                // Found a comment, extract it
-                const comment_start = i + 1; // Skip the #
+                const comment_start = i + 1;
                 var comment_end = comment_start;
                 while (comment_end < between_text.len and between_text[comment_end] != '\n' and between_text[comment_end] != '\r') {
                     comment_end += 1;
                 }
 
-                // If this comment is "standalone" (preceded by at least one
-                // newline) AND we still owe the caller a leading blank line,
-                // emit it now so the comment sticks to the next statement.
-                // Inline comments (no preceding newline) are kept attached
-                // to the previous statement and the blank line is emitted
-                // afterwards.
+                // Keep inline comments attached to the preceding token. Any
+                // required separation before the next definition follows them.
                 const is_inline = newline_count == 0 and !fmt.has_newline;
                 if (!leading_blank_satisfied and !is_inline) {
-                    while (newline_count < min_leading_newlines) {
-                        try fmt.newline();
-                        newline_count += 1;
-                    }
+                    newline_count = @max(newline_count, spacing.min_leading_newlines);
                     leading_blank_satisfied = true;
                 }
-
-                // Check if it's a doc comment
                 const is_doc_comment = comment_start < between_text.len and between_text[comment_start] == '#';
-                // If a doc comment directly follows code (only one \n between them,
-                // and the previous token wasn't another comment), add a blank line.
-                if (is_doc_comment and newline_count == 1 and !prev_was_comment) {
-                    try fmt.newline();
-                    newline_count += 1;
+                if (is_doc_comment and newline_count == 1 and !prev_was_comment and !spacing.after_block_open) {
+                    newline_count = 2;
                 }
 
+                const limit: usize = if (spacing.after_block_open and !prev_was_comment) 1 else 2;
+                for (0..@min(limit, newline_count)) |_| try fmt.newline();
                 if (newline_count > 0 or fmt.has_newline) {
                     try fmt.pushIndent();
                 } else {
@@ -3788,46 +3858,29 @@ const Formatter = struct {
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
-                // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
+                // Preserve shebangs and doc-comment markers.
                 if (!isShebang(start_offset + i, comment_text) and comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
-                try fmt.newline();
-                newline_count = 1; // reset count to allow an additional newline after a comment
+                newline_count = 1;
                 prev_was_comment = true;
                 i = comment_end + 1;
-                // The comment's line ending was already emitted, including both bytes of CRLF.
+                // Count the comment's line ending once, including CRLF.
                 if (i < between_text.len and between_text[comment_end] == '\r' and between_text[i] == '\n') i += 1;
             } else if (between_text[i] == '\n') {
-                if (newline_count < 2) {
-                    try fmt.newline();
-                }
                 newline_count += 1;
-                // Upgrade the first source newline into a blank line if the
-                // caller asked for one and we haven't already satisfied it.
-                if (!leading_blank_satisfied and !prev_was_comment and newline_count == 1 and min_leading_newlines >= 2) {
-                    try fmt.newline();
-                    newline_count = 2;
-                    leading_blank_satisfied = true;
-                }
                 i += 1;
             } else {
                 i += 1;
             }
         }
 
-        // If we still owe a blank line (e.g., the only content was an inline
-        // comment, or the inter-statement region was empty), pad it on at the
-        // end so the next statement is preceded by the requested blank.
         if (!leading_blank_satisfied) {
-            while (newline_count < min_leading_newlines) {
-                try fmt.newline();
-                newline_count += 1;
-            }
+            newline_count = @max(newline_count, spacing.min_leading_newlines);
         }
-
-        // Return true if there was a newline, whether or not there was a comment
+        const limit: usize = if (spacing.before_block_close or (spacing.after_block_open and !prev_was_comment)) 1 else 2;
+        for (0..@min(limit, newline_count)) |_| try fmt.newline();
         return newline_count > 0;
     }
 
@@ -4612,6 +4665,13 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
     return try result.toOwnedSlice();
 }
 
+fn forKeyword(kind: AST.ForKind) []const u8 {
+    return switch (kind) {
+        .iter => "for",
+        .stream => "for!",
+    };
+}
+
 test "issue 10480: package qualifier preserved in exposed aliased imports" {
     // Repro for https://github.com/roc-lang/roc/issues/10480
     const result = try moduleFmtsStable(std.testing.allocator, "module[o as n,F.s as I]", false);
@@ -4664,6 +4724,88 @@ test "package platform dependency preserves inline source order" {
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(input, result);
+}
+
+test "issue 11713: match closing brace aligns after a multiline final arm" {
+    // Repro for https://github.com/roc-lang/roc/issues/11713
+    const inputs = [_][]const u8{
+        "f = |x| {\n" ++
+            "\tmatch x {\n" ++
+            "\t\tOk(v) => v\n" ++
+            "\t\tErr(e) =>\n" ++
+            "\t\t\tmatch e {\n" ++
+            "\t\t\t\tA => 1\n" ++
+            "\t\t\t\tB => 2\n" ++
+            "\t\t\t}\n" ++
+            "\t}\n" ++
+            "}\n" ++
+            "\n" ++
+            "expect f(Ok(3)) == 3\n",
+        "f = |x| match x {\n" ++
+            "\tOk(v) => v\n" ++
+            "\tErr(e) =>\n" ++
+            "\t\tmatch e {\n" ++
+            "\t\t\tA => 1\n" ++
+            "\t\t\tB => 2\n" ++
+            "\t\t}\n" ++
+            "}\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(input, result);
+    }
+}
+
+test "issue 11773: comments preserved around a method list" {
+    // Repro for https://github.com/roc-lang/roc/issues/11773
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{
+            .input = "MyModule := {\n\t# TODO: write code\n}.{\n\t# TODO: write code\n}\n",
+            .expected = "MyModule := {\n\t# TODO: write code\n}.{\n\t# TODO: write code\n}\n",
+        },
+        .{
+            .input = "MyModule := U64.{ # inline\n}",
+            .expected = "MyModule := U64.{ # inline\n}\n",
+        },
+        .{
+            .input = "MyModule := U64.{\n\t# first\n\n\t# second\n}",
+            .expected = "MyModule := U64.{\n\t# first\n\n\t# second\n}\n",
+        },
+        .{
+            .input = "Outer := U64.{\n\tInner := U64.{\n\t\t# nested\n\t}\n}",
+            .expected = "Outer := U64.{\n\tInner := U64.{\n\t\t# nested\n\t}\n}\n",
+        },
+        .{
+            .input = "MyModule := U64 # before dot\n.{ x = 1 }",
+            .expected = "MyModule := U64 # before dot\n.{\n\tx = 1\n}\n",
+        },
+        .{
+            .input = "MyModule := U64 # before dot\n.{}",
+            .expected = "MyModule := U64 # before dot\n.{}\n",
+        },
+        .{
+            .input = "MyModule := U64. # after dot\n{ x = 1 }",
+            .expected = "MyModule := U64. # after dot\n{\n\tx = 1\n}\n",
+        },
+        .{
+            .input = "Outer := U64.{\n\tInner := U64 # before dot\n\t.{ x = 1 }\n}",
+            .expected = "Outer := U64.{\n\tInner := U64 # before dot\n\t.{\n\t\tx = 1\n\t}\n}\n",
+        },
+        .{
+            .input = "Foo(a) := List(a) where [a.eq : a, a -> Bool] # before dot\n.{}",
+            .expected = "Foo(a) := List(a)\n\twhere [a.eq : a, a -> Bool] # before dot\n\t.{}\n",
+        },
+        .{
+            .input = "MyModule := U64\n.\n{}",
+            .expected = "MyModule := U64.{}\n",
+        },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
 }
 
 test "issue 10431: wrapped declaration has no trailing whitespace" {
@@ -4840,6 +4982,65 @@ test "legacy optional marker preserves a comment between colon and marker" {
         "value : {\n\ta ? # keep me\n\t\t: U8,\n}\n",
         result,
     );
+}
+
+test "formatPath check retains full paths after directory traversal" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "d/sub");
+
+    const unformatted = [_][]const u8{ "d/Long.roc", "d/C.roc", "d/sub/Long.roc" };
+    for (unformatted) |path| {
+        try tmp.dir.writeFile(io, .{ .sub_path = path, .data = "x  =  1\n" });
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "d/Formatted.roc", .data = "x = 1\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "d/a.md", .data = "Not Roc" });
+
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    var result = try formatPath(gpa, gpa, tmp.dir, "d", true, .{}, io, &stderr.writer);
+    defer result.deinit();
+    try std.testing.expectEqual(4, result.success);
+    try std.testing.expectEqual(0, result.failure);
+    try std.testing.expectEqualStrings("", stderr.written());
+    const files = result.unformatted_files.?.items;
+    try std.testing.expectEqual(unformatted.len, files.len);
+    for (unformatted) |path| {
+        const expected = try gpa.dupe(u8, path);
+        defer gpa.free(expected);
+        for (expected) |*byte| {
+            if (byte.* == '/') byte.* = std.fs.path.sep;
+        }
+        var matches: usize = 0;
+        for (files) |actual| {
+            if (std.mem.eql(u8, expected, actual)) matches += 1;
+        }
+        try std.testing.expectEqual(1, matches);
+        const contents = try tmp.dir.readFileAlloc(io, path, gpa, .limited(1024));
+        defer gpa.free(contents);
+        try std.testing.expectEqualStrings("x  =  1\n", contents);
+    }
+}
+
+test "formatPath check owns single file paths" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "Long.roc", .data = "x  =  1\n" });
+    var path = "Long.roc".*;
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    var result = try formatPath(gpa, gpa, tmp.dir, &path, true, .{}, io, &stderr.writer);
+    defer result.deinit();
+    @memset(&path, 'X');
+    try std.testing.expectEqual(1, result.success);
+    try std.testing.expectEqual(0, result.failure);
+    const files = result.unformatted_files.?.items;
+    try std.testing.expectEqual(1, files.len);
+    try std.testing.expectEqualStrings("Long.roc", files[0]);
 }
 
 test "formatFilePath migrates a legacy optional field marker" {
@@ -5362,6 +5563,71 @@ test "issue 11208: pipe grouping preserves method insertion and result calls" {
             try std.testing.expectEqual(case.target_kind, pipe.target_kind);
             try std.testing.expectEqual(case.target_tag, std.meta.activeTag(ast.store.getExpr(pipe.right)));
         }
+    }
+}
+
+test "issue 11747: field-value applications preserve pipe call semantics" {
+    const cases = [_]struct {
+        input: []const u8,
+        expected: []const u8,
+        applications: usize = 1,
+        question: bool = false,
+    }{
+        .{ .input = "t=2|>(rec.func)(3)", .expected = "t = 2 |> (rec.func)(3)\n" },
+        .{ .input = "t=2|>(rec.inner.func)(3)", .expected = "t = 2 |> (rec.inner.func)(3)\n" },
+        .{ .input = "t=2|>(rec.func)(3)(4)", .expected = "t = 2 |> (rec.func)(3)(4)\n", .applications = 2 },
+        .{ .input = "t=2|>(rec.func)()()", .expected = "t = 2 |> (rec.func)()()\n", .applications = 2 },
+        .{ .input = "t=2|>(rec.func)(3)?", .expected = "t = 2 |> (rec.func)(3)?\n", .question = true },
+        .{ .input = "t=2|>(rec.func)()?", .expected = "t = 2 |> (rec.func)()?\n", .question = true },
+        .{ .input = "t=2|>(rec.func)", .expected = "t = 2 |> rec.func\n", .applications = 0 },
+        .{ .input = "t=2|>(rec.func)()", .expected = "t = 2 |> rec.func\n", .applications = 0 },
+        .{ .input = "t=2|>(rec.func)(\n# argument\n3\n)", .expected = "t = 2\n\t|> (rec.func)(\n\t\t# argument\n\t\t3,\n\t)\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+
+        // Idempotence alone cannot detect a stable rewrite into method dispatch.
+        for ([_][]const u8{ case.input, result }, 0..) |source, pass| {
+            var env = try ModuleEnv.init(std.testing.allocator, source);
+            defer env.deinit();
+            const ast = try parse.file(std.testing.allocator, &env.common);
+            defer ast.deinit();
+            try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+            const statements = ast.store.statementSlice(ast.store.getFile().statements);
+            const stmt = ast.store.getStatement(statements[0]);
+            var root = ast.store.getExpr(stmt.decl.body);
+            if (case.question) root = ast.store.getExpr(root.suffix_single_question.expr);
+            const pipe = root.arrow_call;
+            try std.testing.expectEqual(AST.PipeTargetKind.ordinary, pipe.target_kind);
+            var callee = ast.store.getExpr(pipe.right);
+            var applications: usize = 0;
+            while (callee == .apply) {
+                applications += 1;
+                callee = ast.store.getExpr(callee.apply.@"fn");
+            }
+            try std.testing.expectEqual(.field_access, std.meta.activeTag(callee));
+            // A direct empty call is allowed to disappear during formatting.
+            if (pass == 1 or case.applications != 0) {
+                try std.testing.expectEqual(case.applications, applications);
+            }
+        }
+    }
+}
+
+test "issue 11747: field-value grouping preserves ordinary and method calls" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "t=(rec.func)(3)", .expected = "t = (rec.func)(3)\n" },
+        .{ .input = "t=(rec.inner.func)()", .expected = "t = (rec.inner.func)()\n" },
+        .{ .input = "t=rec.func(3)", .expected = "t = rec.func(3)\n" },
+        .{ .input = "t=2|>rec.func(3)", .expected = "t = 2 |> rec.func(3)\n" },
+        .{ .input = "t=2|>Mod.func(3)", .expected = "t = 2 |> Mod.func(3)\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
     }
 }
 
@@ -6004,6 +6270,82 @@ test "issue 9940: comments in empty collections and blocks are preserved" {
     try std.testing.expectEqualStrings(expected, result);
 }
 
+test "issue 11771: comments in populated platform sections" {
+    const expected =
+        "platform \"pf\"\n" ++
+        "\trequires {\n" ++
+        "\t\t# Before requirement.\n" ++
+        "\t\tmain! : List(Str) => Try({}, [Exit(I32), ..]),\n" ++
+        "\n" ++
+        "\t\t## Before another requirement.\n" ++
+        "\t\tother! : {} => {}\n" ++
+        "\t\t# After requirements.\n" ++
+        "\t}\n" ++
+        "\texposes []\n" ++
+        "\tpackages {}\n" ++
+        "\tprovides {\n" ++
+        "\t\t# Before provided symbol.\n" ++
+        "\t\t\"roc_main\": main_for_host!,\n" ++
+        "\n" ++
+        "\t\t## After provided symbol.\n" ++
+        "\t}\n" ++
+        "\thosted {\n" ++
+        "\t\t# Before hosted symbol.\n" ++
+        "\t\t\"host_write\": write!,\n" ++
+        "\t}\n" ++
+        "\ttargets: {\n" ++
+        "\t\t# Before inputs directory.\n" ++
+        "\t\tinputs_dir: \"targets/\",\n" ++
+        "\n" ++
+        "\t\t## Before target.\n" ++
+        "\t\tx64musl: { inputs: [\"libhost.a\", app] },\n" ++
+        "\t\t# After targets.\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, expected, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "issue 11771: inline platform section comments" {
+    const expected =
+        "platform \"pf\"\n" ++
+        "\trequires { # Required callbacks.\n" ++
+        "\t\t[Model : model] for main! : Model => {} # Main callback.\n" ++
+        "\t}\n" ++
+        "\texposes []\n" ++
+        "\tpackages {}\n" ++
+        "\tprovides {\n" ++
+        "\t\t\"roc_main\": main_for_host!, # Host entrypoint.\n" ++
+        "\t}\n" ++
+        "\ttargets: {\n" ++
+        "\t\t# Target without an inputs_dir directive.\n" ++
+        "\t\tx64musl: { inputs: [\"libhost.a\", app] }, # Linux host.\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, expected, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "issue 11771: comments in empty platform sections" {
+    const expected =
+        "platform \"pf\"\n" ++
+        "\trequires {\n" ++
+        "\n" ++
+        "\t\t## Empty requirements.\n" ++
+        "\t}\n" ++
+        "\texposes []\n" ++
+        "\tpackages {}\n" ++
+        "\tprovides {\n" ++
+        "\t\t# Empty provides.\n" ++
+        "\t}\n" ++
+        "\ttargets: {\n" ++
+        "\t\t# Empty targets.\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, expected, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+}
+
 test "issue 9940: comments in platform header sections are preserved" {
     const result = try moduleFmtsStable(std.testing.allocator,
         \\platform "pf"
@@ -6047,7 +6389,7 @@ test "issue 9940: comments in platform header sections are preserved" {
 
 test "multiline platform symbol map remains multiline after comments are discarded" {
     const result = try moduleFmtsStable(std.testing.allocator,
-        \\platform"
+        \\platform""
         \\requires{[R:r]for a:R->R}exposes[]packages{a:""}provides{"":#
         \\h,"":r}
     , false);
@@ -6439,4 +6781,190 @@ test "a bare line break after a unary operator normalizes away" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("x = !y\n", result);
+}
+
+test "blank lines at block beginning/end are removed" {
+    // Repro for https://github.com/roc-lang/roc/issues/11774
+    // `roc fmt` must drop blank lines immediately after the opening `{` and
+    // immediately before the closing `}` of a block, while preserving interior
+    // blank lines between statements.
+    const input = "main! = |_args| {\n" ++
+        "\n" ++
+        "\tStdout.line!(\"Hello world!\")?\n" ++
+        "\n" ++
+        "\tOk({})\n" ++
+        "\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected = "main! = |_args| {\n" ++
+        "\tStdout.line!(\"Hello world!\")?\n" ++
+        "\n" ++
+        "\tOk({})\n" ++
+        "}\n";
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "block boundary spacing preserves interior comments and blank lines" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "x = {\n\n\n  1\n\n\n}\n", .expected = "x = {\n\t1\n}\n" },
+        .{ .input = "x = {\n\n y = {\n\n 1\n\n }\n\n y\n\n}\n", .expected = "x = {\n\ty = {\n\t\t1\n\t}\n\n\ty\n}\n" },
+        .{ .input = "x = {\n\n # leading\n\n 1\n\n # trailing\n\n}\n", .expected = "x = {\n\t# leading\n\n\t1\n\n\t# trailing\n}\n" },
+        .{ .input = "x = {\n ## docs\n y = 1\n y\n}\n", .expected = "x = {\n\t## docs\n\ty = 1\n\ty\n}\n" },
+        .{ .input = "x = { # opening\n\n 1 # result\n\n}\n", .expected = "x = { # opening\n\n\t1 # result\n}\n" },
+        .{ .input = "x = || {\n\n ## first\n\n # second\n\n}\n", .expected = "x = || {\n\t## first\n\n\t# second\n}\n" },
+        .{ .input = "x = || {\n\n}\n", .expected = "x = || {}\n" },
+        .{ .input = "x = {\r\n\r\n # leading\r\n\r\n 1 # result\r\n\r\n}\r\n", .expected = "x = {\n\t# leading\n\n\t1 # result\n}\n" },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 11928: invalid string escapes never overwrite source or emit partial output" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const sources = [_][]const u8{
+        \\welcome = |user_name| "Hi ${user_name}, press \F1 for help."
+        ,
+        \\welcome = "press \F1 for help."
+        ,
+        \\welcome = "before \u(ZZ) after"
+        ,
+        \\welcome = "before \u() after"
+        ,
+    };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    for (sources) |source| {
+        const file = try tmp.dir.createFile(io, "invalid.roc", .{});
+        try file.writeStreamingAll(io, source);
+        file.close(io);
+
+        var stderr = std.Io.Writer.Allocating.init(gpa);
+        defer stderr.deinit();
+        var unformatted = std.array_list.Managed([]const u8).init(gpa);
+        defer {
+            for (unformatted.items) |path| gpa.free(path);
+            unformatted.deinit();
+        }
+        // Both normal formatting and --check must reject the source, rather
+        // than classifying the lossy recovery tree as a formatting change.
+        for ([_]?*std.array_list.Managed([]const u8){ null, &unformatted }) |check| {
+            try std.testing.expectError(error.ParsingFailed, formatFilePath(gpa, tmp.dir, "invalid.roc", check, .{}, io, &stderr.writer));
+            const after = try tmp.dir.readFileAlloc(io, "invalid.roc", gpa, .limited(1024));
+            defer gpa.free(after);
+            try std.testing.expectEqualStrings(source, after);
+        }
+        try std.testing.expectEqual(@as(usize, 0), unformatted.items.len);
+        try std.testing.expect(std.mem.find(u8, stderr.written(), "escape sequence") != null);
+
+        const stdin = try tmp.dir.openFile(io, "invalid.roc", .{});
+        defer stdin.close(io);
+        const stdout = try tmp.dir.createFile(io, "stdout", .{});
+        defer stdout.close(io);
+        try std.testing.expectError(error.ParsingFailed, formatStdin(gpa, .{}, io, stdin, stdout, &stderr.writer));
+        const output = try tmp.dir.readFileAlloc(io, "stdout", gpa, .limited(1024));
+        defer gpa.free(output);
+        try std.testing.expectEqualStrings("", output);
+
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+        const ast = try parse.file(gpa, &env.common);
+        defer ast.deinit();
+        const formatters = [_]*const fn (AST, *std.Io.Writer) FormatAstError!void{ formatAst, formatHeader, formatExpr, formatStatement };
+        for (formatters) |format| {
+            var formatted = std.Io.Writer.Allocating.init(gpa);
+            defer formatted.deinit();
+            try std.testing.expectError(error.ParsingFailed, format(ast.*, &formatted.writer));
+            try std.testing.expectEqualStrings("", formatted.written());
+        }
+    }
+}
+
+test "issue 11928: escaped backslash preserves interpolated string content" {
+    const source =
+        \\welcome = |user_name| "Hi ${user_name}, press \\F1 for help."
+    ;
+    const formatted = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(formatted);
+    try std.testing.expectEqualStrings(source ++ "\n", formatted);
+}
+
+test "bidi tokenizer errors prevent every AST formatting entrypoint from writing" {
+    const gpa = std.testing.allocator;
+    const formatters = [_]*const fn (AST, *std.Io.Writer) FormatAstError!void{ formatAst, formatHeader, formatExpr, formatStatement };
+    for (base.bidi.controls) |control| {
+        const source = try std.mem.concat(gpa, u8, &.{ "value = 1 # ", control.utf8 });
+        defer gpa.free(source);
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+        const ast = try parse.file(gpa, &env.common);
+        defer ast.deinit();
+        for (formatters) |format| {
+            var output = std.Io.Writer.Allocating.init(gpa);
+            defer output.deinit();
+            try std.testing.expectError(error.ParsingFailed, format(ast.*, &output.writer));
+            try std.testing.expectEqual(@as(usize, 0), output.written().len);
+        }
+    }
+}
+
+test "carriage return migration survives diagnostic overflow without hiding other errors" {
+    const gpa = std.testing.allocator;
+    const prefix = "value = " ++ "\r" ** 140;
+    const migrated = try moduleFmtsStable(gpa, prefix ++ "42\n", false);
+    defer gpa.free(migrated);
+    try std.testing.expectEqualStrings("value = 42\n", migrated);
+
+    // These errors follow the full diagnostic buffer. They must still block
+    // formatting even though the displayed diagnostics are CRs.
+    for ([_][]const u8{ "0X42\n", "42 # \u{202e}\n", "\"press \\F1 for help.\"\n" }) |suffix| {
+        const source = try std.mem.concat(gpa, u8, &.{ prefix, suffix });
+        defer gpa.free(source);
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+        const ast = try parse.file(gpa, &env.common);
+        defer ast.deinit();
+        try std.testing.expectEqual(@as(usize, 129), ast.tokenize_diagnostics.items.len);
+        var output = std.Io.Writer.Allocating.init(gpa);
+        defer output.deinit();
+        try std.testing.expectError(error.ParsingFailed, formatAst(ast.*, &output.writer));
+        try std.testing.expectEqual(@as(usize, 0), output.written().len);
+    }
+}
+
+test "builtin facts are reused across directory files and later paths" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "files");
+    const source = "value : Str -> Range([E, ..])\nvalue = |_| crash \"unused\"\n";
+    for ([_][]const u8{ "files/First.roc", "files/Second.roc", "Later.roc" }) |path| {
+        try tmp.dir.writeFile(io, .{ .sub_path = path, .data = source });
+    }
+    var facts = BuiltinFacts{ .allocator = gpa };
+    defer facts.deinit();
+    const options = Options{ .builtin_facts = &facts };
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    var first = try formatPath(gpa, gpa, tmp.dir, "files", true, options, io, &stderr.writer);
+    defer first.deinit();
+    try std.testing.expectEqual(2, first.success);
+    try std.testing.expectEqual(0, first.failure);
+    try std.testing.expectEqual(2, first.unformatted_files.?.items.len);
+    const syntax = facts.syntax.?;
+    const position_count = syntax.rows.position_cache.count();
+    try std.testing.expect(position_count > 0);
+    var later = try formatPath(gpa, gpa, tmp.dir, "Later.roc", true, options, io, &stderr.writer);
+    defer later.deinit();
+    try std.testing.expectEqual(1, later.success);
+    try std.testing.expectEqual(0, later.failure);
+    try std.testing.expectEqual(syntax, facts.syntax.?);
+    try std.testing.expectEqual(position_count, facts.syntax.?.rows.position_cache.count());
+    try std.testing.expectEqualStrings("", stderr.written());
 }

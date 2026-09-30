@@ -73,6 +73,7 @@
 //! starting_plants! : () => List(Plant)
 //! starting_plants! = || {
 //!     (0.I64..=15)
+//!         .iter()
 //!         .stream()
 //!         .map(|i| random_plant!(i * 12))
 //!         .collect!()
@@ -86,7 +87,7 @@
 //!
 //! ```roc
 //! starting_plants! = || {
-//!     range_iter = 0.I64..=15
+//!     range_iter = (0.I64..=15).iter()
 //!
 //!     source_stream = {
 //!         len_if_known: Known(16),
@@ -3402,7 +3403,7 @@ const Pass = struct {
     /// representation for its result, so the return type is not its checked
     /// procedure identity.
     fn callIsSuffixAppend(self: *Pass, call: DirectCall) bool {
-        if (call.iterator_procedure != .iter_append) return false;
+        if (call.iterator_procedure != .append) return false;
         const raw = @intFromEnum(call.fn_id);
         if (raw >= self.program.fnCount()) return false;
         return self.program.typedLocalSpan(self.program.getFnAt(raw).args).len == 2;
@@ -7430,6 +7431,11 @@ const Cloner = struct {
     ///   only the small dispatching match, which folds against an arm's
     ///   known constructor into a direct jump. Only the dispatch is ever
     ///   copied; continuation code is stored once.
+    /// - A single shared continuation whose arms supply different outermost
+    ///   constructors gains nothing either: its one parameter would be the
+    ///   whole opaque value. The rewrite declines and the let binds the
+    ///   branch-built value as an ordinary value, keeping the continuation's
+    ///   own result structure visible to the enclosing clone.
     /// - A join's parameters are the decomposed leaves of the values its
     ///   jump sites supply, whenever those values agree on one structure
     ///   skeleton. The join body re-binds the structured value over the
@@ -7586,6 +7592,21 @@ const Cloner = struct {
             .typed_boundary,
             => unreachable,
         };
+
+        // One shared continuation whose several arms supply different
+        // outermost constructors gains no structure: its single parameter
+        // would be the whole opaque value, and the join would hide the
+        // continuation's own result. The let then binds as an ordinary value.
+        if (joins.len == 1 and joins[0].binding == .pattern and joins[0].sites.items.len > 1) {
+            const sites = joins[0].sites.items;
+            const outer_values = try self.pass.allocator.alloc(Value, sites.len);
+            defer self.pass.allocator.free(outer_values);
+            for (sites, outer_values) |site, *value| {
+                if (site.values.len != 1) Common.invariant("let-of-case pattern join site did not supply one value");
+                value.* = site.values[0];
+            }
+            if (!self.valuesShareOuterSkeleton(outer_values)) return null;
+        }
 
         // Wrap the rewritten case in its live join points, innermost last so
         // every jump site in the case sits inside each join's remainder.
@@ -8333,6 +8354,54 @@ const Cloner = struct {
     const let_case_join_leaf_budget: u32 = 1024;
     const let_case_join_param_cap: usize = 64;
 
+    /// Whether every value has the same outermost constructor: the same tag,
+    /// record fields, tuple arity, nominal type, or callable target and
+    /// capture identities. Only such values decompose into shared leaves.
+    fn valuesShareOuterSkeleton(self: *Cloner, values: []const Value) bool {
+        const first = values[0];
+        for (values[1..]) |other| {
+            if (std.meta.activeTag(other) != std.meta.activeTag(first)) return false;
+            switch (first) {
+                .expr, .runtime_anchor, .static_data_candidate => return false,
+                .tag => |first_tag| {
+                    const other_tag = other.tag;
+                    if (other_tag.ty != first_tag.ty) return false;
+                    if (!self.pass.program.names.tagLabelTextEql(other_tag.name, first_tag.name)) return false;
+                    if (other_tag.payloads.len != first_tag.payloads.len) return false;
+                },
+                .record => |first_record| {
+                    const other_record = other.record;
+                    if (other_record.ty != first_record.ty) return false;
+                    if (other_record.fields.len != first_record.fields.len) return false;
+                    for (other_record.fields, first_record.fields) |other_field, first_field| {
+                        if (!self.pass.program.names.recordFieldLabelTextEql(other_field.name, first_field.name)) return false;
+                    }
+                },
+                .tuple => |first_tuple| {
+                    const other_tuple = other.tuple;
+                    if (other_tuple.ty != first_tuple.ty) return false;
+                    if (other_tuple.items.len != first_tuple.items.len) return false;
+                },
+                .nominal => |first_nominal| {
+                    if (other.nominal.ty != first_nominal.ty) return false;
+                },
+                .callable => |first_callable| {
+                    const other_callable = other.callable;
+                    if (other_callable.ty != first_callable.ty) return false;
+                    if (other_callable.fn_id != first_callable.fn_id) return false;
+                    if (other_callable.captures.len != first_callable.captures.len) return false;
+                    for (other_callable.captures, first_callable.captures) |other_capture, first_capture| {
+                        if (other_capture.id != first_capture.id) return false;
+                    }
+                },
+            }
+        }
+        return switch (first) {
+            .expr, .runtime_anchor, .static_data_candidate => false,
+            .tag, .record, .tuple, .nominal, .callable => true,
+        };
+    }
+
     /// Structure-decompose the values every site supplies for one binder
     /// slot. Where all sites agree on the same constructor skeleton, the
     /// skeleton is rebuilt over fresh parameter locals minted for its opaque
@@ -8351,16 +8420,10 @@ const Cloner = struct {
         structured: {
             if (params.items.len >= let_case_join_param_cap) break :structured;
             if (budget.admit(1) != .admitted) break :structured;
+            if (!self.valuesShareOuterSkeleton(values)) break :structured;
             switch (values[0]) {
-                .expr, .runtime_anchor, .static_data_candidate => break :structured,
+                .expr, .runtime_anchor, .static_data_candidate => unreachable,
                 .tag => |first| {
-                    for (values[1..]) |other| {
-                        if (other != .tag) break :structured;
-                        const other_tag = other.tag;
-                        if (other_tag.ty != first.ty) break :structured;
-                        if (!self.pass.program.names.tagLabelTextEql(other_tag.name, first.name)) break :structured;
-                        if (other_tag.payloads.len != first.payloads.len) break :structured;
-                    }
                     const payloads = try arena.alloc(Value, first.payloads.len);
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
@@ -8371,15 +8434,6 @@ const Cloner = struct {
                     return .{ .tag = .{ .ty = first.ty, .name = first.name, .payloads = payloads } };
                 },
                 .record => |first| {
-                    for (values[1..]) |other| {
-                        if (other != .record) break :structured;
-                        const other_record = other.record;
-                        if (other_record.ty != first.ty) break :structured;
-                        if (other_record.fields.len != first.fields.len) break :structured;
-                        for (other_record.fields, first.fields) |other_field, first_field| {
-                            if (!self.pass.program.names.recordFieldLabelTextEql(other_field.name, first_field.name)) break :structured;
-                        }
-                    }
                     const fields = try arena.alloc(FieldValue, first.fields.len);
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
@@ -8393,12 +8447,6 @@ const Cloner = struct {
                     return .{ .record = .{ .ty = first.ty, .fields = fields } };
                 },
                 .tuple => |first| {
-                    for (values[1..]) |other| {
-                        if (other != .tuple) break :structured;
-                        const other_tuple = other.tuple;
-                        if (other_tuple.ty != first.ty) break :structured;
-                        if (other_tuple.items.len != first.items.len) break :structured;
-                    }
                     const items = try arena.alloc(Value, first.items.len);
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
@@ -8409,11 +8457,6 @@ const Cloner = struct {
                     return .{ .tuple = .{ .ty = first.ty, .items = items } };
                 },
                 .nominal => |first| {
-                    for (values[1..]) |other| {
-                        if (other != .nominal) break :structured;
-                        const other_nominal = other.nominal;
-                        if (other_nominal.ty != first.ty) break :structured;
-                    }
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
                     for (values, children) |value, *child| child.* = value.nominal.backing.*;
@@ -8423,17 +8466,7 @@ const Cloner = struct {
                 },
                 .callable => |first| {
                     var iterator_step = first.iterator_step;
-                    for (values[1..]) |other| {
-                        if (other != .callable) break :structured;
-                        const other_callable = other.callable;
-                        if (other_callable.ty != first.ty) break :structured;
-                        if (other_callable.fn_id != first.fn_id) break :structured;
-                        if (other_callable.captures.len != first.captures.len) break :structured;
-                        iterator_step = iterator_step and other_callable.iterator_step;
-                        for (other_callable.captures, first.captures) |other_capture, first_capture| {
-                            if (other_capture.id != first_capture.id) break :structured;
-                        }
-                    }
+                    for (values[1..]) |other| iterator_step = iterator_step and other.callable.iterator_step;
                     const captures = try arena.alloc(CaptureValue, first.captures.len);
                     const children = try self.pass.allocator.alloc(Value, values.len);
                     defer self.pass.allocator.free(children);
@@ -8781,6 +8814,11 @@ const Cloner = struct {
                             try self.cloneLetWithValue(continuation, cloned, &block_bindings)
                         else
                             try self.cloneLetValue(continuation, &block_bindings);
+                        // A let that bound as an ordinary value leaves the
+                        // continuation's own result structure intact.
+                        if (value != .expr) {
+                            return try self.finishBlockValue(ty, terminated, &statements, block_bindings, value, bindings);
+                        }
                         // The continuation's value is branch-built. The block
                         // keeps it as its recorded tail so a case over this
                         // block reads the arms' structure instead of one
@@ -10628,6 +10666,7 @@ const Cloner = struct {
                     },
                     .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {},
                 }
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const record = recordFromValue(value) orelse switch (value) {
                     .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
                     .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
@@ -10671,6 +10710,7 @@ const Cloner = struct {
                     },
                     .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {},
                 }
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const tuple = tupleFromValue(value) orelse switch (value) {
                     .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
                     .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
@@ -10690,7 +10730,7 @@ const Cloner = struct {
                 return verdict;
             },
             .tag => |tag_pat| {
-                if (value == .expr) return .unknown;
+                if (isOpaqueBehindWrappers(value)) return .unknown;
                 const tag = tagFromValue(value) orelse switch (value) {
                     .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
                     .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
@@ -10722,7 +10762,12 @@ const Cloner = struct {
                     .runtime_anchor => |anchor| try self.bindPatToValue(pat_id, anchor.structure.*),
                     .static_data_candidate => |candidate| try self.bindPatToValue(pat_id, candidate.structure.*),
                     .nominal => |nominal| try self.bindPatToValue(backing_pat, nominal.backing.*),
-                    .expr => .unknown,
+                    // A runtime nominal value's record or tuple backing is
+                    // bound by field or tuple-item reads of that same value.
+                    .expr => if (self.patternProjectsNominalBacking(backing_pat))
+                        try self.bindPatToValue(backing_pat, value)
+                    else
+                        .unknown,
                     .tag, .record, .tuple, .callable => Common.invariant("nominal pattern matched an unwrapped constructor value"),
                 };
             },
@@ -10737,6 +10782,16 @@ const Cloner = struct {
             .str_pattern,
             => return .unknown,
         }
+    }
+
+    /// Whether a nominal pattern's backing pattern binds its value only
+    /// through record-field or tuple-item reads, which apply to the nominal
+    /// value itself.
+    fn patternProjectsNominalBacking(self: *const Cloner, backing_pat: Ast.PatId) bool {
+        return switch (self.pass.program.getPat(backing_pat).data) {
+            .record, .tuple => true,
+            .bind, .wildcard, .as, .tag, .nominal, .list, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => false,
+        };
     }
 
     fn bindPatToReusableValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
@@ -10836,7 +10891,12 @@ const Cloner = struct {
                     .runtime_anchor => |anchor| try self.bindPatToFlowValue(pat_id, anchor.structure.*),
                     .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.structure.*),
                     .nominal => |nominal| try self.bindPatToFlowValue(backing_pat, nominal.backing.*),
-                    .expr, .tag, .record, .tuple, .callable => false,
+                    // A runtime nominal value's record or tuple backing is
+                    // bound by field or tuple-item reads of that same value.
+                    .expr => |receiver| canReadFieldsFromExpr(self.pass.program, receiver) and
+                        self.patternProjectsNominalBacking(backing_pat) and
+                        try self.bindPatToFlowValue(backing_pat, value),
+                    .tag, .record, .tuple, .callable => false,
                 };
             },
             .list,
@@ -11860,7 +11920,7 @@ const Cloner = struct {
                 &self.pass.program.types,
                 &self.pass.program.names,
             ),
-            .callable_abi = self.pass.program.types.typeDigestCached(&self.pass.program.names, callable.ty, null),
+            .callable_abi = self.pass.program.types.representationDigestCached(&self.pass.program.names, callable.ty, null),
             .capture_abi = self.callableCaptureAbiDigest(source_captures, callable.captures),
         };
         if (self.pass.callable_workers.get(worker_key)) |worker_fn_id| {
@@ -12010,7 +12070,7 @@ const Cloner = struct {
                 Common.invariant("rewritten callable had no value for a source capture slot");
             std.mem.writeInt(u32, &word, @intFromEnum(id), .little);
             hasher.update(&word);
-            const digest = self.pass.program.types.typeDigestCached(&self.pass.program.names, valueType(self.pass.program, value), null);
+            const digest = self.pass.program.types.representationDigestCached(&self.pass.program.names, valueType(self.pass.program, value), null);
             hasher.update(&digest.bytes);
         }
         return .{ .bytes = hasher.finalResult() };
@@ -14174,20 +14234,25 @@ fn structuralValueStripping(value: Value, strip_depth: usize) Value {
     };
 }
 
-/// Whether two Monotype ids denote the same type. The type store is not
-/// interned: each specialization materializes its own ids, so structurally
-/// identical types reached from different specializations (a call site and
-/// the callee's own body) carry different ids and compare by digest. Both
-/// sides digest through the store's memoized construction, which is why this
-/// probe (and everything that reaches it) takes the program mutable.
+/// Whether two Monotype ids denote the same type with the same
+/// representation. The type store is not interned: each specialization
+/// materializes its own ids, so structurally identical types reached from
+/// different specializations (a call site and the callee's own body) carry
+/// different ids and compare by digest. The representation digest ignores a
+/// named type's checked re-entry reference, which depends on the route that
+/// produced the id (an interface summary replay or an expansion), so that
+/// route never changes a SpecConstr decision. It still observes backings, so
+/// equal types with different representations stay distinct. Both sides
+/// digest through the store's memoized construction, which is why this probe
+/// (and everything that reaches it) takes the program mutable.
 ///
-/// The full digest treats aliases as opaque, so this deliberately answers
-/// false for an alias-wrapped type against its backing: that can miss an
+/// Aliases digest as opaque named nodes, so this deliberately answers false
+/// for an alias-wrapped type against its backing: that can miss an
 /// optimization but can never merge two representations invalidly.
 fn sameType(program: *Ast.Program, lhs: Type.TypeId, rhs: Type.TypeId) bool {
     if (lhs == rhs) return true;
-    const lhs_digest = program.types.typeDigestCached(&program.names, lhs, null);
-    const rhs_digest = program.types.typeDigestCached(&program.names, rhs, null);
+    const lhs_digest = program.types.representationDigestCached(&program.names, lhs, null);
+    const rhs_digest = program.types.representationDigestCached(&program.names, rhs, null);
     return std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes);
 }
 
@@ -14264,7 +14329,7 @@ fn writeShapeDigest(program: *Ast.Program, hasher: *TypeDigestHasher, shape: Sha
 }
 
 fn writePatternType(program: *Ast.Program, hasher: *TypeDigestHasher, ty: Type.TypeId) void {
-    const digest = program.types.typeDigestCached(&program.names, ty, null);
+    const digest = program.types.representationDigestCached(&program.names, ty, null);
     hasher.update(&digest.bytes);
 }
 
@@ -14511,6 +14576,24 @@ fn itemFromValueStripping(value: Value, index: u32, strip_depth: usize) ?Value {
         .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
         .nominal => |nominal| itemFromValueStripping(nominal.backing.*, index, strip_depth + 1),
         .expr, .tag, .record, .callable => null,
+    };
+}
+
+/// Whether stripping every value wrapper, including nominal backings, leaves only
+/// an opaque runtime expression. A nominal such as `Bool` can wrap a runtime
+/// local, so its constructor is unknown even though the wrapper is structured.
+fn isOpaqueBehindWrappers(value: Value) bool {
+    return isOpaqueBehindWrappersStripping(value, 0);
+}
+
+fn isOpaqueBehindWrappersStripping(value: Value, strip_depth: usize) bool {
+    if (strip_depth >= value_wrapper_strip_cap) Common.invariant("isOpaqueBehindWrappers followed a value wrapper chain past the strip cap");
+    return switch (value) {
+        .runtime_anchor => |anchor| isOpaqueBehindWrappersStripping(anchor.structure.*, strip_depth + 1),
+        .static_data_candidate => |candidate| isOpaqueBehindWrappersStripping(candidate.structure.*, strip_depth + 1),
+        .nominal => |nominal| isOpaqueBehindWrappersStripping(nominal.backing.*, strip_depth + 1),
+        .expr => true,
+        .tag, .record, .tuple, .callable => false,
     };
 }
 
@@ -15299,6 +15382,37 @@ test "SpecConstr accepts a transparent alias record update base" {
     try std.testing.expectEqual(record_ty, cloned.value.record.ty);
 }
 
+test "SpecConstr compares representations, not checked provenance" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const u16_ty = try program.types.add(.{ .primitive = .u16 });
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const type_name = try program.names.internTypeName("Wrapper");
+    const Nominal = struct {
+        fn add(p: *Ast.Program, module: names.ModuleIdentityId, name: names.TypeNameId, checked_ty: u32, backing: Type.TypeId) Allocator.Error!Type.TypeId {
+            return p.types.add(.{ .named = .{
+                .named_type = .{ .module = .{}, .ty = @enumFromInt(checked_ty) },
+                .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+                .kind = .nominal,
+                .args = Type.Span.empty(),
+                .backing = .{ .ty = backing, .use = .inspectable },
+            } });
+        }
+    };
+    const first = try Nominal.add(&program, module_identity, type_name, 1, u8_ty);
+    const other_occurrence = try Nominal.add(&program, module_identity, type_name, 2, u8_ty);
+    const other_backing = try Nominal.add(&program, module_identity, type_name, 1, u16_ty);
+
+    const first_full = program.types.typeDigestCached(&program.names, first, null);
+    const other_occurrence_full = program.types.typeDigestCached(&program.names, other_occurrence, null);
+    try std.testing.expect(!std.mem.eql(u8, &first_full.bytes, &other_occurrence_full.bytes));
+    try std.testing.expect(sameType(&program, first, other_occurrence));
+    try std.testing.expect(!sameType(&program, first, other_backing));
+}
+
 test "call-pattern scans direct call and function reference capture operands" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -15449,7 +15563,7 @@ test "staged SpecConstr discovery admits source order with duplicates and bounde
         // second wave after coordinator admission has saturated the target.
         try std.testing.expectEqual(@as(u64, 40), metrics.patterns_recorded);
         try std.testing.expectEqual(@as(u64, Pass.wave_capacity), metrics.peak_retained_shards);
-        try std.testing.expectEqual(@as(u64, if (worker_count == 0) 0 else 41), metrics.tasks_committed);
+        try std.testing.expectEqual(@as(u64, if (worker_count == 0) 0 else if (builtin.mode == .Debug) 41 else 40), metrics.tasks_committed);
         try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
     }
 }
@@ -15509,7 +15623,7 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
         const expensive_arg = try program.addExpr(.{ .ty = tag_ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = producer },
             .args = .empty(),
-            .iterator_procedure = .iter_single,
+            .iterator_procedure = .single,
         } } });
         const duplicate = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = consumers[0] },
@@ -15625,13 +15739,26 @@ test "staged SpecConstr submission failure drains accepted tasks" {
     defer program.deinit();
     const unit_ty = try program.types.add(.zst);
     const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const target = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @enumFromInt(1),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = unit },
+        .ret = unit_ty,
+    });
+    const call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = target },
+        .args = .empty(),
+        .captures = .empty(),
+    } } });
     for (0..4) |index| {
         _ = try program.addFn(.{
-            .shapes = program.finishFnShapes(.{}),
-            .symbol = @enumFromInt(@as(u32, @intCast(index))),
+            .shapes = program.finishFnShapes(.{}).merged(.{ .direct_call = true }),
+            .symbol = @enumFromInt(@as(u32, @intCast(index + 2))),
             .args = .empty(),
             .captures = .empty(),
-            .body = .{ .roc = unit },
+            .body = .{ .roc = call },
             .ret = unit_ty,
         });
     }
@@ -15639,7 +15766,7 @@ test "staged SpecConstr submission failure drains accepted tasks" {
     defer pass.deinit();
     var executor: ReverseSpecConstrExecutor = .{ .worker_count = 4, .fail_after = 2 };
     pass.options.executor = executor.executor();
-    try std.testing.expectError(error.OutOfMemory, pass.collectValueAwareCallPatterns(4));
+    try std.testing.expectError(error.OutOfMemory, pass.collectValueAwareCallPatterns(program.fnCount()));
     try std.testing.expectEqual(@as(usize, 0), executor.len);
 }
 
@@ -16641,25 +16768,31 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
     try std.testing.expectEqual(argument, program.getExpr(cloned_body).data.local);
 }
 
-test "substitution resolves equivalent named types with distinct checked provenance" {
-    const allocator = std.testing.allocator;
-    var program = emptyLiftedProgramForTest(allocator);
-    defer program.deinit();
-
+/// Substitutes a local of the first nominal for a same-binder local of the
+/// second, and returns the substituted expression.
+fn substituteNamedForTest(
+    program: *Ast.Program,
+    first_checked_ty: u32,
+    first_backing: Type.TypeId,
+    second_checked_ty: u32,
+    second_backing: Type.TypeId,
+) Common.LowerError!struct { cloned: Ast.ExprId, replacement: Ast.LocalId, second_ty: Type.TypeId } {
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
     const type_name = try program.names.internTypeName("Nominal");
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const first_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(first_checked_ty) },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
+        .backing = .{ .ty = first_backing, .use = .inspectable },
     } });
     const second_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(second_checked_ty) },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
+        .backing = .{ .ty = second_backing, .use = .inspectable },
     } });
     const binder: check.CheckedModule.PatternBinderId = @enumFromInt(1);
     const first = try program.addLocalWithBinder(@enumFromInt(1), first_ty, binder);
@@ -16668,15 +16801,33 @@ test "substitution resolves equivalent named types with distinct checked provena
     const replacement_expr = try program.addExpr(.{ .ty = first_ty, .data = .{ .local = replacement } });
     const second_expr = try program.addExpr(.{ .ty = second_ty, .data = .{ .local = second } });
 
-    var pass = try Pass.init(allocator, &program);
+    var pass = try Pass.init(program.allocator, program);
     defer pass.deinit();
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
-    try cloner.subst.put(&program, first, .{ .expr = replacement_expr });
-    const cloned = try cloner.cloneExpr(second_expr);
-    const boundary = program.getExpr(cloned).data.typed_boundary;
-    try std.testing.expectEqual(second_ty, program.getExpr(cloned).ty);
-    try std.testing.expectEqual(replacement, program.getExpr(boundary.value).data.local);
+    try cloner.subst.put(program, first, .{ .expr = replacement_expr });
+    return .{ .cloned = try cloner.cloneExpr(second_expr), .replacement = replacement, .second_ty = second_ty };
+}
+
+test "substitution keeps a typed boundary between named types with distinct representations" {
+    var program = emptyLiftedProgramForTest(std.testing.allocator);
+    defer program.deinit();
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const u16_ty = try program.types.add(.{ .primitive = .u16 });
+
+    const result = try substituteNamedForTest(&program, 1, u8_ty, 1, u16_ty);
+    const boundary = program.getExpr(result.cloned).data.typed_boundary;
+    try std.testing.expectEqual(result.second_ty, program.getExpr(result.cloned).ty);
+    try std.testing.expectEqual(result.replacement, program.getExpr(boundary.value).data.local);
+}
+
+test "substitution resolves named types that differ only in checked provenance" {
+    var program = emptyLiftedProgramForTest(std.testing.allocator);
+    defer program.deinit();
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+
+    const result = try substituteNamedForTest(&program, 1, u8_ty, 2, u8_ty);
+    try std.testing.expectEqual(result.replacement, program.getExpr(result.cloned).data.local);
 }
 
 test "known match fold aborts on undecidable branches and keeps the match when every branch is excluded" {
