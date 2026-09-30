@@ -19776,6 +19776,10 @@ const BodyContext = struct {
     /// sibling name bound by the same top-level destructure) is an ordinary
     /// constant use there, restored recursively like a top-level constant.
     in_deferred_body: bool = false,
+    /// An expression statement whose expression is a guarded hoisted root. Its
+    /// value is discarded, so the root has nothing to restore there; the
+    /// statement lowers its original expression, keeping its failure in place.
+    in_place_statement_expr: ?checked.CheckedExprId = null,
     /// Generated local for the top-level constant root currently being
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
@@ -29584,6 +29588,9 @@ const BodyContext = struct {
         statement: checked.CheckedStatementId,
         diverges: bool,
         saved: ?SavedSourceLocation = null,
+        /// `in_place_statement_expr` before an expression statement's value
+        /// lowered, restored once it has.
+        saved_in_place: ?checked.CheckedExprId = null,
         stage: enum { start, pattern_value, divergent_value, expr_value, state_only, dbg, expect, stateful_expect, loop, return_value } = .start,
         requested_cell: DraftTypeCell = undefined,
         /// The binders a stateful statement reassigns. Owned.
@@ -29620,7 +29627,11 @@ const BodyContext = struct {
                 };
                 return self.finishStatement(task, stmt, lowered.termination);
             },
-            .divergent_value, .expr_value => return self.finishStatement(task, .{ .expr = input.?.exprValue() }, .none),
+            .divergent_value => return self.finishStatement(task, .{ .expr = input.?.exprValue() }, .none),
+            .expr_value => {
+                self.in_place_statement_expr = task.saved_in_place;
+                return self.finishStatement(task, .{ .expr = input.?.exprValue() }, .none);
+            },
             .state_only => return self.finishStatement(task, .{ .let_ = .{
                 .pat = try self.stateOnlyPatternAtTypeCell(task.state_cell, task.merge_binders),
                 .value = input.?.exprValue(),
@@ -29676,6 +29687,10 @@ const BodyContext = struct {
                 task.merge_binders = try self.stateMergeBinders(child);
                 if (task.merge_binders.len == 0) {
                     task.stage = .expr_value;
+                    task.saved_in_place = self.in_place_statement_expr;
+                    if (self.view.hoisted_constants.lookupByExpr(child)) |entry| {
+                        if (self.view.compile_time_roots.root(entry.root).guarded) self.in_place_statement_expr = child;
+                    }
                     return requestLowerTask(self, .{ .expr = .{ .expr = child } });
                 }
                 task.state_cell = try self.stateOnlyTypeCell(task.merge_binders);
@@ -33374,8 +33389,9 @@ const BodyContext = struct {
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
         if (hoistedConstRunsAtRuntime(self.view, entry)) return null;
         // A guarded binding root's declaration stays in the runtime body with
-        // its original right-hand side; only its other uses restore the root.
+        // its original right-hand side; the binder's uses read that local.
         if (entry.pattern != null and self.view.compile_time_roots.root(entry.root).guarded) return null;
+        if (self.in_place_statement_expr != null and self.in_place_statement_expr.? == expr_id) return null;
         return entry;
     }
 
