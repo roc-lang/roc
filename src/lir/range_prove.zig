@@ -459,7 +459,7 @@ const EnvMeet = struct {
     /// When set, the entry describes this field of the struct the local
     /// holds rather than the local itself, keyed by the struct's root in
     /// `field_values`.
-    field: ?u16 = null,
+    field: ?u32 = null,
     root: NodeId,
     off_lo: i128,
     off_hi: i128,
@@ -484,7 +484,7 @@ const EnvMeet = struct {
 /// Bound on locals carried through one merge's environment meet.
 const merge_env_cap: usize = 128;
 /// Struct fields considered when a struct local's fields meet.
-const max_struct_meet_fields: u16 = 16;
+const max_struct_meet_fields: u32 = 16;
 
 /// Accumulated meet state of one merge head: the facts present on every
 /// captured incoming edge, and the per-local value meet of the path
@@ -619,7 +619,7 @@ const Pass = struct {
     /// The `field_values` keys whose field holds a tracked integer: only
     /// those meet as scalars at a merge. A list field keeps its value's
     /// length term and must not be replaced by a met scalar.
-    int_fields: collections.DenseMap(u64, void),
+    int_fields: std.AutoHashMap(u64, void),
     /// The node each loop parameter was bound to when its body was seeded
     /// this round. A back edge carrying that very value brings the
     /// parameter back unchanged, so the entry edges' bounds hold on it too.
@@ -719,7 +719,7 @@ const Pass = struct {
             .global_facts = .empty,
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
             .struct_roots = collections.DenseMap(NodeId, void).init(allocator),
-            .int_fields = collections.DenseMap(u64, void).init(allocator),
+            .int_fields = std.AutoHashMap(u64, void).init(allocator),
             .seeded_param_roots = collections.DenseMap(LocalId, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
@@ -1281,7 +1281,7 @@ const Pass = struct {
             const field_local = GuardedList.at(field_locals, i);
             if (trackedIntMax(self.localLayout(field_local)) == null) continue;
             const field_node = (try self.valueOf(field_local)) orelse continue;
-            const key = (@as(u64, node) << 16) | @as(u64, @intCast(i));
+            const key = (@as(u64, node) << 32) | @as(u64, @intCast(i));
             try self.field_values.put(key, field_node);
             try self.int_fields.put(key, {});
             try self.struct_roots.put(node, {});
@@ -2038,9 +2038,9 @@ const Pass = struct {
                 // A struct's integer fields meet like locals of their own, so
                 // a loop exit that carries its state out through one record
                 // keeps each carried value's bounds.
-                var field_idx: u16 = 0;
+                var field_idx: u32 = 0;
                 while (field_idx < max_struct_meet_fields) : (field_idx += 1) {
-                    const field_key = (@as(u64, node.root) << 16) | field_idx;
+                    const field_key = (@as(u64, node.root) << 32) | field_idx;
                     if (!self.int_fields.contains(field_key)) continue;
                     const field_node = self.field_values.get(field_key) orelse continue;
                     // A field with nothing known about it would only take
@@ -2089,7 +2089,7 @@ const Pass = struct {
                 if (!meet.valid and meet.bounds.len == 0 and meet.lower.len == 0 and meet.lower_any.len == 0 and meet.len_bounds.len == 0 and meet.len_bounds_any.len == 0) continue;
                 const binding = self.path_env.get(meet.local);
                 const node_id: ?NodeId = if (binding) |b|
-                    (if (meet.field) |field_idx| self.field_values.get((@as(u64, self.rootOf(b.node)) << 16) | field_idx) else b.node)
+                    (if (meet.field) |field_idx| self.field_values.get((@as(u64, self.rootOf(b.node)) << 32) | field_idx) else b.node)
                 else
                     null;
                 if (node_id) |nid| {
@@ -2328,7 +2328,7 @@ const Pass = struct {
                 // is bound (or freshly made) by the time a field seeds.
                 const node = (try self.metScalarNode(meet)) orelse continue;
                 const parent = (try self.valueOf(meet.local)) orelse continue;
-                const field_key = (@as(u64, self.rootOf(parent)) << 16) | field_idx;
+                const field_key = (@as(u64, self.rootOf(parent)) << 32) | field_idx;
                 try self.field_values.put(field_key, node);
                 try self.int_fields.put(field_key, {});
                 try self.struct_roots.put(self.rootOf(parent), {});
