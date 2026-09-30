@@ -7771,6 +7771,7 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, resolved_request_ty.?)) continue;
@@ -7801,6 +7802,7 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const exact_interface = source_ctx.graph.sameFunctionInterface(
                         draftTemplateSpecLookupRequestNode(spec),
@@ -7842,6 +7844,7 @@ const Builder = struct {
                     // that they refer to the same active specialization.
                     if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, request_fn_ty)) continue;
@@ -16500,6 +16503,17 @@ const DraftOwner = union(enum(u8)) {
     draft_fn: DraftFnId,
     reserved_fn: Ast.FnId,
 };
+
+/// A template specialization with a draft-function lexical owner is retained
+/// only when that owner is, so only requests lowered inside the owner's
+/// subtree may reuse it.
+fn draftTemplateSpecVisibleFrom(draft: *const BodyDraftStore, spec: *const DraftTemplateSpec, request_owner: DraftOwner) bool {
+    const lexical_owner = spec.lexical_owner orelse return true;
+    return switch (lexical_owner) {
+        .root, .reserved_fn => true,
+        .draft_fn => |owner_fn| draft.ownerDescendsFromDraftFn(request_owner, owner_fn),
+    };
+}
 
 fn draftOwnerRetained(owner: DraftOwner, emit_fns: []const bool) bool {
     return switch (owner) {
