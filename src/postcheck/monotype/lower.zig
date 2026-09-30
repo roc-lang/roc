@@ -8137,7 +8137,7 @@ const Builder = struct {
             // those relations' input, so they run in this body.
             if (!templateInterfaceIsClosed(view, &template) and templateHasInterfaceRelations(view, &template)) {
                 if (codec_contract == null) {
-                    try source_ctx.applyTemplateInterfaceRelations(
+                    if (try source_ctx.applyTemplateInterfaceRelations(
                         template_ref,
                         view,
                         template,
@@ -8146,7 +8146,7 @@ const Builder = struct {
                         edge,
                         request_fn_node,
                         &source_ctx.draft.interface_replay,
-                    );
+                    )) |expansion| try source_ctx.runInterfaceRelationFrames(.{ .callee = expansion });
                 } else {
                     try body_ctx.instantiateTemplateDispatchRelations(template, null);
                     try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
@@ -24350,6 +24350,10 @@ const BodyContext = struct {
     /// call chains and nested local scopes, so each scope and each callee
     /// expansion is an explicit frame.
     fn runInterfaceRelations(self: *BodyContext, root: *InterfaceScopeFrame) Allocator.Error!void {
+        try self.runInterfaceRelationFrames(.{ .scope = root });
+    }
+
+    fn runInterfaceRelationFrames(self: *BodyContext, root: InterfaceRelationFrame) Allocator.Error!void {
         var frames = std.ArrayList(InterfaceRelationFrame).empty;
         defer {
             var index = frames.items.len;
@@ -24362,8 +24366,11 @@ const BodyContext = struct {
             }
             frames.deinit(self.allocator);
         }
-        frames.append(self.allocator, .{ .scope = root }) catch |err| {
-            self.releaseInterfaceScopeFrame(root);
+        frames.append(self.allocator, root) catch |err| {
+            switch (root) {
+                .scope => |frame| self.releaseInterfaceScopeFrame(frame),
+                .callee => |expansion| expansion.destroy(),
+            }
             return err;
         };
         while (frames.items.len != 0) {
@@ -24768,7 +24775,7 @@ const BodyContext = struct {
             request_fn_node,
             .interface_summary_input,
         );
-        try self.applyTemplateInterfaceRelations(
+        return try self.applyTemplateInterfaceRelations(
             template_ref,
             callee_view,
             template,
@@ -24785,7 +24792,8 @@ const BodyContext = struct {
     /// its checked root, its evidence contracts, and, for an open interface,
     /// its dispatch and callee relations. A completed expansion is summarized
     /// by its request's identity, so an equal request replays the summary
-    /// instead of expanding again.
+    /// instead of expanding again. An expansion is returned for the caller to
+    /// run as a frame.
     fn applyTemplateInterfaceRelations(
         self: *BodyContext,
         template_ref: names.ProcTemplate,
@@ -24796,7 +24804,7 @@ const BodyContext = struct {
         request_edge: EdgeEvidence,
         request_fn_node: NodeId,
         replay_state: *InterfaceReplayState,
-    ) Allocator.Error!void {
+    ) Allocator.Error!?*DirectCalleeExpansion {
         var edge = request_edge;
         const evidence_digest = stored_evidence.digest;
         const expansion = try self.allocator.create(DirectCalleeExpansion);
