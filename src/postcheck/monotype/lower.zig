@@ -832,7 +832,12 @@ const ModuleIndexSlot = union(enum) {
     relation: u32,
 };
 
-const ModuleView = struct {
+/// A checked module's tables, built once per builder (`Builder.module_views`)
+/// and shared by reference: a view is read on nearly every lowering step, so
+/// it is never copied.
+const ModuleView = *const ModuleViewData;
+
+const ModuleViewData = struct {
     code_generation_key: ?checked.ModuleId = null,
     key: checked.ModuleId,
     module_env: *const can.ModuleEnv,
@@ -956,6 +961,21 @@ const SpecEvidenceTarget = struct {
     callable_contracts: []const SpecEvidence = &.{},
 };
 
+/// Whether relating `contract` to its requirements relates anything: only a
+/// selected target or a checked structural derivation, directly or as a
+/// callable contract, is related to the requirement it satisfies.
+fn evidenceContractRelatesAnything(contract: []const SpecEvidence) bool {
+    for (contract) |entry| {
+        switch (entry) {
+            .target => return true,
+            .structural => |structural| if (structural.checked != null) return true,
+            .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+        }
+        if (evidenceContractRelatesAnything(evidenceCallableContracts(entry))) return true;
+    }
+    return false;
+}
+
 fn evidenceCallableContracts(evidence: SpecEvidence) []const SpecEvidence {
     return switch (evidence) {
         .target => |target| target.callable_contracts,
@@ -1047,6 +1067,9 @@ const SchemeRequirements = struct {
     root: ?checked.CheckedTypeId,
     scheme_vars: []const checked.CheckedTypeId,
     params: []const static_dispatch.EvidenceParamRecord,
+    /// Where `params` starts in `view`'s checked requirement pool; with the
+    /// module, it names the requirement row.
+    params_start: u32,
 };
 
 /// A substitution slot sealed to a durable Monotype type, for requests that
@@ -1057,6 +1080,12 @@ const SealedSubstSlot = union(enum) {
 };
 
 const SealedSubstitution = []const SealedSubstSlot;
+
+/// Whether a template's body relates anything to its interface beyond its
+/// checked root: a dispatch relation or a checked specialization relation.
+fn templateHasInterfaceRelations(view: ModuleView, template: *const checked.CheckedProcedureTemplate) bool {
+    return template.dispatch_relations.len != 0 or view.templates.specializationRelations(template).len != 0;
+}
 
 /// Whether a procedure template's checked function type is its complete
 /// specialization interface. With no type variables in that root, none
@@ -1162,6 +1191,7 @@ fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureT
         .root = template.checked_fn_root,
         .scheme_vars = view.templates.templateSchemeVars(template),
         .params = view.templates.evidenceParams(template),
+        .params_start = template.evidence_params.start,
     };
 }
 
@@ -1403,6 +1433,7 @@ fn enterEvidenceScope(
             .root = scope_record.scheme_root,
             .scheme_vars = scheme_vars,
             .params = view.templates.evidence_params_pool[params_start .. params_start + params_len],
+            .params_start = @intCast(params_start),
         },
         .subst = edge.subst,
         .parent = parent,
@@ -3675,6 +3706,7 @@ const CompletedProcedureRootShard = struct {
 const SpecJobWorkerInputs = struct {
     run_id: SpecJobRunId,
     modules: Common.CheckedModules,
+    module_views: []const ModuleViewData,
     source_file_ids: *const SourceFileIds,
     lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
@@ -4023,6 +4055,11 @@ const Builder = struct {
     /// Checked module key -> position in the lowering input; built lazily on
     /// first lookup (see `buildModuleIndex`).
     module_index: std.AutoHashMap([32]u8, ModuleIndexSlot),
+    /// Every input module's view: the root, then imports, then relation
+    /// modules. A worker's builder borrows its coordinator's views instead,
+    /// so a view it hands back stays valid for the whole run.
+    module_views: []ModuleViewData = &.{},
+    borrowed_module_views: ?[]const ModuleViewData = null,
     /// Program source-file id of every checked module in the lowering input,
     /// keyed by checked module identity. The coordinator seeds this table
     /// before lowering any body; workers borrow it for this lowering run.
@@ -4310,12 +4347,12 @@ const Builder = struct {
         errdefer seeds.deinit(self.allocator);
         try self.source_file_ids.ensureTotalCapacity(@intCast(capacity));
         try self.lowering_module_ids.ensureTotalCapacity(@intCast(capacity));
-        self.appendSourceFileSeed(&seeds, moduleView(self.root_view));
-        for (self.modules.imports) |imported| {
-            self.appendSourceFileSeed(&seeds, moduleView(imported));
+        self.appendSourceFileSeed(&seeds, self.rootModuleView());
+        for (0..self.modules.imports.len) |index| {
+            self.appendSourceFileSeed(&seeds, self.importModuleView(index));
         }
-        for (self.modules.root.relation_modules) |relation| {
-            self.appendSourceFileSeed(&seeds, moduleView(relation));
+        for (0..self.modules.root.relation_modules.len) |index| {
+            self.appendSourceFileSeed(&seeds, self.relationModuleView(index));
         }
         std.mem.sort(SourceFileSeed, seeds.items, {}, SourceFileSeed.lessThan);
         return seeds.toOwnedSlice(self.allocator);
@@ -4413,6 +4450,7 @@ const Builder = struct {
         });
         errdefer builder.deinit();
         builder.borrowed_source_file_ids = inputs.source_file_ids;
+        builder.borrowed_module_views = inputs.module_views;
         builder.borrowed_lowering_module_ids = inputs.lowering_module_ids;
         builder.borrowed_comptime_root_functions = inputs.declared_comptime_root_functions;
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
@@ -4503,6 +4541,8 @@ const Builder = struct {
         self.pending_spec_jobs.deinit(self.allocator);
         self.type_cache.deinit();
         self.evidence_arena.deinit();
+        // Workers borrow these views, so they go last.
+        self.allocator.free(self.module_views);
     }
 
     fn count(self: *Builder, comptime field: []const u8) void {
@@ -4719,14 +4759,14 @@ const Builder = struct {
         var entries = std.ArrayList(HostedCatalogEntry).empty;
         defer entries.deinit(self.allocator);
 
-        try self.appendHostedCatalogFromView(&entries, moduleView(self.root_view));
+        try self.appendHostedCatalogFromView(&entries, self.rootModuleView());
         for (self.modules.imports, 0..) |imported, index| {
             if (self.importModuleAlreadyScanned(imported.key, index)) continue;
-            try self.appendHostedCatalogFromView(&entries, moduleView(imported));
+            try self.appendHostedCatalogFromView(&entries, self.importModuleView(index));
         }
         for (self.modules.root.relation_modules, 0..) |relation, index| {
             if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
-            try self.appendHostedCatalogFromView(&entries, moduleView(relation));
+            try self.appendHostedCatalogFromView(&entries, self.relationModuleView(index));
         }
 
         if (self.hostedBindingView()) |binding_view| {
@@ -4786,18 +4826,18 @@ const Builder = struct {
     }
 
     fn hostedBindingView(self: *Builder) ?HostedBindingView {
-        const root = moduleView(self.root_view);
+        const root = self.rootModuleView();
         if (root.module_identity.kind == .platform) {
             return .{ .table = root.hosted_bindings, .names = root.names };
         }
-        for (self.modules.imports) |imported| {
-            const view = moduleView(imported);
+        for (0..self.modules.imports.len) |index| {
+            const view = self.importModuleView(index);
             if (view.module_identity.kind == .platform) {
                 return .{ .table = view.hosted_bindings, .names = view.names };
             }
         }
-        for (self.modules.root.relation_modules) |relation| {
-            const view = moduleView(relation);
+        for (0..self.modules.root.relation_modules.len) |index| {
+            const view = self.relationModuleView(index);
             if (view.module_identity.kind == .platform) {
                 return .{ .table = view.hosted_bindings, .names = view.names };
             }
@@ -5118,6 +5158,7 @@ const Builder = struct {
         const inputs = SpecJobWorkerInputs{
             .run_id = self.spec_job_run_id,
             .modules = self.modules,
+            .module_views = self.moduleViews(),
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
@@ -5197,7 +5238,7 @@ const Builder = struct {
     }
 
     fn lowerLayoutRequest(self: *Builder, checked_ty: checked.CheckedTypeId) Allocator.Error!void {
-        const ty = try self.lowerType(moduleView(self.root_view), checked_ty);
+        const ty = try self.lowerType(self.rootModuleView(), checked_ty);
         try self.program.addLayoutRequest(.{
             .checked_type = checked_ty,
             .ty = ty,
@@ -5206,7 +5247,7 @@ const Builder = struct {
     }
 
     fn lowerStaticDataRequest(self: *Builder, request: Common.StaticDataRequest) Allocator.Error!void {
-        const type_view = moduleView(self.root_view);
+        const type_view = self.rootModuleView();
         const ret_ty = try self.lowerType(type_view, request.checked_type);
         const body = body: {
             // Provided exports request the whole checked constant before its
@@ -6898,6 +6939,7 @@ const Builder = struct {
                         .inputs = .{
                             .run_id = self.spec_job_run_id,
                             .modules = self.modules,
+                            .module_views = self.moduleViews(),
                             .source_file_ids = self.sourceFileIds(),
                             .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
@@ -8090,10 +8132,25 @@ const Builder = struct {
         }
         if (!local_context_dependent) {
             // A deferred body lowers in its own specialization, so only an
-            // open interface needs the template's relations replayed here.
-            if (!templateInterfaceIsClosed(view, &template)) {
-                try body_ctx.instantiateTemplateDispatchRelations(template, null);
-                try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
+            // open interface needs the template's relations applied here. A
+            // codec contract instantiated into this body above is part of
+            // those relations' input, so they run in this body.
+            if (!templateInterfaceIsClosed(view, &template) and templateHasInterfaceRelations(view, &template)) {
+                if (codec_contract == null) {
+                    try source_ctx.applyTemplateInterfaceRelations(
+                        template_ref,
+                        view,
+                        template,
+                        family,
+                        stored_evidence,
+                        edge,
+                        request_fn_node,
+                        &source_ctx.draft.interface_replay,
+                    );
+                } else {
+                    try body_ctx.instantiateTemplateDispatchRelations(template, null);
+                    try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
+                }
             }
             return .{ .local = .{ .draft = fn_id } };
         }
@@ -9214,16 +9271,43 @@ const Builder = struct {
         if (self.module_index.count() == 0) self.buildModuleIndex();
         const slot = self.module_index.get(key) orelse return null;
         return switch (slot) {
-            .root => moduleView(self.root_view),
-            .import => |index| moduleView(self.modules.imports[index]),
-            .relation => |index| moduleView(self.modules.root.relation_modules[index]),
+            .root => self.rootModuleView(),
+            .import => |index| self.importModuleView(index),
+            .relation => |index| self.relationModuleView(index),
         };
+    }
+
+    fn rootModuleView(self: *Builder) ModuleView {
+        return &self.moduleViews()[0];
+    }
+
+    fn importModuleView(self: *Builder, index: usize) ModuleView {
+        return &self.moduleViews()[1 + index];
+    }
+
+    fn relationModuleView(self: *Builder, index: usize) ModuleView {
+        return &self.moduleViews()[1 + self.modules.imports.len + index];
+    }
+
+    /// Every input module's view, built on first use.
+    fn moduleViews(self: *Builder) []const ModuleViewData {
+        if (self.borrowed_module_views) |views| return views;
+        if (self.module_views.len != 0) return self.module_views;
+        const view_count = 1 + self.modules.imports.len + self.modules.root.relation_modules.len;
+        const views = self.allocator.alloc(ModuleViewData, view_count) catch
+            Common.compilerBug("module view allocation failed");
+        views[0] = moduleViewData(self.root_view);
+        for (self.modules.imports, views[1..][0..self.modules.imports.len]) |imported, *view| view.* = moduleViewData(imported);
+        for (self.modules.root.relation_modules, views[1 + self.modules.imports.len ..]) |relation, *view| view.* = moduleViewData(relation);
+        self.module_views = views;
+        return views;
     }
 
     fn buildModuleIndex(self: *Builder) void {
         // Lookups happen on the coordinator before any worker borrows the
         // builder, so the index is complete before it is shared.
-        self.module_index.ensureTotalCapacity(@intCast(1 + self.modules.imports.len + self.modules.root.relation_modules.len)) catch
+        const view_count = 1 + self.modules.imports.len + self.modules.root.relation_modules.len;
+        self.module_index.ensureTotalCapacity(@intCast(view_count)) catch
             Common.compilerBug("module index allocation failed");
         // Later entries never override earlier ones so the search order of the
         // lowering input (root, imports, relations) is preserved exactly.
@@ -9240,14 +9324,14 @@ const Builder = struct {
     /// (used to resolve a defaulted field's declaring module—design.md
     /// "Defaulted Fields").
     fn moduleForIdentityHash(self: *Builder, origin_hash: *const [32]u8) ?ModuleView {
-        const root = moduleView(self.root_view);
+        const root = self.rootModuleView();
         if (moduleViewIdentityMatches(root, origin_hash)) return root;
-        for (self.modules.imports) |imported| {
-            const view = moduleView(imported);
+        for (0..self.modules.imports.len) |index| {
+            const view = self.importModuleView(index);
             if (moduleViewIdentityMatches(view, origin_hash)) return view;
         }
-        for (self.modules.root.relation_modules) |relation| {
-            const view = moduleView(relation);
+        for (0..self.modules.root.relation_modules.len) |index| {
+            const view = self.relationModuleView(index);
             if (moduleViewIdentityMatches(view, origin_hash)) return view;
         }
         return null;
@@ -19075,7 +19159,7 @@ const ActiveConstBindingScope = struct {
 const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
-    kind: enum { procedure, method_signature, method_contract, local_method_contract } = .procedure,
+    kind: enum { procedure, method_signature, method_contract, local_method_contract, evidence_contracts } = .procedure,
     family: DraftTemplateFamilyAddress,
     evidence_digest: [32]u8,
     /// Bucket selector over the request's exact identity bytes, which remain
@@ -24684,8 +24768,36 @@ const BodyContext = struct {
             request_fn_node,
             .interface_summary_input,
         );
-        const evidence = edge.vector;
-        const stored_evidence = try self.builder.constFnEvidence(rootEvidence(template_ref, evidence));
+        try self.applyTemplateInterfaceRelations(
+            template_ref,
+            callee_view,
+            template,
+            DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, self.view.types.rootKey(source_fn_ty)),
+            try self.builder.constFnEvidence(rootEvidence(template_ref, edge.vector)),
+            edge,
+            request_fn_node,
+            replay_state,
+        );
+    }
+
+    /// Relate `request_fn_node` and the substitution's cells to everything a
+    /// specialization of `template` at `edge` implies about its interface:
+    /// its checked root, its evidence contracts, and, for an open interface,
+    /// its dispatch and callee relations. A completed expansion is summarized
+    /// by its request's identity, so an equal request replays the summary
+    /// instead of expanding again.
+    fn applyTemplateInterfaceRelations(
+        self: *BodyContext,
+        template_ref: names.ProcTemplate,
+        callee_view: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+        family: DraftTemplateFamilyAddress,
+        stored_evidence: StoredConstFnEvidence,
+        request_edge: EdgeEvidence,
+        request_fn_node: NodeId,
+        replay_state: *InterfaceReplayState,
+    ) Allocator.Error!void {
+        var edge = request_edge;
         const evidence_digest = stored_evidence.digest;
         const expansion = try self.allocator.create(DirectCalleeExpansion);
         expansion.* = .{
@@ -24714,7 +24826,7 @@ const BodyContext = struct {
         for (edge.subst, request_bytes[shape.bytes.len..]) |slot, *byte| byte.* = if (slot == .checked_error) 1 else 0;
         const request: InterfaceConstraints.Identity = .{ .bytes = request_bytes, .leaves = shape.leaves };
         const address = InterfaceReplayAddress{
-            .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, self.view.types.rootKey(source_fn_ty)),
+            .family = family,
             .evidence_digest = evidence_digest.bytes,
             .input_digest = interfaceRequestBucket(request.bytes),
         };
@@ -25082,6 +25194,7 @@ const BodyContext = struct {
                 .crash => Common.invariant("non-divergent dispatch relation resolved to a crash"),
             };
             const expr_ty = self.view.bodies.expr(plan.expr).ty;
+            self.builder.count("template_dispatch_relation_replays");
             _ = try self.callableDispatchResultTypeNodeInPhase(
                 expr_ty,
                 callable_plan,
@@ -47624,7 +47737,7 @@ const BodyContext = struct {
                 break :blk EdgeEvidence{
                     .subst = subst,
                     .vector = try self.deriveEvidenceVector(
-                        .{ .view = self.view, .root = scope.scheme_root, .scheme_vars = scheme_vars, .params = params },
+                        .{ .view = self.view, .root = scope.scheme_root, .scheme_vars = scheme_vars, .params = params, .params_start = scope.evidence_params.start },
                         subst,
                         self.view,
                         self.view.static_dispatch_plans.evidence_refs[start .. start + len],
@@ -49139,7 +49252,7 @@ const BodyContext = struct {
     }
 
     fn emptySchema(view: ModuleView) SchemeRequirements {
-        return .{ .view = view, .root = null, .scheme_vars = &.{}, .params = &.{} };
+        return .{ .view = view, .root = null, .scheme_vars = &.{}, .params = &.{}, .params_start = 0 };
     }
 
     /// The schema of a generalized-local dispatch scope; a local procedure
@@ -49156,6 +49269,7 @@ const BodyContext = struct {
             .root = scope.scheme_root,
             .scheme_vars = view.templates.scopeSchemeVars(&scope),
             .params = view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len],
+            .params_start = scope.evidence_params.start,
         };
     }
 
@@ -49898,12 +50012,7 @@ const BodyContext = struct {
         // Summary lookup describes the unrefined input. On a cache miss its
         // expansion applies these relations to detached substitution cells;
         // a hit replays the completed relation without repeating this work.
-        if (purpose != .interface_summary_input) {
-            var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
-            defer checked_ctx.deinit();
-            try checked_ctx.seedSubstitution(schema, subst);
-            try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, out);
-        }
+        if (purpose != .interface_summary_input) try self.relateEvidenceContracts(schema, subst, out);
         for (schema.params, out) |param, *entry| {
             // Structural entries already carry the checked callable contracts
             // materialized above; only targets need receiver-based selection.
@@ -49922,6 +50031,114 @@ const BodyContext = struct {
             entry.* = try self.mergeCheckedEvidenceContract(derived, entry.*);
         }
         return out;
+    }
+
+    /// Relate every selected contract in `contract` to the requirement it
+    /// satisfies, over `schema`'s substitution `subst`. The relations of one
+    /// requirement row and contract are summarized by the substitution's
+    /// identity, so an equal substitution replays them in one step instead of
+    /// relating each requirement again.
+    fn relateEvidenceContracts(
+        self: *BodyContext,
+        schema: SchemeRequirements,
+        subst: SpecSubstitution,
+        contract: []const SpecEvidence,
+    ) Allocator.Error!void {
+        if (!evidenceContractRelatesAnything(contract)) return;
+        var roots = std.ArrayList(NodeId).empty;
+        defer roots.deinit(self.allocator);
+        for (subst) |slot| if (slot == .node) try roots.append(self.allocator, slot.node);
+        if (roots.items.len == 0 or !self.draft.interface_replay.use_finished_summaries) {
+            return try self.relateEvidenceContractsAt(schema, subst, contract);
+        }
+        const pool = schema.view.templates.evidence_params_pool;
+        if (schema.params_start > pool.len or schema.params.len > pool.len - schema.params_start or
+            schema.params.ptr != pool[schema.params_start..].ptr)
+        {
+            Common.invariant("scheme requirements were not the checked requirement row they named");
+        }
+
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), roots.items);
+        const shape = try input.identityInto(self.graph, scratch.allocator());
+        const request_bytes = try scratch.allocator().alloc(u8, shape.bytes.len + subst.len);
+        @memcpy(request_bytes[0..shape.bytes.len], shape.bytes);
+        for (subst, request_bytes[shape.bytes.len..]) |slot, *byte| byte.* = if (slot == .checked_error) 1 else 0;
+        const request: InterfaceConstraints.Identity = .{ .bytes = request_bytes, .leaves = shape.leaves };
+        const evidence = try self.builder.constFnEvidence(rootEvidence(self.owner_template, contract));
+        const address: InterfaceReplayAddress = .{
+            .kind = .evidence_contracts,
+            .family = .{
+                .module = schema.view.key.bytes,
+                .proc_base = schema.params_start,
+                .template = @intCast(schema.params.len),
+                .method_scope = self.method_scope.key.bytes,
+                .source_fn_key = if (schema.root) |root| schema.view.types.rootKey(root).bytes else @splat(0),
+            },
+            .evidence_digest = evidence.digest.bytes,
+            .input_digest = interfaceRequestBucket(request.bytes),
+        };
+        var verify_summary: ?InterfaceSummary = null;
+        if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
+            self.builder.count("interface_summary_hits");
+            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
+                self.builder.interface_summary_checks += 1;
+                self.builder.count("interface_summary_verifications");
+                verify_summary = summary;
+            } else {
+                switch (summary) {
+                    .unchanged => self.builder.count("interface_summary_unchanged_hits"),
+                    .constraints => |constraints| {
+                        for (try constraints.instantiate(self.graph), roots.items) |produced, root| {
+                            try self.graph.unify(produced, root);
+                        }
+                    },
+                }
+                return;
+            }
+        }
+        self.builder.count("interface_summary_expansions");
+        // Relate independent copies of the substitution's cells, so unrelated
+        // caller state cannot enter the retained result.
+        const detached = try input.instantiate(self.graph);
+        const detached_subst = try self.graph.arena().dupe(SubstSlot, subst);
+        var next_root: usize = 0;
+        for (detached_subst) |*slot| if (slot.* == .node) {
+            slot.* = .{ .node = detached[next_root] };
+            next_root += 1;
+        };
+        try self.relateEvidenceContractsAt(schema, detached_subst, contract);
+        const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), detached);
+        const summary: InterfaceSummary = if (try (try constraints.identityInto(self.graph, scratch.allocator())).eql(shape, self.typeStore(), self.nameStore()))
+            .unchanged
+        else
+            .{ .constraints = constraints };
+        if (verify_summary) |expected| {
+            if (!try expected.eql(summary, self.graph, scratch.allocator(), self.typeStore(), self.nameStore())) {
+                Common.compilerBug("cached evidence contract relations disagreed with a fresh expansion");
+            }
+        } else {
+            _ = try self.insertInterfaceSummary(.{
+                .address = address,
+                .evidence = evidence,
+                .request = request,
+                .summary = summary,
+            });
+        }
+        for (detached, roots.items) |produced, root| try self.graph.unify(produced, root);
+    }
+
+    fn relateEvidenceContractsAt(
+        self: *BodyContext,
+        schema: SchemeRequirements,
+        subst: SpecSubstitution,
+        contract: []const SpecEvidence,
+    ) Allocator.Error!void {
+        var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
+        defer checked_ctx.deinit();
+        try checked_ctx.seedSubstitution(schema, subst);
+        try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, contract);
     }
 
     /// Relate a selected target's callable to the constraint it satisfies,
@@ -51239,6 +51456,7 @@ const BodyContext = struct {
         param: static_dispatch.EvidenceParamRecord,
         entry: SpecEvidence,
     ) Allocator.Error!void {
+        self.builder.count("evidence_contract_relations");
         switch (entry) {
             .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
             .structural => |structural| if (structural.checked) |checked_structural| {
@@ -63969,7 +64187,8 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
     try std.testing.expect(first_shape != second_shape);
     try std.testing.expect(try type_store.typeEql(&name_store, first_shape, second_shape));
 
-    var view: ModuleView = undefined;
+    var view_data: ModuleViewData = undefined;
+    const view = &view_data;
     view.key = .{};
     // These opaque ids are deliberate synthetic identities: this unit only
     // compares call targets for equality and never dereferences their source
@@ -64114,10 +64333,12 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     ctx.builder = &builder;
     ctx.graph = graph;
     ctx.owner_template = std.mem.zeroes(names.ProcTemplate);
-    ctx.view.key = .{ .bytes = @splat(0) };
-    ctx.view.types = checked_types.view();
-    ctx.view.templates = &templates;
-    ctx.view.nested_proc_sites = &nested_sites;
+    var ctx_view: ModuleViewData = undefined;
+    ctx.view = &ctx_view;
+    ctx_view.key = .{ .bytes = @splat(0) };
+    ctx_view.types = checked_types.view();
+    ctx_view.templates = &templates;
+    ctx_view.nested_proc_sites = &nested_sites;
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer ctx.instantiation.deinit();
 
@@ -64135,7 +64356,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     const inner_node = try graph.newNode(.{ .primitive = .i64 });
     child.evidence = .{
         .scope = root.scope,
-        .schema = .{ .view = ctx.view, .root = null, .scheme_vars = &.{inner_ty}, .params = &.{} },
+        .schema = .{ .view = ctx.view, .root = null, .scheme_vars = &.{inner_ty}, .params = &.{}, .params_start = 0 },
         .subst = &.{.{ .node = inner_node }},
         .parent = &root,
     };
@@ -64192,7 +64413,8 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     const other_decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{other_receiver_ty}, other_receiver_ty);
     const decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, receiver_ty);
 
-    var frame_view: ModuleView = undefined;
+    var frame_view_data: ModuleViewData = undefined;
+    const frame_view = &frame_view_data;
     frame_view.names = &frame_names;
     frame_view.types = checked_types.view();
     const params = [_]static_dispatch.EvidenceParamRecord{
@@ -64207,6 +64429,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
             .root = null,
             .scheme_vars = &.{ receiver_ty, other_receiver_ty },
             .params = &params,
+            .params_start = 0,
         },
         .subst = &.{ .{ .node = receiver }, .{ .node = other_receiver } },
         .vector = &.{ .{ .structural = .{ .derivation = .encoder } }, .checked_error, .{ .structural = .{ .derivation = .parser } } },
@@ -64231,7 +64454,8 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     defer inner_names.deinit();
     const inner_method = try inner_names.internMethodName("is_eq");
     try std.testing.expectEqual(caller_decode, inner_method);
-    var inner_view: ModuleView = undefined;
+    var inner_view_data: ModuleViewData = undefined;
+    const inner_view = &inner_view_data;
     inner_view.names = &inner_names;
     inner_view.types = checked_types.view();
     ctx.evidence = .{
@@ -64241,6 +64465,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
             .root = null,
             .scheme_vars = &.{receiver_ty},
             .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true }},
+            .params_start = 0,
         },
         .subst = &.{.{ .node = receiver }},
         .vector = &.{.{ .structural = .{ .derivation = .equality } }},
@@ -64259,19 +64484,23 @@ test "specialization evidence equality includes exact target instantiation" {
     // same canonical type topology.
     roots[10].key = roots[8].key;
 
-    var target_view: ModuleView = undefined;
+    var target_view_data: ModuleViewData = undefined;
+    const target_view = &target_view_data;
     target_view.key = .{};
     target_view.key.bytes[0] = 1;
     target_view.types = .{ .roots = &roots };
-    var other_target_view: ModuleView = undefined;
+    var other_target_view_data: ModuleViewData = undefined;
+    const other_target_view = &other_target_view_data;
     other_target_view.key = .{};
     other_target_view.key.bytes[0] = 2;
     other_target_view.types = .{ .roots = &roots };
-    var instantiation_view: ModuleView = undefined;
+    var instantiation_view_data: ModuleViewData = undefined;
+    const instantiation_view = &instantiation_view_data;
     instantiation_view.key = .{};
     instantiation_view.key.bytes[0] = 3;
     instantiation_view.types = .{ .roots = &roots };
-    var other_instantiation_view: ModuleView = undefined;
+    var other_instantiation_view_data: ModuleViewData = undefined;
+    const other_instantiation_view = &other_instantiation_view_data;
     other_instantiation_view.key = .{};
     other_instantiation_view.key.bytes[0] = 4;
     other_instantiation_view.types = .{ .roots = &roots };
@@ -64754,7 +64983,7 @@ fn bindLocalName(
     try program.setLocalName(local, source[start..end]);
 }
 
-fn moduleView(view: checked.ImportedModuleView) ModuleView {
+fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
     return .{
         .code_generation_key = view.code_generation_key,
         .key = view.key,
@@ -68030,8 +68259,10 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
-    ctx.view.key = .{ .bytes = @splat(0) };
-    ctx.view.types = checked_types.view();
+    var ctx_view: ModuleViewData = undefined;
+    ctx.view = &ctx_view;
+    ctx_view.key = .{ .bytes = @splat(0) };
+    ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer ctx.instantiation.deinit();
 
@@ -68097,8 +68328,10 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             ctx.allocator = allocator;
             ctx.builder = &builder;
             ctx.graph = graph;
-            ctx.view.key = .{ .bytes = @splat(0) };
-            ctx.view.types = checked_types.view();
+            var ctx_view: ModuleViewData = undefined;
+            ctx.view = &ctx_view;
+            ctx_view.key = .{ .bytes = @splat(0) };
+            ctx_view.types = checked_types.view();
             ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
             defer ctx.instantiation.deinit();
             _ = ctx.instNode(recursive) catch |err| {
@@ -68234,8 +68467,10 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
-    ctx.view.key = .{ .bytes = @splat(0) };
-    ctx.view.types = checked_types.view();
+    var ctx_view: ModuleViewData = undefined;
+    ctx.view = &ctx_view;
+    ctx_view.key = .{ .bytes = @splat(0) };
+    ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer ctx.instantiation.deinit();
     errdefer {
@@ -68315,8 +68550,10 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
-    ctx.view.key = .{ .bytes = @splat(0) };
-    ctx.view.types = checked_types.view();
+    var ctx_view: ModuleViewData = undefined;
+    ctx.view = &ctx_view;
+    ctx_view.key = .{ .bytes = @splat(0) };
+    ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer ctx.instantiation.deinit();
 
@@ -68367,8 +68604,10 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             ctx.allocator = allocator;
             ctx.builder = &builder;
             ctx.graph = graph;
-            ctx.view.key = .{ .bytes = @splat(0) };
-            ctx.view.types = view;
+            var ctx_view: ModuleViewData = undefined;
+            ctx.view = &ctx_view;
+            ctx_view.key = .{ .bytes = @splat(0) };
+            ctx_view.types = view;
             ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
             defer ctx.instantiation.deinit();
             _ = ctx.instNode(root) catch |err| {
@@ -68413,8 +68652,10 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     ctx.allocator = allocator;
     ctx.builder = &builder;
     ctx.graph = graph;
-    ctx.view.key = .{ .bytes = @splat(0) };
-    ctx.view.types = checked_types.view();
+    var ctx_view: ModuleViewData = undefined;
+    ctx.view = &ctx_view;
+    ctx_view.key = .{ .bytes = @splat(0) };
+    ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer ctx.instantiation.deinit();
     errdefer {
@@ -68516,8 +68757,10 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             ctx.allocator = gpa;
             ctx.builder = &builder;
             ctx.graph = graph;
-            ctx.view.key = .{ .bytes = @splat(0) };
-            ctx.view.types = checked_types.view();
+            var ctx_view: ModuleViewData = undefined;
+            ctx.view = &ctx_view;
+            ctx_view.key = .{ .bytes = @splat(0) };
+            ctx_view.types = checked_types.view();
             ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
             defer ctx.instantiation.deinit();
             errdefer {
@@ -68568,7 +68811,9 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     ctx.spare_inst_frames = .empty;
     defer ctx.deinitSpareInstFrames();
     ctx.graph = graph;
-    ctx.view.types = checked_types.view();
+    var ctx_view: ModuleViewData = undefined;
+    ctx.view = &ctx_view;
+    ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), @splat(0));
     defer ctx.instantiation.deinit();
     var outer = InstantiatingNodeMap.init(gpa);
@@ -68674,7 +68919,8 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     builder.active_body_draft = null;
     builder.type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(gpa);
     defer builder.type_cache.deinit();
-    var view: ModuleView = undefined;
+    var view_data: ModuleViewData = undefined;
+    const view = &view_data;
     view.key = .{};
     view.names = &source_names;
     view.types = checked_types.view();
@@ -68768,7 +69014,8 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     ctx.builder = &builder;
     ctx.graph = graph;
     ctx.draft = &draft;
-    var view: ModuleView = undefined;
+    var view_data: ModuleViewData = undefined;
+    const view = &view_data;
     view.names = &source_names;
     view.const_store = &constants;
 

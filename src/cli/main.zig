@@ -17172,7 +17172,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -17196,6 +17196,8 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Interface relation requests", .count = counters.interface_relation_requests },
         .{ .name = "Interface replay hits", .count = counters.interface_replay_hits },
         .{ .name = "Interface closed expansions", .count = counters.interface_closed_expansions },
+        .{ .name = "Template dispatch relation replays", .count = counters.template_dispatch_relation_replays },
+        .{ .name = "Evidence contract relations", .count = counters.evidence_contract_relations },
         .{ .name = "Exact type checks", .count = counters.exact_type_checks },
         .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
