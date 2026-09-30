@@ -54091,6 +54091,17 @@ const BodyContext = struct {
         comptime_site: ?DraftComptimeSiteId,
         value_selection: ?*ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
+        // A divergent scrutinee never produces a value for a branch to
+        // inspect: no pattern is observed at runtime, and the match is exactly
+        // its scrutinee's divergence. Checking relates no branch pattern to a
+        // scrutinee that always crashes, so those patterns need not even
+        // agree with each other and must not be instantiated here.
+        if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+            return try self.exprIdAsDivergentData(
+                try self.lowerDivergentExprAtTypeCell(match.cond, self.matchOutputCell(output)),
+            );
+        }
+
         const PendingBranch = struct {
             ctx: BodyContext,
             pattern: checked.CheckedMatchBranchPattern,

@@ -448,29 +448,7 @@ top_level = {
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "top_level"))
-		(e-block
-			(s-var
-				(p-var-assign (ident "$total"))
-				(e-num (value "0")))
-			(s-for-bang
-				(p-assign (ident "n"))
-				(e-dispatch-call (method "iter") (constraint-fn-var 554)
-					(receiver
-						(e-list
-							(elems
-								(e-typed-int (value "1") (type "U64"))
-								(e-num (value "2")))))
-					(args))
-				(e-block
-					(s-reassign
-						(p-var-assign (ident "$total"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 597)
-							(receiver
-								(e-runtime-error (tag "erroneous_value_use")))
-							(args
-								(e-runtime-error (tag "erroneous_value_use")))))
-					(e-empty_record)))
-			(e-runtime-error (tag "erroneous_value_use")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

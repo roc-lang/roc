@@ -12,6 +12,14 @@ const max_methods = 256;
 pub const max_method_arity = 2;
 const max_local_bindings = 4;
 const max_context_values = 32;
+const max_type_errors = 3;
+
+/// One construct written at a type other than the one its position requires.
+pub const TypeErrorSite = struct {
+    output_offset: usize,
+    expected: Type,
+    written: Type,
+};
 
 allocator: std.mem.Allocator,
 reader: *FuzzReader,
@@ -21,6 +29,14 @@ next_id: u32,
 symbols: RootSymbols,
 methods: [max_methods]Method,
 method_count: usize,
+/// How many expressions may still be generated at a deliberately wrong type.
+/// Zero (the default) generates only well-typed programs and consumes no
+/// extra input, so well-typed fuzz inputs keep generating the same program.
+type_error_budget: u8,
+/// How many expressions were generated at a deliberately wrong type.
+type_errors_written: u8,
+/// Where each deliberately ill-typed construct starts in the output.
+type_error_sites: [max_type_errors]TypeErrorSite,
 
 pub const SymbolKind = enum {
     app_file,
@@ -94,6 +110,9 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
         .symbols = undefined,
         .methods = undefined,
         .method_count = 0,
+        .type_error_budget = 0,
+        .type_errors_written = 0,
+        .type_error_sites = undefined,
     };
 }
 
@@ -147,10 +166,23 @@ pub fn writeTypeTo(self: *const Self, output: *std.ArrayList(u8), allocator: std
     }
 }
 
+/// Allow up to `budget` expressions of the next generated module to be written
+/// at a type other than the one their position requires. Every construct the
+/// generator composes then also reaches checking and lowering ill-typed.
+pub fn allowTypeErrors(self: *Self, budget: u8) void {
+    self.type_error_budget = @min(budget, max_type_errors);
+}
+
+/// The deliberately ill-typed expressions of the last generated module.
+pub fn typeErrorSites(self: *const Self) []const TypeErrorSite {
+    return self.type_error_sites[0..self.type_errors_written];
+}
+
 pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     self.output.clearRetainingCapacity();
     self.next_id = 0;
     self.method_count = 0;
+    self.type_errors_written = 0;
 
     self.symbols = .{
         .typ = self.fresh(.type),
@@ -226,10 +258,6 @@ fn generateMethod(self: *Self, param_types: [max_method_arity]Type, arity: u8, r
         .arity = arity,
         .result_type = result_type,
     };
-    var args: [max_method_arity]Symbol = undefined;
-    for (0..arity) |index| {
-        args[index] = self.fresh(.value);
-    }
     const visible_methods = self.method_count;
 
     try self.writeIndent(1);
@@ -245,19 +273,21 @@ fn generateMethod(self: *Self, param_types: [max_method_arity]Type, arity: u8, r
     try self.writeIndent(1);
     try self.writeSymbol(method.symbol);
     try self.write(" = |");
+    var context = emptyContext();
     for (0..arity) |index| {
         if (index > 0) try self.write(", ");
-        try self.writeSymbol(args[index]);
+        context = try self.writeParamPattern(param_types[index], context);
     }
     try self.write("| ");
-    try self.writeMethodBody(result_type, args, param_types, arity, depth, visible_methods);
+    try self.writeMethodBody(result_type, context, depth, visible_methods);
     try self.write("\n");
 
     self.methods[self.method_count] = method;
     self.method_count += 1;
 }
 
-fn writeExpr(self: *Self, typ: Type, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+fn writeExpr(self: *Self, expected: Type, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    const typ = self.chooseWrittenType(expected);
     if (depth == 0) {
         try self.writeLeafExpr(typ, context, visible_methods);
         return;
@@ -286,8 +316,61 @@ fn writeLeafExpr(self: *Self, typ: Type, context: ExprContext, visible_methods: 
     try self.writeLiteral(typ);
 }
 
-fn writeMethodBody(self: *Self, result_type: Type, args: [max_method_arity]Symbol, arg_types: [max_method_arity]Type, arity: u8, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    var context = contextFromParams(args, arg_types, arity);
+/// Write the pattern for one parameter of type `param_type` and return
+/// `context` extended with the names it binds. A record or tuple parameter
+/// may be destructured into its components; while the type-error budget
+/// lasts, a parameter is occasionally destructured at a different type.
+fn writeParamPattern(self: *Self, param_type: Type, context: ExprContext) std.mem.Allocator.Error!ExprContext {
+    if (self.type_error_budget != 0 and self.reader.intRangeAtMost(u8, 0, 15) == 0) {
+        const written: Type = if (param_type == .record) .tuple_bool_u64 else .record;
+        self.recordTypeError(param_type, written);
+        return try self.writeDestructurePattern(written, context);
+    }
+    switch (param_type) {
+        .record, .tuple_bool_u64 => if (self.reader.boolean()) return try self.writeDestructurePattern(param_type, context),
+        .root, .bool, .str, .u64, .list_u64, .try_u64_str => {},
+    }
+    const arg = self.fresh(.value);
+    try self.writeSymbol(arg);
+    return extendContext(context, arg, param_type);
+}
+
+fn writeDestructurePattern(self: *Self, typ: Type, context: ExprContext) std.mem.Allocator.Error!ExprContext {
+    const bool_part = self.fresh(.value);
+    const u64_part = self.fresh(.value);
+    var extended = extendContext(extendContext(context, bool_part, .bool), u64_part, .u64);
+    switch (typ) {
+        .record => {
+            const str_part = self.fresh(.value);
+            try self.write("{ ");
+            try self.writeSymbol(self.symbols.field0);
+            try self.write(": ");
+            try self.writeSymbol(bool_part);
+            try self.write(", ");
+            try self.writeSymbol(self.symbols.field1);
+            try self.write(": ");
+            try self.writeSymbol(u64_part);
+            try self.write(", ");
+            try self.writeSymbol(self.symbols.field2);
+            try self.write(": ");
+            try self.writeSymbol(str_part);
+            try self.write(" }");
+            extended = extendContext(extended, str_part, .str);
+        },
+        .tuple_bool_u64 => {
+            try self.write("(");
+            try self.writeSymbol(bool_part);
+            try self.write(", ");
+            try self.writeSymbol(u64_part);
+            try self.write(")");
+        },
+        .root, .bool, .str, .u64, .list_u64, .try_u64_str => unreachable,
+    }
+    return extended;
+}
+
+fn writeMethodBody(self: *Self, result_type: Type, params: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    var context = params;
     const local_count = if (depth == 0) 0 else self.reader.intRangeAtMost(u8, 0, max_local_bindings);
 
     if (local_count == 0) {
@@ -320,14 +403,6 @@ fn writeMethodBody(self: *Self, result_type: Type, args: [max_method_arity]Symbo
     try self.write("\n");
     try self.writeIndent(1);
     try self.write("}");
-}
-
-fn contextFromParams(args: [max_method_arity]Symbol, arg_types: [max_method_arity]Type, arity: u8) ExprContext {
-    var context = emptyContext();
-    for (0..arity) |index| {
-        context = extendContext(context, args[index], arg_types[index]);
-    }
-    return context;
 }
 
 fn contextSymbol(self: *Self, typ: Type, context: ExprContext) ?Symbol {
@@ -1078,6 +1153,29 @@ fn writeTupleLiteral(self: *Self, context: ExprContext, depth: u8, visible_metho
 
 fn writeType(self: *Self, typ: Type) std.mem.Allocator.Error!void {
     try self.writeTypeTo(&self.output, self.allocator, typ);
+}
+
+/// The type an expression required at `expected` is actually written at:
+/// `expected` itself, or, while the type-error budget lasts, occasionally a
+/// different type.
+fn chooseWrittenType(self: *Self, expected: Type) Type {
+    if (self.type_error_budget == 0) return expected;
+    if (self.reader.intRangeAtMost(u8, 0, 15) != 0) return expected;
+    const offset = self.reader.intRangeAtMost(usize, 1, all_types.len - 1);
+    const expected_index = std.mem.findScalar(Type, &all_types, expected).?;
+    const written = all_types[(expected_index + offset) % all_types.len];
+    self.recordTypeError(expected, written);
+    return written;
+}
+
+fn recordTypeError(self: *Self, expected: Type, written: Type) void {
+    self.type_error_sites[self.type_errors_written] = .{
+        .output_offset = self.output.items.len,
+        .expected = expected,
+        .written = written,
+    };
+    self.type_error_budget -= 1;
+    self.type_errors_written += 1;
 }
 
 fn chooseType(self: *Self) Type {

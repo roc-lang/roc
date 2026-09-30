@@ -599,6 +599,50 @@ eligible expression, failure to evaluate, store, restore, or emit it correctly
 is a compiler bug with a regression test, not a reason to demote the expression
 from compile-time evaluation.
 
+### Every Rejection Is Explicit Recovery
+
+`roc check`, `roc build`, and `roc run` all lower every checked program, so
+post-check stages consume rejected code on every error path, not only when a
+rejected program is executed. A checker diagnostic that rejects code is
+therefore complete only when the rejected node is also explicit recovery data
+at the checked boundary: the node is a checked runtime error, or every binder
+it introduces is erroneous so each use becomes one. A diagnostic whose only
+recovery is a `.err` solved type is incomplete whenever post-check lowering
+instantiates that type, as it does for every lambda parameter and every
+destructured binder, and a diagnostic that leaves the solved types consistent
+but rejects the relation between them (such as a field-kind judgment) must
+retire the node that owns the relation. Post-check stages never recover
+rejected code themselves; an invariant they hit on an error path is a missing
+checker recovery. The recovery rules:
+
+- A lambda parameter pattern that the lambda's annotation rejects binds
+  nothing, so the lambda is erroneous, exactly as when the pattern fails its
+  own check.
+- A binding whose right-hand side is erroneous binds nothing. Every name a
+  destructuring pattern introduces is erroneous, annotated or not; an
+  unannotated assignment's own name is erroneous.
+- An effectful top-level value's right-hand side is erroneous.
+- A `.?` access or `x: _` unset that the field-kind judgment rejects makes its
+  owning expression (the access chain, record literal, or record update) a
+  runtime error. The rejected relation has no lowering.
+
+A module that fails before checking, such as a member or dependent of an import
+cycle, has no checked artifact. Checked-program finalization publishes a
+program only when the app root finished checking; otherwise every checked
+module still finishes its independent compile-time work and every report is
+emitted, and a command that needs a program stops after rendering diagnostics.
+Consumers of a build's modules skip a module that has no checked artifact.
+
+Rejected programs are tested generatively rather than case by case. The
+`build-errors` fuzzer uses the shared typed generator with a type-error budget:
+occasionally it writes an expression, or destructures a parameter, at a type
+other than the one its position requires, so every construct the generator
+learns is also exercised ill-typed, and the program must lower without a
+compiler crash. The CLI `snapshot-programs` suite checks every `file`,
+`snippet`, and `expr` snapshot source as a program and requires the compiler
+not to crash, so the snapshot corpus, most of which is rejected programs,
+covers the recovery of every diagnostic that has a snapshot.
+
 Root selection keeps maximal eligible expressions. Each expression frame
 records the root-candidate stack length at entry. If the expression finishes as
 compile-time-known, unconditionally reachable, and effect-free, it removes
@@ -2335,6 +2379,13 @@ unexplained branch-body mismatch. The scrutinee's own error is not re-reported,
 the patterns are never related back to it, and the first disagreement poisons
 the shared variable so later patterns short-circuit exactly as they do when the
 scrutinee carries the relation.
+
+A scrutinee that always crashes (`...`, `crash`, or a block or `if` whose
+every result crashes) relates no branch pattern at all: no value ever reaches
+a branch, so no pattern is observed at runtime and the patterns are not
+required to agree with each other. Monotype consumes the scrutinee's checked
+divergence and lowers any match whose scrutinee diverges as the scrutinee's
+divergence alone; it never instantiates or relates the branch patterns.
 
 ## Type Alias Invariant
 

@@ -6011,7 +6011,10 @@ fn checkedArtifactForBuild(
     ctx: *CliCtx,
     build_env: *BuildEnv,
     source_path: []const u8,
-) CliError!*const check.CheckedArtifact.CheckedModuleArtifact {
+) CliMainError!*const check.CheckedArtifact.CheckedModuleArtifact {
+    // An app root that never finished checking has no program; its
+    // diagnostics have already been rendered.
+    if (!build_env.executable_artifacts_finalized) return error.TypeCheckingFailed;
     const artifact = build_env.executableRootCheckedArtifact();
     if (artifact.hasUnboundPlatformRequirements()) {
         return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
@@ -7074,10 +7077,12 @@ fn lowerLirWithBuildEnv(
     const watch_inputs = try build_env.collectWatchInputStates();
     errdefer compile.watch_inputs.deinit(ctx.gpa, watch_inputs);
 
-    if (builtin.mode == .Debug and !build_env.executable_artifacts_finalized) {
-        std.debug.panic("CLI lowering invariant violated: executable artifacts were not finalized", .{});
+    // An app root that never finished checking has no program; its
+    // diagnostics have already been rendered.
+    if (!build_env.executable_artifacts_finalized) {
+        if (reporter) |r| r.fail();
+        return error.TypeCheckingFailed;
     }
-    if (!build_env.executable_artifacts_finalized) unreachable;
     if (reporter) |r| finishFrontEndPhase(r, build_env.getTimingInfo());
 
     const root_artifact = build_env.executableRootCheckedArtifact();

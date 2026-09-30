@@ -1264,6 +1264,9 @@ pub const Coordinator = struct {
     /// Set only after the frontend coordinator loop has drained every task and
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
+    /// Set by checked-program finalization: whether it published a program,
+    /// which requires a checked app root.
+    checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// The checked modules whose `expect`s are the developer's own tests, in
@@ -2273,9 +2276,8 @@ pub const Coordinator = struct {
     pub fn finishCheckedProgram(self: *Coordinator, mode: compile_build.PostCheckPublicationMode) CoordinatorError!void {
         errdefer self.shutdown();
         if (!self.frontend_complete) coordinatorInvariant("checked program finalization preceded frontend completion", .{});
-        if (mode == .executable_artifacts and self.findRootModule(.platform) != null and
-            (self.findRootModule(.app) != null or self.findRootModule(.default_app) != null))
-        {
+        self.checked_program = mode == .executable_artifacts and self.appRootChecked();
+        if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
             if (platform.evaluation_state == .prepared) {
@@ -2297,13 +2299,23 @@ pub const Coordinator = struct {
         } else {
             // Only a compilation that publishes executable artifacts has a
             // program: `roc check`, `roc build` and `roc run` all do.
-            const program_root = if (mode == .executable_artifacts and
-                (self.findRootModule(.app) != null or self.findRootModule(.default_app) != null))
-                self.executableRootCheckedArtifact()
-            else
-                null;
+            const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluatePreparedModules(true, null, null, program_root);
         }
+    }
+
+    /// Whether the last checked-program finalization published a program.
+    pub fn hasCheckedProgram(self: *const Coordinator) bool {
+        return self.checked_program;
+    }
+
+    /// Whether the app root finished checking. A root that failed (for
+    /// example as a dependent of an import cycle) has no checked artifact, so
+    /// the build has no program; every checked module still finishes its
+    /// independent compile-time work and every report is still emitted.
+    fn appRootChecked(self: *Coordinator) bool {
+        const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return false;
+        return app_root.mod.checkedArtifact() != null;
     }
 
     fn prepareExecutableArtifacts(self: *Coordinator) compile_package.PublishError!void {
