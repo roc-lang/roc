@@ -433,6 +433,26 @@ const LoopBounds = struct {
 };
 
 /// Fixed-capacity list of synthesized bounds.
+/// Roots a bounds query can reach before normalization; wider than a meet
+/// keeps, so the constant bound among them is never crowded out.
+const query_bound_cap: usize = 32;
+
+const QueryBounds = struct {
+    items: [query_bound_cap]MeetBound = undefined,
+    len: usize = 0,
+
+    fn append(self: *QueryBounds, bound: MeetBound) void {
+        if (self.len < query_bound_cap) {
+            self.items[self.len] = bound;
+            self.len += 1;
+        }
+    }
+
+    fn slice(self: *const QueryBounds) []const MeetBound {
+        return self.items[0..self.len];
+    }
+};
+
 const MeetBounds = struct {
     items: [meet_bound_cap]MeetBound = undefined,
     len: usize = 0,
@@ -3074,7 +3094,7 @@ const Pass = struct {
     /// path facts, found by walking fact edges forward from its root.
     fn reachableBounds(self: *Pass, node_id: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
-        var bounds: MeetBounds = .{};
+        var bounds: QueryBounds = .{};
         const node = self.nodes.items[node_id];
         bounds.append(.{ .root = node.root, .c = node.off_hi });
         self.query_best.clearRetainingCapacity();
@@ -3110,9 +3130,12 @@ const Pass = struct {
         return id;
     }
 
-    fn normalizeUpperBounds(self: *Pass, bounds: MeetBounds, node: Node) ResourceError!MeetBounds {
-        const zero = (try self.constantRoot()) orelse return bounds;
+    fn normalizeUpperBounds(self: *Pass, bounds: QueryBounds, node: Node) ResourceError!MeetBounds {
         var out: MeetBounds = .{};
+        const zero = (try self.constantRoot()) orelse {
+            for (bounds.slice()) |bound| out.append(bound);
+            return out;
+        };
         var best: ?i128 = null;
         var best_assumed: u64 = 0;
         for (bounds.slice()) |bound| {
@@ -3123,8 +3146,6 @@ const Pass = struct {
                     best = c;
                     best_assumed = bound.assumed;
                 }
-            } else {
-                out.append(bound);
             }
         }
         const root = self.nodes.items[node.root];
@@ -3135,13 +3156,22 @@ const Pass = struct {
                 best_assumed = 0;
             }
         }
+        // The constant bound goes first: a meet keeps only a few bounds, and
+        // this is the one every edge can share.
         if (best) |c| out.append(.{ .root = zero, .c = c, .assumed = best_assumed });
+        for (bounds.slice()) |bound| {
+            const bound_root = self.nodes.items[bound.root];
+            if (bound_root.lo != bound_root.hi) out.append(bound);
+        }
         return out;
     }
 
-    fn normalizeLowerBounds(self: *Pass, bounds: MeetBounds, node: Node) ResourceError!MeetBounds {
-        const zero = (try self.constantRoot()) orelse return bounds;
+    fn normalizeLowerBounds(self: *Pass, bounds: QueryBounds, node: Node) ResourceError!MeetBounds {
         var out: MeetBounds = .{};
+        const zero = (try self.constantRoot()) orelse {
+            for (bounds.slice()) |bound| out.append(bound);
+            return out;
+        };
         var best: ?i128 = null;
         var best_assumed: u64 = 0;
         for (bounds.slice()) |bound| {
@@ -3152,8 +3182,6 @@ const Pass = struct {
                     best = c;
                     best_assumed = bound.assumed;
                 }
-            } else {
-                out.append(bound);
             }
         }
         // The node's own range floor is a constant lower bound too.
@@ -3165,7 +3193,12 @@ const Pass = struct {
                 best_assumed = 0;
             }
         }
+        // The constant bound goes first, as in `normalizeUpperBounds`.
         if (best) |c| out.append(.{ .root = zero, .c = c, .assumed = best_assumed });
+        for (bounds.slice()) |bound| {
+            const bound_root = self.nodes.items[bound.root];
+            if (bound_root.lo != bound_root.hi) out.append(bound);
+        }
         return out;
     }
 
@@ -3174,7 +3207,7 @@ const Pass = struct {
     /// term's root. Smaller `c` is the stronger claim.
     fn lenLowerBounds(self: *Pass, len_node: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
-        var bounds: MeetBounds = .{};
+        var bounds: QueryBounds = .{};
         const node = self.nodes.items[len_node];
         bounds.append(.{ .root = node.root, .c = -node.off_lo });
         self.query_best.clearRetainingCapacity();
