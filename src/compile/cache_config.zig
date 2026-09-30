@@ -260,7 +260,11 @@ pub const Constants = struct {
     ///      generalization scopes past any narrower bound.
     /// 118: Combine full-word type variable ranks with 32-bit representation
     ///      counts, offsets, and discriminants.
-    pub const CACHE_VERSION = 118;
+    /// 119: Checked type keys are computed by the shared key engine: equal
+    ///      recursive types share one key however they are unrolled, type
+    ///      variables are written as relative references, and a child is
+    ///      referred to by its key plus the variables it shares.
+    pub const CACHE_VERSION = 119;
 };
 
 /// Configuration for the Roc cache system.

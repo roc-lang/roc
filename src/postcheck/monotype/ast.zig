@@ -532,6 +532,7 @@ pub fn fnEvidenceEql(
     right_head: ?u32,
 ) bool {
     if (left_head != right_head or left_evidence.len != right_evidence.len or left_frames.len != right_frames.len) return false;
+    if (left_evidence.ptr == right_evidence.ptr and left_frames.ptr == right_frames.ptr) return true;
     for (left_evidence, right_evidence) |left, right| {
         switch (left) {
             .target => |left_target| switch (right) {

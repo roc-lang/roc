@@ -3090,52 +3090,20 @@ const SlackVersionRewriter = struct {
         return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } }, origin);
     }
 
-    pub fn interceptStmt(self: *SlackVersionRewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *SlackVersionRewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         switch (stmt) {
             .join => |s| {
                 // Every append site the body holds belongs to a chain the
                 // head checked: the body is copied only when all of them fit.
-                if (self.sites.get(old_id)) |site| {
-                    var next = try cloner.cloneStmt(site.next);
-                    if (site.owned_out) |flag| {
-                        next = try cloner.store.addCFStmt(.{ .assign_literal = .{
-                            .target = try cloner.mapLocal(flag),
-                            .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
-                            .next = next,
-                        } }, origin);
-                    }
-                    next = try cloner.store.addCFStmt(.{ .assign_ref = .{
-                        .target = try cloner.mapLocal(site.slack_out),
-                        .op = .{ .local = try cloner.mapLocal(site.slack_in) },
-                        .next = next,
-                    } }, origin);
-                    return try cloner.store.addCFStmt(.{ .assign_low_level = .{
-                        .target = try cloner.mapLocal(site.target),
-                        .op = .list_append_unsafe,
-                        .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
-                        .args = try cloner.store.addLocalSpan(&.{ try cloner.mapLocal(site.list), try cloner.mapLocal(site.elem) }),
-                        .next = next,
-                    } }, origin);
-                }
+                if (self.sites.get(old_id)) |site| return body_clone.Intercept.one(site.next);
                 const fresh: LIR.JoinPointId = @enumFromInt(self.max_join_id.*);
                 self.max_join_id.* += 1;
                 try self.join_map.put(s.id, fresh);
-                const body = try cloner.cloneStmt(s.body);
-                const remainder = try cloner.cloneStmt(s.remainder);
-                return try cloner.store.addCFStmt(.{ .join = .{
-                    .id = fresh,
-                    .params = try cloner.mapLocalSpan(s.params),
-                    .retained = try cloner.mapLocalSpan(s.retained),
-                    .maybe_uninitialized_params = try cloner.mapLocalSpan(s.maybe_uninitialized_params),
-                    .maybe_uninitialized_conditions = try cloner.mapLocalSpan(s.maybe_uninitialized_conditions),
-                    .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
-                    .body = body,
-                    .remainder = remainder,
-                } }, origin);
+                return body_clone.Intercept.two(s.body, s.remainder);
             },
             .jump => |s| {
                 const target = if (s.target == self.loop_id) self.fast_id else (self.join_map.get(s.target) orelse s.target);
-                return try cloner.store.addCFStmt(.{ .jump = .{ .target = target } }, origin);
+                return .{ .done = try cloner.store.addCFStmt(.{ .jump = .{ .target = target } }, origin) };
             },
             .init_uninitialized,
             .assign_ref,
@@ -3179,8 +3147,54 @@ const SlackVersionRewriter = struct {
             .assign_boxy_tag_payload,
             .boxy_tag_match,
             .assign_call_dict,
-            => return null,
+            => return .none,
         }
+    }
+
+    pub fn finishIntercept(
+        self: *SlackVersionRewriter,
+        cloner: anytype,
+        old_id: CFStmtId,
+        stmt: LIR.CFStmt,
+        origin: LIR.StmtOrigin,
+        cloned: []const CFStmtId,
+    ) ResourceError!CFStmtId {
+        const s = switch (stmt) {
+            .join => |join| join,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .jump, .ret, .crash => unreachable,
+        };
+        if (self.sites.get(old_id)) |site| {
+            var next = cloned[0];
+            if (site.owned_out) |flag| {
+                next = try cloner.store.addCFStmt(.{ .assign_literal = .{
+                    .target = try cloner.mapLocal(flag),
+                    .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+                    .next = next,
+                } }, origin);
+            }
+            next = try cloner.store.addCFStmt(.{ .assign_ref = .{
+                .target = try cloner.mapLocal(site.slack_out),
+                .op = .{ .local = try cloner.mapLocal(site.slack_in) },
+                .next = next,
+            } }, origin);
+            return try cloner.store.addCFStmt(.{ .assign_low_level = .{
+                .target = try cloner.mapLocal(site.target),
+                .op = .list_append_unsafe,
+                .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
+                .args = try cloner.store.addLocalSpan(&.{ try cloner.mapLocal(site.list), try cloner.mapLocal(site.elem) }),
+                .next = next,
+            } }, origin);
+        }
+        return try cloner.store.addCFStmt(.{ .join = .{
+            .id = self.join_map.get(s.id).?,
+            .params = try cloner.mapLocalSpan(s.params),
+            .retained = try cloner.mapLocalSpan(s.retained),
+            .maybe_uninitialized_params = try cloner.mapLocalSpan(s.maybe_uninitialized_params),
+            .maybe_uninitialized_conditions = try cloner.mapLocalSpan(s.maybe_uninitialized_conditions),
+            .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
+            .body = cloned[0],
+            .remainder = cloned[1],
+        } }, origin);
     }
 };
 

@@ -2712,6 +2712,7 @@ fn specEvidenceEql(allocator: Allocator, a: SpecEvidence, b: SpecEvidence) Alloc
 /// worklist rather than by recursion.
 fn specEvidenceVectorEql(allocator: Allocator, a: []const SpecEvidence, b: []const SpecEvidence) Allocator.Error!bool {
     if (a.len != b.len) return false;
+    if (a.ptr == b.ptr) return true;
     var pending = std.ArrayList(SpecEvidencePair).empty;
     defer pending.deinit(allocator);
     for (a, b) |a_entry, b_entry| try pending.append(allocator, .{ .a = a_entry, .b = b_entry });
@@ -2927,6 +2928,8 @@ fn evidenceChainEql(allocator: Allocator, a: EvidenceChain, b: EvidenceChain) Al
     while (true) {
         if (!EvidenceScope.eql(left.scope, right.scope)) return false;
         if (!try specEvidenceVectorEql(allocator, left.vector, right.vector)) return false;
+        // The same parent frame is the same remaining chain.
+        if (left.parent == right.parent) return true;
         if (left.parent) |left_parent| {
             const right_parent = right.parent orelse return false;
             left = left_parent.*;
@@ -3128,22 +3131,100 @@ const StoredConstFnEvidence = struct {
     nodes: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
+    /// `Ast.fnEvidenceDigest` of exactly these fields. It is computed once
+    /// when the value is built, or taken from the template that recorded it
+    /// alongside the same fields, so no consumer rehashes the topology.
+    digest: Ast.EvidenceDigest,
+
+    fn init(
+        nodes: []const check.ConstStore.ConstFnEvidence,
+        frames: []const check.ConstStore.ConstFnEvidenceFrame,
+        head: ?u32,
+    ) StoredConstFnEvidence {
+        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(nodes, frames, head) };
+    }
+
+    fn empty() StoredConstFnEvidence {
+        return init(&.{}, &.{}, null);
+    }
+
+    /// The evidence a function template recorded, with the digest it
+    /// recorded for those same fields.
+    fn recorded(
+        nodes: []const check.ConstStore.ConstFnEvidence,
+        frames: []const check.ConstStore.ConstFnEvidenceFrame,
+        head: ?u32,
+        digest: Ast.EvidenceDigest,
+    ) StoredConstFnEvidence {
+        if (@import("builtin").mode == .Debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(nodes, frames, head))) {
+            Common.invariant("function template evidence digest did not match its recorded topology");
+        }
+        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = digest };
+    }
+};
+
+/// What `Builder.constFnEvidence` reads from a chain: each frame's lexical
+/// scope and vector, reached through `parent`. Chain frames are written once
+/// when created and never mutated, so two chains whose head frames agree on
+/// these identities convert to the same stored evidence.
+const StoredEvidenceSource = struct {
+    lexical: LexicalDispatchScope,
+    vector_ptr: usize,
+    vector_len: usize,
+    parent: ?*const EvidenceChain,
+
+    fn of(chain: EvidenceChain) StoredEvidenceSource {
+        return .{
+            .lexical = chain.scope.lexical,
+            .vector_ptr = @intFromPtr(chain.vector.ptr),
+            .vector_len = chain.vector.len,
+            .parent = chain.parent,
+        };
+    }
+};
+
+const StoredEvidenceStorage = struct {
+    nodes_ptr: usize,
+    nodes_len: usize,
+    frames_ptr: usize,
+    frames_len: usize,
+};
+
+const DraftEvidenceSpans = struct {
+    nodes: DraftSpan(check.ConstStore.ConstFnEvidence),
+    frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame),
+};
+
+const StoredEvidenceCacheEntry = struct {
+    source: StoredEvidenceSource,
+    stored: StoredConstFnEvidence,
 };
 
 fn specializationEvidenceView(evidence: StoredConstFnEvidence) specialize.EvidenceView {
-    return .{ .nodes = evidence.nodes, .frames = evidence.frames, .head = evidence.head };
+    return .{ .nodes = evidence.nodes, .frames = evidence.frames, .head = evidence.head, .digest = evidence.digest };
 }
 
 fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvidence) bool {
+    if (!std.meta.eql(left.digest, right.digest)) return false;
     return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
 }
 
 fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) StoredConstFnEvidence {
-    return .{
-        .nodes = program.constFnEvidence(template.const_evidence),
-        .frames = program.constFnEvidenceFrames(template.const_evidence_frames),
-        .head = template.const_evidence_frame_head,
-    };
+    return StoredConstFnEvidence.recorded(
+        program.constFnEvidence(template.const_evidence),
+        program.constFnEvidenceFrames(template.const_evidence_frames),
+        template.const_evidence_frame_head,
+        template.evidence_digest,
+    );
+}
+
+fn draftFnEvidence(body_draft: *const BodyDraftStore, template: DraftFnTemplate) StoredConstFnEvidence {
+    return StoredConstFnEvidence.recorded(
+        body_draft.constFnEvidence(template.const_evidence),
+        body_draft.constFnEvidenceFrames(template.const_evidence_frames),
+        template.const_evidence_frame_head,
+        template.evidence_digest,
+    );
 }
 
 /// Pass-local lowering state for one procedure template specialization,
@@ -5831,11 +5912,11 @@ const Builder = struct {
             ));
             parent = @intCast(frames.items.len - 1);
         }
-        return .{
-            .nodes = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
-            .frames = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
-            .head = parent,
-        };
+        return StoredConstFnEvidence.init(
+            try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
+            try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
+            parent,
+        );
     }
 
     /// Copy committed evidence out of the growable program lists so a lowered
@@ -5845,6 +5926,7 @@ const Builder = struct {
             .nodes = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, evidence.nodes),
             .frames = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, evidence.frames),
             .head = evidence.head,
+            .digest = evidence.digest,
         };
     }
 
@@ -6045,7 +6127,7 @@ const Builder = struct {
             rootEvidence(template_ref, spec_evidence);
         const identity_topology = source_topology orelse rootEvidence(template_ref, spec_evidence);
         const identity_evidence = try self.constFnEvidence(identity_topology);
-        const evidence_digest = Ast.fnEvidenceDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head);
+        const evidence_digest = identity_evidence.digest;
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
         const spec_identity = self.templateSpecIdentity(
@@ -7646,7 +7728,7 @@ const Builder = struct {
         }
 
         const stored_evidence = try self.constFnEvidence(rootEvidence(template_ref, evidence));
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const evidence_digest = stored_evidence.digest;
         const structural_lexical_dependent = template.target != .hosted and
             source_ctx.local_proc_contexts.count() != 0 and
             (try specEvidenceContainsStructural(self.allocator, evidence) or
@@ -8261,7 +8343,7 @@ const Builder = struct {
         fn_id: Ast.FnId,
         status: Ast.SpecStatus,
     ) Allocator.Error!Ast.SpecId {
-        const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
+        const evidence_digest = evidence.digest;
         return try self.addSpecRecord(
             self.templateSpecIdentity(
                 template_ref,
@@ -8288,7 +8370,7 @@ const Builder = struct {
         request_fn_ty_digest: names.TypeDigest,
         fn_id: Ast.FnId,
     ) Allocator.Error!Ast.SpecId {
-        const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
+        const evidence_digest = evidence.digest;
         return try self.addSpecRecord(
             self.nestedSpecIdentity(nested, method_scope, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
@@ -10169,8 +10251,9 @@ const Builder = struct {
         const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
         self.countBodyDiagnostic("nested_lookup_probes");
         const family_exists = source_ctx.draft.nested_spec_families.contains(family);
-        const stored_evidence = try self.constFnEvidence(requested_evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const stored_evidence = try source_ctx.storedEvidence(requested_evidence);
+        const evidence_digest = stored_evidence.digest;
+        const draft_evidence = try source_ctx.draft.addStoredConstFnEvidence(stored_evidence);
         const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
             try source_ctx.activeTypeFromNode(request_fn_node)
         else
@@ -10382,8 +10465,8 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
             .evidence_digest = evidence_digest,
-            .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = draft_evidence.nodes,
+            .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
         }, .signature_relation = signature_relation });
         const symbol = self.symbols.fresh();
@@ -11557,11 +11640,7 @@ const Builder = struct {
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
 
-        const requested_evidence = StoredConstFnEvidence{
-            .nodes = body_draft.constFnEvidence(draft_fn.source.const_evidence),
-            .frames = body_draft.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
-            .head = draft_fn.source.const_evidence_frame_head,
-        };
+        const requested_evidence = draftFnEvidence(body_draft, draft_fn.source);
         const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
         const identity = self.templateSpecIdentity(
             spec.template_ref,
@@ -11789,11 +11868,7 @@ const Builder = struct {
             const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, 0, 0);
             const fn_ty = sealed_template.mono_fn_ty;
             solved_fn_tys[raw_index] = fn_ty;
-            const requested_evidence = StoredConstFnEvidence{
-                .nodes = body_draft.constFnEvidence(fn_.source.const_evidence),
-                .frames = body_draft.constFnEvidenceFrames(fn_.source.const_evidence_frames),
-                .head = fn_.source.const_evidence_frame_head,
-            };
+            const requested_evidence = draftFnEvidence(body_draft, fn_.source);
             var identity: ?Ast.SpecIdentity = null;
             var allow_identity_merge = true;
             var lexical_owner: ?DraftOwner = null;
@@ -11861,11 +11936,7 @@ const Builder = struct {
                     if (identities[prior]) |existing| {
                         if (try self.draftSpecIdentityEql(existing, wanted)) {
                             const prior_template = body_draft.fns.items[prior].source;
-                            const prior_evidence = StoredConstFnEvidence{
-                                .nodes = body_draft.constFnEvidence(prior_template.const_evidence),
-                                .frames = body_draft.constFnEvidenceFrames(prior_template.const_evidence_frames),
-                                .head = prior_template.const_evidence_frame_head,
-                            };
+                            const prior_evidence = draftFnEvidence(body_draft, prior_template);
                             if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
                             if (std.debug.runtime_safety and
                                 !try self.program.types.typeEql(
@@ -16505,6 +16576,10 @@ const BodyDraftStore = struct {
     fns: std.ArrayList(DraftFn),
     const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
     const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
+    /// The spans already holding a stored evidence value, by the identity of
+    /// its `Builder.evidence_arena` storage, so every function created from
+    /// the same conversion shares one copy.
+    stored_evidence_spans: std.AutoHashMapUnmanaged(StoredEvidenceStorage, DraftEvidenceSpans) = .empty,
     defs: std.ArrayList(DraftDef),
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
@@ -16922,6 +16997,7 @@ const BodyDraftStore = struct {
         self.defs.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
+        self.stored_evidence_spans.deinit(self.allocator);
         self.fns.deinit(self.allocator);
     }
 
@@ -17215,6 +17291,27 @@ const BodyDraftStore = struct {
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    /// Spans holding `stored`, which must be a `Builder.constFnEvidence`
+    /// result: its arena storage is never freed or reused while this draft
+    /// lives, so that storage's identity names its contents.
+    fn addStoredConstFnEvidence(self: *BodyDraftStore, stored: StoredConstFnEvidence) Allocator.Error!DraftEvidenceSpans {
+        const key: StoredEvidenceStorage = .{
+            .nodes_ptr = @intFromPtr(stored.nodes.ptr),
+            .nodes_len = stored.nodes.len,
+            .frames_ptr = @intFromPtr(stored.frames.ptr),
+            .frames_len = stored.frames.len,
+        };
+        const entry = try self.stored_evidence_spans.getOrPut(self.allocator, key);
+        if (!entry.found_existing) {
+            errdefer _ = self.stored_evidence_spans.remove(key);
+            entry.value_ptr.* = .{
+                .nodes = try self.addConstFnEvidence(stored.nodes),
+                .frames = try self.addConstFnEvidenceFrames(stored.frames),
+            };
+        }
+        return entry.value_ptr.*;
     }
 
     fn addConstFnEvidence(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidence) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidence) {
@@ -19083,6 +19180,7 @@ const InterfaceSummaryCache = struct {
             .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, entry.evidence.nodes),
             .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, entry.evidence.frames),
             .head = entry.evidence.head,
+            .digest = entry.evidence.digest,
         };
         owned.request = try entry.request.copy(arena, InterfaceSummaryCopy{});
         owned.summary = try entry.summary.copy(arena, InterfaceSummaryCopy{});
@@ -19455,6 +19553,11 @@ const BodyContext = struct {
     /// restored from the constant lower their bodies against this chain
     /// (their plans' `constraint(k)` refs index the constant's scheme).
     restore_evidence: EvidenceChain,
+    /// The stored form of the last chain this body converted, which is
+    /// almost always `evidence` itself: every nested procedure and body-local
+    /// function created under the same chain shares one conversion instead
+    /// of rebuilding and rehashing the whole chain per procedure.
+    stored_evidence_cache: ?StoredEvidenceCacheEntry = null,
     /// Exact dispatch sites whose constraint evidence resolves to a checked
     /// error or unreachable value in this specialization. Monotype emits a
     /// runtime crash instead of returning a value from each such dispatch.
@@ -21152,20 +21255,33 @@ const BodyContext = struct {
         return try self.draft.addLocal(symbol, ty, binder, null);
     }
 
+    /// The stored form of `chain`, reusing the last conversion when `chain`
+    /// reads the same frames.
+    fn storedEvidence(self: *BodyContext, chain: EvidenceChain) Allocator.Error!StoredConstFnEvidence {
+        const source = StoredEvidenceSource.of(chain);
+        if (self.stored_evidence_cache) |cached| {
+            if (std.meta.eql(cached.source, source)) return cached.stored;
+        }
+        const stored = try self.builder.constFnEvidence(chain);
+        self.stored_evidence_cache = .{ .source = source, .stored = stored };
+        return stored;
+    }
+
     fn addFn(self: *BodyContext, source: Ast.FnTemplate) Allocator.Error!DraftFnId {
         if (source.const_evidence.len != 0 or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
             Common.invariant("body-local function source carried evidence outside its lexical lowering context");
         }
-        const stored_evidence = try self.builder.constFnEvidence(self.evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const stored_evidence = try self.storedEvidence(self.evidence);
+        const evidence_digest = stored_evidence.digest;
+        const draft_evidence = try self.draft.addStoredConstFnEvidence(stored_evidence);
         return try self.draft.addFn(.{
             .source = .{
                 .fn_def = source.fn_def,
                 .source_fn_ty = source.source_fn_ty,
                 .source_fn_key = source.source_fn_key,
                 .mono_fn_ty = try self.draftTypeCell(source.mono_fn_ty),
-                .const_evidence = try self.draft.addConstFnEvidence(stored_evidence.nodes),
-                .const_evidence_frames = try self.draft.addConstFnEvidenceFrames(stored_evidence.frames),
+                .const_evidence = draft_evidence.nodes,
+                .const_evidence_frames = draft_evidence.frames,
                 .const_evidence_frame_head = stored_evidence.head,
                 .evidence_digest = evidence_digest,
             },
@@ -23334,7 +23450,8 @@ const BodyContext = struct {
                 std.debug.assert(removed);
             },
             .decl_backing => |task| self.leaveDeclBackingScopes(task),
-            .slice, .fields, .tags, .nominal, .declared_order => {},
+            .declared_order => |task| self.leaveDeclBackingScopes(task),
+            .slice, .fields, .tags, .nominal => {},
         }
     }
 
@@ -23663,14 +23780,22 @@ const BodyContext = struct {
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
         task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty };
         frame.cursor = InstNominalCursor.declared_order;
-        return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal }) } };
+        return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
 
+    /// A nominal instance's declared field order. Its padding types
+    /// instantiate in the declaring view, with the declaration's formals bound
+    /// to this instance's argument nodes, exactly as its backing instantiates.
     const InstDeclaredOrderTask = struct {
         nominal: checked.CheckedNominalType,
+        args: []NodeId,
         lookup: Builder.NominalDeclLookup = undefined,
-        entries: []InstDeclaredField = &.{},
-        padding_cursor: usize = 0,
+        /// The view and instantiation context the declaring module replaced.
+        outer: ?struct { view: ModuleView, instantiation: TypeInstantiationContext } = null,
+        scope: ?*InstantiatingNodeMap = null,
+        field_kind_scope: ?*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind) = null,
+        scope_pushed: bool = false,
+        field_kind_scope_pushed: bool = false,
     };
 
     fn stepInstDeclaredOrder(self: *BodyContext, frame: *InstFrame, task: *InstDeclaredOrderTask, input: ?InstResult) Allocator.Error!InstStep {
@@ -23681,31 +23806,33 @@ const BodyContext = struct {
             };
             const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
             if (fields.len == 0) return .{ .ret = .{ .declared_order = &.{} } };
-            task.entries = try self.graph.arena().alloc(InstDeclaredField, fields.len);
+            if (task.lookup.padding_field_tys.len == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, &.{}) } };
             frame.cursor = 1;
-        } else {
-            task.entries[frame.index] = .{ .padding = input.?.get(.node) };
-            frame.index += 1;
+            try self.enterDeclScopes(task, task.lookup.view, task.lookup.declaration, task.args);
+            return instSliceStep(task.lookup.padding_field_tys);
         }
+        const padding_nodes = input.?.get(.nodes);
+        self.leaveDeclBackingScopes(task);
+        return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, padding_nodes) } };
+    }
+
+    fn instDeclaredOrderEntries(self: *BodyContext, task: *InstDeclaredOrderTask, padding_nodes: []const NodeId) Allocator.Error![]InstDeclaredField {
         const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
-        while (frame.index < fields.len) {
-            switch (fields[frame.index]) {
-                .named => |label| {
-                    task.entries[frame.index] = .{ .named = try self.recordFieldName(task.lookup.view, label) };
-                    frame.index += 1;
-                },
+        const entries = try self.graph.arena().alloc(InstDeclaredField, fields.len);
+        var padding_cursor: usize = 0;
+        for (fields, entries) |field, *entry| {
+            switch (field) {
+                .named => |label| entry.* = .{ .named = try self.recordFieldName(task.lookup.view, label) },
                 .padding => {
-                    const padding_types = task.lookup.padding_field_tys;
-                    if (task.padding_cursor >= padding_types.len) {
+                    if (padding_cursor >= padding_nodes.len) {
                         Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
                     }
-                    const checked_ty = padding_types[task.padding_cursor];
-                    task.padding_cursor += 1;
-                    return instNodeStep(self.checkedTypeInCurrentView(task.lookup.view, checked_ty));
+                    entry.* = .{ .padding = padding_nodes[padding_cursor] };
+                    padding_cursor += 1;
                 },
             }
         }
-        return .{ .ret = .{ .declared_order = task.entries } };
+        return entries;
     }
 
     /// Instantiate a nominal instance's backing. A declaration-backed nominal's
@@ -23755,14 +23882,28 @@ const BodyContext = struct {
         try self.graph.putNominalBackingNode(source.view.key.bytes, declaration_id, task.args, task.placeholder);
 
         frame.cursor = 1;
-        if (!moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) {
+        try self.enterDeclScopes(task, source.view, source.declaration, task.args);
+        return instNodeStep(source.declaration.backing);
+    }
+
+    /// Enter `view` (when it is not the current one) and push declaration
+    /// scopes binding `declaration`'s formals to `args`, recording on `task`
+    /// what `leaveDeclBackingScopes` undoes.
+    fn enterDeclScopes(
+        self: *BodyContext,
+        task: anytype,
+        view: ModuleView,
+        declaration: checked.CheckedNominalDeclaration,
+        args: []const NodeId,
+    ) Allocator.Error!void {
+        if (!moduleBytesEqual(view.key.bytes, self.view.key.bytes)) {
             task.outer = .{ .view = self.view, .instantiation = self.instantiation };
-            self.view = source.view;
-            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), source.view.key.bytes);
+            self.view = view;
+            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), view.key.bytes);
         }
 
-        const formal_args = source.declaration.formalArgs(self.view.types);
-        if (formal_args.len != task.args.len) {
+        const formal_args = declaration.formalArgs(self.view.types);
+        if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
         const scope = try self.allocator.create(InstantiatingNodeMap);
@@ -23771,19 +23912,18 @@ const BodyContext = struct {
         const field_kind_scope = try self.allocator.create(collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind));
         field_kind_scope.* = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
         task.field_kind_scope = field_kind_scope;
-        for (formal_args, task.args) |formal, arg| {
+        for (formal_args, args) |formal, arg| {
             try scope.put(self.scopedCheckedType(formal), .{ .node = arg });
         }
         try self.instantiation.decl_scopes.append(self.allocator, scope);
         task.scope_pushed = true;
         try self.instantiation.field_kind_decl_scopes.append(self.allocator, field_kind_scope);
         task.field_kind_scope_pushed = true;
-        return instNodeStep(source.declaration.backing);
     }
 
     /// Pop and free the declaration scopes `task` pushed, then restore the
     /// view and instantiation context it replaced.
-    fn leaveDeclBackingScopes(self: *BodyContext, task: *InstDeclBackingTask) void {
+    fn leaveDeclBackingScopes(self: *BodyContext, task: anytype) void {
         if (task.field_kind_scope_pushed) {
             _ = self.instantiation.field_kind_decl_scopes.pop();
             task.field_kind_scope_pushed = false;
@@ -23951,16 +24091,6 @@ const BodyContext = struct {
             },
             .opaque_without_backing => null,
         };
-    }
-
-    fn checkedTypeInCurrentView(
-        self: *BodyContext,
-        source_view: ModuleView,
-        source_ty: checked.CheckedTypeId,
-    ) checked.CheckedTypeId {
-        if (moduleBytesEqual(source_view.key.bytes, self.view.key.bytes)) return source_ty;
-        return self.view.types.rootForKey(source_view.types.rootKey(source_ty)) orelse
-            Common.invariant("imported nominal declaration formal was not projected into the current checked type store");
     }
 
     fn lowerTemplateBodyAtNode(
@@ -24541,11 +24671,7 @@ const BodyContext = struct {
         );
         const evidence = edge.vector;
         const stored_evidence = try self.builder.constFnEvidence(rootEvidence(template_ref, evidence));
-        const evidence_digest = Ast.fnEvidenceDigest(
-            stored_evidence.nodes,
-            stored_evidence.frames,
-            stored_evidence.head,
-        );
+        const evidence_digest = stored_evidence.digest;
         const expansion = try self.allocator.create(DirectCalleeExpansion);
         expansion.* = .{
             .caller = self,
@@ -44500,8 +44626,9 @@ const BodyContext = struct {
         }
         self.draft.exprs.items[@intFromEnum(parsed)].ty = ret_cell;
 
-        const stored_evidence = try self.builder.constFnEvidence(self.evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const stored_evidence = try self.storedEvidence(self.evidence);
+        const evidence_digest = stored_evidence.digest;
+        const draft_evidence = try self.draft.addStoredConstFnEvidence(stored_evidence);
         const runtime_fn_id = try self.draft.addFn(.{ .source = .{
             .fn_def = .{ .parser_runtime = .{
                 .owner = runtime.owner,
@@ -44510,8 +44637,8 @@ const BodyContext = struct {
             .source_fn_ty = boundary.fn_value.source_fn_ty,
             .source_fn_key = boundary.fn_value.source_fn_key,
             .mono_fn_ty = request_cell,
-            .const_evidence = try self.draft.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.draft.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = draft_evidence.nodes,
+            .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
         } });
@@ -44639,8 +44766,9 @@ const BodyContext = struct {
         }
         self.draft.exprs.items[@intFromEnum(encoded)].ty = ret_cell;
 
-        const stored_evidence = try self.builder.constFnEvidence(self.evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const stored_evidence = try self.storedEvidence(self.evidence);
+        const evidence_digest = stored_evidence.digest;
+        const draft_evidence = try self.draft.addStoredConstFnEvidence(stored_evidence);
         const runtime_fn_id = try self.draft.addFn(.{ .source = .{
             .fn_def = .{ .encoder_for_runtime = .{
                 .owner = runtime.owner,
@@ -44649,8 +44777,8 @@ const BodyContext = struct {
             .source_fn_ty = boundary.fn_value.source_fn_ty,
             .source_fn_key = boundary.fn_value.source_fn_key,
             .mono_fn_ty = request_cell,
-            .const_evidence = try self.draft.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.draft.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = draft_evidence.nodes,
+            .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
         } });
@@ -49809,7 +49937,7 @@ const BodyContext = struct {
         // This relation consumes only the selected checked signature, not its
         // nested dispatch evidence. Its source identity and adapter rule fully
         // determine the operation over the complete input constraint.
-        const evidence: StoredConstFnEvidence = .{ .nodes = &.{}, .frames = &.{}, .head = null };
+        const evidence = StoredConstFnEvidence.empty();
         const address: InterfaceReplayAddress = .{
             .kind = switch (reachability) {
                 .adapter_reachable => .method_contract,
@@ -49865,7 +49993,7 @@ const BodyContext = struct {
             .evidence_digest = @splat(0),
             .input_digest = @splat(0),
         };
-        const evidence: StoredConstFnEvidence = .{ .nodes = &.{}, .frames = &.{}, .head = null };
+        const evidence = StoredConstFnEvidence.empty();
         const request: InterfaceConstraints.Identity = .{ .bytes = &.{}, .leaves = &.{} };
         if (cacheable) {
             if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
