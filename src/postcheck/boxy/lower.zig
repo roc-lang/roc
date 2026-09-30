@@ -14854,12 +14854,21 @@ const ProcedureBuilder = struct {
         host_origin.kind = .scaffold;
         var proc = ProcBodyBuilder.initSyntheticAdapter(self, resolved.module, worker_layout, host_origin);
         defer proc.deinit();
-        const host_rep = self.plan.hostRepFor(root_plan.host_rep);
+        // Only a host-shaped root crosses the host ABI. A private root is
+        // wrapped just to supply its worker's hidden arguments, at its own
+        // representation, as its layouts were planned.
+        const host_rep = if (root_plan.wrapper_kind == .host_shaped_wrapper)
+            self.plan.hostRepFor(root_plan.host_rep)
+        else
+            root_plan.host_rep;
         const host_function = proc.functionChildrenForRep(host_rep);
         const worker_function = proc.functionChildrenForRep(worker_plan.rep);
         const host_args = self.layout_plan.rootLayoutSlice(root_layout.host_args);
-        const host_ret = root_layout.host_ret orelse root_layout.host_value orelse
-            boxyLowerInvariant("boxy host wrapper had no host return layout");
+        const host_ret = root_layout.host_ret orelse root_layout.host_value orelse switch (root_plan.wrapper_kind) {
+            .host_shaped_wrapper => boxyLowerInvariant("boxy host wrapper had no host return layout"),
+            // A private root returns what its worker returns.
+            .private_worker_only => worker_layout.ret orelse worker_layout.value,
+        };
         const host_ret_rep = if (host_function) |function| function.ret else host_rep;
         const worker_ret_rep = if (worker_function) |function| function.ret else worker_plan.rep;
         const hidden_desc_params = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs);

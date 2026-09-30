@@ -522,6 +522,10 @@ binding_scheme_classification_stack: std.ArrayListUnmanaged(Var) = .empty,
 /// evidence of discharge: an unrelated error can poison the receiver, and a
 /// relation may be concrete before its place in the worklist is visited.
 settled_static_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// The failure expression of the queued entry that first consumed each
+/// relation in `settled_static_dispatch_constraint_fns`: the use a failure of
+/// that relation was attributed to.
+settled_static_dispatch_failure_exprs: std.AutoHashMapUnmanaged(Var, StaticDispatchConstraint.Provenance.OptExprIdx) = .empty,
 /// Dispatch requirements discovered while checking a prospective scheme.
 /// Candidates live in an append-only arena while any prospective owner is
 /// active, and the owner index lets each generalization boundary visit only its
@@ -677,6 +681,11 @@ codec_row_demand_tags: std.ArrayListUnmanaged(Ident.Idx) = .empty,
 /// the relation names no local expression. Demands recorded during validation
 /// are owned by this region.
 active_codec_owner_region: ?Region = null,
+/// How the running drain treats an implicit parser relation it resolves.
+implicit_parse_mode: ImplicitParseMode = .validate,
+/// Implicit parser relations a queueing drain resolved whose derived-parser
+/// validation the owning walk has not run yet, stacked by drain.
+implicit_parse_requests: std.ArrayListUnmanaged(ImplicitParseRequest) = .empty,
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
@@ -3257,6 +3266,7 @@ pub fn deinit(self: *Self) void {
     self.binding_scheme_classification_seen.deinit(self.gpa);
     self.binding_scheme_classification_stack.deinit(self.gpa);
     self.settled_static_dispatch_constraint_fns.deinit(self.gpa);
+    self.settled_static_dispatch_failure_exprs.deinit(self.gpa);
     self.scheme_requirement_candidates.deinit(self.gpa);
     var scheme_candidate_indices = self.scheme_requirement_candidate_indices_by_owner.valueIterator();
     while (scheme_candidate_indices.next()) |indices| indices.deinit(self.gpa);
@@ -3280,6 +3290,7 @@ pub fn deinit(self: *Self) void {
     self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.codec_row_demands.deinit(self.gpa);
     self.codec_row_demand_tags.deinit(self.gpa);
+    self.implicit_parse_requests.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
@@ -37747,6 +37758,19 @@ fn deferredDispatchRelationWasRetained(
 /// Record exact callable relations that this pass conclusively consumed. This
 /// is checker lifecycle data, so speculative commit-probes never update it;
 /// their committed constraints are revisited by the ordinary post-commit pass.
+/// Whether every relation of a queued entry was already consumed by an entry
+/// attributing its failure to the same use, so consuming it again could
+/// neither decide nor report anything new.
+fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintCheck) bool {
+    const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
+    if (constraints.len == 0) return false;
+    for (constraints) |constraint| {
+        const failure_expr = self.settled_static_dispatch_failure_exprs.get(constraint.fn_var) orelse return false;
+        if (failure_expr != deferred.failure_expr) return false;
+    }
+    return true;
+}
+
 fn recordSettledDeferredDispatchRelation(
     self: *Self,
     deferred: DeferredConstraintCheck,
@@ -37762,6 +37786,8 @@ fn recordSettledDeferredDispatchRelation(
             continue;
         }
         try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
+        const failure_expr = try self.settled_static_dispatch_failure_exprs.getOrPut(self.gpa, constraint.fn_var);
+        if (!failure_expr.found_existing) failure_expr.value_ptr.* = deferred.failure_expr;
     }
     // A later child can inspect this scheme before the queue finishes.
     // Retire only the exact relations this validation step just consumed.
@@ -37828,27 +37854,98 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
 /// Drain a dispatch suffix without replaying the enclosing relation. Generated
 /// codec methods must settle their own requirements before closing error rows.
+/// A drain of deferred static-dispatch relations that can stop between two
+/// relations and later continue from the next one.
+const StaticDispatchDrain = struct {
+    start: usize,
+    index: usize,
+    /// During this pass, flex receivers are held here and checked again
+    /// later, when maybe they've been resolved.
+    scratch_top: u32,
+    settled_relations_before: usize,
+    is_numeric_default_pass: bool,
+    /// The children a stopped relation appended, which inherit its failure
+    /// expression again once the derived-parser validations it queued have
+    /// appended theirs.
+    stopped_children: ?struct {
+        start: usize,
+        failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx,
+    } = null,
+};
+
+/// How a drain treats an implicit parser relation it resolves.
+const ImplicitParseMode = enum {
+    /// Validate the derived parser before the drain continues.
+    validate,
+    /// Queue the validation in `implicit_parse_requests` and stop after the
+    /// current relation, so the derived-parser walk that owns the drain runs
+    /// it as one of its own positions.
+    queue,
+};
+
+const StaticDispatchDrainProgress = enum { done, stopped };
+
 fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default_pass: bool, start: usize) std.mem.Allocator.Error!void {
+    var drain = self.beginStaticDispatchDrain(is_numeric_default_pass, start);
+    switch (try self.resumeStaticDispatchDrain(env, &drain, .validate)) {
+        .done => {},
+        .stopped => unreachable, // only a queueing drain stops
+    }
+}
+
+fn beginStaticDispatchDrain(self: *Self, is_numeric_default_pass: bool, start: usize) StaticDispatchDrain {
+    return .{
+        .start = start,
+        .index = start,
+        .scratch_top = self.scratch_deferred_static_dispatch_constraints.top(),
+        .settled_relations_before = self.settled_static_dispatch_constraint_fns.count(),
+        .is_numeric_default_pass = is_numeric_default_pass,
+    };
+}
+
+/// Give back a drain's held receivers without finishing it.
+fn abandonStaticDispatchDrain(self: *Self, drain: *const StaticDispatchDrain) void {
+    self.scratch_deferred_static_dispatch_constraints.clearFrom(drain.scratch_top);
+}
+
+fn resumeStaticDispatchDrain(
+    self: *Self,
+    env: *Env,
+    drain: *StaticDispatchDrain,
+    implicit_parse_mode: ImplicitParseMode,
+) std.mem.Allocator.Error!StaticDispatchDrainProgress {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // During this pass, we want to hold onto any flex vars we encounter and
-    // check them again later, when maybe they've been resolved
-    const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();
-    defer self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
-    const settled_relations_before = self.settled_static_dispatch_constraint_fns.count();
+    const is_numeric_default_pass = drain.is_numeric_default_pass;
+    const start = drain.start;
+    const scratch_deferred_top = drain.scratch_top;
+    errdefer self.abandonStaticDispatchDrain(drain);
+    const mode_before = self.implicit_parse_mode;
+    self.implicit_parse_mode = implicit_parse_mode;
+    defer self.implicit_parse_mode = mode_before;
+
+    if (drain.stopped_children) |children| {
+        inheritDeferredConstraintFailureExpr(env, children.start, children.failure_expr);
+        drain.stopped_children = null;
+    }
 
     // The drain runs until the queue is exhausted. Termination is structural:
     // every re-deferred relation keeps a still-flex receiver whose eventual
     // grounding consumes it, and every fresh child edge passes the lineage
     // detectors, which reject an exact repeated state or a strictly grown
     // re-entry of the same binding before it can extend the queue further.
-    var deferred_constraint_index: usize = start;
-    while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
-        const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
+    while (drain.index < env.deferred_static_dispatch_constraints.items.items.len) : (drain.index += 1) {
+        const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[drain.index];
+        // A receiver's relation can be queued once by the unification that
+        // grounded it and again through its instantiation dispatcher; when
+        // both attribute a failure to the same use, the entry that reaches
+        // the drain second finds it already consumed.
+        if (self.deferredRelationsAlreadySettled(deferred_constraint)) continue;
         const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
         const failure_expr = explicitDeferredConstraintFailureExpr(deferred_constraint);
         const deferred_children_start = env.deferred_static_dispatch_constraints.items.items.len;
+        const implicit_parse_requests_before = self.implicit_parse_requests.items.len;
         defer {
             if (env.deferred_static_dispatch_constraints.items.items.len > deferred_children_start) {
                 const child_failure_expr = self.deferredConstraintFailureExpr(deferred_constraint);
@@ -38970,6 +39067,15 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
         if (!self.deferredDispatchRelationWasRetained(deferred_constraint, retained_top)) {
             try self.recordSettledDeferredDispatchRelation(deferred_constraint);
         }
+        if (self.implicit_parse_requests.items.len != implicit_parse_requests_before) {
+            const child_failure_expr = self.deferredConstraintFailureExpr(deferred_constraint);
+            drain.stopped_children = .{
+                .start = deferred_children_start,
+                .failure_expr = if (child_failure_expr) |expr_idx| .from(@intFromEnum(expr_idx)) else .none,
+            };
+            drain.index += 1;
+            return .stopped;
+        }
     }
 
     // Preserve the enclosing drain's prefix, if this is a method-local drain.
@@ -38980,15 +39086,17 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
         self.gpa,
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
+    self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
 
     // A failed commit-probe must leave checker side tables untouched along
     // with the solved graph. Normal solve passes can retire requirements whose
     // receivers this pass conclusively discharged.
     if (!self.commit_probe_active and
-        self.settled_static_dispatch_constraint_fns.count() != settled_relations_before)
+        self.settled_static_dispatch_constraint_fns.count() != drain.settled_relations_before)
     {
         self.retireResolvedTypeSchemeRequirements();
     }
+    return .done;
 }
 
 fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var, region: Region) Allocator.Error!void {
@@ -43128,6 +43236,43 @@ fn satisfyDerivedToHashConstraint(
     }
 }
 
+/// An implicit parser relation whose derived parser is validated as one
+/// walk.
+const ImplicitParseRequest = struct {
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    constraint_fn_var: Var,
+    region: Region,
+    failure_expr: ?CIR.Expr.Idx,
+};
+
+/// One implicit parser relation while its derived parser is validated.
+const ImplicitParseRun = struct {
+    request: ImplicitParseRequest,
+    runtime_fn_var: Var,
+    validation_var: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+    generated_calls_start: usize,
+    walk: DerivedCodecWalk,
+    owner_region_before: ?Region,
+    err_tags_before: std.ArrayListUnmanaged(Ident.Idx) = .empty,
+
+    fn inputs(run: *ImplicitParseRun, env: *Env) DerivedCodecInputs {
+        return .{
+            .encoding_var = run.encoding_var,
+            .state_var = run.state_var,
+            .err_var = run.err_var,
+            .constraint = run.request.constraint,
+            .env = env,
+            .region = run.request.region,
+            .walk = &run.walk,
+            .failure_expr = run.request.failure_expr,
+        };
+    }
+};
+
 fn satisfyImplicitParserConstraint(
     self: *Self,
     dispatcher_var: Var,
@@ -43137,29 +43282,56 @@ fn satisfyImplicitParserConstraint(
     region: Region,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    const request: ImplicitParseRequest = .{
+        .dispatcher_var = dispatcher_var,
+        .constraint = constraint,
+        .constraint_fn_var = constraint_fn_var,
+        .region = region,
+        .failure_expr = failure_expr,
+    };
+    switch (self.implicit_parse_mode) {
+        .queue => try self.implicit_parse_requests.append(self.gpa, request),
+        .validate => {
+            const run = try self.beginImplicitParse(request, env) orelse return;
+            defer self.endImplicitParse(run);
+            try self.finishImplicitParse(run, try self.validateDerivedParseVar(run, env), env);
+        },
+    }
+}
+
+/// Constrain an implicit parser relation's signature and prepare the walk
+/// that validates its derived parser. Null when the relation was decided
+/// without one.
+fn beginImplicitParse(self: *Self, request: ImplicitParseRequest, env: *Env) Allocator.Error!?*ImplicitParseRun {
+    const dispatcher_var = request.dispatcher_var;
+    const constraint = request.constraint;
+    const constraint_fn_var = request.constraint_fn_var;
+    const region = request.region;
+    const failure_expr = request.failure_expr;
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
         try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return;
+        return null;
     };
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 1) {
         try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return;
+        return null;
     }
 
     // Copy the encoding arg before adding fresh vars; the args slice may dangle.
     const encoding_var = args[0];
-    const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
+    const runtime_fn_var = resolved_func.ret;
+    const resolved_runtime_fn = self.types.resolveVar(runtime_fn_var);
     const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
         try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return;
+        return null;
     };
     const runtime_args = self.types.sliceVars(runtime_func.args);
     if (runtime_args.len != 1) {
         try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return;
+        return null;
     }
 
     // Copy the state arg before adding fresh vars; the args slice may dangle.
@@ -43169,49 +43341,71 @@ fn satisfyImplicitParserConstraint(
     const ret_result = try self.unifyInContext(parse_result_var, runtime_func.ret, env, .none);
     if (!ret_result.isEstablished()) {
         try self.markStaticDispatchRejected(constraint);
-        return;
+        return null;
     }
 
     const generated_calls_start = self.scratch_generated_codec_calls.items.len;
-    defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
-    var walk = DerivedCodecWalk.init(self.gpa, generated_calls_start);
-    defer walk.deinit();
+    const run = try self.gpa.create(ImplicitParseRun);
+    run.* = .{
+        .request = request,
+        .runtime_fn_var = runtime_fn_var,
+        .validation_var = dispatcher_var,
+        .encoding_var = encoding_var,
+        .state_var = state_var,
+        .err_var = err_var,
+        .generated_calls_start = generated_calls_start,
+        .walk = DerivedCodecWalk.init(self.gpa, generated_calls_start),
+        .owner_region_before = self.active_codec_owner_region,
+    };
+    errdefer self.endImplicitParse(run);
     // A dispatcher that derives its own codec is validated against the shape
     // that codec is generated from, not against the name in front of it, and
     // everything below is inside that shape for the rest of this constraint.
-    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, constraint_fn_var, self.cir.idents.parser_for, .parser, &walk, env, region)) orelse dispatcher_var;
-    const owner_region_before = self.active_codec_owner_region;
+    if (try self.generatedStructuralCodecBackingVar(dispatcher_var, constraint_fn_var, self.cir.idents.parser_for, .parser, &run.walk, env, region)) |backing_var| {
+        run.validation_var = backing_var;
+    }
     self.active_codec_owner_region = self.codecRelationOwnerRegion(constraint, failure_expr);
-    defer self.active_codec_owner_region = owner_region_before;
-    var err_tags_before = std.ArrayListUnmanaged(Ident.Idx).empty;
-    defer err_tags_before.deinit(self.gpa);
-    try self.appendTagRowNames(err_var, &err_tags_before);
-    const validation = try self.validateDerivedParseVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk, .shape, failure_expr);
-    if (validation == .ok) try self.recordCodecRowGrowth(err_var, err_tags_before.items);
+    try self.appendTagRowNames(err_var, &run.err_tags_before);
+    return run;
+}
+
+/// Apply a validated implicit parser relation's outcome.
+fn finishImplicitParse(self: *Self, run: *ImplicitParseRun, validation: DerivedParseValidation, env: *Env) Allocator.Error!void {
+    const request = run.request;
+    if (validation == .ok) try self.recordCodecRowGrowth(run.err_var, run.err_tags_before.items);
     switch (validation) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .parser,
-            constraint_fn_var,
-            resolved_func.ret,
-            dispatcher_var,
-            validation_var,
-            encoding_var,
-            state_var,
-            err_var,
-            self.scratch_generated_codec_calls.items[generated_calls_start..],
+            request.constraint_fn_var,
+            run.runtime_fn_var,
+            request.dispatcher_var,
+            run.validation_var,
+            run.encoding_var,
+            run.state_var,
+            run.err_var,
+            self.scratch_generated_codec_calls.items[run.generated_calls_start..],
             env,
-            region,
+            request.region,
         ),
         .reported_error => {
             // The derived-method requirement is erroneous, not the value whose
             // shape was inspected. Preserve that solved value type so earlier,
             // independent expressions remain valid lowering input; the source
             // dispatch itself is the explicit runtime failure.
-            try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
-            try self.markStaticDispatchRejected(constraint);
+            try self.poisonConstraintFailure(request.dispatcher_var, request.constraint, env, request.failure_expr);
+            try self.markStaticDispatchRejected(request.constraint);
         },
-        .unsupported => try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr),
+        .unsupported => try self.reportConstraintErrorAt(request.dispatcher_var, request.constraint, .not_nominal, env, false, request.failure_expr, request.failure_expr),
     }
+}
+
+/// Give back everything an implicit parser relation's walk held.
+fn endImplicitParse(self: *Self, run: *ImplicitParseRun) void {
+    self.active_codec_owner_region = run.owner_region_before;
+    self.scratch_generated_codec_calls.shrinkRetainingCapacity(run.generated_calls_start);
+    run.err_tags_before.deinit(self.gpa);
+    run.walk.deinit();
+    self.gpa.destroy(run);
 }
 
 fn satisfyImplicitEncoderForConstraint(
@@ -43961,42 +44155,118 @@ fn instantiateGeneratedCodecMethodTarget(
 /// to this method: the prefix includes the derivation currently being checked.
 /// Each copied requirement is enqueued once, and each completed relation is
 /// permanently settled or rejected, so the loop ends when neither advances.
-fn settleGeneratedCodecMethodRequirements(
+/// Settle the requirements a method's instantiation added. Dispatchers that
+/// became concrete are drained until a pass changes nothing; each implicit
+/// parser relation a drain resolves is validated as a child position before
+/// the drain continues.
+fn stepParseSettle(
     self: *Self,
-    env: *Env,
-    dispatchers_start: usize,
-    deferred_start: usize,
-    failure_expr: ?CIR.Expr.Idx,
-) Allocator.Error!void {
-    self.settling_codec_method_requirements_depth += 1;
-    defer self.settling_codec_method_requirements_depth -= 1;
-    // All latch writes belong to newly instantiated dispatchers. Probe rollback
-    // truncates this suffix; no pre-probe latch or global pending cursor moves.
-    while (true) {
-        var appended = false;
-        var idx = dispatchers_start;
-        while (idx < self.instantiation_dispatchers.items.len) : (idx += 1) {
-            const dispatcher = self.instantiation_dispatchers.items[idx];
-            if (dispatcher.deferred_enqueued or dispatcher.constraints.len() == 0) continue;
-            if (self.types.resolveVar(dispatcher.dispatcher_var).desc.content == .flex) continue;
-            try self.enqueueDeferredDispatchConstraint(env, .{
-                .var_ = dispatcher.dispatcher_var,
-                .constraints = dispatcher.constraints,
-                .failure_expr = if (failure_expr) |expr| .from(@intFromEnum(expr)) else .none,
-            }, .{ .recorded = dispatcher.owner_group_index });
-            self.instantiation_dispatchers.items[idx].deferred_enqueued = true;
-            appended = true;
-        }
-        if (env.deferred_static_dispatch_constraints.items.items.len == deferred_start) return;
-        inheritDeferredConstraintFailureExpr(env, deferred_start, if (failure_expr) |expr| .from(@intFromEnum(expr)) else .none);
-        const settled_before = self.settled_static_dispatch_constraint_fns.count();
-        const dispatchers_before = self.instantiation_dispatchers.items.len;
-        const deferred_before = env.deferred_static_dispatch_constraints.items.items.len;
-        try self.checkStaticDispatchConstraintsFrom(env, false, deferred_start);
-        if (!appended and self.settled_static_dispatch_constraint_fns.count() == settled_before and
-            self.instantiation_dispatchers.items.len == dispatchers_before and
-            env.deferred_static_dispatch_constraints.items.items.len == deferred_before) return;
+    inputs: DerivedCodecInputs,
+    settle: *ParseSettleFrame,
+) Allocator.Error!DerivedCodecStep(DerivedParseTask) {
+    const env = inputs.env;
+    const failure_expr = inputs.failure_expr;
+    const failure_expr_idx: StaticDispatchConstraint.Provenance.OptExprIdx = if (failure_expr) |expr| .from(@intFromEnum(expr)) else .none;
+    if (!settle.entered) {
+        settle.entered = true;
+        self.settling_codec_method_requirements_depth += 1;
     }
+    while (true) switch (settle.phase) {
+        .enqueue => {
+            // All latch writes belong to newly instantiated dispatchers. Probe
+            // rollback truncates this suffix; no pre-probe latch or global
+            // pending cursor moves.
+            settle.appended = false;
+            var idx = settle.dispatchers_start;
+            while (idx < self.instantiation_dispatchers.items.len) : (idx += 1) {
+                const dispatcher = self.instantiation_dispatchers.items[idx];
+                if (dispatcher.deferred_enqueued or dispatcher.constraints.len() == 0) continue;
+                if (self.types.resolveVar(dispatcher.dispatcher_var).desc.content == .flex) continue;
+                try self.enqueueDeferredDispatchConstraint(env, .{
+                    .var_ = dispatcher.dispatcher_var,
+                    .constraints = dispatcher.constraints,
+                    .failure_expr = failure_expr_idx,
+                }, .{ .recorded = dispatcher.owner_group_index });
+                self.instantiation_dispatchers.items[idx].deferred_enqueued = true;
+                settle.appended = true;
+            }
+            if (env.deferred_static_dispatch_constraints.items.items.len == settle.deferred_start) {
+                self.leaveParseSettle(settle);
+                return .{ .done = try self.finishParseSettle(inputs, settle.post) };
+            }
+            inheritDeferredConstraintFailureExpr(env, settle.deferred_start, failure_expr_idx);
+            settle.settled_before = self.settled_static_dispatch_constraint_fns.count();
+            settle.dispatchers_before = self.instantiation_dispatchers.items.len;
+            settle.deferred_before = env.deferred_static_dispatch_constraints.items.items.len;
+            settle.drain = self.beginStaticDispatchDrain(false, settle.deferred_start);
+            settle.requests_start = self.implicit_parse_requests.items.len;
+            settle.next_request = settle.requests_start;
+            settle.phase = .drain;
+        },
+        .drain => {
+            if (settle.next_request < self.implicit_parse_requests.items.len) {
+                const request = self.implicit_parse_requests.items[settle.next_request];
+                settle.next_request += 1;
+                return .{ .child = .{ .implicit = request } };
+            }
+            self.implicit_parse_requests.shrinkRetainingCapacity(settle.requests_start);
+            settle.next_request = settle.requests_start;
+            switch (try self.resumeStaticDispatchDrain(env, &settle.drain, .queue)) {
+                .stopped => {},
+                .done => {
+                    settle.phase = .enqueue;
+                    if (!settle.appended and self.settled_static_dispatch_constraint_fns.count() == settle.settled_before and
+                        self.instantiation_dispatchers.items.len == settle.dispatchers_before and
+                        env.deferred_static_dispatch_constraints.items.items.len == settle.deferred_before)
+                    {
+                        self.leaveParseSettle(settle);
+                        return .{ .done = try self.finishParseSettle(inputs, settle.post) };
+                    }
+                },
+            }
+        },
+    };
+}
+
+fn leaveParseSettle(self: *Self, settle: *ParseSettleFrame) void {
+    if (!settle.entered) return;
+    settle.entered = false;
+    self.settling_codec_method_requirements_depth -= 1;
+}
+
+/// Finish a method whose instantiated requirements are settled.
+fn finishParseSettle(self: *Self, inputs: DerivedCodecInputs, post: ParseSettlePost) Allocator.Error!DerivedParseValidation {
+    switch (post) {
+        .method => |method| {
+            if (method.own_error_row) |row| switch (try self.constrainDerivedParserFormatError(row.parent, row.child, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region)) {
+                .ok => {},
+                .unsupported, .reported_error => |validation| return validation,
+            };
+            return try self.finishGeneratedCodecMethodValidation(method.result, method.method_name, method.encoding_var, method.expected_fn, method.method_var, method.subject_var);
+        },
+        .nominal_error_row => |child_err_var| return try self.constrainDerivedParserErrorRowIncludes(inputs.err_var, child_err_var, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region),
+    }
+}
+
+/// Begin one of a derived parser's method checks.
+fn beginParseMethodCheck(self: *Self, inputs: DerivedCodecInputs, check: ParseMethodCheck) Allocator.Error!ParseMethodBegin {
+    return switch (check) {
+        .format => |format| try self.beginParseFormatMethod(inputs, format.shape_var, format.spec_decl),
+        .dict_protocol => |protocol| try self.beginParseDictProtocolMethod(inputs, protocol.subject_var, protocol.method),
+        .key => |key_var| try self.beginParseKeyMethod(inputs, key_var),
+        .str_key => try self.beginParseKeyMethod(inputs, try self.freshStr(inputs.env, inputs.region)),
+        .skip_record_field => try self.beginSkipRecordFieldMethod(inputs),
+        .invalid_value => .{ .done = try self.validateInvalidValueMethod(
+            inputs.encoding_var,
+            inputs.state_var,
+            inputs.err_var,
+            inputs.constraint,
+            inputs.env,
+            inputs.region,
+            inputs.failure_expr,
+            inputs.walk,
+        ) },
+    };
 }
 
 const NullTryInfo = struct {
@@ -44348,18 +44618,19 @@ fn reportDerivedParseMissingMethodAt(
     return .reported_error;
 }
 
-fn validateParseFormatMethod(
+fn beginParseFormatMethod(
     self: *Self,
-    encoding_var: Var,
-    state_var: Var,
+    inputs: DerivedCodecInputs,
     shape_var: Var,
     spec_decl: BuiltinParseSpecDecl,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
-) Allocator.Error!DerivedParseValidation {
+) Allocator.Error!ParseMethodBegin {
+    const encoding_var = inputs.encoding_var;
+    const state_var = inputs.state_var;
+    const err_var = inputs.err_var;
+    const constraint = inputs.constraint;
+    const env = inputs.env;
+    const region = inputs.region;
+    const failure_expr = inputs.failure_expr;
     const method_name = try self.parseFormatMethodName(spec_decl);
     const subject_var: ?Var = switch (spec_decl) {
         .null => null,
@@ -44393,7 +44664,7 @@ fn validateParseFormatMethod(
     const dispatchers_start = self.instantiation_dispatchers.items.len;
     const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
-        return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
+        return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
     };
     // ParseTagUnionSpec executes compiler-generated payload parsers at this
     // contract's row. Its format callable therefore depends on the enclosing
@@ -44437,13 +44708,20 @@ fn validateParseFormatMethod(
             .method_name = method_name,
         },
     });
-    if (!result.isEstablished()) return .reported_error;
-    try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
-    if (spec_decl != .tag_union) switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |validation| return validation,
-    };
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, subject_var);
+    if (!result.isEstablished()) return .{ .done = .reported_error };
+    return .{ .settle = .{
+        .dispatchers_start = dispatchers_start,
+        .deferred_start = deferred_start,
+        .post = .{ .method = .{
+            .own_error_row = if (spec_decl == .tag_union) null else .{ .parent = err_var, .child = child_err_var },
+            .result = result,
+            .method_name = method_name,
+            .encoding_var = encoding_var,
+            .expected_fn = expected_fn,
+            .method_var = method.var_,
+            .subject_var = subject_var,
+        } },
+    } };
 }
 
 fn validateEncodeFormatMethod(
@@ -44514,43 +44792,8 @@ fn validateEncodeFormatMethod(
 /// the entry count, `parse_dict_next` reports whether an entry follows,
 /// `parse_dict_after_key` consumes whatever sits between a key and its value,
 /// and `parse_dict_after_entry` reports whether more entries follow.
-fn validateDerivedParseDictMethods(
+fn validateEncodeDictProtocolMethod(
     self: *Self,
-    dict_var: Var,
-    encoding_var: Var,
-    state_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
-) Allocator.Error!DerivedParseValidation {
-    const start_ret = try self.freshParseCountedStartTryVar(state_var, err_var, env, region);
-    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_start", start_ret, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    const next_ret = try self.freshParseArrayEventTryVar(state_var, err_var, "Entry", "Done", env, region);
-    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_next", next_ret, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    const after_key_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
-    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_after_key", after_key_ret, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    const after_entry_ret = try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region);
-    switch (try self.validateDictProtocolMethod(.parser, dict_var, encoding_var, state_var, "parse_dict_after_entry", after_entry_ret, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    return .ok;
-}
-
-fn validateDictProtocolMethod(
-    self: *Self,
-    comptime kind: ModuleEnv.GeneratedCodecDerivation.Kind,
     subject_var: Var,
     encoding_var: Var,
     state_var: Var,
@@ -44562,16 +44805,10 @@ fn validateDictProtocolMethod(
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     const method_name = try self.protocolMethodName(method_text);
-    const dispatchers_start = self.instantiation_dispatchers.items.len;
-    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
     };
-    const parent_result = self.tryArgsFromVar(expected_ret).?;
-    const is_parser = kind == .parser;
-    const child_err_var = if (is_parser) try self.fresh(env, region) else parent_result.err;
-    const child_ret = if (is_parser) try self.freshFromContent(try self.mkTryContent(parent_result.ok, child_err_var), env, region) else expected_ret;
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, child_ret), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -44580,31 +44817,86 @@ fn validateDictProtocolMethod(
         },
     });
     if (!result.isEstablished()) return .reported_error;
-    if (is_parser) try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
-    if (is_parser) switch (try self.constrainDerivedParserFormatError(parent_result.err, child_err_var, constraint, failure_expr, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |validation| return validation,
-    };
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, subject_var);
 }
 
-fn validateParseKeyMethod(
+fn beginParseDictProtocolMethod(
     self: *Self,
+    inputs: DerivedCodecInputs,
+    subject_var: Var,
+    protocol_method: DictParseMethod,
+) Allocator.Error!ParseMethodBegin {
+    const encoding_var = inputs.encoding_var;
+    const state_var = inputs.state_var;
+    const err_var = inputs.err_var;
+    const constraint = inputs.constraint;
+    const env = inputs.env;
+    const region = inputs.region;
+    const failure_expr = inputs.failure_expr;
+    const expected_ret = switch (protocol_method) {
+        .parse_dict_start => try self.freshParseCountedStartTryVar(state_var, err_var, env, region),
+        .parse_dict_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Entry", "Done", env, region),
+        .parse_dict_after_key, .parse_key_start => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
+        .parse_dict_after_entry => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+    };
+    const method_name = switch (protocol_method) {
+        inline .parse_dict_start,
+        .parse_dict_next,
+        .parse_dict_after_key,
+        .parse_dict_after_entry,
+        .parse_key_start,
+        => |known| try self.protocolMethodName(@tagName(known)),
+    };
+    const dispatchers_start = self.instantiation_dispatchers.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
+    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
+        return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
+    };
+    const parent_result = self.tryArgsFromVar(expected_ret).?;
+    const child_err_var = try self.fresh(env, region);
+    const child_ret = try self.freshFromContent(try self.mkTryContent(parent_result.ok, child_err_var), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, child_ret), env, region);
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = encoding_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    if (!result.isEstablished()) return .{ .done = .reported_error };
+    return .{ .settle = .{
+        .dispatchers_start = dispatchers_start,
+        .deferred_start = deferred_start,
+        .post = .{ .method = .{
+            .own_error_row = .{ .parent = parent_result.err, .child = child_err_var },
+            .result = result,
+            .method_name = method_name,
+            .encoding_var = encoding_var,
+            .expected_fn = expected_fn,
+            .method_var = method.var_,
+            .subject_var = subject_var,
+        } },
+    } };
+}
+
+fn beginParseKeyMethod(
+    self: *Self,
+    inputs: DerivedCodecInputs,
     key_var: Var,
-    encoding_var: Var,
-    state_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
-) Allocator.Error!DerivedParseValidation {
-    const method_text = try self.parseDictKeyMethodText(key_var) orelse return .ok;
+) Allocator.Error!ParseMethodBegin {
+    const encoding_var = inputs.encoding_var;
+    const state_var = inputs.state_var;
+    const err_var = inputs.err_var;
+    const constraint = inputs.constraint;
+    const env = inputs.env;
+    const region = inputs.region;
+    const failure_expr = inputs.failure_expr;
+    const method_text = try self.parseDictKeyMethodText(key_var) orelse return .{ .done = .ok };
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
     const dispatchers_start = self.instantiation_dispatchers.items.len;
     const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
-        return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
+        return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
     };
     const child_err_var = try self.fresh(env, region);
     const expected_ret = try self.freshParseResultTryVar(key_var, state_var, child_err_var, env, region);
@@ -44616,13 +44908,20 @@ fn validateParseKeyMethod(
             .method_name = method_name,
         },
     });
-    if (!result.isEstablished()) return .reported_error;
-    try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
-    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |validation| return validation,
-    }
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, key_var);
+    if (!result.isEstablished()) return .{ .done = .reported_error };
+    return .{ .settle = .{
+        .dispatchers_start = dispatchers_start,
+        .deferred_start = deferred_start,
+        .post = .{ .method = .{
+            .own_error_row = .{ .parent = err_var, .child = child_err_var },
+            .result = result,
+            .method_name = method_name,
+            .encoding_var = encoding_var,
+            .expected_fn = expected_fn,
+            .method_var = method.var_,
+            .subject_var = key_var,
+        } },
+    } };
 }
 
 fn validateEncodeKeyMethod(
@@ -44949,23 +45248,20 @@ fn validateInvalidValueMethod(
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
 }
 
-fn validateSkipRecordFieldMethod(
-    self: *Self,
-    encoding_var: Var,
-    state_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
-    walk: *const DerivedCodecWalk,
-) Allocator.Error!DerivedParseValidation {
+fn beginSkipRecordFieldMethod(self: *Self, inputs: DerivedCodecInputs) Allocator.Error!ParseMethodBegin {
+    const encoding_var = inputs.encoding_var;
+    const state_var = inputs.state_var;
+    const err_var = inputs.err_var;
+    const constraint = inputs.constraint;
+    const env = inputs.env;
+    const region = inputs.region;
+    const failure_expr = inputs.failure_expr;
     const method_name = try self.protocolMethodName("skip_record_field");
-    if (self.hasReusableGeneratedCodecCall(method_name, walk)) return .ok;
+    if (self.hasReusableGeneratedCodecCall(method_name, inputs.walk)) return .{ .done = .ok };
     const dispatchers_start = self.instantiation_dispatchers.items.len;
     const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
-        return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
+        return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr) };
     };
     const child_err_var = try self.fresh(env, region);
     const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, child_err_var), env, region);
@@ -44977,13 +45273,20 @@ fn validateSkipRecordFieldMethod(
             .method_name = method_name,
         },
     });
-    if (!result.isEstablished()) return .reported_error;
-    try self.settleGeneratedCodecMethodRequirements(env, dispatchers_start, deferred_start, failure_expr);
-    switch (try self.constrainDerivedParserFormatError(err_var, child_err_var, constraint, failure_expr, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |validation| return validation,
-    }
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
+    if (!result.isEstablished()) return .{ .done = .reported_error };
+    return .{ .settle = .{
+        .dispatchers_start = dispatchers_start,
+        .deferred_start = deferred_start,
+        .post = .{ .method = .{
+            .own_error_row = .{ .parent = err_var, .child = child_err_var },
+            .result = result,
+            .method_name = method_name,
+            .encoding_var = encoding_var,
+            .expected_fn = expected_fn,
+            .method_var = method.var_,
+            .subject_var = null,
+        } },
+    } };
 }
 
 fn validateRenameFieldMethod(
@@ -45401,6 +45704,80 @@ const DerivedParseTask = union(enum) {
     /// A row extension: another storage fragment of the same logical union.
     tag_ext: Var,
     nominal: struct { var_: Var, nominal: types_mod.NominalType, context: DerivedParseContext },
+    /// A format or protocol method the parser calls.
+    method: ParseMethodCheck,
+    /// A method's instantiated requirements, settled before its signature is
+    /// finished.
+    settle: ParseSettleFrame,
+    /// An implicit parser relation settling queued, validated as a walk of
+    /// its own.
+    implicit: ImplicitParseRequest,
+};
+
+/// A format or protocol method a derived parser calls. Settling the
+/// requirements its instantiation adds can resolve implicit parser
+/// relations, whose own walks run as positions of this one.
+const ParseMethodCheck = union(enum) {
+    format: struct { shape_var: Var, spec_decl: BuiltinParseSpecDecl },
+    dict_protocol: struct { subject_var: Var, method: DictParseMethod },
+    key: Var,
+    /// The `parse_key` method for the string a unit-tag key is rendered as.
+    str_key,
+    skip_record_field,
+    invalid_value,
+};
+
+const DictParseMethod = enum {
+    parse_dict_start,
+    parse_dict_next,
+    parse_dict_after_key,
+    parse_dict_after_entry,
+    parse_key_start,
+};
+
+/// What finishes a method once its instantiated requirements are settled.
+const ParseSettlePost = union(enum) {
+    method: struct {
+        /// The enclosing row and the method's own error row, when the method
+        /// has a row of its own.
+        own_error_row: ?struct { parent: Var, child: Var },
+        result: unifier.Result,
+        method_name: Ident.Idx,
+        encoding_var: Var,
+        expected_fn: Var,
+        method_var: Var,
+        subject_var: ?Var,
+    },
+    /// A custom nominal parser's own error row, composed into the enclosing
+    /// row.
+    nominal_error_row: Var,
+};
+
+/// Settling the requirements a method's instantiation added: dispatchers
+/// that became concrete are drained until nothing further changes. The
+/// drain queues each implicit parser relation it resolves, and the relation
+/// is validated as a child position before the drain continues.
+const ParseSettleFrame = struct {
+    dispatchers_start: usize,
+    deferred_start: usize,
+    post: ParseSettlePost,
+    phase: enum { enqueue, drain } = .enqueue,
+    /// Whether this settle has entered `settling_codec_method_requirements_depth`,
+    /// which it holds until it finishes.
+    entered: bool = false,
+    appended: bool = false,
+    settled_before: usize = 0,
+    dispatchers_before: usize = 0,
+    deferred_before: usize = 0,
+    drain: StaticDispatchDrain = undefined,
+    /// This drain's queued relations in `implicit_parse_requests`.
+    requests_start: usize = 0,
+    next_request: usize = 0,
+};
+
+const ParseMethodBegin = union(enum) {
+    done: DerivedParseValidation,
+    settle: ParseSettleFrame,
 };
 
 /// What one derived-codec frame asks for next.
@@ -45441,9 +45818,30 @@ const NominalCodecFrame = struct {
 fn DerivedCodecFrame(comptime Task: type) type {
     return struct {
         task: Task,
-        stage: enum { start, components, dict_key, backing, finish } = .start,
+        stage: enum {
+            start,
+            /// A record's field set or a tuple's elements, once its methods hold.
+            fields,
+            components,
+            /// The payload named by `then_var`, once the queued checks hold.
+            checked_payload,
+            set_from_list,
+            dict_keys,
+            dict_unit_keys,
+            dict_construction,
+            dict_key_start,
+            dict_key,
+            backing,
+            finish,
+        } = .start,
         index: usize = 0,
         inner: usize = 0,
+        /// How many nested implicit parser walks enclose this position.
+        run_depth: usize = 0,
+        /// Method checks this position makes before its next stage, in order.
+        checks: std.ArrayListUnmanaged(ParseMethodCheck) = .empty,
+        check_index: usize = 0,
+        then_var: Var = undefined,
         /// A record's field presences or a tuple's element vars. Owned.
         presences: std.ArrayListUnmanaged(types_mod.RecordField.Presence) = .empty,
         vars: std.ArrayListUnmanaged(Var) = .empty,
@@ -45456,50 +45854,71 @@ fn DerivedCodecFrame(comptime Task: type) type {
     };
 }
 
-fn validateDerivedParseVar(
-    self: *Self,
-    var_: Var,
-    encoding_var: Var,
-    state_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    walk: *DerivedCodecWalk,
-    context: DerivedParseContext,
-    failure_expr: ?CIR.Expr.Idx,
-) Allocator.Error!DerivedParseValidation {
-    const inputs: DerivedCodecInputs = .{
-        .encoding_var = encoding_var,
-        .state_var = state_var,
-        .err_var = err_var,
-        .constraint = constraint,
-        .env = env,
-        .region = region,
-        .walk = walk,
-        .failure_expr = failure_expr,
-    };
+/// Validate an implicit parser relation's derived parser. Each implicit
+/// parser relation that settling a method resolves is validated as a
+/// position of this same walk, with the inputs of its own run.
+fn validateDerivedParseVar(self: *Self, run: *ImplicitParseRun, env: *Env) Allocator.Error!DerivedParseValidation {
     const Frame = DerivedCodecFrame(DerivedParseTask);
     var frames = std.ArrayListUnmanaged(Frame).empty;
+    var runs = std.ArrayListUnmanaged(*ImplicitParseRun).empty;
     defer {
         var index = frames.items.len;
         while (index > 0) {
             index -= 1;
-            self.releaseDerivedCodecFrame(DerivedParseTask, inputs, &frames.items[index]);
+            const frame = &frames.items[index];
+            const frame_run = if (frame.run_depth == 0) run else runs.items[frame.run_depth - 1];
+            self.releaseDerivedCodecFrame(DerivedParseTask, frame_run.inputs(env), frame);
+            if (frame.task == .implicit and frame.stage == .finish) self.endImplicitParse(runs.pop().?);
         }
         frames.deinit(self.gpa);
+        runs.deinit(self.gpa);
     }
-    try frames.append(self.gpa, .{ .task = .{ .var_ = .{ .var_ = var_, .context = context } } });
+    try frames.append(self.gpa, .{ .task = .{ .var_ = .{ .var_ = run.validation_var, .context = .shape } } });
     var input: ?DerivedParseValidation = null;
     while (true) {
         const frame = &frames.items[frames.items.len - 1];
-        const step = try self.stepDerivedParse(inputs, frame, input);
+        const run_depth = runs.items.len;
+        const inputs = (if (run_depth == 0) run else runs.items[run_depth - 1]).inputs(env);
+        const step: DerivedCodecStep(DerivedParseTask) = switch (frame.task) {
+            .implicit => |request| switch (frame.stage) {
+                .start => blk: {
+                    const nested = try self.beginImplicitParse(request, env) orelse break :blk .{ .done = .ok };
+                    runs.append(self.gpa, nested) catch |err| {
+                        self.endImplicitParse(nested);
+                        return err;
+                    };
+                    frame.stage = .finish;
+                    break :blk .{ .child = .{ .var_ = .{ .var_ = nested.validation_var, .context = .shape } } };
+                },
+                .finish => blk: {
+                    const nested = runs.pop().?;
+                    frame.stage = .start;
+                    defer self.endImplicitParse(nested);
+                    try self.finishImplicitParse(nested, input.?, env);
+                    // The relation's outcome is its own; the walk that
+                    // queued it continues.
+                    break :blk .{ .done = .ok };
+                },
+                .fields,
+                .components,
+                .checked_payload,
+                .set_from_list,
+                .dict_keys,
+                .dict_unit_keys,
+                .dict_construction,
+                .dict_key_start,
+                .dict_key,
+                .backing,
+                => unreachable,
+            },
+            .var_, .record, .tuple, .tag_union, .tag_ext, .nominal, .method, .settle => try self.stepDerivedParse(inputs, frame, input),
+        };
         input = null;
         switch (step) {
-            .child => |task| try frames.append(self.gpa, .{ .task = task }),
+            .child => |task| try frames.append(self.gpa, .{ .task = task, .run_depth = runs.items.len }),
             .tail => |task| {
                 self.releaseDerivedCodecFrame(DerivedParseTask, inputs, frame);
-                frame.* = .{ .task = task };
+                frame.* = .{ .task = task, .run_depth = run_depth };
             },
             .done => |validation| {
                 var finished = frames.pop().?;
@@ -45515,6 +45934,18 @@ fn validateDerivedParseVar(
 fn releaseDerivedCodecFrame(self: *Self, comptime Task: type, inputs: DerivedCodecInputs, frame: *DerivedCodecFrame(Task)) void {
     frame.presences.deinit(self.gpa);
     frame.vars.deinit(self.gpa);
+    frame.checks.deinit(self.gpa);
+    if (Task == DerivedParseTask) switch (frame.task) {
+        .settle => |*settle| {
+            if (settle.phase == .drain) {
+                self.abandonStaticDispatchDrain(&settle.drain);
+                self.implicit_parse_requests.shrinkRetainingCapacity(settle.requests_start);
+                settle.phase = .enqueue;
+            }
+            self.leaveParseSettle(settle);
+        },
+        .var_, .record, .tuple, .tag_union, .tag_ext, .nominal, .method, .implicit => {},
+    };
     if (frame.scratch_top) |top| {
         self.scratch_record_field_vars.clearFrom(top);
         frame.scratch_top = null;
@@ -45561,14 +45992,8 @@ fn stepDerivedParse(
     frame: *DerivedCodecFrame(DerivedParseTask),
     input: ?DerivedParseValidation,
 ) Allocator.Error!DerivedCodecStep(DerivedParseTask) {
-    const encoding_var = inputs.encoding_var;
-    const state_var = inputs.state_var;
-    const err_var = inputs.err_var;
-    const constraint = inputs.constraint;
-    const env = inputs.env;
-    const region = inputs.region;
     const walk = inputs.walk;
-    const failure_expr = inputs.failure_expr;
+    if (continueParseMethodChecks(frame, input)) |step| return step;
     switch (frame.task) {
         .var_ => |task| {
             const resolved = self.types.resolveVar(task.var_);
@@ -45605,9 +46030,31 @@ fn stepDerivedParse(
             };
         },
         .record => |record_var| {
-            if (frame.stage == .start) {
-                frame.stage = .components;
-                if (try self.validateDerivedParseRecordMethods(inputs, record_var, &frame.presences)) |failed| return .{ .done = failed };
+            switch (frame.stage) {
+                .start => {
+                    frame.stage = .fields;
+                    return try self.startParseMethodChecks(frame, &.{
+                        .{ .format = .{ .shape_var = record_var, .spec_decl = .record_start } },
+                        .{ .format = .{ .shape_var = record_var, .spec_decl = .record_field } },
+                        .{ .format = .{ .shape_var = record_var, .spec_decl = .record_after_field } },
+                        .skip_record_field,
+                    });
+                },
+                .fields => {
+                    frame.stage = .components;
+                    if (try self.validateDerivedParseRecordFields(inputs, record_var, &frame.presences)) |failed| return .{ .done = failed };
+                },
+                .components => {},
+                .checked_payload,
+                .set_from_list,
+                .dict_keys,
+                .dict_unit_keys,
+                .dict_construction,
+                .dict_key_start,
+                .dict_key,
+                .backing,
+                .finish,
+                => unreachable,
             }
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
             if (frame.index == frame.presences.items.len) return .{ .done = .ok };
@@ -45616,20 +46063,35 @@ fn stepDerivedParse(
             return .{ .child = .{ .var_ = .{ .var_ = field_var, .context = .record_field } } };
         },
         .tuple => |task| {
-            if (frame.stage == .start) {
-                frame.stage = .components;
-                switch (try self.validateDerivedParseTupleMethods(encoding_var, state_var, task.var_, err_var, constraint, env, region, failure_expr)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
-                // A tuple with the wrong runtime element count is rejected by the
-                // generated driver rather than by a format method, so this call is an
-                // unconditional part of the checked tuple-parser contract.
-                switch (try self.validateInvalidValueMethod(encoding_var, state_var, err_var, constraint, env, region, failure_expr, walk)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
-                try frame.vars.appendSlice(self.gpa, self.types.sliceVars(task.tuple.elems));
+            switch (frame.stage) {
+                .start => {
+                    frame.stage = .fields;
+                    return try self.startParseMethodChecks(frame, &.{
+                        .{ .format = .{ .shape_var = task.var_, .spec_decl = .tuple_start } },
+                        .{ .format = .{ .shape_var = task.var_, .spec_decl = .tuple_next } },
+                        .{ .format = .{ .shape_var = task.var_, .spec_decl = .tuple_end } },
+                        // A tuple with the wrong runtime element count is
+                        // rejected by the generated driver rather than by a
+                        // format method, so this call is an unconditional part
+                        // of the checked tuple-parser contract.
+                        .invalid_value,
+                    });
+                },
+                .fields => {
+                    frame.stage = .components;
+                    try frame.vars.appendSlice(self.gpa, self.types.sliceVars(task.tuple.elems));
+                },
+                .components => {},
+                .checked_payload,
+                .set_from_list,
+                .dict_keys,
+                .dict_unit_keys,
+                .dict_construction,
+                .dict_key_start,
+                .dict_key,
+                .backing,
+                .finish,
+                => unreachable,
             }
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
             if (frame.index == frame.vars.items.len) return .{ .done = .ok };
@@ -45644,11 +46106,10 @@ fn stepDerivedParse(
                     .supported => {},
                     .unsupported, .unresolved => return .{ .done = .unsupported },
                 }
-                switch (try self.validateParseFormatMethod(encoding_var, state_var, task.var_, .tag_union, err_var, constraint, env, region, failure_expr)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
                 frame.tags = task.tag_union;
+                return try self.startParseMethodChecks(frame, &.{
+                    .{ .format = .{ .shape_var = task.var_, .spec_decl = .tag_union } },
+                });
             }
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
             if (self.nextDerivedCodecPayload(frame)) |payload| return .{ .child = .{ .var_ = .{ .var_ = payload, .context = .shape } } };
@@ -45688,7 +46149,40 @@ fn stepDerivedParse(
             return .{ .tail = .{ .tag_ext = frame.tags.ext } };
         },
         .nominal => |task| return self.stepDerivedParseNominal(inputs, frame, task.var_, task.nominal, task.context, input),
+        .method => |check| return switch (try self.beginParseMethodCheck(inputs, check)) {
+            .done => |validation| .{ .done = validation },
+            .settle => |settle| .{ .tail = .{ .settle = settle } },
+        },
+        .settle => |*settle| return try self.stepParseSettle(inputs, settle),
+        // The walk loop runs implicit relations itself.
+        .implicit => unreachable,
     }
+}
+
+/// Queue a position's method checks and ask for the first; the position
+/// resumes at its next stage once every check holds.
+fn startParseMethodChecks(
+    self: *Self,
+    frame: *DerivedCodecFrame(DerivedParseTask),
+    checks: []const ParseMethodCheck,
+) Allocator.Error!DerivedCodecStep(DerivedParseTask) {
+    try frame.checks.appendSlice(self.gpa, checks);
+    return continueParseMethodChecks(frame, null).?;
+}
+
+/// The next of a position's queued method checks, or the first check's
+/// failure. Null when none is queued or every one held.
+fn continueParseMethodChecks(frame: *DerivedCodecFrame(DerivedParseTask), input: ?DerivedParseValidation) ?DerivedCodecStep(DerivedParseTask) {
+    if (frame.checks.items.len == 0) return null;
+    if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
+    if (frame.check_index < frame.checks.items.len) {
+        const check = frame.checks.items[frame.check_index];
+        frame.check_index += 1;
+        return .{ .child = .{ .method = check } };
+    }
+    frame.checks.clearRetainingCapacity();
+    frame.check_index = 0;
+    return null;
 }
 
 /// The next payload of `frame.tags` to validate, tag by tag.
@@ -45706,38 +46200,21 @@ fn nextDerivedCodecPayload(self: *Self, frame: anytype) ?Var {
     return null;
 }
 
-/// A record parser's format methods, field set, and field conventions,
-/// checked before any field's own type. Null when they all hold.
-fn validateDerivedParseRecordMethods(
+/// A record parser's field set and field conventions, checked after its
+/// format methods and before any field's own type. Null when they all hold.
+fn validateDerivedParseRecordFields(
     self: *Self,
     inputs: DerivedCodecInputs,
     record_var: Var,
     field_presences: *std.ArrayListUnmanaged(types_mod.RecordField.Presence),
 ) Allocator.Error!?DerivedParseValidation {
     const encoding_var = inputs.encoding_var;
-    const state_var = inputs.state_var;
     const err_var = inputs.err_var;
     const constraint = inputs.constraint;
     const env = inputs.env;
     const region = inputs.region;
     const walk = inputs.walk;
     const failure_expr = inputs.failure_expr;
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_start, err_var, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_field, err_var, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_after_field, err_var, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    switch (try self.validateSkipRecordFieldMethod(encoding_var, state_var, err_var, constraint, env, region, failure_expr, walk)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
     var collected = std.ArrayList(types_mod.RecordField.Presence).empty;
     defer collected.deinit(self.gpa);
     switch (try self.collectDerivedRecordFields(record_var, &collected)) {
@@ -45793,6 +46270,53 @@ fn stepDerivedParseNominal(
     }.of;
     switch (frame.stage) {
         .start => {},
+        .checked_payload => return shape(frame.then_var),
+        .set_from_list => {
+            switch (try self.validateSetFromListMethod(nominal_var, nominal, frame.vars.items[0], constraint, env, region)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return .{ .done = result },
+            }
+            return shape(frame.then_var);
+        },
+        .dict_keys => {
+            const args = self.nominalDictKeyValueVars(nominal).?;
+            const closed_unit_tag_key = try self.closeDerivedCodecUnitTagDictKeyRow(args.key, env, region);
+            if (closed_unit_tag_key or try self.varSupportsStringRenderedDictKey(args.key)) {
+                frame.stage = .dict_unit_keys;
+                return try self.startParseMethodChecks(frame, &.{.{ .key = args.key }});
+            }
+            // A key the format cannot render as a key string is read by the
+            // key type's own parser. `parse_key_start` is what admits that: a
+            // format whose key position only holds strings does not implement
+            // it, so such a key is rejected there rather than by a rule in the
+            // compiler that every format has to share.
+            frame.stage = .dict_key_start;
+            return try self.startParseMethodChecks(frame, &.{
+                .{ .dict_protocol = .{ .subject_var = args.key, .method = .parse_key_start } },
+            });
+        },
+        .dict_unit_keys => {
+            frame.stage = .dict_construction;
+            if (try self.varIsClosedUnitTagUnion(self.nominalDictKeyValueVars(nominal).?.key)) {
+                return try self.startParseMethodChecks(frame, &.{ .str_key, .invalid_value });
+            }
+            return try self.stepDerivedParseNominal(inputs, frame, nominal_var, nominal, context, input);
+        },
+        .dict_construction => {
+            const args = self.nominalDictKeyValueVars(nominal).?;
+            switch (try self.validateDictConstructionMethods(nominal_var, nominal, args.key, args.value, constraint, env, region)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return .{ .done = result },
+            }
+            return shape(args.value);
+        },
+        .dict_key_start => {
+            const args = self.nominalDictKeyValueVars(nominal).?;
+            try frame.vars.append(self.gpa, args.key);
+            frame.nominal.dict_value = args.value;
+            frame.stage = .dict_key;
+            return .{ .child = .{ .var_ = .{ .var_ = args.key, .context = .shape } } };
+        },
         .dict_key => {
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
             switch (try self.validateDictConstructionMethods(nominal_var, nominal, frame.vars.items[0], frame.nominal.dict_value, constraint, env, region)) {
@@ -45819,26 +46343,33 @@ fn stepDerivedParseNominal(
             );
             self.leaveDerivedCodecBacking(inputs, &frame.nominal);
             frame.stage = .finish;
-            return .{ .done = try self.finishDerivedParseNominal(inputs, &frame.nominal, nominal_var) };
+            return try self.finishDerivedParseNominal(&frame.nominal, nominal_var);
         },
-        .components, .finish => unreachable,
+        .fields, .components, .finish => unreachable,
     }
 
+    const list_methods = struct {
+        fn of(list_var: Var) [3]ParseMethodCheck {
+            return .{
+                .{ .format = .{ .shape_var = list_var, .spec_decl = .list_start } },
+                .{ .format = .{ .shape_var = list_var, .spec_decl = .list_next } },
+                .{ .format = .{ .shape_var = list_var, .spec_decl = .list_after_item } },
+            };
+        }
+    }.of;
     if (self.nominalIsBuiltinBoolType(nominal)) {
-        return .{ .done = try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, .bool, err_var, constraint, env, region, failure_expr) };
+        return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = .bool } } } };
     }
     if (self.nominalIsBuiltinStrType(nominal)) {
-        return .{ .done = try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, .str, err_var, constraint, env, region, failure_expr) };
+        return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = .str } } } };
     }
     if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
-        return .{ .done = try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, parseSpecDeclForNumKind(num_kind), err_var, constraint, env, region, failure_expr) };
+        return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = parseSpecDeclForNumKind(num_kind) } } } };
     }
     if (self.nominalListPayloadVar(nominal)) |payload_var| {
-        switch (try self.validateDerivedParseListMethods(encoding_var, state_var, nominal_var, err_var, constraint, env, region, failure_expr)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
-        return shape(payload_var);
+        frame.then_var = payload_var;
+        frame.stage = .checked_payload;
+        return try self.startParseMethodChecks(frame, &list_methods(nominal_var));
     }
     if (self.nominalBoxPayloadVar(nominal)) |payload_var| {
         return shape(payload_var);
@@ -45846,60 +46377,21 @@ fn stepDerivedParseNominal(
     if (self.nominalSetPayloadVar(nominal)) |payload_var| {
         if (!try self.varSupportsIsEq(payload_var)) return .{ .done = .unsupported };
         const list_var = try self.freshFromContent(try self.mkListContent(payload_var), env, region);
-        switch (try self.validateDerivedParseListMethods(encoding_var, state_var, nominal_var, err_var, constraint, env, region, failure_expr)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
-        switch (try self.validateSetFromListMethod(nominal_var, nominal, list_var, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
-        return shape(payload_var);
+        try frame.vars.append(self.gpa, list_var);
+        frame.then_var = payload_var;
+        frame.stage = .set_from_list;
+        return try self.startParseMethodChecks(frame, &list_methods(nominal_var));
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         if (!try self.varSupportsIsEq(args.key)) return .{ .done = .unsupported };
         if (!try self.varSupportsToHash(args.key)) return .{ .done = .unsupported };
-        switch (try self.validateDerivedParseDictMethods(nominal_var, encoding_var, state_var, err_var, constraint, env, region, failure_expr)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
-        const closed_unit_tag_key = try self.closeDerivedCodecUnitTagDictKeyRow(args.key, env, region);
-        if (closed_unit_tag_key or try self.varSupportsStringRenderedDictKey(args.key)) {
-            switch (try self.validateParseKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region, failure_expr)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
-            if (try self.varIsClosedUnitTagUnion(args.key)) {
-                const str_var = try self.freshStr(env, region);
-                switch (try self.validateParseKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region, failure_expr)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
-                switch (try self.validateInvalidValueMethod(encoding_var, state_var, err_var, constraint, env, region, failure_expr, walk)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
-            }
-        } else {
-            // A key the format cannot render as a key string is read by the
-            // key type's own parser. `parse_key_start` is what admits that: a
-            // format whose key position only holds strings does not implement
-            // it, so such a key is rejected there rather than by a rule in the
-            // compiler that every format has to share.
-            switch (try self.validateDictProtocolMethod(.parser, args.key, encoding_var, state_var, "parse_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, failure_expr)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
-            try frame.vars.append(self.gpa, args.key);
-            frame.nominal.dict_value = args.value;
-            frame.stage = .dict_key;
-            return .{ .child = .{ .var_ = .{ .var_ = args.key, .context = .shape } } };
-        }
-        switch (try self.validateDictConstructionMethods(nominal_var, nominal, args.key, args.value, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
-        return shape(args.value);
+        frame.stage = .dict_keys;
+        return try self.startParseMethodChecks(frame, &.{
+            .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_start } },
+            .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_next } },
+            .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_after_key } },
+            .{ .dict_protocol = .{ .subject_var = nominal_var, .method = .parse_dict_after_entry } },
+        });
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
         if (try self.missingTryInfoFromNominal(nominal)) |info| {
@@ -45907,11 +46399,11 @@ fn stepDerivedParseNominal(
             return shape(info.ok_var);
         }
         const info = try self.nullTryInfoFromNominal(nominal) orelse return .{ .done = .unsupported };
-        switch (try self.validateParseFormatMethod(encoding_var, state_var, state_var, .null, err_var, constraint, env, region, failure_expr)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
-        return shape(info.ok_var);
+        frame.then_var = info.ok_var;
+        frame.stage = .checked_payload;
+        return try self.startParseMethodChecks(frame, &.{
+            .{ .format = .{ .shape_var = state_var, .spec_decl = .null } },
+        });
     }
 
     const original_env, _ = self.ownerEnvForOriginModule(
@@ -45982,15 +46474,14 @@ fn stepDerivedParseNominal(
         }
     }
     frame.stage = .finish;
-    return .{ .done = try self.finishDerivedParseNominal(inputs, &frame.nominal, nominal_var) };
+    return try self.finishDerivedParseNominal(&frame.nominal, nominal_var);
 }
 
 fn finishDerivedParseNominal(
     self: *Self,
-    inputs: DerivedCodecInputs,
     nominal: *const NominalCodecFrame,
     nominal_var: Var,
-) Allocator.Error!DerivedParseValidation {
+) Allocator.Error!DerivedCodecStep(DerivedParseTask) {
     switch (try self.finishGeneratedCodecMethodValidation(
         nominal.result,
         self.cir.idents.parser_for,
@@ -46000,14 +46491,17 @@ fn finishDerivedParseNominal(
         nominal_var,
     )) {
         .ok => {},
-        .unsupported, .reported_error => |validation| return validation,
+        .unsupported, .reported_error => |validation| return .{ .done = validation },
     }
     // A generated nested parser was validated at the parent's own row, so
     // inclusion holds by construction and there is no child extension left to
     // close.
-    if (nominal.generated) return .ok;
-    try self.settleGeneratedCodecMethodRequirements(inputs.env, nominal.dispatchers_start, nominal.deferred_start, inputs.failure_expr);
-    return try self.constrainDerivedParserErrorRowIncludes(inputs.err_var, nominal.child_err_var, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region);
+    if (nominal.generated) return .{ .done = .ok };
+    return .{ .tail = .{ .settle = .{
+        .dispatchers_start = nominal.dispatchers_start,
+        .deferred_start = nominal.deferred_start,
+        .post = .{ .nominal_error_row = nominal.child_err_var },
+    } } };
 }
 
 fn collectDerivedRecordFields(
@@ -46505,7 +46999,7 @@ fn stepDerivedEncodeNominal(
             frame.stage = .finish;
             return .{ .done = try self.finishDerivedEncodeNominal(&frame.nominal, nominal_var) };
         },
-        .components, .finish => unreachable,
+        .fields, .components, .checked_payload, .set_from_list, .dict_keys, .dict_unit_keys, .dict_construction, .dict_key_start, .finish => unreachable,
     }
 
     if (self.nominalIsBuiltinBoolType(nominal)) {
@@ -46571,7 +47065,7 @@ fn stepDerivedEncodeNominal(
         } else {
             // Mirrors the parse side: `encode_key_start` is what admits a key
             // the format cannot render as a key string.
-            switch (try self.validateDictProtocolMethod(.encoder, args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null)) {
+            switch (try self.validateEncodeDictProtocolMethod(args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return .{ .done = result },
             }
@@ -46677,58 +47171,6 @@ fn validateDerivedEncodeTagUnionMethods(
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
     switch (try self.validateEncodeFormatMethod(encoding_var, state_var, tag_union_var, .tag, err_var, constraint, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    return .ok;
-}
-
-fn validateDerivedParseListMethods(
-    self: *Self,
-    encoding_var: Var,
-    state_var: Var,
-    list_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
-) Allocator.Error!DerivedParseValidation {
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_start, err_var, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_next, err_var, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_after_item, err_var, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    return .ok;
-}
-
-fn validateDerivedParseTupleMethods(
-    self: *Self,
-    encoding_var: Var,
-    state_var: Var,
-    tuple_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
-) Allocator.Error!DerivedParseValidation {
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, tuple_var, .tuple_start, err_var, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, tuple_var, .tuple_next, err_var, constraint, env, region, failure_expr)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, tuple_var, .tuple_end, err_var, constraint, env, region, failure_expr)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }

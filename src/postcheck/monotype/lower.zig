@@ -26669,12 +26669,91 @@ const BodyContext = struct {
         }
     }
 
-    /// A lambda or closure value whose nested function body lowers as a
-    /// child task, so nested functions never nest native lowering calls.
+    /// An evidence computation run by the lowering loop: each nested lambda
+    /// or closure it drafts lowers its body as a child task, so an argument
+    /// lambda's body never nests a lowering run inside its call's evidence.
+    const HostedEvidenceTask = struct {
+        root: EvidenceTask,
+        started: bool = false,
+        frames: std.ArrayList(EvidenceFrame) = .empty,
+    };
+
+    fn hostedEvidenceTask(root: EvidenceTask) LowerTask {
+        return .{ .hosted_evidence = .{ .root = root } };
+    }
+
+    fn stepHostedEvidence(self: *BodyContext, task: *HostedEvidenceTask) Allocator.Error!LowerStep {
+        if (!task.started) {
+            task.started = true;
+            try task.frames.append(self.allocator, .{ .ctx = self, .task = task.root });
+        }
+        return switch (try self.driveEvidence(&task.frames)) {
+            .done => |result| .{ .ret = .{ .evidence = result } },
+            .draft_nested => |request| requestLowerTask(request.ctx, .{ .nested_fn = .{
+                .expr_id = request.expr,
+                .request_fn_node = request.request_fn_node,
+                .purpose = .draft,
+            } }),
+        };
+    }
+
+    /// Lambda and closure operands, each drafted at its slot as a child task
+    /// in order. Then the frame becomes `then`, whose result is this task's
+    /// result, or with no `then` it answers nothing.
+    const DraftCallablesTask = struct {
+        /// Owned.
+        drafts: []DraftNestedCallable,
+        index: usize = 0,
+        then: ?union(enum) {
+            prepared_operands: PreparedOperandsTask,
+            uninhabited_dispatch: UninhabitedArgumentTask,
+        } = null,
+    };
+
+    /// Draft the listed callables, then run `then`. Takes ownership of
+    /// `drafts`.
+    fn draftCallablesThen(self: *BodyContext, drafts: []DraftNestedCallable, then: @FieldType(DraftCallablesTask, "then")) LowerStep {
+        if (drafts.len == 0) {
+            self.allocator.free(drafts);
+            if (then) |task| return requestLowerTask(self, switch (task) {
+                .prepared_operands => |prepared| .{ .prepared_operands = prepared },
+                .uninhabited_dispatch => |uninhabited| .{ .uninhabited_dispatch = uninhabited },
+            });
+        }
+        return requestLowerTask(self, .{ .draft_callables = .{ .drafts = drafts, .then = then } });
+    }
+
+    fn stepDraftCallables(self: *BodyContext, frame: *LowerFrame, task: *DraftCallablesTask) Allocator.Error!LowerStep {
+        if (task.index < task.drafts.len) {
+            const draft = task.drafts[task.index];
+            task.index += 1;
+            return requestLowerTask(draft.ctx, .{ .nested_fn = .{
+                .expr_id = draft.expr,
+                .request_fn_node = draft.request_fn_node,
+                .purpose = .draft,
+            } });
+        }
+        const then = task.then;
+        self.allocator.free(task.drafts);
+        task.drafts = &.{};
+        const next = then orelse return .{ .ret = .{ .evidence = .none } };
+        frame.cursor = 0;
+        frame.task = switch (next) {
+            .prepared_operands => |prepared| .{ .prepared_operands = prepared },
+            .uninhabited_dispatch => |uninhabited| .{ .uninhabited_dispatch = uninhabited },
+        };
+        return try self.stepLower(frame, null);
+    }
+
+    /// A lambda or closure whose nested function body lowers as a child task,
+    /// so nested functions never nest native lowering calls.
     const NestedFnTask = struct {
         expr_id: checked.CheckedExprId,
         request_fn_node: NodeId,
         closure: ?@FieldType(checked.CheckedExprData, "closure") = null,
+        /// A value lowers the function expression; a draft only makes its
+        /// specialization exist at the request node.
+        purpose: enum { value, draft } = .value,
         stage: enum { start, body } = .start,
         capture_span: DraftSpan(DraftFnDefCapture) = undefined,
         draft: ?DraftNestedLowering = null,
@@ -26698,16 +26777,32 @@ const BodyContext = struct {
                 const expr_id = task.expr_id;
                 const request_fn_node = task.request_fn_node;
                 var capture_nodes: []NodeId = &.{};
-                const source_fn_ty = if (task.closure) |closure| ty: {
-                    task.capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
-                    capture_nodes = try self.graph.arena().alloc(NodeId, task.capture_span.len);
-                    for (self.fnDefCaptureSpan(task.capture_span), capture_nodes) |capture, *node| {
-                        node.* = try self.exprTypeCell(capture.value).toGraphNode(self.graph);
-                    }
-                    const lambda = self.view.bodies.expr(closure.lambda);
-                    if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
-                    break :ty lambda.ty;
-                } else self.view.bodies.expr(expr_id).ty;
+                const source_fn_ty = switch (task.purpose) {
+                    .draft => switch (self.view.bodies.expr(expr_id).data) {
+                        .lambda => ty: {
+                            self.builder.countBodyDiagnostic("nested_lambdas_prepared");
+                            break :ty self.view.bodies.expr(expr_id).ty;
+                        },
+                        .closure => |closure| ty: {
+                            self.builder.countBodyDiagnostic("nested_closures_prepared");
+                            capture_nodes = try self.closureCaptureEntryNodes(closure);
+                            const lambda = self.view.bodies.expr(closure.lambda);
+                            if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
+                            break :ty lambda.ty;
+                        },
+                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("nested callable draft named a non-callable expression"),
+                    },
+                    .value => if (task.closure) |closure| ty: {
+                        task.capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
+                        capture_nodes = try self.graph.arena().alloc(NodeId, task.capture_span.len);
+                        for (self.fnDefCaptureSpan(task.capture_span), capture_nodes) |capture, *node| {
+                            node.* = try self.exprTypeCell(capture.value).toGraphNode(self.graph);
+                        }
+                        const lambda = self.view.bodies.expr(closure.lambda);
+                        if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
+                        break :ty lambda.ty;
+                    } else self.view.bodies.expr(expr_id).ty,
+                };
                 const nested = try self.builder.nestedFnForExpr(
                     self.view,
                     self.owner_template,
@@ -26762,6 +26857,10 @@ const BodyContext = struct {
     }
 
     fn finishNestedFnValue(self: *BodyContext, task: *NestedFnTask, fn_id: DraftFnTarget) Allocator.Error!LowerStep {
+        switch (task.purpose) {
+            .value => {},
+            .draft => return .{ .ret = .{ .evidence = .none } },
+        }
         const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, task.request_fn_node);
         return loweredExprStep(try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(fn_node),
@@ -26836,9 +26935,9 @@ const BodyContext = struct {
         tuple_access: struct { checked_ty: checked.CheckedTypeId, tuple: checked.CheckedExprId, elem_index: usize, expected_ty: ?Type.TypeId },
         /// `directCallCompletedResultNode`
         completed_result: CompletedResultTask,
-        /// `prepareDirectCallArgsAtNodes`
+        /// A direct call's arguments related to its request node.
         prepare_direct_args: PrepareArgsTask,
-        /// `prepareExprSpanAtNodes`
+        /// Expressions related to their request nodes.
         prepare_span: PrepareArgsTask,
         /// `relateExprAtNode`
         relate: RelateTask,
@@ -26959,23 +27058,44 @@ const BodyContext = struct {
     const EvidenceStep = union(enum) {
         call: struct { ctx: *BodyContext, task: EvidenceTask },
         ret: EvidenceResult,
+        /// Draft a nested lambda or closure at its request node; the frame
+        /// resumes once it is drafted.
+        draft_nested: DraftNestedCallable,
+    };
+
+    /// A lambda or closure argument drafted at its request node before the
+    /// evidence that needs it continues.
+    const DraftNestedCallable = struct {
+        ctx: *BodyContext,
+        expr: checked.CheckedExprId,
+        request_fn_node: NodeId,
+    };
+
+    const EvidenceProgress = union(enum) {
+        done: EvidenceResult,
+        draft_nested: DraftNestedCallable,
     };
 
     fn evidenceCall(ctx: *BodyContext, task: EvidenceTask) EvidenceStep {
         return .{ .call = .{ .ctx = ctx, .task = task } };
     }
 
-    /// Run an evidence computation to completion on an explicit frame stack.
+    /// Run an evidence computation to completion on an explicit frame stack,
+    /// drafting each nested callable it needs in place.
     fn runEvidence(self: *BodyContext, root: EvidenceTask) Allocator.Error!EvidenceResult {
         var frames: std.ArrayList(EvidenceFrame) = .empty;
         defer frames.deinit(self.allocator);
-        errdefer {
-            while (frames.pop()) |frame| {
-                var owned = frame;
-                owned.ctx.releaseEvidenceFrame(&owned);
-            }
-        }
+        errdefer releaseEvidenceFrames(&frames);
         try frames.append(self.allocator, .{ .ctx = self, .task = root });
+        while (true) switch (try self.driveEvidence(&frames)) {
+            .done => |result| return result,
+            .draft_nested => |request| try request.ctx.ensureNestedCallableAtNode(request.expr, request.request_fn_node),
+        };
+    }
+
+    /// Step an evidence computation until it finishes or asks for a nested
+    /// callable to be drafted. The frame that asked resumes on the next call.
+    fn driveEvidence(self: *BodyContext, frames: *std.ArrayList(EvidenceFrame)) Allocator.Error!EvidenceProgress {
         var input: ?EvidenceResult = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
@@ -26987,10 +27107,18 @@ const BodyContext = struct {
                 .ret => |result| {
                     var finished = frames.pop().?;
                     finished.ctx.releaseEvidenceFrame(&finished);
-                    if (frames.items.len == 0) return result;
+                    if (frames.items.len == 0) return .{ .done = result };
                     input = result;
                 },
+                .draft_nested => |request| return .{ .draft_nested = request },
             }
+        }
+    }
+
+    fn releaseEvidenceFrames(frames: *std.ArrayList(EvidenceFrame)) void {
+        while (frames.pop()) |frame| {
+            var owned = frame;
+            owned.ctx.releaseEvidenceFrame(&owned);
         }
     }
 
@@ -28016,13 +28144,22 @@ const BodyContext = struct {
             self.builder.countBodyDiagnosticBy("arguments_prepared", task.checked_exprs.len);
             frame.cursor = 1;
             if (direct_call and self.directCallArgsRelated(task.expr, task.fn_node)) task.index = task.checked_exprs.len;
-        } else {
+        } else if (frame.cursor == 1) {
             task.index += 1;
         }
-        if (task.index < task.checked_exprs.len) {
-            return evidenceCall(self, .{ .relate = .{ .expr = task.checked_exprs[task.index], .expected_node = task.nodes[task.index] } });
+        if (frame.cursor == 1) {
+            if (task.index < task.checked_exprs.len) {
+                return evidenceCall(self, .{ .relate = .{ .expr = task.checked_exprs[task.index], .expected_node = task.nodes[task.index] } });
+            }
+            frame.cursor = 2;
+            task.index = 0;
         }
-        try self.ensureNestedCallablesAtNodes(task.checked_exprs, task.nodes);
+        while (task.index < task.checked_exprs.len) {
+            const expr = task.checked_exprs[task.index];
+            const request_fn_node = task.nodes[task.index];
+            task.index += 1;
+            if (self.isNestedCallableExpr(expr)) return .{ .draft_nested = .{ .ctx = self, .expr = expr, .request_fn_node = request_fn_node } };
+        }
         if (direct_call) {
             if (self.direct_call_requests.getPtr(task.expr)) |request| {
                 if (request.fn_node == task.fn_node) {
@@ -28365,60 +28502,62 @@ const BodyContext = struct {
         closed_operands: ClosedDispatchOperands,
         statement: LoweredStatement,
         data: BodyExprData,
+        /// A hosted evidence computation's result.
+        evidence: EvidenceResult,
 
         fn exprValue(self: LowerResult) DraftExprId {
             return switch (self) {
                 .expr => |expr| expr,
-                .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .data => unreachable,
+                .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => unreachable,
             };
         }
 
         fn maybeExprValue(self: LowerResult) ?DraftExprId {
             return switch (self) {
                 .maybe_expr => |expr| expr,
-                .expr, .call, .maybe_call, .span, .closed_operands, .statement, .data => unreachable,
+                .expr, .call, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => unreachable,
             };
         }
 
         fn callValue(self: LowerResult) LoweredCall {
             return switch (self) {
                 .call => |call| call,
-                .expr, .maybe_expr, .maybe_call, .span, .closed_operands, .statement, .data => unreachable,
+                .expr, .maybe_expr, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => unreachable,
             };
         }
 
         fn maybeCallValue(self: LowerResult) ?LoweredCall {
             return switch (self) {
                 .maybe_call => |call| call,
-                .expr, .maybe_expr, .call, .span, .closed_operands, .statement, .data => unreachable,
+                .expr, .maybe_expr, .call, .span, .closed_operands, .statement, .data, .evidence => unreachable,
             };
         }
 
         fn spanValue(self: LowerResult) DraftSpan(DraftExprId) {
             return switch (self) {
                 .span => |span| span,
-                .expr, .maybe_expr, .call, .maybe_call, .closed_operands, .statement, .data => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .closed_operands, .statement, .data, .evidence => unreachable,
             };
         }
 
         fn closedOperandsValue(self: LowerResult) ClosedDispatchOperands {
             return switch (self) {
                 .closed_operands => |operands| operands,
-                .expr, .maybe_expr, .call, .maybe_call, .span, .statement, .data => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .statement, .data, .evidence => unreachable,
             };
         }
 
         fn statementValue(self: LowerResult) LoweredStatement {
             return switch (self) {
                 .statement => |statement| statement,
-                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .data => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .data, .evidence => unreachable,
             };
         }
 
         fn dataValue(self: LowerResult) BodyExprData {
             return switch (self) {
                 .data => |data| data,
-                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .evidence => unreachable,
             };
         }
     };
@@ -28506,6 +28645,12 @@ const BodyContext = struct {
         match_task: MatchTask,
         /// `lowerLambdaExprAtNode` and `lowerClosureAtNode`
         nested_fn: NestedFnTask,
+        /// An evidence computation whose nested-callable drafts lower as
+        /// child tasks.
+        hosted_evidence: HostedEvidenceTask,
+        /// Lambda and closure operands drafted at their slots, each as a
+        /// child task.
+        draft_callables: DraftCallablesTask,
         /// A control-flow branch body lowered for its output.
         branch_body: BranchBodyTask,
         /// A branch value composed into the enclosing branch state.
@@ -28580,7 +28725,7 @@ const BodyContext = struct {
         /// A deferred intrinsic emitted once the body's graph is sealed,
         /// with the arguments its call site lowered, if any.
         deferred_body: ?struct { pre_lowered_args: ?DraftSpan(DraftExprId) } = null,
-        stage: enum { start, deferred_args, args } = .start,
+        stage: enum { start, deferred_prepared, deferred_args, args } = .start,
         /// The checked arguments. Owned.
         args: []checked.CheckedExprId = &.{},
         arg_tys: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined,
@@ -30565,6 +30710,8 @@ const BodyContext = struct {
         callable_ret: NodeId = undefined,
         pre_lowered: std.ArrayList(PreLoweredOperand) = .empty,
         index: usize = 0,
+        /// The next operand to draft if it is a lambda or closure.
+        draft_index: usize = 0,
     };
 
     const ClosedProcedureTask = struct {
@@ -30776,7 +30923,14 @@ const BodyContext = struct {
 
     fn stepConstructor(self: *BodyContext, frame: *LowerFrame, task: *ConstructorTask, input: ?LowerResult) Allocator.Error!LowerStep {
         if (frame.cursor == 0) {
-            try self.beginConstructor(task);
+            const drafts = try self.beginConstructor(task);
+            if (drafts.len != 0) {
+                frame.cursor = constructor_drafts_cursor;
+                return self.draftCallablesThen(drafts, null);
+            }
+            self.allocator.free(drafts);
+            frame.cursor = 1;
+        } else if (frame.cursor == constructor_drafts_cursor) {
             frame.cursor = 1;
         } else {
             task.lowered[task.index] = if (task.uninhabited_slot) |cell|
@@ -30801,6 +30955,9 @@ const BodyContext = struct {
         return loweredExprStep(lowered);
     }
 
+    /// The constructor task's cursor while its lambda children are drafted.
+    const constructor_drafts_cursor: u8 = 2;
+
     fn constructorChild(_: *BodyContext, task: *const ConstructorTask, index: usize) checked.CheckedExprId {
         return switch (task.kind) {
             .record => |record| if (record.record.ext) |ext|
@@ -30813,8 +30970,9 @@ const BodyContext = struct {
     }
 
     /// Compute every child's slot, relate each child to its slot, and
-    /// allocate the child results.
-    fn beginConstructor(self: *BodyContext, task: *ConstructorTask) Allocator.Error!void {
+    /// allocate the child results. Returns the lambda and closure children
+    /// to draft at their slots, owned.
+    fn beginConstructor(self: *BodyContext, task: *ConstructorTask) Allocator.Error![]DraftNestedCallable {
         const child_count = switch (task.kind) {
             .record => |record| record.record.fields.len + @as(usize, if (record.record.ext != null) 1 else 0),
             .nominal => 1,
@@ -30861,9 +31019,11 @@ const BodyContext = struct {
         const children = try self.allocator.alloc(checked.CheckedExprId, child_count);
         defer self.allocator.free(children);
         for (children, 0..) |*child, index| child.* = self.constructorChild(task, index);
-        try self.prepareConstructorChildrenAtNodes(children, task.slots);
+        const drafts = try self.relateConstructorChildrenAtNodes(children, task.slots);
+        errdefer self.allocator.free(drafts);
         task.lowered = try self.allocator.alloc(DraftExprId, child_count);
         task.produced = try self.allocator.alloc(NodeId, child_count);
+        return drafts;
     }
 
     /// Record what the child at `task.index` contributes to the
@@ -31026,6 +31186,14 @@ const BodyContext = struct {
             .if_task => |*task| self.releaseIfTask(task),
             .match_task => |*task| self.releaseMatchTask(task),
             .nested_fn => |*task| self.releaseNestedFnTask(task),
+            .hosted_evidence => |*task| {
+                releaseEvidenceFrames(&task.frames);
+                task.frames.deinit(self.allocator);
+            },
+            .draft_callables => |*task| {
+                self.allocator.free(task.drafts);
+                task.drafts = &.{};
+            },
             .value_then_state => |*task| self.releaseValueThenStateTask(task),
             .discarded => |*task| self.releaseDiscardedTask(task),
             .statement => |*task| self.releaseStatementTask(task),
@@ -31094,6 +31262,8 @@ const BodyContext = struct {
             .if_task => |*task| self.stepIf(task, input),
             .match_task => |*task| self.stepMatch(task, input),
             .nested_fn => |*task| self.stepNestedFn(task, input),
+            .hosted_evidence => |*task| self.stepHostedEvidence(task),
+            .draft_callables => |*task| self.stepDraftCallables(frame, task),
             .branch_body => |*task| self.stepBranchBody(frame, task, input),
             .value_then_state => |*task| self.stepValueThenState(task, input),
             .discarded => |*task| self.stepDiscarded(task, input),
@@ -31840,6 +32010,7 @@ const BodyContext = struct {
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         switch (frame.cursor) {
             0 => {},
+            dispatch_drafts_cursor => return try self.nextDispatchDraft(frame, task),
             // The uninhabited-argument check.
             1 => {
                 if (input.?.maybeExprValue()) |uninhabited| return self.dispatchLowerDone(task, uninhabited);
@@ -32030,20 +32201,40 @@ const BodyContext = struct {
             .generated_quote,
             => {},
         };
-        for (plan_args, 0..) |operand, index| switch (operand) {
-            .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, callable_graph.args[index]),
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => {},
-        };
+        frame.cursor = dispatch_drafts_cursor;
+        return try self.nextDispatchDraft(frame, task);
+    }
+
+    /// Draft the dispatch's next lambda or closure operand at its callable
+    /// slot, then check the operands for an uninhabited argument.
+    fn nextDispatchDraft(self: *BodyContext, frame: *LowerFrame, task: *DispatchLowerTask) Allocator.Error!LowerStep {
+        while (task.draft_index < task.plan_args.len) {
+            const index = task.draft_index;
+            task.draft_index += 1;
+            switch (task.plan_args[index]) {
+                .checked_expr => |expr| if (self.isNestedCallableExpr(expr)) {
+                    return requestLowerTask(self, .{ .nested_fn = .{
+                        .expr_id = expr,
+                        .request_fn_node = task.callable_args[index],
+                        .purpose = .draft,
+                    } });
+                },
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => {},
+            }
+        }
         frame.cursor = 1;
         return requestLowerTask(self, .{ .uninhabited_dispatch = .{
-            .operands = plan_args,
-            .arg_nodes = callable_graph.args,
-            .ret_cell = expected_ret_cell,
+            .operands = task.plan_args,
+            .arg_nodes = task.callable_args,
+            .ret_cell = task.expected_ret_cell,
         } });
     }
+
+    /// The dispatch task's cursor while its lambda operands are drafted.
+    const dispatch_drafts_cursor: u8 = 0xf0;
 
     /// Lower the dispatch's next checked operand at its callable slot, or
     /// finish the dispatch once every checked operand is lowered.
@@ -32116,9 +32307,9 @@ const BodyContext = struct {
             try self.lowerTypeNode(checked_ret_ty);
         _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node, .exact);
         if (task.direct_parametric_low_level != null) {
-            try self.prepareDispatchOperandsAtNodes(plan_args, task.callable_args, pre_lowered);
+            const drafts = try self.relateDispatchOperandsAtNodes(plan_args, task.callable_args, pre_lowered);
             frame.cursor = 3;
-            return requestLowerTask(self, .{ .prepared_operands = .{
+            return self.draftCallablesThen(drafts, .{ .prepared_operands = .{
                 .operands = plan_args,
                 .nodes = task.callable_args,
                 .pre_lowered = pre_lowered,
@@ -32138,8 +32329,8 @@ const BodyContext = struct {
     ) Allocator.Error!LowerStep {
         const fn_nodes = try self.graph.functionNodes(callable_node);
         const operands = plan.argsSlice(self.view.static_dispatch_plans);
-        try self.prepareDispatchOperandsAtNodes(operands, fn_nodes.args, pre_lowered);
-        return requestLowerTask(self, .{ .prepared_operands = .{
+        const drafts = try self.relateDispatchOperandsAtNodes(operands, fn_nodes.args, pre_lowered);
+        return self.draftCallablesThen(drafts, .{ .prepared_operands = .{
             .operands = operands,
             .nodes = fn_nodes.args,
             .pre_lowered = pre_lowered,
@@ -32418,9 +32609,9 @@ const BodyContext = struct {
                     Common.invariant("closed dispatch argument arity differed from its callable type");
                 }
                 task.arg_nodes = function.args;
-                try self.prepareDispatchOperandsAtNodes(task.operands, function.args, &.{});
+                const drafts = try self.relateDispatchOperandsAtNodes(task.operands, function.args, &.{});
                 frame.cursor = 1;
-                return requestLowerTask(self, .{ .uninhabited_dispatch = .{
+                return self.draftCallablesThen(drafts, .{ .uninhabited_dispatch = .{
                     .operands = task.operands,
                     .arg_nodes = function.args,
                     .ret_cell = task.expected_ret_cell,
@@ -32704,6 +32895,11 @@ const BodyContext = struct {
     const divergent_call_cursor: u8 = 0xff;
     /// The generated iterator whose `next` a direct call reads.
     const iterator_next_cursor: u8 = 0xfe;
+    /// A direct call's arguments are related to its request and every lambda
+    /// argument is drafted.
+    const direct_args_prepared_cursor: u8 = 0xfd;
+    /// An indirect call's arguments are related to its instantiated callee.
+    const indirect_args_prepared_cursor: u8 = 0xfc;
 
     /// `lowerCallAtExpectedNode`
     fn stepCallLower(self: *BodyContext, frame: *LowerFrame, task: *CallLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -32749,15 +32945,15 @@ const BodyContext = struct {
                         expected_ret_node,
                     );
                     const fn_nodes = try self.graph.functionNodes(fn_node);
-                    try self.prepareDirectCallArgsAtNodes(checked_expr, fn_node, call.args, fn_nodes.args);
                     task.fn_node = fn_node;
                     task.fn_nodes = fn_nodes;
-                    frame.cursor = 1;
-                    return requestLowerTask(self, .{ .uninhabited_call = .{
-                        .checked_args = call.args,
-                        .arg_nodes = fn_nodes.args,
-                        .ret_cell = DraftTypeCell.fromGraphNode(fn_nodes.ret),
-                    } });
+                    frame.cursor = direct_args_prepared_cursor;
+                    return requestLowerTask(self, hostedEvidenceTask(.{ .prepare_direct_args = .{
+                        .expr = checked_expr,
+                        .fn_node = fn_node,
+                        .checked_exprs = call.args,
+                        .nodes = fn_nodes.args,
+                    } }));
                 }
 
                 if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
@@ -32785,11 +32981,25 @@ const BodyContext = struct {
                     false,
                 );
                 const fn_nodes = try self.graph.functionNodes(fn_node);
-                try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
                 task.fn_node = fn_node;
                 task.fn_nodes = fn_nodes;
+                frame.cursor = indirect_args_prepared_cursor;
+                return requestLowerTask(self, hostedEvidenceTask(.{ .prepare_span = .{
+                    .checked_exprs = call.args,
+                    .nodes = fn_nodes.args,
+                } }));
+            },
+            direct_args_prepared_cursor => {
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .uninhabited_call = .{
+                    .checked_args = call.args,
+                    .arg_nodes = task.fn_nodes.args,
+                    .ret_cell = DraftTypeCell.fromGraphNode(task.fn_nodes.ret),
+                } });
+            },
+            indirect_args_prepared_cursor => {
                 frame.cursor = 6;
-                return requestLowerChild(self, call.func, DraftTypeCell.fromGraphNode(fn_node));
+                return requestLowerChild(self, call.func, DraftTypeCell.fromGraphNode(task.fn_node));
             },
             // A direct call's uninhabited-argument check.
             1 => {
@@ -33492,9 +33702,11 @@ const BodyContext = struct {
                         // body, so it follows the same prepare/freeze/emit
                         // boundary whether or not this particular request
                         // happens to be resolved yet.
-                        try self.prepareExprSpanAtNodes(task.args, callable.args);
-                        task.stage = .deferred_args;
-                        return requestLowerTask(self, .{ .prepared_span = .{ .exprs = task.args, .nodes = callable.args } });
+                        task.stage = .deferred_prepared;
+                        return requestLowerTask(self, hostedEvidenceTask(.{ .prepare_span = .{
+                            .checked_exprs = task.args,
+                            .nodes = callable.args,
+                        } }));
                     }
                     // Other intrinsics defer only while their request still
                     // owns live row defaults such as an open
@@ -33503,6 +33715,11 @@ const BodyContext = struct {
                 }
                 try self.beginCallsiteIntrinsicBody(task);
                 return try self.nextCallsiteIntrinsicArg(task);
+            },
+            .deferred_prepared => {
+                task.stage = .deferred_args;
+                const callable = try self.graph.functionNodes(task.callable_node);
+                return requestLowerTask(self, .{ .prepared_span = .{ .exprs = task.args, .nodes = callable.args } });
             },
             .deferred_args => return loweredExprStep(try self.deferCallsiteIntrinsic(task, input.?.spanValue())),
             .args => {
@@ -41635,18 +41852,6 @@ const BodyContext = struct {
         return true;
     }
 
-    /// Relate a direct call's arguments to its request interface once per
-    /// shared request.
-    fn prepareDirectCallArgsAtNodes(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        fn_node: NodeId,
-        checked_args: []const checked.CheckedExprId,
-        arg_nodes: []const NodeId,
-    ) Allocator.Error!void {
-        _ = try self.runEvidence(.{ .prepare_direct_args = .{ .expr = checked_expr, .fn_node = fn_node, .checked_exprs = checked_args, .nodes = arg_nodes } });
-    }
-
     /// Select and draft the callee specialization of a direct call's request
     /// interface, once per shared request.
     fn completedDirectCalleeAtNode(
@@ -45711,24 +45916,23 @@ const BodyContext = struct {
         _ = try self.runEvidence(.{ .relate = .{ .expr = checked_expr, .expected_node = expected_node } });
     }
 
-    fn prepareConstructorChildrenAtNodes(
+    /// Relate each constructor child to its slot, and list the lambda and
+    /// closure children to draft at their slots. The list is owned.
+    fn relateConstructorChildrenAtNodes(
         self: *BodyContext,
         checked_exprs: []const checked.CheckedExprId,
         nodes: []const NodeId,
-    ) Allocator.Error!void {
+    ) Allocator.Error![]DraftNestedCallable {
         if (checked_exprs.len != nodes.len) Common.invariant("constructor child count differed from graph construction arity");
         for (checked_exprs, nodes) |checked_expr, node| {
             try self.relateExprAtNode(checked_expr, node);
         }
-        try self.ensureNestedCallablesAtNodes(checked_exprs, nodes);
-    }
-
-    fn prepareExprSpanAtNodes(
-        self: *BodyContext,
-        checked_exprs: []const checked.CheckedExprId,
-        nodes: []const NodeId,
-    ) Allocator.Error!void {
-        _ = try self.runEvidence(.{ .prepare_span = .{ .checked_exprs = checked_exprs, .nodes = nodes } });
+        var drafts = std.ArrayList(DraftNestedCallable).empty;
+        errdefer drafts.deinit(self.allocator);
+        for (checked_exprs, nodes) |checked_expr, node| {
+            if (self.isNestedCallableExpr(checked_expr)) try drafts.append(self.allocator, .{ .ctx = self, .expr = checked_expr, .request_fn_node = node });
+        }
+        return try drafts.toOwnedSlice(self.allocator);
     }
 
     const PreLoweredOperand = struct {
@@ -45818,12 +46022,15 @@ const BodyContext = struct {
         return null;
     }
 
-    fn prepareDispatchOperandsAtNodes(
+    /// Relate each dispatch operand not already lowered to its callable
+    /// slot, and list the lambda and closure operands to draft at their
+    /// slots. The list is owned.
+    fn relateDispatchOperandsAtNodes(
         self: *BodyContext,
         operands: []const static_dispatch.StaticDispatchOperand,
         nodes: []const NodeId,
         pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!void {
+    ) Allocator.Error![]DraftNestedCallable {
         if (operands.len != nodes.len) Common.invariant("dispatch argument arity differs from function graph node");
         for (operands, nodes, 0..) |operand, node, index| {
             if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
@@ -45842,16 +46049,21 @@ const BodyContext = struct {
                 => {},
             }
         }
+        var drafts = std.ArrayList(DraftNestedCallable).empty;
+        errdefer drafts.deinit(self.allocator);
         for (operands, nodes, 0..) |operand, node, index| {
             if (self.preLoweredOperandAt(pre_lowered, index) != null) continue;
             switch (operand) {
-                .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, node),
+                .checked_expr => |expr| if (self.isNestedCallableExpr(expr)) {
+                    try drafts.append(self.allocator, .{ .ctx = self, .expr = expr, .request_fn_node = node });
+                },
                 .generated_interpolation_iter,
                 .generated_numeral,
                 .generated_quote,
                 => {},
             }
         }
+        return try drafts.toOwnedSlice(self.allocator);
     }
 
     fn lowerDispatchOperandAtType(
@@ -47756,12 +47968,36 @@ const BodyContext = struct {
         return fn_node;
     }
 
+    /// The type nodes of the captured locals a closure draft enters with.
+    fn closureCaptureEntryNodes(self: *BodyContext, closure: @FieldType(checked.CheckedExprData, "closure")) Allocator.Error![]NodeId {
+        var capture_nodes = std.ArrayList(NodeId).empty;
+        defer capture_nodes.deinit(self.allocator);
+        for (closure.captures) |capture| {
+            const binder = checkedCaptureBinder(self.view, capture.pattern);
+            const local = self.binders.get(binder) orelse continue;
+            try self.markActiveConstBinderUsed(binder);
+            const cell = self.localTypeCell(local);
+            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
+            try capture_nodes.append(self.allocator, try cell.toGraphNode(self.graph));
+        }
+        return try self.graph.arena().dupe(NodeId, capture_nodes.items);
+    }
+
+    /// Whether an expression is a lambda or closure, which is drafted at its
+    /// request node before evidence that needs the request continues.
+    fn isNestedCallableExpr(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+        self.builder.countBodyDiagnostic("nested_callable_checks");
+        return switch (self.view.bodies.expr(expr_id).data) {
+            .lambda, .closure => true,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+        };
+    }
+
     fn ensureNestedCallableAtNode(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
-        self.builder.countBodyDiagnostic("nested_callable_checks");
         switch (self.view.bodies.expr(expr_id).data) {
             .lambda => {
                 self.builder.countBodyDiagnostic("nested_lambdas_prepared");
@@ -47769,17 +48005,7 @@ const BodyContext = struct {
             },
             .closure => |closure| {
                 self.builder.countBodyDiagnostic("nested_closures_prepared");
-                var capture_nodes = std.ArrayList(NodeId).empty;
-                defer capture_nodes.deinit(self.allocator);
-                for (closure.captures) |capture| {
-                    const binder = checkedCaptureBinder(self.view, capture.pattern);
-                    const local = self.binders.get(binder) orelse continue;
-                    try self.markActiveConstBinderUsed(binder);
-                    const cell = self.localTypeCell(local);
-                    try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
-                    try capture_nodes.append(self.allocator, try cell.toGraphNode(self.graph));
-                }
-                _ = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, capture_nodes.items);
+                _ = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, try self.closureCaptureEntryNodes(closure));
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
@@ -47792,7 +48018,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         if (expr_ids.len != request_fn_nodes.len) Common.invariant("nested callable argument count differed from graph function arity");
         for (expr_ids, request_fn_nodes) |expr_id, request_fn_node| {
-            try self.ensureNestedCallableAtNode(expr_id, request_fn_node);
+            if (self.isNestedCallableExpr(expr_id)) try self.ensureNestedCallableAtNode(expr_id, request_fn_node);
         }
     }
 
