@@ -17042,6 +17042,8 @@ pub const ResolvedValueRefTable = struct {
         const module = modules.module(module_idx);
         var key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
         defer key_writer.deinit();
+        // The store is final here, as it is for publication's own writer.
+        key_writer.retainComposedKeys();
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
         var callable_aliases = std.ArrayList(ResolvedValueRefId).empty;
