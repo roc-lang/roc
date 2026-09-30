@@ -517,6 +517,33 @@ test "hoist context matrix selects roots in unguarded eligible positions" {
             .expected_call_roots = 1,
         },
         .{
+            .name = "block_final_after_dbg",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |_| {
+            \\    dbg 0.I64
+            \\    add_one(41.I64)
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
+            .name = "statement_after_while",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| {
+            \\    while arg == 0.I64 {
+            \\        break
+            \\    }
+            \\    result = add_one(41.I64)
+            \\    result + arg
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
             .name = "dbg_operand",
             .source =
             \\add_one = |n| n + 1.I64
@@ -655,12 +682,12 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             ,
         },
         .{
-            .name = "block_final_after_dbg",
+            .name = "block_final_after_return",
             .source =
             \\add_one = |n| n + 1.I64
             \\
-            \\main = |_| {
-            \\    dbg 0.I64
+            \\main = |arg| {
+            \\    return arg
             \\    add_one(41.I64)
             \\}
             ,
@@ -1314,19 +1341,52 @@ test "hoist roots are not selected for observable debug expressions" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected after observable effects in blocks" {
-    var test_env = try TestEnv.init("Test",
-        \\main = |_| {
+test "hoist roots selected after observable effects in blocks match those without the effect" {
+    var with_dbg = try TestEnv.init("Test",
+        \\main = |arg| {
         \\    before = 1.I64 + 2.I64
         \\    dbg 0.I64
         \\    after = 3.I64 + 4.I64
-        \\    before + after
+        \\    before + after + arg
+        \\}
+    );
+    defer with_dbg.deinit();
+
+    var without_dbg = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    before = 1.I64 + 2.I64
+        \\    after = 3.I64 + 4.I64
+        \\    before + after + arg
+        \\}
+    );
+    defer without_dbg.deinit();
+
+    try with_dbg.assertNoErrors();
+    try without_dbg.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 3), countExprRootsByTag(&without_dbg, .e_dispatch_call));
+    try std.testing.expectEqual(
+        countExprRootsByTag(&without_dbg, .e_dispatch_call),
+        countExprRootsByTag(&with_dbg, .e_dispatch_call),
+    );
+}
+
+test "refutable destructure after an effect selects validation root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    dbg 0.I64
+        \\    Ok(_) = List.get([1], 0)
+        \\    Ok({})
         \\}
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const validation = switch (roots[0].body) {
+        .pattern_validation => |validation| validation,
+        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+    };
+    try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
 
 test "hoist roots with non-concrete compile-time types are pruned" {
