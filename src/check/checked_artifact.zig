@@ -41347,3 +41347,47 @@ test "issue 11737: identical callable contract vectors share their checked stora
     different[0].resolution = .checked_error;
     try std.testing.expect(!std.meta.eql(first, try pass.internCallableContracts(&different)));
 }
+
+test "checked polarity alias publication erases hidden arguments and preserves backing" {
+    const allocator = std.testing.allocator;
+    const TestEnv = @import("test/TestEnv.zig");
+    var env = try TestEnv.init("HiddenAlias",
+        \\Result(a) : [Ok(a), Err]
+        \\value : {} -> Result({})
+        \\value = |_| crash "unused"
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    const source_modules = [_]TypedCIR.Modules.SourceModule{.{ .precompiled = env.module_env }};
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const function = env.module_env.types.resolveVar(ModuleEnv.varFrom(defs[defs.len - 1])).desc.content.structure.fn_pure;
+    const raw_alias = env.module_env.types.resolveVar(function.ret).desc.content.alias;
+    try std.testing.expectEqual(@as(u32, 1), raw_alias.source_arg_count);
+    try std.testing.expectEqual(@as(usize, 1), env.module_env.types.sliceAliasHiddenArgs(raw_alias).len);
+    const raw_backing = env.module_env.types.resolveVar(env.module_env.types.getAliasBackingVar(raw_alias)).desc.content.structure.tag_union;
+    try std.testing.expectEqual(env.module_env.types.resolveVar(raw_backing.ext).var_, env.module_env.types.resolveVar(env.module_env.types.sliceAliasHiddenArgs(raw_alias)[0]).var_);
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
+    defer active.deinit();
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    const root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, function.ret);
+    const alias = store.payload(root).alias;
+    try std.testing.expectEqual(@as(usize, 1), alias.args.len);
+    const row = store.payload(alias.backing).tag_union;
+    try std.testing.expect(store.payload(row.ext) == .flex);
+    const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), function.ret);
+    try std.testing.expectEqualSlices(u8, &source_key.bytes, &store.roots.items[@intFromEnum(root)].key.bytes);
+
+    const roundtrip = try artifact_serialize.roundTripForTest(allocator, CheckedTypeStore, &store);
+    defer allocator.free(roundtrip.buffer);
+    const loaded_alias = roundtrip.loaded.payload(root).alias;
+    try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
+    try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
+}

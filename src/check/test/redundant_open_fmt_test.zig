@@ -85,6 +85,23 @@ test "redundant open rows - function results, arguments and callbacks" {
     , .exact);
 }
 
+test "redundant open rows - retained phantom callback arguments" {
+    try expectFormatterMatchesChecker(
+        \\Phantom(a) : {}
+        \\Outer(a) : Phantom(Str -> a)
+        \\Chain(a) : Outer(a)
+        \\Consumer(a) : Phantom(a -> Str)
+        \\use : Outer([E, ..]) -> Str
+        \\use = |_| "ok"
+        \\chain : Chain([E, ..]) -> Str
+        \\chain = |_| "ok"
+        \\direct : Phantom(Str -> [E, ..]) -> Str
+        \\direct = |_| "ok"
+        \\consumer : Consumer([E, ..]) -> Str
+        \\consumer = |_| "ok"
+    , .exact);
+}
+
 test "redundant open rows - values and non-lambda bodies" {
     try expectFormatterMatchesChecker(
         \\boom : [Boom, ..]
@@ -225,4 +242,81 @@ test "redundant open rows - annotation-only definition outside an app" {
         \\done : Str -> [A, ..]
         \\done = |_| A
     , .formatter_subset);
+}
+
+test "redundant open rows - builtin function-shaped formals force output at input uses" {
+    try expectFormatterMatchesChecker(
+        \\iter : Iter([E, ..]) -> Str
+        \\iter = |_| "ok"
+        \\stream : Stream([E, ..]) -> Str
+        \\stream = |_| "ok"
+    , .exact);
+}
+
+test "redundant open rows - auto-imported Range shares builtin exposure knowledge" {
+    try expectFormatterMatchesChecker(
+        \\value : Str -> Range([E, ..])
+        \\value = |_| crash "unused"
+        \\consume : Range([E, ..]) -> Str
+        \\consume = |_| "ok"
+    , .exact);
+}
+
+test "redundant open rows - known declarations exceed old depth and arity limits" {
+    try expectFormatterMatchesChecker(
+        \\A0(a) : Str -> a
+        \\A1(a) : A0(a)
+        \\A2(a) : A1(a)
+        \\A3(a) : A2(a)
+        \\A4(a) : A3(a)
+        \\A5(a) : A4(a)
+        \\A6(a) : A5(a)
+        \\A7(a) : A6(a)
+        \\A8(a) : A7(a)
+        \\A9(a) : A8(a)
+        \\Many(a,b,c,d,e,f,g,h,i) : Str -> i
+        \\deep : A9([E, ..]) -> Str
+        \\deep = |_| "ok"
+        \\wide : Many({},{},{},{},{},{},{},{},[E, ..]) -> Str
+        \\wide = |_| "ok"
+    , .exact);
+}
+
+test "redundant open rows - recursive nominal positions and transparent resets" {
+    try expectFormatterMatchesChecker(
+        \\Input(t) : t -> Str
+        \\Out(t) : Str -> t
+        \\Recursive(a) := [Next(Input(Out(Recursive(a))))]
+        \\A(a,b) := [Next(B(a,b) -> Str)]
+        \\B(a,b) := [Again(A(a,Str)), Value(Str -> b)]
+        \\recursive : Recursive([E, ..]) -> Str
+        \\recursive = |_| "ok"
+        \\separate : A([E, ..], [F, ..]) -> Str
+        \\separate = |_| "ok"
+    , .exact);
+}
+
+test "redundant open rows - entire function aliases preserve adapter reach" {
+    try expectFormatterMatchesChecker(
+        \\Result(e) : Try(Str, e)
+        \\Method(a,e) : a -> Result(e)
+        \\load : a -> Try(Str, [E]) where [a.fetch : Method(a,[E, ..])]
+        \\load = |_| crash "unused"
+    , .exact);
+}
+
+test "redundant open rows - adapter reach crosses long alias chains" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(testing.allocator);
+    try source.appendSlice(testing.allocator, "R0(e) : Try(Str,e)\n");
+    for (1..70) |index| {
+        const line = try std.fmt.allocPrint(testing.allocator, "R{d}(e) : R{d}(e)\n", .{ index, index - 1 });
+        defer testing.allocator.free(line);
+        try source.appendSlice(testing.allocator, line);
+    }
+    try source.appendSlice(testing.allocator,
+        \\load : a -> Try(Str,[E]) where [a.fetch : a -> R69([E, ..])]
+        \\load = |_| crash "unused"
+    );
+    try expectFormatterMatchesChecker(source.items, .exact);
 }

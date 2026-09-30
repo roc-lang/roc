@@ -34,7 +34,7 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(20, @sizeOf(Alias));
+    try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
@@ -352,6 +352,8 @@ pub const Rigid = struct {
 pub const Alias = struct {
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
+    /// Source arguments precede hidden implicit-row parameters in `vars`.
+    source_arg_count: u32,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,
@@ -1270,24 +1272,14 @@ pub const TwoStaticDispatchConstraints = struct {
 ///
 /// This is walk state for annotation generation, instantiation, and display—it
 /// is never stored in a type. The root of an annotation is positive
-/// (output), function argument positions negate the surrounding polarity, and
-/// every other position (returns, type application args, record fields, tuple
-/// elems, tag payloads) preserves it.
+/// (output). Each function resets its arguments to negative and its return
+/// to positive, independently of the enclosing position. Type application
+/// args, record fields, tuple elements, and tag payloads inherit position.
 pub const Polarity = enum {
     /// An input (negative) position: a value the annotated thing consumes.
     neg,
     /// An output (positive) position: a value the annotated thing produces.
     pos,
-
-    /// The polarity one level deeper through a function argument position:
-    /// argument positions negate the surrounding polarity, while return
-    /// positions preserve it.
-    pub fn flip(self: Polarity) Polarity {
-        return switch (self) {
-            .neg => .pos,
-            .pos => .neg,
-        };
-    }
 };
 
 /// The ident text of the compiler-internal rigid var used as the extension of

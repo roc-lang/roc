@@ -17,6 +17,8 @@ const SafeList = collections.SafeList;
 
 const tokenize = parse.tokenize;
 const OpenRows = @import("open_rows.zig").OpenRows;
+/// Owned builtin facts reusable across sequential formatter operations.
+pub const BuiltinFacts = @import("open_rows.zig").BuiltinFacts;
 const StatementScope = @import("open_rows.zig").StatementScope;
 
 /// Errors that can occur while formatting an already-parsed AST.
@@ -49,6 +51,8 @@ pub const Options = struct {
     /// formatter's own round-trip tests must not produce output that changes
     /// with whichever compiler built them.
     compiler_version: ?[]const u8 = null,
+    /// Borrowed, invocation-owned builtin facts. Never shared between threads.
+    builtin_facts: ?*BuiltinFacts = null,
 };
 
 /// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
@@ -87,6 +91,10 @@ fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
 pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, options: Options, io: std.Io, stderr: *std.Io.Writer) FormatPathError!FormattingResult {
+    var builtin_facts = BuiltinFacts{ .allocator = gpa };
+    defer builtin_facts.deinit();
+    var shared_options = options;
+    if (shared_options.builtin_facts == null) shared_options.builtin_facts = &builtin_facts;
     var success_count: usize = 0;
     var failed_count: usize = 0;
     // Only used for `roc fmt --check`. If we aren't doing check, don't bother allocating
@@ -108,7 +116,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                 if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".roc")) continue;
                 const file_path = try std.fs.path.join(gpa, &.{ path, entry.path });
                 defer gpa.free(file_path);
-                if (formatFilePath(gpa, base_dir, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
+                if (formatFilePath(gpa, base_dir, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) |_| {
                     success_count += 1;
                 } else |err| switch (err) {
                     error.NotRocFile => {},
@@ -154,7 +162,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, options, io, stderr)) |_| {
+        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) |_| {
             success_count += 1;
         } else |err| switch (err) {
             error.NotRocFile => {},
@@ -545,6 +553,7 @@ const Formatter = struct {
     pub fn formatFile(fmt: *Formatter) FormatAstError!void {
         var open_rows = try OpenRows.init(fmt.ast.gpa, &fmt.ast);
         defer open_rows.deinit();
+        open_rows.shared_builtins = fmt.options.builtin_facts;
         try fmt.formatFileWithOpenRows(&open_rows);
     }
 
@@ -6856,4 +6865,36 @@ test "carriage return migration survives diagnostic overflow without hiding othe
         try std.testing.expectError(error.ParsingFailed, formatAst(ast.*, &output.writer));
         try std.testing.expectEqual(@as(usize, 0), output.written().len);
     }
+}
+
+test "builtin facts are reused across directory files and later paths" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "files");
+    const source = "value : Str -> Range([E, ..])\nvalue = |_| crash \"unused\"\n";
+    for ([_][]const u8{ "files/First.roc", "files/Second.roc", "Later.roc" }) |path| {
+        try tmp.dir.writeFile(io, .{ .sub_path = path, .data = source });
+    }
+    var facts = BuiltinFacts{ .allocator = gpa };
+    defer facts.deinit();
+    const options = Options{ .builtin_facts = &facts };
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    var first = try formatPath(gpa, gpa, tmp.dir, "files", true, options, io, &stderr.writer);
+    defer first.deinit();
+    try std.testing.expectEqual(2, first.success);
+    try std.testing.expectEqual(0, first.failure);
+    try std.testing.expectEqual(2, first.unformatted_files.?.items.len);
+    const syntax = facts.syntax.?;
+    const position_count = syntax.rows.position_cache.count();
+    try std.testing.expect(position_count > 0);
+    var later = try formatPath(gpa, gpa, tmp.dir, "Later.roc", true, options, io, &stderr.writer);
+    defer later.deinit();
+    try std.testing.expectEqual(1, later.success);
+    try std.testing.expectEqual(0, later.failure);
+    try std.testing.expectEqual(syntax, facts.syntax.?);
+    try std.testing.expectEqual(position_count, facts.syntax.?.rows.position_cache.count());
+    try std.testing.expectEqualStrings("", stderr.written());
 }

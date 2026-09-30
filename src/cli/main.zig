@@ -16922,7 +16922,9 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     const stderr = ctx.io.stderr();
     // Formatting a file brings its `roc` version pin up to date when this
     // compiler is a newer nightly than the one it names.
-    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version };
+    var builtin_facts = fmt.BuiltinFacts{ .allocator = ctx.gpa };
+    defer builtin_facts.deinit();
+    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version, .builtin_facts = &builtin_facts };
     if (args.stdin) {
         fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
