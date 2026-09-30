@@ -32540,6 +32540,7 @@ fn generalizedCallableShape(
     const shape = while (true) {
         const key = try self.canonical_key_writer.fromVarWithAnchoredIdentities(fn_root, anchors);
         if (!try self.normalizeReportedDuplicateRow(value, env)) break key.bytes;
+        self.canonical_key_writer.invalidateAnchoredKeys();
     };
     try cache.put(fn_root, shape);
     return shape;
@@ -32627,6 +32628,10 @@ fn deduplicateGeneralizedDispatchRequirements(
 
     var callable_shapes = std.AutoHashMap(Var, [32]u8).init(self.gpa);
     defer callable_shapes.deinit();
+    // Callables share most of what they reach, so their shapes are keyed with
+    // one retained engine; every store change below invalidates it.
+    self.canonical_key_writer.retainAnchoredKeys();
+    defer self.canonical_key_writer.releaseAnchoredKeys();
 
     var pending_receivers: std.ArrayListUnmanaged(Var) = .empty;
     defer pending_receivers.deinit(self.gpa);
@@ -32667,7 +32672,9 @@ fn deduplicateGeneralizedDispatchRequirements(
                 entry.value_ptr.* = constraint.fn_var;
                 continue;
             }
-            if (try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env)) {
+            const merged = try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env);
+            self.canonical_key_writer.invalidateAnchoredKeys();
+            if (merged) {
                 try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, value, env);
             }
         }
@@ -32704,6 +32711,7 @@ fn deduplicateGeneralizedDispatchRequirements(
             .alias, .structure, .field_presence, .err => unreachable,
         };
         try self.types.setVarContent(resolved.var_, retained_content);
+        self.canonical_key_writer.invalidateAnchoredKeys();
     }
 
     const scheme_idx = self.typeSchemeIndexForRoot(scheme_var) orelse return;
@@ -32740,6 +32748,7 @@ fn deduplicateGeneralizedDispatchRequirements(
         if (entry.found_existing) {
             const same_callable = self.types.resolveVar(entry.value_ptr.fn_var).var_ == self.types.resolveVar(requirement.constraint.fn_var).var_ or
                 try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.fn_var, requirement.constraint.fn_var, env);
+            self.canonical_key_writer.invalidateAnchoredKeys();
             if (same_callable) {
                 const retained = &self.type_schemes.items[scheme_idx].dispatch_requirements.items[entry.value_ptr.write_index];
                 retained.deferred_generated_codec = retained.deferred_generated_codec or requirement.deferred_generated_codec;
