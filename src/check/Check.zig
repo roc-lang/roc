@@ -346,6 +346,11 @@ checking_final_codec_dispatch_constraints: bool = false,
 /// Boundary validation produces constraints once; the exact calls and live
 /// contract roots freeze only after the module's error rows have settled.
 constraining_boundary_codecs: bool = false,
+/// Depth of `settleGeneratedCodecMethodRequirements`. While a selected codec
+/// method's requirements settle, its caller is about to treat that method's
+/// error row as complete, so none of those requirements may wait for the
+/// final codec boundary.
+settling_codec_method_requirements_depth: u32 = 0,
 boundary_codec_derivations: std.ArrayListUnmanaged(BoundaryCodecDerivation) = .empty,
 boundary_codec_calls: std.ArrayListUnmanaged(ModuleEnv.GeneratedCodecCall) = .empty,
 /// Complete imported schemes, shared by ordinary lookups and method dispatch.
@@ -37515,6 +37520,12 @@ fn deferGeneratedCodecConstraintToFinalization(
     constraint: StaticDispatchConstraint,
 ) Allocator.Error!bool {
     if (self.probe_depth != 0 or self.checking_final_codec_dispatch_constraints) return false;
+    // A settling codec method's own requirements determine the error row its
+    // caller is about to close, so they validate now. A relation parked before
+    // the settle began is not one of them and keeps its single final validation.
+    if (self.settling_codec_method_requirements_depth != 0) {
+        return self.final_codec_dispatch_constraint_fns.contains(constraint.fn_var);
+    }
 
     const entry = try self.final_codec_dispatch_constraint_fns.getOrPut(self.gpa, constraint.fn_var);
     if (entry.found_existing) return true;
@@ -43699,6 +43710,8 @@ fn settleGeneratedCodecMethodRequirements(
     deferred_start: usize,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    self.settling_codec_method_requirements_depth += 1;
+    defer self.settling_codec_method_requirements_depth -= 1;
     // All latch writes belong to newly instantiated dispatchers. Probe rollback
     // truncates this suffix; no pre-probe latch or global pending cursor moves.
     while (true) {

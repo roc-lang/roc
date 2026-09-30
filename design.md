@@ -4859,7 +4859,21 @@ representation. When the runtime worker it returns has a different
 representation (for example, a presence slot where the constructor's return
 names an inline required field), the constructor's pack boundary adapts the
 runtime worker to the checked return. Planning never rewrites the
-constructor's representation to match its runtime worker.
+constructor's representation to match its runtime worker. A source call whose
+checked dispatch resolved structurally (`List(Str).parser_for(format)`) is a
+direct call of the generated constructor, declared at its checked derivation's
+source roles and called at the dispatch's callable type; a dictionary slot
+whose evidence is structural reaches the same worker. A format method whose
+error row is empty (`Try(.., [])`) has no error value, so a generated parser's
+`Err` arm for it lowers as unreachable and contributes nothing to the parser's
+row. When two requirement type variables of a dictionary method are
+instantiated at one actual, their call descriptors are the same descriptor, so
+a worker descriptor may take either (`test/cli/JsonGenericCustomParser.roc`
+under `--specialize=no`).
+A static dictionary slot whose method target is a compiler-derived `is_eq` or
+`to_hash` has no worker: the slot carries structural equality or hash evidence
+over the owner's type (`test/cli/JsonParseErrorComposition.roc` under
+`--specialize=no`).
 
 A generated parser or encoder runtime walks its contract's body shape: for a
 declaration-backed nominal that is the checker's own snapshot of the backing,
@@ -4882,6 +4896,14 @@ with those planned child descriptors. It does not copy a concrete aggregate
 into erased storage and reconstruct its descriptor afterward. All successful
 branches of a generated worker must therefore produce both the committed value
 and the exact return descriptor required by its callable ABI.
+
+Boxy pattern lowering follows the same order. A container read that writes a
+component's runtime descriptor (a tuple item, a record field) creates the
+component local's descriptor local before its sub-pattern is lowered, and a match
+binder whose source has no runtime descriptor takes its source
+representation's descriptor, so a binder inside a nominal pattern over boxed
+storage (`(Wrapped.(b), _)` with `Wrapped := Box(Str)`) is described before use
+(`test/cli/NominalBoxPatternBinders.roc`).
 
 Compiler-generated operands and callables use this contract at polymorphic
 boundaries too. Quote conversion, numeral conversion, interpolation iterators,
@@ -7870,6 +7892,14 @@ the generated callable, without replaying the enclosing derivation. Both local
 and imported methods obey this ordering, pinned by
 `src/check/test/issue_11728_test.zig` and
 `test/cli/JsonGenericCustomParser.roc` (issue #11728).
+That drain validates the generated codec requirements it copies on the spot
+rather than parking them in `final_codec_dispatch_constraints`: a custom parser
+that calls a derived `parser_for` has its errors determined by that derived
+parser, so the derivation cannot wait for the final codec boundary while the
+child row closes. A relation parked before the drain began is not one of the
+selected method's requirements and keeps its single final validation. Pinned by
+`src/check/test/issue_11838_test.zig` and
+`test/cli/JsonCustomParserOverDerived.roc` (issue #11838).
 During checking, `constrainDerivedParserErrorRowIncludes` closes an
 unconstrained extension on the instantiated custom-parser method and requires
 every resulting child error tag to occur with the same payload types in the
@@ -8559,7 +8589,12 @@ complete):
   The slot descriptor records the `#Present` discriminant explicitly. Worker
   boundaries use that metadata to wrap an inline required value in `#Present`
   or unwrap a `#Present` slot for an inline required result; optional callers
-  pass the slot through unchanged. Thus required instantiations pay only the
+  pass the slot through unchanged. When the call boundary completes the
+  worker's result descriptor from the caller's, an inline caller value only
+  completes the erased children of the worker's `#Present` payload: the payload
+  keeps the worker's storage, which is what the returned bytes use. Borrowed
+  materialization retains the Present payload that the adaptation copied.
+  (`test/cli/ParserCustomNominalField.roc` under `--specialize=no`.) Thus required instantiations pay only the
   explicit boundary conversion needed by a shared representation, while
   specialized lowering remains free to use its resolved zero-cost inline
   representation. Boxy record construction uses the same child kind to wrap
@@ -13573,7 +13608,24 @@ value list with boxed items). Uses whose actuals agree keep the direct
 transfer. A worker argument's root
 descriptor may be rebuilt from the worker's own descriptors for the nominal's
 arguments. Reading a field through a nominal receiver takes the record's
-descriptor from the receiver's own descriptor.
+descriptor from the receiver's own descriptor. Constructing a value through a
+nominal backing (`Ok(payload)` through `Try`'s backing) describes each payload
+position with the constructed payload's own descriptor, keyed by the formal the
+backing names that position with, before the formal resolves to its actual: a
+worker builds values of a type parameter's actual in its own storage (an open
+row it constructed, say), which the actual's hidden descriptor need not describe
+(`test/cli/JsonCustomParserOverDerived.roc` under `--specialize=no`).
+
+Checking copies a generalized variable at each use, so a variable in a
+worker's checked types that no scheme in its lexical chain quantifies is shared
+with its definition: the still-open variable of a monomorphic value, left at its
+checked default. Boxy reads such a variable at that default, as the specialized
+pipeline does for the same shared variable. A derived `is_eq`/`to_hash` compares
+the component as the closed representation (an open row's listed variants), a
+root or compile-time evaluation describes and dispatches a variable its types
+still hold at the default, and nothing reads a per-use guess
+(`test/cli/TopLevelOpenRowValues.roc`,
+`test/cli/UnresolvedPolymorphicTopLevelValue.roc`).
 
 Nominal substitution identity does not demand a runtime representation. Boxy
 interns checked type bindings separately from representations; a binding receives

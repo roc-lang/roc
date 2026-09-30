@@ -2287,6 +2287,13 @@ const ProcedureBuilder = struct {
                     frame.phase = .forward;
                     return .{ .request = .{ .desc = sealed_default } };
                 }
+                if (source_rep.kind == .dynamic and source_rep.children.len == 0 and source_rep.tag_variants.len == 0) {
+                    // A variable nothing binds where it is read is at its default.
+                    if (self.plan.sharedClosedRep(frame.rep)) |closed| {
+                        frame.phase = .forward;
+                        return .{ .request = .{ .desc = closed } };
+                    }
+                }
                 if (source_rep.nominal_backing_arg_substitutions.len != 0) {
                     try self.collectStaticNominalBackingDescriptorSources(frame.rep, &frame.sources);
                     frame.phase = .forward;
@@ -19345,9 +19352,13 @@ const ProcBodyBuilder = struct {
         switch (dispatch.resolution) {
             .direct_closed, .direct_parametric => {},
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            .evidence_dependent,
-            .structural,
-            => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
+            // A structural parser or encoder runs its generated codec
+            // constructor, which planning bound as this call's direct worker.
+            .structural => |derivation| switch (derivation.kind()) {
+                .parser, .encoder => {},
+                .equality, .hash, .map, .map_effectful => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
+            },
+            .evidence_dependent => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             .checked_error => return exprDone(try self.lowerUnexecutableDispatchInto("method dispatch failed to check")),
             .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
         }
@@ -21212,6 +21223,11 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const source_payload = try self.generatedParserSingleTagPayloadLocal(source_err);
+        // A method whose error row is empty has no error value, so its Err
+        // arm never runs and contributes nothing to the parent row.
+        if (self.repIsEmptyTagUnion(source_payload.child.rep)) {
+            return try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
+        }
         const target_err = self.generatedParserTagVariant(target_rep, "Err");
         const target_payloads = self.parent.plan.childSlice(target_err.variant.payloads);
         if (target_payloads.len != 1) boxyLowerInvariant("generated parser result Err did not have one payload");
@@ -28777,6 +28793,13 @@ const ProcBodyBuilder = struct {
                 if (self.patternIsIgnored(field.pattern)) return null;
                 const pattern = self.module.checked_bodies.pattern(field.pattern);
                 const field_local = try self.addFrameLocalForRepWithFreshDescriptor(self.repForType(pattern.ty));
+                // The read below writes the descriptor the tuple stores for this
+                // element; the sub-pattern, lowered first, must already see it.
+                const tuple_rep = self.tupleRepForBoundary(self.repForType(field.tuple_ty)) orelse
+                    boxyLowerInvariant("tuple pattern source did not have a tuple representation");
+                if (!self.isZstLocal(field_local) and self.payloadFieldCarriesRuntimeDesc(tuple_rep, field.field_index)) {
+                    _ = try self.mutableDescriptorLocalForValue(field_local);
+                }
                 try state.actions.append(allocator, .{ .tuple_read = .{ .field_local = field_local, .source = field.source, .tuple_rep = self.repForType(field.tuple_ty), .field_index = field.field_index } });
                 try state.actions.append(allocator, .{ .pattern = .{ .pattern = field.pattern, .source = field_local, .mode = field.mode } });
             },
@@ -29859,7 +29882,8 @@ const ProcBodyBuilder = struct {
         {
             return try self.assignRepresentationBoundary(target, source, target_rep, source_rep, next);
         }
-        return try self.assignLocal(target, source, next);
+        // A source without a runtime descriptor has its representation's.
+        return try self.assignLocalFromRep(target, source, source_rep, next);
     }
 
     fn bindMatchBinderFromRep(
@@ -29880,7 +29904,7 @@ const ProcBodyBuilder = struct {
         {
             return try self.assignRepresentationBoundary(target, source, target_rep, source_rep, next);
         }
-        return try self.assignLocal(target, source, next);
+        return try self.assignLocalFromRep(target, source, source_rep, next);
     }
 
     fn matchBinderRepresentative(
@@ -32993,6 +33017,16 @@ const ProcBodyBuilder = struct {
         while (true) {
             const exact_rep = self.descriptorTemplateExactRep(rep_id, context);
             if (exact_rep == rep_id) break;
+            // A constructed value forces the descriptor of the position it
+            // fills, which a nominal backing names by its formal. The value's
+            // own descriptor describes its storage there, whatever descriptor
+            // the formal's actual type carries.
+            if (context.forced_refs[@intFromEnum(self.parent.descriptorIdentityRep(rep_id))]) |local| {
+                if (context.excluded_local != local) {
+                    try appendUniqueLocal(self.parent.allocator, captures, local);
+                    return .{ .local = local };
+                }
+            }
             rep_id = exact_rep;
         }
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);
@@ -35220,6 +35254,7 @@ const ProcBodyBuilder = struct {
             .structural => .expand,
             .call => |index| .{ .call = index },
             .scheme_dictionary => |requirement| .{ .scheme_dictionary = requirement },
+            .shared_closed => |closed| .{ .convert = closed },
         };
     }
 
