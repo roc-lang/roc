@@ -1883,7 +1883,7 @@ const EchoAppCheck = struct {
     has_runtime_roots: bool = false,
 };
 
-fn checkEchoApp(gpa: std.mem.Allocator, source: []const u8) !EchoAppCheck {
+fn checkEchoApp(gpa: std.mem.Allocator, source: []const u8) HoistedConstantsTestError!EchoAppCheck {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
