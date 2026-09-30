@@ -239,5 +239,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/numeral_literal_pattern_derived_is_eq_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11560_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11305_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11698_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11732_test.zig"));
 }

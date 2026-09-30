@@ -578,99 +578,223 @@ pub const ConstTypeStore = struct {
         target: *names.NameStore,
     };
 
+    /// One step of cloning a type node, in the order a direct walk takes
+    /// it: components are cloned, names translated, and spans appended in
+    /// source order, so ids and interned names come out the same.
+    const CloneOp = union(enum) {
+        child: ConstTypeId,
+        field_name: names.RecordFieldNameId,
+        tag_name: names.TagNameId,
+        default: ?TypeFieldDefault,
+        def: TypeDef,
+        /// Appends cloned components `start..start + len` as a type span.
+        span: struct { start: u32, len: u32 },
+    };
+
+    /// A reserved type node whose components are being cloned. Results are
+    /// kept in step order and read back in the same order when it is filled.
+    const CloneFrame = struct {
+        source_ty: ConstTypeId,
+        out: ConstTypeId,
+        ops: std.ArrayList(CloneOp) = .empty,
+        next: usize = 0,
+        types: std.ArrayList(ConstTypeId) = .empty,
+        field_names: std.ArrayList(names.RecordFieldNameId) = .empty,
+        tag_names: std.ArrayList(names.TagNameId) = .empty,
+        defaults: std.ArrayList(?TypeFieldDefault) = .empty,
+        def: ?TypeDef = null,
+        spans: std.ArrayList(ConstRange) = .empty,
+
+        fn deinit(self: *CloneFrame, allocator: Allocator) void {
+            self.ops.deinit(allocator);
+            self.types.deinit(allocator);
+            self.field_names.deinit(allocator);
+            self.tag_names.deinit(allocator);
+            self.defaults.deinit(allocator);
+            self.spans.deinit(allocator);
+        }
+    };
+
     fn cloneTypeFromInner(
         self: *ConstTypeStore,
         source: *const ConstTypeStore,
         name_translation: ?NameTranslation,
+        root: ConstTypeId,
+        map: *collections.DenseMap(ConstTypeId, ConstTypeId),
+    ) Allocator.Error!ConstTypeId {
+        var frames = std.ArrayList(CloneFrame).empty;
+        defer {
+            for (frames.items) |*frame| frame.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
+        const result = try self.startClone(source, root, map, &frames);
+        while (frames.items.len > 0) {
+            const top = frames.items.len - 1;
+            const frame = &frames.items[top];
+            if (frame.next < frame.ops.items.len) {
+                const op = frame.ops.items[frame.next];
+                frame.next += 1;
+                switch (op) {
+                    .child => |child| {
+                        try frame.types.ensureUnusedCapacity(self.allocator, 1);
+                        const cloned = try self.startClone(source, child, map, &frames);
+                        frames.items[top].types.appendAssumeCapacity(cloned);
+                    },
+                    .field_name => |name| try frame.field_names.append(self.allocator, try translateRecordFieldName(name_translation, name)),
+                    .tag_name => |name| try frame.tag_names.append(self.allocator, try translateTagName(name_translation, name)),
+                    .default => |default| try frame.defaults.append(self.allocator, try translateFieldDefault(name_translation, default)),
+                    .def => |def| frame.def = try translateTypeDef(name_translation, def),
+                    .span => |range| try frame.spans.append(self.allocator, try self.appendTypeSpan(frame.types.items[range.start..][0..range.len])),
+                }
+                continue;
+            }
+            var finished = frames.pop().?;
+            defer finished.deinit(self.allocator);
+            try self.finishClone(source, &finished);
+        }
+        return result;
+    }
+
+    /// Reserves the clone of `ty`, filling it at once when it has no
+    /// components and pushing the frame that clones them otherwise.
+    fn startClone(
+        self: *ConstTypeStore,
+        source: *const ConstTypeStore,
         ty: ConstTypeId,
         map: *collections.DenseMap(ConstTypeId, ConstTypeId),
+        frames: *std.ArrayList(CloneFrame),
     ) Allocator.Error!ConstTypeId {
         if (map.get(ty)) |existing| return existing;
 
         const out = try self.reserve();
         try map.put(ty, out);
 
-        const cloned = switch (source.get(ty)) {
-            .primitive => |primitive| ConstType{ .primitive = primitive },
-            .zst => .zst,
-            .erased => |erased| ConstType{ .erased = erased },
-            .list => |elem| ConstType{ .list = try self.cloneTypeFromInner(source, name_translation, elem, map) },
-            .box => |elem| ConstType{ .box = try self.cloneTypeFromInner(source, name_translation, elem, map) },
-            .tuple => |span| blk: {
-                const children = source.typeSpan(span);
-                const cloned_children = try self.allocator.alloc(ConstTypeId, children.len);
-                defer self.allocator.free(cloned_children);
-                for (children, 0..) |child, i| cloned_children[i] = try self.cloneTypeFromInner(source, name_translation, child, map);
-                break :blk ConstType{ .tuple = try self.appendTypeSpan(cloned_children) };
+        var frame = CloneFrame{ .source_ty = ty, .out = out };
+        errdefer frame.deinit(self.allocator);
+        const ops = &frame.ops;
+        switch (source.get(ty)) {
+            .primitive => |primitive| {
+                self.fill(out, .{ .primitive = primitive });
+                return out;
             },
-            .func => |function| blk: {
+            .zst => {
+                self.fill(out, .zst);
+                return out;
+            },
+            .erased => |erased| {
+                self.fill(out, .{ .erased = erased });
+                return out;
+            },
+            .list, .box => |elem| try ops.append(self.allocator, .{ .child = elem }),
+            .tuple => |span| for (source.typeSpan(span)) |child| try ops.append(self.allocator, .{ .child = child }),
+            .func => |function| {
                 const args = source.typeSpan(function.args);
-                const cloned_args = try self.allocator.alloc(ConstTypeId, args.len);
-                defer self.allocator.free(cloned_args);
-                for (args, 0..) |arg, i| cloned_args[i] = try self.cloneTypeFromInner(source, name_translation, arg, map);
-                break :blk ConstType{ .func = .{
-                    .args = try self.appendTypeSpan(cloned_args),
-                    .ret = try self.cloneTypeFromInner(source, name_translation, function.ret, map),
-                } };
+                for (args) |arg| try ops.append(self.allocator, .{ .child = arg });
+                try ops.append(self.allocator, .{ .span = .{ .start = 0, .len = @intCast(args.len) } });
+                try ops.append(self.allocator, .{ .child = function.ret });
             },
+            .record => |span| for (source.fieldSpan(span)) |field| {
+                try ops.append(self.allocator, .{ .field_name = field.name });
+                try ops.append(self.allocator, .{ .child = field.ty });
+                if (field.value_ty) |value_ty| try ops.append(self.allocator, .{ .child = value_ty });
+                try ops.append(self.allocator, .{ .default = field.default });
+            },
+            .tag_union => |span| {
+                var cloned: u32 = 0;
+                for (source.tagSpan(span)) |tag| {
+                    const payloads = source.typeSpan(tag.payloads);
+                    for (payloads) |payload| try ops.append(self.allocator, .{ .child = payload });
+                    try ops.append(self.allocator, .{ .tag_name = tag.name });
+                    try ops.append(self.allocator, .{ .tag_name = tag.checked_name });
+                    try ops.append(self.allocator, .{ .span = .{ .start = cloned, .len = @intCast(payloads.len) } });
+                    cloned += @intCast(payloads.len);
+                }
+            },
+            .named => |named| {
+                const args = source.typeSpan(named.args);
+                for (args) |arg| try ops.append(self.allocator, .{ .child = arg });
+                for (source.declaredFieldSpan(named.declared_order)) |entry| switch (entry) {
+                    .named => |name| try ops.append(self.allocator, .{ .field_name = name }),
+                    .padding => |padding| try ops.append(self.allocator, .{ .child = padding }),
+                };
+                try ops.append(self.allocator, .{ .def = named.def });
+                try ops.append(self.allocator, .{ .span = .{ .start = 0, .len = @intCast(args.len) } });
+                if (named.backing) |backing| try ops.append(self.allocator, .{ .child = backing.ty });
+            },
+        }
+        try frames.append(self.allocator, frame);
+        return out;
+    }
+
+    /// Fills a reserved clone from its components' results, read back in
+    /// the order `startClone` listed their steps.
+    fn finishClone(self: *ConstTypeStore, source: *const ConstTypeStore, frame: *const CloneFrame) Allocator.Error!void {
+        const types = frame.types.items;
+        const cloned: ConstType = switch (source.get(frame.source_ty)) {
+            .primitive, .zst, .erased => unreachable,
+            .list => .{ .list = types[0] },
+            .box => .{ .box = types[0] },
+            .tuple => .{ .tuple = try self.appendTypeSpan(types) },
+            .func => .{ .func = .{ .args = frame.spans.items[0], .ret = types[types.len - 1] } },
             .record => |span| blk: {
                 const fields = source.fieldSpan(span);
                 const cloned_fields = try self.allocator.alloc(TypeField, fields.len);
                 defer self.allocator.free(cloned_fields);
+                var type_cursor: usize = 0;
                 for (fields, 0..) |field, i| {
+                    const field_ty = types[type_cursor];
+                    type_cursor += 1;
+                    const value_ty: ?ConstTypeId = if (field.value_ty != null) value: {
+                        defer type_cursor += 1;
+                        break :value types[type_cursor];
+                    } else null;
                     cloned_fields[i] = .{
-                        .name = try translateRecordFieldName(name_translation, field.name),
-                        .ty = try self.cloneTypeFromInner(source, name_translation, field.ty, map),
-                        .value_ty = if (field.value_ty) |value_ty|
-                            try self.cloneTypeFromInner(source, name_translation, value_ty, map)
-                        else
-                            null,
-                        .default = try translateFieldDefault(name_translation, field.default),
+                        .name = frame.field_names.items[i],
+                        .ty = field_ty,
+                        .value_ty = value_ty,
+                        .default = frame.defaults.items[i],
                     };
                 }
-                break :blk ConstType{ .record = try self.appendFieldSpan(cloned_fields) };
+                break :blk .{ .record = try self.appendFieldSpan(cloned_fields) };
             },
             .tag_union => |span| blk: {
                 const tags = source.tagSpan(span);
                 const cloned_tags = try self.allocator.alloc(TypeTag, tags.len);
                 defer self.allocator.free(cloned_tags);
-                for (tags, 0..) |tag, i| {
-                    const payloads = source.typeSpan(tag.payloads);
-                    const cloned_payloads = try self.allocator.alloc(ConstTypeId, payloads.len);
-                    defer self.allocator.free(cloned_payloads);
-                    for (payloads, 0..) |payload, j| cloned_payloads[j] = try self.cloneTypeFromInner(source, name_translation, payload, map);
-                    cloned_tags[i] = .{
-                        .name = try translateTagName(name_translation, tag.name),
-                        .checked_name = try translateTagName(name_translation, tag.checked_name),
-                        .payloads = try self.appendTypeSpan(cloned_payloads),
-                    };
-                }
-                break :blk ConstType{ .tag_union = try self.appendTagSpan(cloned_tags) };
+                for (cloned_tags, 0..) |*tag, i| tag.* = .{
+                    .name = frame.tag_names.items[2 * i],
+                    .checked_name = frame.tag_names.items[2 * i + 1],
+                    .payloads = frame.spans.items[i],
+                };
+                break :blk .{ .tag_union = try self.appendTagSpan(cloned_tags) };
             },
             .named => |named| blk: {
-                const args = source.typeSpan(named.args);
-                const cloned_args = try self.allocator.alloc(ConstTypeId, args.len);
-                defer self.allocator.free(cloned_args);
-                for (args, 0..) |arg, i| cloned_args[i] = try self.cloneTypeFromInner(source, name_translation, arg, map);
-
+                const args_len = source.typeSpan(named.args).len;
                 const declared = source.declaredFieldSpan(named.declared_order);
                 const cloned_declared = try self.allocator.alloc(TypeDeclaredField, declared.len);
                 defer self.allocator.free(cloned_declared);
+                var type_cursor: usize = args_len;
+                var name_cursor: usize = 0;
                 for (declared, 0..) |entry, i| {
                     cloned_declared[i] = switch (entry) {
-                        .named => |name| .{ .named = try translateRecordFieldName(name_translation, name) },
-                        .padding => |padding| .{ .padding = try self.cloneTypeFromInner(source, name_translation, padding, map) },
+                        .named => named_field: {
+                            defer name_cursor += 1;
+                            break :named_field .{ .named = frame.field_names.items[name_cursor] };
+                        },
+                        .padding => padding: {
+                            defer type_cursor += 1;
+                            break :padding .{ .padding = types[type_cursor] };
+                        },
                     };
                 }
-
-                break :blk ConstType{ .named = .{
+                break :blk .{ .named = .{
                     .named_type = named.named_type,
-                    .def = try translateTypeDef(name_translation, named.def),
+                    .def = frame.def.?,
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
-                    .args = try self.appendTypeSpan(cloned_args),
+                    .args = frame.spans.items[0],
                     .backing = if (named.backing) |backing| .{
-                        .ty = try self.cloneTypeFromInner(source, name_translation, backing.ty, map),
+                        .ty = types[type_cursor],
                         .use = backing.use,
                         .authority = backing.authority,
                     } else null,
@@ -678,8 +802,7 @@ pub const ConstTypeStore = struct {
                 } };
             },
         };
-        self.fill(out, cloned);
-        return out;
+        self.fill(frame.out, cloned);
     }
 
     fn translateRecordFieldName(name_translation: ?NameTranslation, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
@@ -857,7 +980,7 @@ pub const ConstStore = struct {
     /// Store `fn_value`; its `captures` are copied into the pool. The caller
     /// retains ownership of the input `captures` slice and frees it.
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
-        validateEvidenceFrames(fn_value);
+        try validateEvidenceFrames(self.allocator, fn_value);
         const id: ConstFnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
         const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence);
@@ -874,13 +997,13 @@ pub const ConstStore = struct {
         return id;
     }
 
-    fn validateEvidenceFrames(fn_value: ConstFn) void {
-        if (!evidenceFramesValid(fn_value)) {
+    fn validateEvidenceFrames(allocator: Allocator, fn_value: ConstFn) Allocator.Error!void {
+        if (!try evidenceFramesValid(allocator, fn_value)) {
             constStoreInvariant("stored function evidence frames were not one explicit lexical chain");
         }
     }
 
-    fn evidenceFramesValid(fn_value: ConstFn) bool {
+    fn evidenceFramesValid(allocator: Allocator, fn_value: ConstFn) Allocator.Error!bool {
         if (fn_value.evidence_frames.len == 0) {
             return switch (fn_value.fn_def) {
                 .parser_runtime, .encoder_for_runtime => fn_value.evidence_frame_head == null and fn_value.evidence.len == 0,
@@ -908,37 +1031,59 @@ pub const ConstStore = struct {
                 if (frame.parent == null or frame.parent.? != index - 1) return false;
             }
             if (frame.roots_start != cursor) return false;
-            cursor = evidenceVectorEnd(fn_value.evidence, cursor, frame.roots_len) orelse return false;
+            cursor = try evidenceVectorEnd(allocator, fn_value.evidence, cursor, frame.roots_len) orelse return false;
         }
         return cursor == fn_value.evidence.len;
     }
 
-    fn evidenceVectorEnd(nodes: []const ConstFnEvidence, start: usize, count: u32) ?usize {
+    /// The end of a vector of `count` evidence trees starting at `start`, or
+    /// null when a nested vector's declared subtree length disagrees with its
+    /// entries. Open nested vectors are kept on an explicit stack.
+    fn evidenceVectorEnd(allocator: Allocator, nodes: []const ConstFnEvidence, start: usize, count: u32) Allocator.Error!?usize {
+        const Open = struct {
+            remaining: u32,
+            /// Where a nested vector's entries start, and how many nodes they
+            /// must span; null for the outermost vector.
+            nested: ?struct { start: usize, subtree_len: u32 },
+        };
+        var open = std.ArrayList(Open).empty;
+        defer open.deinit(allocator);
+        try open.append(allocator, .{ .remaining = count, .nested = null });
         var cursor = start;
-        for (0..count) |_| {
+        while (open.items.len > 0) {
+            const top = &open.items[open.items.len - 1];
+            if (top.remaining == 0) {
+                const done = open.pop().?;
+                if (done.nested) |nested| {
+                    if (cursor - nested.start != nested.subtree_len) return null;
+                }
+                continue;
+            }
+            top.remaining -= 1;
             if (cursor >= nodes.len) return null;
             const node = nodes[cursor];
             cursor += 1;
-            switch (node) {
-                .target => |target| {
-                    switch (target.nested) {
-                        .resolved => |nested| {
-                            const nested_start = cursor;
-                            cursor = evidenceVectorEnd(nodes, cursor, nested.count) orelse return null;
-                            if (cursor - nested_start != nested.subtree_len) return null;
-                        },
-                        .from_callable => {},
-                    }
-                },
-                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
-            }
+            // A node's nested vector precedes its callable contracts, so the
+            // contracts wait beneath it on the stack.
             const contracts = switch (node) {
                 .target => |target| target.callable_contracts,
                 .structural => |structural| structural.callable_contracts,
                 .from_callable => |use| use.callable_contracts,
                 .from_scheme, .unreachable_value, .checked_error => 0,
             };
-            cursor = evidenceVectorEnd(nodes, cursor, contracts) orelse return null;
+            if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });
+            switch (node) {
+                .target => |target| {
+                    switch (target.nested) {
+                        .resolved => |nested| try open.append(allocator, .{
+                            .remaining = nested.count,
+                            .nested = .{ .start = cursor, .subtree_len = nested.subtree_len },
+                        }),
+                        .from_callable => {},
+                    }
+                },
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            }
         }
         return cursor;
     }
@@ -951,7 +1096,7 @@ pub const ConstStore = struct {
             .instantiation = null,
             .nested = .from_callable,
         } }};
-        try std.testing.expectEqual(@as(?usize, 1), evidenceVectorEnd(&evidence, 0, 1));
+        try std.testing.expectEqual(@as(?usize, 1), try evidenceVectorEnd(std.testing.allocator, &evidence, 0, 1));
     }
 
     test "issue 11737: stored evidence validates callable contract topology" {
@@ -961,9 +1106,9 @@ pub const ConstStore = struct {
             .checked_error,
             .unreachable_value,
         };
-        try std.testing.expectEqual(@as(?usize, 4), evidenceVectorEnd(&nodes, 0, 2));
-        try std.testing.expectEqual(@as(?usize, null), evidenceVectorEnd(nodes[0..2], 0, 1));
-        try std.testing.expectEqual(@as(?usize, null), evidenceVectorEnd(&nodes, 0, 3));
+        try std.testing.expectEqual(@as(?usize, 4), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 2));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, nodes[0..2], 0, 1));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 3));
     }
 
     pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
@@ -1092,26 +1237,20 @@ pub const ConstStore = struct {
         defer self.allocator.free(fn_delayed_depth);
         @memset(fn_delayed_depth, 0);
 
+        var pending = std.ArrayList(GraphVisit).empty;
+        defer pending.deinit(self.allocator);
+        const states: GraphStates = .{
+            .value_state = value_state,
+            .fn_state = fn_state,
+            .value_delayed_depth = value_delayed_depth,
+            .fn_delayed_depth = fn_delayed_depth,
+        };
         for (self.values.items, 0..) |_, index| {
-            self.verifyGraph(
-                @enumFromInt(@as(u32, @intCast(index))),
-                value_state,
-                fn_state,
-                value_delayed_depth,
-                fn_delayed_depth,
-                0,
-            );
+            try self.verifyGraph(&pending, states, .{ .value = .{ .id = @enumFromInt(@as(u32, @intCast(index))), .delayed_depth = 0 } });
         }
         for (self.fns.items, 0..) |_, index| {
-            validateEvidenceFrames(self.getFn(@enumFromInt(@as(u32, @intCast(index)))));
-            self.verifyFnGraph(
-                @enumFromInt(@as(u32, @intCast(index))),
-                value_state,
-                fn_state,
-                value_delayed_depth,
-                fn_delayed_depth,
-                0,
-            );
+            try validateEvidenceFrames(self.allocator, self.getFn(@enumFromInt(@as(u32, @intCast(index)))));
+            try self.verifyGraph(&pending, states, .{ .fn_value = .{ .id = @enumFromInt(@as(u32, @intCast(index))), .delayed_depth = 0 } });
         }
     }
 
@@ -1134,91 +1273,110 @@ pub const ConstStore = struct {
         self.* = ConstStore.init(self.allocator);
     }
 
+    const GraphStates = struct {
+        value_state: []VisitState,
+        fn_state: []VisitState,
+        value_delayed_depth: []usize,
+        fn_delayed_depth: []usize,
+    };
+
+    /// One step of the completeness walk. A node stays `active` from its
+    /// visit until its exit step, so the states mark the current path.
+    const GraphVisit = union(enum) {
+        value: struct { id: ConstNodeId, delayed_depth: usize },
+        fn_value: struct { id: ConstFnId, delayed_depth: usize },
+        exit_value: usize,
+        exit_fn: usize,
+    };
+
+    /// Verifies every node reachable from `root` is complete and that every
+    /// cycle passes through a delayed function capture. Children are pushed
+    /// in reverse so they are visited in order.
     fn verifyGraph(
         self: *const ConstStore,
-        id: ConstNodeId,
-        value_state: []VisitState,
-        fn_state: []VisitState,
-        value_delayed_depth: []usize,
-        fn_delayed_depth: []usize,
-        delayed_depth: usize,
-    ) void {
-        const index = @intFromEnum(id);
-        if (index >= self.values.items.len) constStoreInvariant("completed store contains an out-of-range value id");
-        switch (value_state[index]) {
-            .done => return,
-            .active => {
-                if (delayed_depth > value_delayed_depth[index]) return;
-                constStoreInvariant("completed store contains a cycle without a delayed function capture");
-            },
-            .unseen => {},
-        }
+        pending: *std.ArrayList(GraphVisit),
+        states: GraphStates,
+        root: GraphVisit,
+    ) Allocator.Error!void {
+        pending.clearRetainingCapacity();
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |visit| switch (visit) {
+            .exit_value => |index| states.value_state[index] = .done,
+            .exit_fn => |index| states.fn_state[index] = .done,
+            .value => |node| {
+                const index = @intFromEnum(node.id);
+                if (index >= self.values.items.len) constStoreInvariant("completed store contains an out-of-range value id");
+                switch (states.value_state[index]) {
+                    .done => continue,
+                    .active => {
+                        if (node.delayed_depth > states.value_delayed_depth[index]) continue;
+                        constStoreInvariant("completed store contains a cycle without a delayed function capture");
+                    },
+                    .unseen => {},
+                }
 
-        value_state[index] = .active;
-        value_delayed_depth[index] = delayed_depth;
-        switch (self.get(id)) {
-            .pending => constStoreInvariant("completed store contains a pending node"),
-            .zst, .scalar => {},
-            .str, .crash => |str| {
-                _ = self.strBytes(str);
+                states.value_state[index] = .active;
+                states.value_delayed_depth[index] = node.delayed_depth;
+                try pending.append(self.allocator, .{ .exit_value = index });
+                const mark = pending.items.len;
+                switch (self.get(node.id)) {
+                    .pending => constStoreInvariant("completed store contains a pending node"),
+                    .zst, .scalar => {},
+                    .str, .crash => |str| {
+                        _ = self.strBytes(str);
+                    },
+                    .fn_value => |fn_id| try pending.append(self.allocator, .{ .fn_value = .{ .id = fn_id, .delayed_depth = node.delayed_depth } }),
+                    .box => |child| try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } }),
+                    .nominal => |nominal| try pending.append(self.allocator, .{ .value = .{ .id = nominal.backing, .delayed_depth = node.delayed_depth } }),
+                    .list => |list| switch (list) {
+                        .nodes => |children| for (children) |child| {
+                            try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
+                        },
+                        .packed_bytes => |packed_list| {
+                            const bytes = self.blobBytes(packed_list.bytes);
+                            const expected_len = @as(u64, packed_list.len) * packed_list.byteWidth();
+                            if (bytes.len != expected_len) {
+                                constStoreInvariant("packed list byte length differs from its element encoding");
+                            }
+                        },
+                        .empty => {},
+                    },
+                    .tuple,
+                    .record,
+                    => |children| for (children) |child| {
+                        try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
+                    },
+                    .tag => |tag| for (tag.payloads) |payload| {
+                        try pending.append(self.allocator, .{ .value = .{ .id = payload, .delayed_depth = node.delayed_depth } });
+                    },
+                }
+                std.mem.reverse(GraphVisit, pending.items[mark..]);
             },
-            .fn_value => |fn_id| self.verifyFnGraph(fn_id, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
-            .box => |child| self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
-            .nominal => |nominal| self.verifyGraph(nominal.backing, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
-            .list => |list| switch (list) {
-                .nodes => |children| for (children) |child| {
-                    self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
-                },
-                .packed_bytes => |packed_list| {
-                    const bytes = self.blobBytes(packed_list.bytes);
-                    const expected_len = @as(u64, packed_list.len) * packed_list.byteWidth();
-                    if (bytes.len != expected_len) {
-                        constStoreInvariant("packed list byte length differs from its element encoding");
+            .fn_value => |node| {
+                const index = @intFromEnum(node.id);
+                if (index >= self.fns.items.len) constStoreInvariant("completed store contains an out-of-range function id");
+                switch (states.fn_state[index]) {
+                    .done => continue,
+                    .active => {
+                        if (node.delayed_depth > states.fn_delayed_depth[index]) continue;
+                        constStoreInvariant("completed store contains a function cycle without a delayed capture");
+                    },
+                    .unseen => {},
+                }
+
+                states.fn_state[index] = .active;
+                states.fn_delayed_depth[index] = node.delayed_depth;
+                try pending.append(self.allocator, .{ .exit_fn = index });
+                const mark = pending.items.len;
+                for (self.getFn(node.id).captures) |capture| {
+                    if (@intFromEnum(capture.ty) >= self.type_store.types.items.len) {
+                        constStoreInvariant("completed store contains an out-of-range capture type id");
                     }
-                },
-                .empty => {},
+                    try pending.append(self.allocator, .{ .value = .{ .id = capture.value, .delayed_depth = node.delayed_depth + 1 } });
+                }
+                std.mem.reverse(GraphVisit, pending.items[mark..]);
             },
-            .tuple,
-            .record,
-            => |children| {
-                for (children) |child| self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
-            },
-            .tag => |tag| {
-                for (tag.payloads) |payload| self.verifyGraph(payload, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
-            },
-        }
-        value_state[index] = .done;
-    }
-
-    fn verifyFnGraph(
-        self: *const ConstStore,
-        id: ConstFnId,
-        value_state: []VisitState,
-        fn_state: []VisitState,
-        value_delayed_depth: []usize,
-        fn_delayed_depth: []usize,
-        delayed_depth: usize,
-    ) void {
-        const index = @intFromEnum(id);
-        if (index >= self.fns.items.len) constStoreInvariant("completed store contains an out-of-range function id");
-        switch (fn_state[index]) {
-            .done => return,
-            .active => {
-                if (delayed_depth > fn_delayed_depth[index]) return;
-                constStoreInvariant("completed store contains a function cycle without a delayed capture");
-            },
-            .unseen => {},
-        }
-
-        fn_state[index] = .active;
-        fn_delayed_depth[index] = delayed_depth;
-        for (self.getFn(id).captures) |capture| {
-            if (@intFromEnum(capture.ty) >= self.type_store.types.items.len) {
-                constStoreInvariant("completed store contains an out-of-range capture type id");
-            }
-            self.verifyGraph(capture.value, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth + 1);
-        }
-        fn_state[index] = .done;
+        };
     }
 };
 
@@ -1415,35 +1573,35 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     empty_chain.evidence = &.{};
     empty_chain.evidence_frames = &empty_frames;
     empty_chain.evidence_frame_head = 2;
-    try std.testing.expect(ConstStore.evidenceFramesValid(empty_chain));
+    try std.testing.expect(try ConstStore.evidenceFramesValid(std.testing.allocator, empty_chain));
 
     var absent_chain = loaded_fn;
     absent_chain.evidence = &.{};
     absent_chain.evidence_frames = &.{};
     absent_chain.evidence_frame_head = null;
-    try std.testing.expect(!ConstStore.evidenceFramesValid(absent_chain));
+    try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, absent_chain));
 
     absent_chain.fn_def = .{ .parser_runtime = .{
         .owner = .{ .proc_base = @enumFromInt(1), .template = @enumFromInt(2) },
         .expr = @enumFromInt(11),
     } };
-    try std.testing.expect(ConstStore.evidenceFramesValid(absent_chain));
+    try std.testing.expect(try ConstStore.evidenceFramesValid(std.testing.allocator, absent_chain));
 
     var corrupt_head = loaded_fn;
     corrupt_head.evidence_frame_head = 0;
-    try std.testing.expect(!ConstStore.evidenceFramesValid(corrupt_head));
+    try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_head));
 
     var corrupt_parent_frames = evidence_frames;
     corrupt_parent_frames[1].parent = 1;
     var corrupt_parent = loaded_fn;
     corrupt_parent.evidence_frames = &corrupt_parent_frames;
-    try std.testing.expect(!ConstStore.evidenceFramesValid(corrupt_parent));
+    try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_parent));
 
     var corrupt_range_frames = evidence_frames;
     corrupt_range_frames[1].roots_start = 99;
     var corrupt_range = loaded_fn;
     corrupt_range.evidence_frames = &corrupt_range_frames;
-    try std.testing.expect(!ConstStore.evidenceFramesValid(corrupt_range));
+    try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_range));
 }
 
 test "ConstStore: exact function capture back-edge survives serialization" {

@@ -1404,7 +1404,7 @@ fn finalize(
 
         for (requests, 0..) |request, request_index| {
             const root_id = state.rootIdForRequestIndex(request_index);
-            if (!state.dependenciesComplete(request)) {
+            if (!try state.dependenciesComplete(request)) {
                 if (batch_requests.items.len == 0) {
                     finalizationInvariant("compile-time root request order placed a root before another root it depends on");
                 }
@@ -1423,7 +1423,7 @@ fn finalize(
                 batch_requests.clearRetainingCapacity();
                 batch_root_ids.clearRetainingCapacity();
 
-                if (!state.dependenciesComplete(request)) {
+                if (!try state.dependenciesComplete(request)) {
                     finalizationInvariant("compile-time root request order referenced a later or cyclic dependency");
                 }
             }
@@ -1475,6 +1475,8 @@ const RootCompletionState = struct {
     request_index_by_root: []u32,
     visited_templates: []u32,
     visit: u32,
+    /// Procedure templates whose dependencies are still to be checked.
+    pending_templates: std.ArrayList(canonical.ProcedureTemplateRef) = .empty,
     current_root_id: ?checked.ComptimeRootId = null,
 
     fn init(
@@ -1542,6 +1544,7 @@ const RootCompletionState = struct {
 
     fn deinit(self: *RootCompletionState) void {
         const allocator = self.allocator;
+        self.pending_templates.deinit(allocator);
         allocator.free(self.visited_templates);
         allocator.free(self.request_index_by_root);
         allocator.free(self.request_root_ids);
@@ -1568,7 +1571,7 @@ const RootCompletionState = struct {
     fn dependenciesComplete(
         self: *RootCompletionState,
         request: checked.RootRequest,
-    ) bool {
+    ) Allocator.Error!bool {
         const request_root_id = compileTimeRootForRequest(self.module, request);
         const saved_current_root_id = self.current_root_id;
         defer self.current_root_id = saved_current_root_id;
@@ -1581,13 +1584,23 @@ const RootCompletionState = struct {
         }
         const template_ref = request.procedure_template orelse
             finalizationInvariant("compile-time root had no checked wrapper template");
-        return self.templateDependenciesComplete(template_ref);
+
+        // Every template reachable through the checked references must be
+        // complete, so templates are checked from a worklist in any order.
+        self.pending_templates.clearRetainingCapacity();
+        try self.pending_templates.append(self.allocator, template_ref);
+        while (self.pending_templates.pop()) |next| {
+            if (!try self.templateDependenciesComplete(next)) return false;
+        }
+        return true;
     }
 
+    /// Whether the template's own references are complete, queueing the
+    /// local templates they reach.
     fn templateDependenciesComplete(
         self: *RootCompletionState,
         template_ref: canonical.ProcedureTemplateRef,
-    ) bool {
+    ) Allocator.Error!bool {
         if (!artifactMatches(template_ref.artifact, self.module.key)) return true;
         const index = @intFromEnum(template_ref.template);
         if (index >= self.visited_templates.len) {
@@ -1597,13 +1610,7 @@ const RootCompletionState = struct {
         self.visited_templates[index] = self.visit;
 
         const template = self.module.checked_procedure_templates.get(template_ref.template);
-        return self.resolvedRefsDependenciesComplete(template.resolved_value_refs);
-    }
-
-    fn resolvedRefsDependenciesComplete(
-        self: *RootCompletionState,
-        refs: checked.ResolvedValueRefTableRef,
-    ) bool {
+        const refs = template.resolved_value_refs;
         const start = refs.start;
         const end = refs.start + refs.len;
         if (end > self.module.resolved_value_refs.template_refs.len) {
@@ -1614,25 +1621,33 @@ const RootCompletionState = struct {
             if (raw >= self.module.resolved_value_refs.records.len) {
                 finalizationInvariant("compile-time dependency ref id was outside the checked table");
             }
-            if (!self.resolvedRefDependenciesComplete(self.module.resolved_value_refs.records[raw].ref)) {
-                return false;
+            switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[raw].ref)) {
+                .complete => |complete| if (!complete) return false,
+                .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
             }
         }
         return true;
     }
 
-    fn resolvedRefDependenciesComplete(
+    /// What a reference depends on: an answer known at once, or a checked
+    /// procedure template whose own references decide it.
+    const Dependency = union(enum) {
+        complete: bool,
+        template: canonical.ProcedureTemplateRef,
+    };
+
+    fn resolvedRefDependency(
         self: *RootCompletionState,
         ref: checked.ResolvedValueRef,
-    ) bool {
+    ) Dependency {
         return switch (ref) {
-            .top_level_const => |const_use| self.constUseComplete(const_use),
-            .selected_hoisted_const => |selected| self.constUseComplete(selected.const_use),
+            .top_level_const => |const_use| .{ .complete = self.constUseComplete(const_use) },
+            .selected_hoisted_const => |selected| .{ .complete = self.constUseComplete(selected.const_use) },
             .top_level_proc,
             .promoted_top_level_proc,
-            => |proc_use| self.procedureUseDependenciesComplete(proc_use),
-            .platform_required_const => |required| self.constUseComplete(required.const_use),
-            .platform_required_proc => |required| self.procedureUseDependenciesComplete(required.procedure),
+            => |proc_use| self.procedureUseDependency(proc_use),
+            .platform_required_const => |required| .{ .complete = self.constUseComplete(required.const_use) },
+            .platform_required_proc => |required| self.procedureUseDependency(required.procedure),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -1643,7 +1658,7 @@ const RootCompletionState = struct {
             .hosted_proc,
             .platform_required_declaration,
             .platform_required_checked_error,
-            => true,
+            => .{ .complete = true },
         };
     }
 
@@ -1709,60 +1724,35 @@ const RootCompletionState = struct {
         };
     }
 
-    fn procedureUseDependenciesComplete(
+    fn procedureUseDependency(
         self: *RootCompletionState,
         proc_use: checked.ProcedureUseTemplate,
-    ) bool {
-        return switch (proc_use.binding) {
-            .top_level => |top_level| self.topLevelProcedureDependenciesComplete(top_level),
-            .imported, .hosted => true,
-            .platform_required => |required| self.platformRequiredProcedureDependenciesComplete(required),
-        };
-    }
-
-    fn topLevelProcedureDependenciesComplete(
-        self: *RootCompletionState,
-        top_level: checked.ArtifactTopLevelProcedureBindingRef,
-    ) bool {
-        if (!artifactMatches(top_level.artifact, self.module.key)) return true;
-        const binding = self.module.top_level_procedure_bindings.get(top_level.binding);
-        return self.procedureBindingDependenciesComplete(binding.body);
-    }
-
-    fn procedureBindingDependenciesComplete(
-        self: *RootCompletionState,
-        body: checked.ProcedureBindingBody,
-    ) bool {
-        return switch (body) {
-            .direct_template => |direct| self.callableTemplateDependenciesComplete(direct.template),
-            .checked_error => true,
-            .callable_eval_template => |template_id| blk: {
-                const template = self.module.callable_eval_templates.get(template_id);
-                break :blk self.rootDependencyComplete(template.root);
+    ) Dependency {
+        var binding = proc_use.binding;
+        while (true) switch (binding) {
+            .top_level => |top_level| {
+                if (!artifactMatches(top_level.artifact, self.module.key)) return .{ .complete = true };
+                return switch (self.module.top_level_procedure_bindings.get(top_level.binding).body) {
+                    .direct_template => |direct| switch (direct.template) {
+                        .checked => |checked_template| .{ .template = checked_template },
+                        .lifted, .synthetic => finalizationInvariant("checked procedure dependency referenced a post-check template"),
+                    },
+                    .checked_error => .{ .complete = true },
+                    .callable_eval_template => |template_id| .{
+                        .complete = self.rootDependencyComplete(self.module.callable_eval_templates.get(template_id).root),
+                    },
+                };
             },
-        };
-    }
-
-    fn callableTemplateDependenciesComplete(
-        self: *RootCompletionState,
-        template: canonical.CallableProcedureTemplateRef,
-    ) bool {
-        return switch (template) {
-            .checked => |checked_template| self.templateDependenciesComplete(checked_template),
-            .lifted, .synthetic => finalizationInvariant("checked procedure dependency referenced a post-check template"),
-        };
-    }
-
-    fn platformRequiredProcedureDependenciesComplete(
-        self: *RootCompletionState,
-        required: checked.RequiredAppProcedureRef,
-    ) bool {
-        if (!artifactMatches(required.artifact, self.module.key)) return true;
-        const binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
-            finalizationInvariant("platform-required procedure dependency referenced a missing binding");
-        return switch (binding.value_use) {
-            .procedure_value => |procedure_use| self.procedureUseDependenciesComplete(procedure_use.procedure),
-            .const_value => |const_use| self.constUseComplete(const_use.const_use),
+            .imported, .hosted => return .{ .complete = true },
+            .platform_required => |required| {
+                if (!artifactMatches(required.artifact, self.module.key)) return .{ .complete = true };
+                const required_binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
+                    finalizationInvariant("platform-required procedure dependency referenced a missing binding");
+                switch (required_binding.value_use) {
+                    .procedure_value => |procedure_use| binding = procedure_use.procedure.binding,
+                    .const_value => |const_use| return .{ .complete = self.constUseComplete(const_use.const_use) },
+                }
+            },
         };
     }
 };

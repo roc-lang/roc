@@ -130,7 +130,7 @@ const InlineAnalyzer = struct {
         @memset(materialization_states, .unknown);
         for (0..solved.lifted.fnCount()) |index| {
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
+            try analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
         }
 
         const inline_bodies = try allocator.alloc(?Lifted.ExprId, decisions.len);
@@ -154,59 +154,13 @@ const InlineAnalyzer = struct {
         };
     }
 
-    fn inlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
-        const index = @intFromEnum(fn_id);
-        switch (self.decisions[index]) {
-            .unknown => {},
-            .visiting => {
-                self.markCycle(fn_id);
-                return null;
-            },
-            .never => return null,
-            .inline_body => |candidate| return candidate.body,
-        }
-
-        self.decisions[index] = .visiting;
-        try self.stack.append(self.allocator, fn_id);
-        defer {
-            const popped = self.stack.pop() orelse Common.invariant("inline analysis stack underflow");
-            if (popped != fn_id) Common.invariant("inline analysis stack was corrupted");
-        }
-
-        const candidate = self.inlineCandidate(fn_id) orelse {
-            self.decisions[index] = .never;
-            return null;
-        };
-
-        // Visit every proc called anywhere in the candidate body, including calls
-        // nested inside low-level operands or other call arguments. A self-call
-        // re-enters this function while it is `.visiting`, so `markCycle` marks
-        // the whole cycle `.never` and keeps it out of the inline plan instead
-        // of inlining it without bound.
-        if (!try self.visitBodyCallees(candidate.body, 0)) {
-            self.decisions[index] = .never;
-            return null;
-        }
-
-        switch (self.decisions[index]) {
-            .never => return null,
-            .visiting => {},
-            .unknown,
-            .inline_body,
-            => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
-        }
-
-        self.decisions[index] = .{ .inline_body = candidate };
-        return candidate.body;
-    }
-
-    fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Candidate {
+    fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Candidate {
         if (self.keep_keyed_specializations) {
             if (self.solved.lifted.getFn(fn_id).source) |template| {
                 if (template.spec_key != null) return null;
             }
         }
-        if (self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
+        if (try self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
         if (self.singleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .single_use };
         return null;
     }
@@ -238,113 +192,6 @@ const InlineAnalyzer = struct {
         return body;
     }
 
-    /// Resolve outer single-use candidates before their descendants. Demoting
-    /// an outer body creates a procedure boundary, which can make a nested
-    /// single-use body safe to inline exactly once.
-    fn resolveSingleUseMaterialization(
-        self: *InlineAnalyzer,
-        fn_id: Lifted.FnId,
-        states: []MaterializationState,
-    ) void {
-        const index = @intFromEnum(fn_id);
-        const candidate = switch (self.decisions[index]) {
-            .inline_body => |candidate| candidate,
-            .never => {
-                states[index] = .once;
-                return;
-            },
-            .unknown,
-            .visiting,
-            => Common.invariant("inline materialization analysis saw an unfinished decision"),
-        };
-        if (candidate.kind != .single_use) return;
-
-        switch (states[index]) {
-            .unknown => states[index] = .visiting,
-            .visiting => Common.invariant("single-use call-owner graph contained a selected cycle"),
-            .once => return,
-            .multiple => Common.invariant("resolved single-use body still had multiple materializations"),
-        }
-
-        const use = self.procedure_usage.get(fn_id);
-        const owner = use.external_call_owner orelse
-            Common.invariant("single-use function had no external call owner");
-        if (!self.bodyMaterializedOnce(owner, states)) {
-            self.decisions[index] = .never;
-        }
-        states[index] = .once;
-    }
-
-    /// Whether the selected inline plan lowers this source body in exactly one
-    /// place. A procedure boundary owns one body materialization. A selected
-    /// body instead inherits the materialization count of its unique caller;
-    /// multiple direct inline sites or a simultaneous value/procedure use stop
-    /// the proof.
-    fn bodyMaterializedOnce(
-        self: *InlineAnalyzer,
-        fn_id: Lifted.FnId,
-        states: []MaterializationState,
-    ) bool {
-        const index = @intFromEnum(fn_id);
-        switch (self.decisions[index]) {
-            .never => {
-                states[index] = .once;
-                return true;
-            },
-            .inline_body => |candidate| if (candidate.kind == .single_use) {
-                self.resolveSingleUseMaterialization(fn_id, states);
-                return true;
-            },
-            .unknown,
-            .visiting,
-            => Common.invariant("inline materialization analysis saw an unfinished owner decision"),
-        }
-
-        switch (states[index]) {
-            .unknown => states[index] = .visiting,
-            .visiting => Common.invariant("selected wrapper call-owner graph contained a cycle"),
-            .once => return true,
-            .multiple => return false,
-        }
-
-        const use = self.procedure_usage.get(fn_id);
-        const once = if (use.external_calls == 0)
-            true
-        else if (use.external_calls != 1)
-            false
-        else blk: {
-            const call_expr_id = use.external_call_expr orelse
-                Common.invariant("single-call inline owner had no external call expression");
-            const call_expr = self.solved.lifted.getExpr(call_expr_id);
-            if (call_expr.data != .call_proc) {
-                Common.invariant("single-call inline owner use was not a direct call expression");
-            }
-            if (call_expr.data.call_proc.is_cold) break :blk true;
-            if (use.value_refs != 0) break :blk false;
-
-            const owner = use.external_call_owner orelse
-                Common.invariant("single-call inline owner had no external call owner");
-            break :blk self.bodyMaterializedOnce(owner, states);
-        };
-        states[index] = if (once) .once else .multiple;
-        return once;
-    }
-
-    fn wrapperCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
-        const source_fn = self.solved.lifted.getFn(fn_id);
-        if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
-        if (self.solvedCaptureCount(fn_id) != 0) return null;
-
-        const body = switch (source_fn.body) {
-            .roc => |body_expr| body_expr,
-            .hosted => return null,
-        };
-
-        if (!self.isInlineableWrapperBody(body)) return null;
-        if (!self.bodyReadsOnlyArgs(fn_id, body)) return null;
-        return body;
-    }
-
     fn solvedCaptureCount(self: *const InlineAnalyzer, fn_id: Lifted.FnId) usize {
         const captures = self.solvedCapturesForFn(fn_id);
         return self.solved_types.captureSpan(captures).len;
@@ -367,116 +214,449 @@ const InlineAnalyzer = struct {
         return .empty();
     }
 
-    fn bodyReadsOnlyArgs(self: *const InlineAnalyzer, fn_id: Lifted.FnId, body: Lifted.ExprId) bool {
+    /// One function whose inline eligibility is being decided. Its candidate
+    /// body is walked on its own work list, which suspends at each direct
+    /// call until that callee's decision is made, so neither call chains nor
+    /// expression nesting become native call depth.
+    const Visit = struct {
+        fn_id: Lifted.FnId,
+        candidate: Candidate,
+        walk: std.ArrayList(WalkItem),
+    };
+
+    const WalkItem = struct { child: Lifted.ExprChild, loop_depth: usize };
+
+    const Entered = union(enum) {
+        /// The function's decision was already made.
+        decided: ?Lifted.ExprId,
+        /// A visit of the function's candidate body began.
+        started,
+    };
+
+    fn inlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
+        var visits: std.ArrayList(Visit) = .empty;
+        defer {
+            for (visits.items) |*visit| visit.walk.deinit(self.allocator);
+            visits.deinit(self.allocator);
+        }
+        switch (try self.enterInlineBody(fn_id, &visits)) {
+            .decided => |body| return body,
+            .started => {},
+        }
+        while (true) {
+            const visit = &visits.items[visits.items.len - 1];
+            const outcome = try self.walkVisit(visit, &visits);
+            if (outcome == .suspended) continue;
+            const finished = visits.pop().?;
+            var walk = finished.walk;
+            walk.deinit(self.allocator);
+            const body = self.finishVisit(finished, outcome == .closed);
+            if (visits.items.len == 0) return body;
+        }
+    }
+
+    fn enterInlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId, visits: *std.ArrayList(Visit)) std.mem.Allocator.Error!Entered {
+        const index = @intFromEnum(fn_id);
+        switch (self.decisions[index]) {
+            .unknown => {},
+            .visiting => {
+                self.markCycle(fn_id);
+                return .{ .decided = null };
+            },
+            .never => return .{ .decided = null },
+            .inline_body => |candidate| return .{ .decided = candidate.body },
+        }
+
+        self.decisions[index] = .visiting;
+        try self.stack.append(self.allocator, fn_id);
+
+        const candidate = try self.inlineCandidate(fn_id) orelse {
+            self.decisions[index] = .never;
+            self.leaveInlineBody(fn_id);
+            return .{ .decided = null };
+        };
+
+        // Visit every proc called anywhere in the candidate body, including calls
+        // nested inside low-level operands or other call arguments. A self-call
+        // re-enters this function while it is `.visiting`, so `markCycle` marks
+        // the whole cycle `.never` and keeps it out of the inline plan instead
+        // of inlining it without bound.
+        var walk: std.ArrayList(WalkItem) = .empty;
+        errdefer walk.deinit(self.allocator);
+        try walk.append(self.allocator, .{ .child = .{ .expr = candidate.body }, .loop_depth = 0 });
+        try visits.append(self.allocator, .{ .fn_id = fn_id, .candidate = candidate, .walk = walk });
+        return .started;
+    }
+
+    fn leaveInlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId) void {
+        const popped = self.stack.pop() orelse Common.invariant("inline analysis stack underflow");
+        if (popped != fn_id) Common.invariant("inline analysis stack was corrupted");
+    }
+
+    fn finishVisit(self: *InlineAnalyzer, visit: Visit, closed: bool) ?Lifted.ExprId {
+        const index = @intFromEnum(visit.fn_id);
+        defer self.leaveInlineBody(visit.fn_id);
+        if (!closed) {
+            self.decisions[index] = .never;
+            return null;
+        }
+        switch (self.decisions[index]) {
+            .never => return null,
+            .visiting => {},
+            .unknown,
+            .inline_body,
+            => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
+        }
+        self.decisions[index] = .{ .inline_body = visit.candidate };
+        return visit.candidate.body;
+    }
+
+    const WalkOutcome = enum {
+        /// A callee's visit began; this walk resumes after it.
+        suspended,
+        /// The body is closed: no escaping return, break, or continue.
+        closed,
+        /// The body can transfer control out of itself.
+        open,
+    };
+
+    /// Walk a candidate body, proving that every break and continue is owned
+    /// by a loop inside the body while visiting every proc it calls, so
+    /// cycles consisting entirely of selected bodies are rejected before
+    /// lowering; combining the checks avoids a second traversal. Positions
+    /// are visited in source order.
+    fn walkVisit(self: *InlineAnalyzer, visit: *Visit, visits: *std.ArrayList(Visit)) std.mem.Allocator.Error!WalkOutcome {
+        const walk = &visit.walk;
+        var children: std.ArrayList(Lifted.ExprChild) = .empty;
+        defer children.deinit(self.allocator);
+        while (walk.pop()) |item| {
+            const depth = item.loop_depth;
+            children.clearRetainingCapacity();
+            var callee: ?Lifted.FnId = null;
+            switch (item.child) {
+                .stmt => |stmt_id| switch (self.solved.lifted.getStmt(stmt_id)) {
+                    .return_ => return .open,
+                    .let_, .expr, .expect, .dbg, .uninitialized, .crash => try Lifted.appendStmtChildren(self.allocator, &self.solved.lifted, stmt_id, &children),
+                },
+                .expr => |expr_id| switch (self.solved.lifted.getExpr(expr_id).data) {
+                    .return_ => return .open,
+                    .break_ => if (depth == 0) return .open else try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
+                    .continue_ => if (depth == 0) return .open else try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
+                    .loop_ => |loop| {
+                        const initial_values = self.solved.lifted.exprSpan(loop.initial_values);
+                        for (0..initial_values.len) |index| try children.append(self.allocator, .{ .expr = GuardedList.at(initial_values, index) });
+                        try walk.append(self.allocator, .{ .child = .{ .expr = loop.body }, .loop_depth = depth + 1 });
+                    },
+                    .lambda,
+                    .fn_def,
+                    .uninitialized,
+                    .uninitialized_payload,
+                    .crash,
+                    .comptime_exhaustiveness_failed,
+                    .inline_expects_enabled,
+                    => {},
+                    .call_proc => |call| {
+                        callee = Lifted.localDirectCallee(call);
+                        try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children);
+                    },
+                    .@"unreachable",
+                    .local,
+                    .unit,
+                    .int_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .dec_lit,
+                    .str_lit,
+                    .bytes_lit,
+                    .def_ref,
+                    .fn_ref,
+                    .list,
+                    .tuple,
+                    .record,
+                    .record_update,
+                    .tag,
+                    .typed_boundary,
+                    .static_data_candidate,
+                    .comptime_value,
+                    .nominal,
+                    .dbg,
+                    .expect,
+                    .expect_err,
+                    .literal_rejected,
+                    .comptime_branch_taken,
+                    .let_,
+                    .call_value,
+                    .low_level,
+                    .field_access,
+                    .tuple_access,
+                    .structural_eq,
+                    .structural_hash,
+                    .match_,
+                    .if_,
+                    .block,
+                    .join_point,
+                    .jump,
+                    .if_initialized_payload,
+                    .try_sequence,
+                    .try_record_sequence,
+                    => try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
+                },
+            }
+            var index = children.items.len;
+            while (index > 0) {
+                index -= 1;
+                try walk.append(self.allocator, .{ .child = children.items[index], .loop_depth = depth });
+            }
+            // The callee is decided before the call's operands are visited.
+            if (callee) |target| switch (try self.enterInlineBody(target, visits)) {
+                .decided => {},
+                .started => return .suspended,
+            };
+        }
+        return .closed;
+    }
+
+    /// Resolve outer single-use candidates before their descendants. Demoting
+    /// an outer body creates a procedure boundary, which can make a nested
+    /// single-use body safe to inline exactly once.
+    fn resolveSingleUseMaterialization(
+        self: *InlineAnalyzer,
+        fn_id: Lifted.FnId,
+        states: []MaterializationState,
+    ) std.mem.Allocator.Error!void {
+        _ = try self.runMaterialization(.{ .resolve = fn_id }, states);
+    }
+
+    /// One step of the materialization proof. `resolve` settles a single-use
+    /// candidate; `body_once` asks whether a body is lowered in exactly one
+    /// place. Both follow unique call owners outward, so the chain of owners
+    /// is held on an explicit stack.
+    const MaterializationFrame = union(enum) {
+        resolve: Lifted.FnId,
+        body_once: Lifted.FnId,
+    };
+
+    fn runMaterialization(self: *InlineAnalyzer, root: MaterializationFrame, states: []MaterializationState) std.mem.Allocator.Error!bool {
+        var frames: std.ArrayList(MaterializationFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        try frames.append(self.allocator, root);
+        // The result of the frame that just finished, for its parent.
+        var result: ?bool = null;
+        while (frames.items.len != 0) {
+            const frame = frames.items[frames.items.len - 1];
+            switch (frame) {
+                .resolve => |fn_id| {
+                    const index = @intFromEnum(fn_id);
+                    if (result) |once| {
+                        if (!once) self.decisions[index] = .never;
+                        states[index] = .once;
+                        _ = frames.pop();
+                        result = true;
+                        continue;
+                    }
+                    const candidate = switch (self.decisions[index]) {
+                        .inline_body => |candidate| candidate,
+                        .never => {
+                            states[index] = .once;
+                            _ = frames.pop();
+                            result = true;
+                            continue;
+                        },
+                        .unknown,
+                        .visiting,
+                        => Common.invariant("inline materialization analysis saw an unfinished decision"),
+                    };
+                    if (candidate.kind != .single_use) {
+                        _ = frames.pop();
+                        result = true;
+                        continue;
+                    }
+
+                    switch (states[index]) {
+                        .unknown => states[index] = .visiting,
+                        .visiting => Common.invariant("single-use call-owner graph contained a selected cycle"),
+                        .once => {
+                            _ = frames.pop();
+                            result = true;
+                            continue;
+                        },
+                        .multiple => Common.invariant("resolved single-use body still had multiple materializations"),
+                    }
+
+                    const use = self.procedure_usage.get(fn_id);
+                    const owner = use.external_call_owner orelse
+                        Common.invariant("single-use function had no external call owner");
+                    try frames.append(self.allocator, .{ .body_once = owner });
+                },
+                .body_once => |fn_id| {
+                    const index = @intFromEnum(fn_id);
+                    if (result) |once| {
+                        states[index] = if (once) .once else .multiple;
+                        _ = frames.pop();
+                        result = once;
+                        continue;
+                    }
+                    switch (self.decisions[index]) {
+                        .never => {
+                            states[index] = .once;
+                            _ = frames.pop();
+                            result = true;
+                            continue;
+                        },
+                        .inline_body => |candidate| if (candidate.kind == .single_use) {
+                            // The resolved single-use body answers for this one.
+                            frames.items[frames.items.len - 1] = .{ .resolve = fn_id };
+                            continue;
+                        },
+                        .unknown,
+                        .visiting,
+                        => Common.invariant("inline materialization analysis saw an unfinished owner decision"),
+                    }
+
+                    switch (states[index]) {
+                        .unknown => states[index] = .visiting,
+                        .visiting => Common.invariant("selected wrapper call-owner graph contained a cycle"),
+                        .once => {
+                            _ = frames.pop();
+                            result = true;
+                            continue;
+                        },
+                        .multiple => {
+                            _ = frames.pop();
+                            result = false;
+                            continue;
+                        },
+                    }
+
+                    const use = self.procedure_usage.get(fn_id);
+                    const settled: ?bool = if (use.external_calls == 0)
+                        true
+                    else if (use.external_calls != 1)
+                        false
+                    else blk: {
+                        const call_expr_id = use.external_call_expr orelse
+                            Common.invariant("single-call inline owner had no external call expression");
+                        const call_expr = self.solved.lifted.getExpr(call_expr_id);
+                        if (call_expr.data != .call_proc) {
+                            Common.invariant("single-call inline owner use was not a direct call expression");
+                        }
+                        if (call_expr.data.call_proc.is_cold) break :blk true;
+                        if (use.value_refs != 0) break :blk false;
+                        break :blk null;
+                    };
+                    if (settled) |once| {
+                        states[index] = if (once) .once else .multiple;
+                        _ = frames.pop();
+                        result = once;
+                        continue;
+                    }
+                    const owner = use.external_call_owner orelse
+                        Common.invariant("single-call inline owner had no external call owner");
+                    try frames.append(self.allocator, .{ .body_once = owner });
+                },
+            }
+            result = null;
+        }
+        return result.?;
+    }
+
+    fn wrapperCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
+        const source_fn = self.solved.lifted.getFn(fn_id);
+        if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
+        if (self.solvedCaptureCount(fn_id) != 0) return null;
+
+        const body = switch (source_fn.body) {
+            .roc => |body_expr| body_expr,
+            .hosted => return null,
+        };
+
+        if (!try self.isInlineableWrapperBody(body)) return null;
+        if (!try self.bodyReadsOnlyArgs(fn_id, body)) return null;
+        return body;
+    }
+
+    fn bodyReadsOnlyArgs(self: *const InlineAnalyzer, fn_id: Lifted.FnId, body: Lifted.ExprId) std.mem.Allocator.Error!bool {
         const source_fn = self.solved.lifted.getFn(fn_id);
         return self.exprReadsOnlyArgs(body, self.solved.lifted.typedLocalSpan(source_fn.args));
     }
 
-    fn exprReadsOnlyArgs(self: *const InlineAnalyzer, expr_id: Lifted.ExprId, args: anytype) bool {
-        const expr = self.solved.lifted.getExpr(expr_id);
-        return switch (expr.data) {
-            .local => |local| localIsArg(local, args),
-            .@"unreachable",
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .crash,
-            .bytes_lit,
-            .def_ref,
-            => true,
-            .fn_ref => |fn_ref| self.captureOperandSpanReadsOnlyArgs(fn_ref.captures, args),
-            .list,
-            .tuple,
-            => |items| self.exprSpanReadsOnlyArgs(items, args),
-            .record => |fields| {
-                const field_exprs = self.solved.lifted.fieldExprSpan(fields);
-                for (0..field_exprs.len) |index| {
-                    const field = GuardedList.at(field_exprs, index);
-                    if (!self.exprReadsOnlyArgs(field.value, args)) return false;
-                }
-                return true;
-            },
-            .record_update => |update| {
-                if (!self.exprReadsOnlyArgs(update.base, args)) return false;
-                const field_exprs = self.solved.lifted.fieldExprSpan(update.fields);
-                for (0..field_exprs.len) |index| {
-                    const field = GuardedList.at(field_exprs, index);
-                    if (!self.exprReadsOnlyArgs(field.value, args)) return false;
-                }
-                return true;
-            },
-            .tag => |tag| self.exprSpanReadsOnlyArgs(tag.payloads, args),
-            .static_data_candidate => |candidate| self.exprReadsOnlyArgs(candidate.runtime_expr, args),
-            .inline_expects_enabled => true,
-            .comptime_value => |candidate| self.exprReadsOnlyArgs(candidate.initializer, args),
-            .typed_boundary => |boundary| self.exprReadsOnlyArgs(boundary.value, args),
-            .nominal,
-            .dbg,
-            .expect,
-            => |child| self.exprReadsOnlyArgs(child, args),
-            .return_ => |ret| self.exprReadsOnlyArgs(ret.value, args),
-            .expect_err => |expect_err| self.exprReadsOnlyArgs(expect_err.msg, args),
-            .literal_rejected => |rejected| self.exprReadsOnlyArgs(rejected.msg, args),
-            .comptime_branch_taken => |taken| self.exprReadsOnlyArgs(taken.body, args),
-            .call_value => |call| self.exprReadsOnlyArgs(call.callee, args) and self.exprSpanReadsOnlyArgs(call.args, args),
-            .call_proc => |call| !call.is_cold and
-                self.exprSpanReadsOnlyArgs(call.args, args) and
-                self.captureOperandSpanReadsOnlyArgs(call.captures, args),
-            .low_level => |call| self.exprSpanReadsOnlyArgs(call.args, args),
-            .field_access => |field| self.exprReadsOnlyArgs(field.receiver, args),
-            .tuple_access => |access| self.exprReadsOnlyArgs(access.tuple, args),
-            .structural_eq => |eq| self.exprReadsOnlyArgs(eq.lhs, args) and self.exprReadsOnlyArgs(eq.rhs, args),
-            .structural_hash => |h| self.exprReadsOnlyArgs(h.value, args) and self.exprReadsOnlyArgs(h.hasher, args),
-            .block => |block| self.isLiteralCrash(expr_id) or
-                (self.solved.lifted.stmtSpan(block.statements).len == 0 and self.exprReadsOnlyArgs(block.final_expr, args)),
-            .if_ => |if_| blk: {
-                // This admits guarded wrappers, not arbitrary conditional
-                // arguments inside otherwise call-through wrappers.
-                if (!self.isInlineableWrapperBody(expr_id)) break :blk false;
-                const branches = self.solved.lifted.ifBranchSpan(if_.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    if (!self.exprReadsOnlyArgs(branch.cond, args) or
-                        !self.exprReadsOnlyArgs(branch.body, args)) break :blk false;
-                }
-                break :blk self.exprReadsOnlyArgs(if_.final_else, args);
-            },
-            .lambda,
-            .fn_def,
-            .let_,
-            .match_,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .loop_,
-            .break_,
-            .continue_,
-            .join_point,
-            .jump,
-            .comptime_exhaustiveness_failed,
-            => false,
-        };
-    }
-
-    fn exprSpanReadsOnlyArgs(self: *const InlineAnalyzer, span: Lifted.Span(Lifted.ExprId), args: anytype) bool {
-        const exprs = self.solved.lifted.exprSpan(span);
-        for (0..exprs.len) |index| {
-            const expr = GuardedList.at(exprs, index);
-            if (!self.exprReadsOnlyArgs(expr, args)) return false;
-        }
-        return true;
-    }
-
-    fn captureOperandSpanReadsOnlyArgs(self: *const InlineAnalyzer, span: Lifted.Span(Lifted.CaptureOperand), args: anytype) bool {
-        const operands = self.solved.lifted.captureOperandSpan(span);
-        for (0..operands.len) |index| {
-            const operand = GuardedList.at(operands, index);
-            if (!self.exprReadsOnlyArgs(operand.value, args)) return false;
+    /// Whether `root` reads no local other than `args`. Every subexpression
+    /// must, so they are checked in any order on a work stack.
+    fn exprReadsOnlyArgs(self: *const InlineAnalyzer, root: Lifted.ExprId, args: anytype) std.mem.Allocator.Error!bool {
+        const lifted = &self.solved.lifted;
+        var stack: std.ArrayList(Lifted.ExprChild) = .empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, .{ .expr = root });
+        while (stack.pop()) |child| {
+            const expr_id = child.expr;
+            switch (lifted.getExpr(expr_id).data) {
+                .local => |local| if (!localIsArg(local, args)) return false,
+                .@"unreachable",
+                .unit,
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .crash,
+                .bytes_lit,
+                .def_ref,
+                .inline_expects_enabled,
+                => {},
+                .fn_ref,
+                .list,
+                .tuple,
+                .record,
+                .record_update,
+                .tag,
+                .static_data_candidate,
+                .comptime_value,
+                .typed_boundary,
+                .nominal,
+                .dbg,
+                .expect,
+                .return_,
+                .expect_err,
+                .literal_rejected,
+                .comptime_branch_taken,
+                .call_value,
+                .low_level,
+                .field_access,
+                .tuple_access,
+                .structural_eq,
+                .structural_hash,
+                => try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack),
+                .call_proc => |call| {
+                    if (call.is_cold) return false;
+                    try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack);
+                },
+                .block => |block| if (!self.isLiteralCrash(expr_id)) {
+                    if (lifted.stmtSpan(block.statements).len != 0) return false;
+                    try stack.append(self.allocator, .{ .expr = block.final_expr });
+                },
+                .if_ => {
+                    // This admits guarded wrappers, not arbitrary conditional
+                    // arguments inside otherwise call-through wrappers.
+                    if (!try self.isInlineableWrapperBody(expr_id)) return false;
+                    try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack);
+                },
+                .lambda,
+                .fn_def,
+                .let_,
+                .match_,
+                .uninitialized,
+                .uninitialized_payload,
+                .if_initialized_payload,
+                .try_sequence,
+                .try_record_sequence,
+                .loop_,
+                .break_,
+                .continue_,
+                .join_point,
+                .jump,
+                .comptime_exhaustiveness_failed,
+                => return false,
+            }
         }
         return true;
     }
@@ -489,415 +669,155 @@ const InlineAnalyzer = struct {
         return false;
     }
 
+    /// What a wrapper position must be: a whole wrapper body, a guard arm
+    /// (a literal crash or a wrapper body), or an operand a wrapper builds
+    /// its result from (an argument, a literal, or another wrapper body).
+    const WrapperRole = enum { body, arm, operand };
+
     /// Whether a body is a checked wrapper: one operation, a constant, or a
     /// single guard whose arms are each of those or a crash. Such a body does
     /// less work than its call costs, and substituting it at every call site
     /// exposes its guard and its constant arguments to LIR range analysis
     /// before backend instruction selection. `List.get` and the byte reads
-    /// have this shape with a `Try` on each arm.
-    fn isInlineableWrapperBody(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
-        const expr = self.solved.lifted.getExpr(expr_id);
-        if (expr.data == .call_proc or expr.data == .low_level) return true;
-        if (expr.data == .tag) return self.exprSpanIsWrapperOperand(expr.data.tag.payloads);
-        if (expr.data == .nominal) return self.isInlineableWrapperBody(expr.data.nominal);
-        if (expr.data == .if_) {
-            const branches = self.solved.lifted.ifBranchSpan(expr.data.if_.branches);
-            if (branches.len != 1) return false;
-            const branch = GuardedList.at(branches, 0);
-            return self.isWrapperArm(branch.body) and self.isWrapperArm(expr.data.if_.final_else);
-        }
-        if (expr.data != .block) return false;
-        return self.solved.lifted.stmtSpan(expr.data.block.statements).len == 0 and
-            self.isInlineableWrapperBody(expr.data.block.final_expr);
-    }
-
-    fn isWrapperArm(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
-        return self.isLiteralCrash(expr_id) or self.isInlineableWrapperBody(expr_id);
-    }
-
-    /// A value a wrapper may build its result from: an argument, a literal,
-    /// or another wrapper body.
-    fn isWrapperOperand(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
-        const expr = self.solved.lifted.getExpr(expr_id);
-        return switch (expr.data) {
-            .local,
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            => true,
-            .call_proc,
-            .low_level,
-            .tag,
-            .nominal,
-            .if_,
-            .block,
-            => self.isInlineableWrapperBody(expr_id),
-            .@"unreachable",
-            .crash,
-            .def_ref,
-            .fn_ref,
-            .list,
-            .tuple,
-            .record,
-            .record_update,
-            .static_data_candidate,
-            .inline_expects_enabled,
-            .comptime_value,
-            .typed_boundary,
-            .dbg,
-            .expect,
-            .return_,
-            .expect_err,
-            .literal_rejected,
-            .comptime_branch_taken,
-            .call_value,
-            .field_access,
-            .tuple_access,
-            .structural_eq,
-            .structural_hash,
-            .lambda,
-            .fn_def,
-            .let_,
-            .match_,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .loop_,
-            .break_,
-            .continue_,
-            .join_point,
-            .jump,
-            .comptime_exhaustiveness_failed,
-            => false,
-        };
-    }
-
-    fn exprSpanIsWrapperOperand(self: *const InlineAnalyzer, span: Lifted.Span(Lifted.ExprId)) bool {
-        const exprs = self.solved.lifted.exprSpan(span);
-        for (0..exprs.len) |index| {
-            if (!self.isWrapperOperand(GuardedList.at(exprs, index))) return false;
-        }
-        return true;
-    }
-
-    fn isLiteralCrash(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
-        const expr = self.solved.lifted.getExpr(expr_id);
-        return switch (expr.data) {
-            .crash => true,
-            .low_level => |call| blk: {
-                if (call.op != .crash) break :blk false;
-                const args = self.solved.lifted.exprSpan(call.args);
-                break :blk args.len == 1 and
-                    self.isStringLiteral(GuardedList.at(args, 0));
-            },
-            .block => |block| blk: {
-                const stmts = self.solved.lifted.stmtSpan(block.statements);
-                if (stmts.len == 0) break :blk self.isLiteralCrash(block.final_expr);
-                // SpecConstr normalizes a terminal crash to a statement
-                // followed by unreachable. No preceding work is admitted.
-                if (stmts.len != 1 or self.solved.lifted.getExpr(block.final_expr).data != .@"unreachable") break :blk false;
-                break :blk switch (self.solved.lifted.getStmt(GuardedList.at(stmts, 0))) {
-                    .crash => true,
-                    .expr => |child| self.isLiteralCrash(child),
-                    .uninitialized, .let_, .expect, .dbg, .return_ => false,
-                };
-            },
-            .local,
-            .unit,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .static_data_candidate,
-            .inline_expects_enabled,
-            .comptime_value,
-            .typed_boundary,
-            .list,
-            .tuple,
-            .record,
-            .record_update,
-            .tag,
-            .nominal,
-            .let_,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            .fn_ref,
-            .call_value,
-            .call_proc,
-            .field_access,
-            .tuple_access,
-            .structural_eq,
-            .structural_hash,
-            .match_,
-            .if_,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .loop_,
-            .break_,
-            .continue_,
-            .join_point,
-            .jump,
-            .return_,
-            .comptime_branch_taken,
-            .comptime_exhaustiveness_failed,
-            .dbg,
-            .expect_err,
-            .literal_rejected,
-            .expect,
-            => false,
-        };
-    }
-
-    fn isStringLiteral(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
-        return switch (self.solved.lifted.getExpr(expr_id).data) {
-            .str_lit => true,
-            .nominal => |backing| self.isStringLiteral(backing),
-            .typed_boundary => |boundary| self.isStringLiteral(boundary.value),
-            .local,
-            .unit,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .bytes_lit,
-            .static_data_candidate,
-            .inline_expects_enabled,
-            .comptime_value,
-            .list,
-            .tuple,
-            .record,
-            .record_update,
-            .tag,
-            .let_,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            .fn_ref,
-            .call_value,
-            .call_proc,
-            .low_level,
-            .field_access,
-            .tuple_access,
-            .structural_eq,
-            .structural_hash,
-            .match_,
-            .if_,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .block,
-            .loop_,
-            .break_,
-            .continue_,
-            .join_point,
-            .jump,
-            .return_,
-            .crash,
-            .comptime_branch_taken,
-            .comptime_exhaustiveness_failed,
-            .dbg,
-            .expect_err,
-            .literal_rejected,
-            .expect,
-            => false,
-        };
-    }
-
-    /// Visit every proc called within an inline candidate so cycles consisting
-    /// entirely of selected bodies are rejected before lowering. At the same
-    /// time, prove that every break and continue is owned by a loop inside the
-    /// body; combining the checks avoids a second candidate-body traversal.
-    fn visitBodyCallees(self: *InlineAnalyzer, expr_id: Lifted.ExprId, loop_depth: usize) std.mem.Allocator.Error!bool {
-        const expr = self.solved.lifted.getExpr(expr_id);
-        return switch (expr.data) {
-            .@"unreachable",
-            .local,
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .def_ref,
-            => true,
-            .fn_ref => |fn_ref| try self.visitCaptureOperandSpanCallees(fn_ref.captures, loop_depth),
-            .list,
-            .tuple,
-            => |items| try self.visitSpanCallees(items, loop_depth),
-            .record => |fields| {
-                const field_exprs = self.solved.lifted.fieldExprSpan(fields);
-                for (0..field_exprs.len) |index| {
-                    const field = GuardedList.at(field_exprs, index);
-                    if (!try self.visitBodyCallees(field.value, loop_depth)) return false;
-                }
-                return true;
-            },
-            .record_update => |update| {
-                if (!try self.visitBodyCallees(update.base, loop_depth)) return false;
-                const field_exprs = self.solved.lifted.fieldExprSpan(update.fields);
-                for (0..field_exprs.len) |index| {
-                    const field = GuardedList.at(field_exprs, index);
-                    if (!try self.visitBodyCallees(field.value, loop_depth)) return false;
-                }
-                return true;
-            },
-            .tag => |tag| try self.visitSpanCallees(tag.payloads, loop_depth),
-            .typed_boundary => |boundary| try self.visitBodyCallees(boundary.value, loop_depth),
-            .static_data_candidate => |candidate| try self.visitBodyCallees(candidate.runtime_expr, loop_depth),
-            .inline_expects_enabled => true,
-            .comptime_value => |candidate| try self.visitBodyCallees(candidate.initializer, loop_depth),
-            .nominal,
-            .dbg,
-            .expect,
-            => |child| try self.visitBodyCallees(child, loop_depth),
-            .return_ => false,
-            .expect_err => |expect_err| try self.visitBodyCallees(expect_err.msg, loop_depth),
-            .literal_rejected => |rejected| try self.visitBodyCallees(rejected.msg, loop_depth),
-            .comptime_branch_taken => |taken| try self.visitBodyCallees(taken.body, loop_depth),
-            .let_ => |let_| {
-                if (!try self.visitBodyCallees(let_.value, loop_depth)) return false;
-                return try self.visitBodyCallees(let_.rest, loop_depth);
-            },
-            .call_value => |call| {
-                if (!try self.visitBodyCallees(call.callee, loop_depth)) return false;
-                return try self.visitSpanCallees(call.args, loop_depth);
-            },
-            .call_proc => |call| {
-                if (Lifted.localDirectCallee(call)) |callee| {
-                    _ = try self.inlineBody(callee);
-                }
-                if (!try self.visitSpanCallees(call.args, loop_depth)) return false;
-                return try self.visitCaptureOperandSpanCallees(call.captures, loop_depth);
-            },
-            .low_level => |call| try self.visitSpanCallees(call.args, loop_depth),
-            .field_access => |field| try self.visitBodyCallees(field.receiver, loop_depth),
-            .tuple_access => |access| try self.visitBodyCallees(access.tuple, loop_depth),
-            .structural_eq => |eq| {
-                if (!try self.visitBodyCallees(eq.lhs, loop_depth)) return false;
-                return try self.visitBodyCallees(eq.rhs, loop_depth);
-            },
-            .structural_hash => |h| {
-                if (!try self.visitBodyCallees(h.value, loop_depth)) return false;
-                return try self.visitBodyCallees(h.hasher, loop_depth);
-            },
-            .match_ => |match_| {
-                if (!try self.visitBodyCallees(match_.scrutinee, loop_depth)) return false;
-                const branches = self.solved.lifted.branchSpan(match_.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    if (!try self.visitStmtSpanCallees(branch.bindings, loop_depth)) return false;
-                    if (branch.guard) |guard| {
-                        if (!try self.visitBodyCallees(guard, loop_depth)) return false;
-                    }
-                    if (!try self.visitBodyCallees(branch.body, loop_depth)) return false;
-                }
-                return true;
-            },
-            .if_ => |if_| {
-                const branches = self.solved.lifted.ifBranchSpan(if_.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    if (!try self.visitBodyCallees(branch.cond, loop_depth)) return false;
-                    if (!try self.visitBodyCallees(branch.body, loop_depth)) return false;
-                }
-                return try self.visitBodyCallees(if_.final_else, loop_depth);
-            },
-            .block => |block| {
-                if (!try self.visitStmtSpanCallees(block.statements, loop_depth)) return false;
-                return try self.visitBodyCallees(block.final_expr, loop_depth);
-            },
-            .loop_ => |loop| {
-                if (!try self.visitSpanCallees(loop.initial_values, loop_depth)) return false;
-                return try self.visitBodyCallees(loop.body, loop_depth + 1);
-            },
-            .break_ => |maybe| if (loop_depth == 0)
-                false
-            else if (maybe) |value|
-                try self.visitBodyCallees(value, loop_depth)
-            else
-                true,
-            .continue_ => |continue_| loop_depth != 0 and try self.visitSpanCallees(continue_.values, loop_depth),
-            .join_point => |join_point| {
-                if (!try self.visitBodyCallees(join_point.body, loop_depth)) return false;
-                return try self.visitBodyCallees(join_point.remainder, loop_depth);
-            },
-            .jump => |jump| try self.visitSpanCallees(jump.loop_values, loop_depth) and
-                try self.visitSpanCallees(jump.args, loop_depth),
-            .if_initialized_payload => |payload_switch| {
-                if (!try self.visitBodyCallees(payload_switch.cond, loop_depth)) return false;
-                if (!try self.visitBodyCallees(payload_switch.initialized, loop_depth)) return false;
-                return try self.visitBodyCallees(payload_switch.uninitialized, loop_depth);
-            },
-            .try_sequence => |sequence| {
-                if (!try self.visitBodyCallees(sequence.try_expr, loop_depth)) return false;
-                return try self.visitBodyCallees(sequence.ok_body, loop_depth);
-            },
-            .try_record_sequence => |sequence| {
-                if (!try self.visitBodyCallees(sequence.try_expr, loop_depth)) return false;
-                return try self.visitBodyCallees(sequence.ok_body, loop_depth);
-            },
-            .lambda,
-            .fn_def,
-            .uninitialized,
-            .uninitialized_payload,
-            .crash,
-            .comptime_exhaustiveness_failed,
-            => true,
-        };
-    }
-
-    fn visitSpanCallees(self: *InlineAnalyzer, span: Lifted.Span(Lifted.ExprId), loop_depth: usize) std.mem.Allocator.Error!bool {
-        const exprs = self.solved.lifted.exprSpan(span);
-        for (0..exprs.len) |index| {
-            const child = GuardedList.at(exprs, index);
-            if (!try self.visitBodyCallees(child, loop_depth)) return false;
-        }
-        return true;
-    }
-
-    fn visitStmtSpanCallees(self: *InlineAnalyzer, span: Lifted.Span(Lifted.StmtId), loop_depth: usize) std.mem.Allocator.Error!bool {
-        const stmts = self.solved.lifted.stmtSpan(span);
-        for (0..stmts.len) |index| {
-            const closed = switch (self.solved.lifted.getStmt(GuardedList.at(stmts, index))) {
-                .let_ => |let_| try self.visitBodyCallees(let_.value, loop_depth),
-                .expr,
-                .expect,
-                .dbg,
-                => |child| try self.visitBodyCallees(child, loop_depth),
-                .return_ => false,
-                .uninitialized,
-                .crash,
-                => true,
+    /// have this shape with a `Try` on each arm. Every position must qualify
+    /// in its role, so positions are checked in any order on a work stack.
+    fn isInlineableWrapperBody(self: *const InlineAnalyzer, root: Lifted.ExprId) std.mem.Allocator.Error!bool {
+        const lifted = &self.solved.lifted;
+        const Item = struct { role: WrapperRole, expr: Lifted.ExprId };
+        var stack: std.ArrayList(Item) = .empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, .{ .role = .body, .expr = root });
+        while (stack.pop()) |item| {
+            const expr = lifted.getExpr(item.expr);
+            const role: WrapperRole = switch (item.role) {
+                .arm => if (self.isLiteralCrash(item.expr)) continue else .body,
+                .operand => switch (expr.data) {
+                    .local,
+                    .unit,
+                    .int_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .dec_lit,
+                    .str_lit,
+                    .bytes_lit,
+                    => continue,
+                    .call_proc,
+                    .low_level,
+                    .tag,
+                    .nominal,
+                    .if_,
+                    .block,
+                    => .body,
+                    .@"unreachable",
+                    .crash,
+                    .def_ref,
+                    .fn_ref,
+                    .list,
+                    .tuple,
+                    .record,
+                    .record_update,
+                    .static_data_candidate,
+                    .inline_expects_enabled,
+                    .comptime_value,
+                    .typed_boundary,
+                    .dbg,
+                    .expect,
+                    .return_,
+                    .expect_err,
+                    .literal_rejected,
+                    .comptime_branch_taken,
+                    .call_value,
+                    .field_access,
+                    .tuple_access,
+                    .structural_eq,
+                    .structural_hash,
+                    .lambda,
+                    .fn_def,
+                    .let_,
+                    .match_,
+                    .uninitialized,
+                    .uninitialized_payload,
+                    .if_initialized_payload,
+                    .try_sequence,
+                    .try_record_sequence,
+                    .loop_,
+                    .break_,
+                    .continue_,
+                    .join_point,
+                    .jump,
+                    .comptime_exhaustiveness_failed,
+                    => return false,
+                },
+                .body => .body,
             };
-            if (!closed) return false;
+            std.debug.assert(role == .body);
+            switch (expr.data) {
+                .call_proc, .low_level => {},
+                .tag => |tag| {
+                    const payloads = lifted.exprSpan(tag.payloads);
+                    for (0..payloads.len) |index| try stack.append(self.allocator, .{ .role = .operand, .expr = GuardedList.at(payloads, index) });
+                },
+                .nominal => |backing| try stack.append(self.allocator, .{ .role = .body, .expr = backing }),
+                .if_ => |if_| {
+                    const branches = lifted.ifBranchSpan(if_.branches);
+                    if (branches.len != 1) return false;
+                    try stack.append(self.allocator, .{ .role = .arm, .expr = GuardedList.at(branches, 0).body });
+                    try stack.append(self.allocator, .{ .role = .arm, .expr = if_.final_else });
+                },
+                .block => |block| {
+                    if (lifted.stmtSpan(block.statements).len != 0) return false;
+                    try stack.append(self.allocator, .{ .role = .body, .expr = block.final_expr });
+                },
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+            }
         }
         return true;
     }
 
-    fn visitCaptureOperandSpanCallees(self: *InlineAnalyzer, span: Lifted.Span(Lifted.CaptureOperand), loop_depth: usize) std.mem.Allocator.Error!bool {
-        const operands = self.solved.lifted.captureOperandSpan(span);
-        for (0..operands.len) |index| {
-            const operand = GuardedList.at(operands, index);
-            if (!try self.visitBodyCallees(operand.value, loop_depth)) return false;
+    /// Whether an expression is a crash with a literal message, possibly
+    /// under blocks that hold nothing else.
+    fn isLiteralCrash(self: *const InlineAnalyzer, root: Lifted.ExprId) bool {
+        const lifted = &self.solved.lifted;
+        var expr_id = root;
+        while (true) {
+            switch (lifted.getExpr(expr_id).data) {
+                .crash => return true,
+                .low_level => |call| {
+                    if (call.op != .crash) return false;
+                    const args = lifted.exprSpan(call.args);
+                    return args.len == 1 and
+                        self.isStringLiteral(GuardedList.at(args, 0));
+                },
+                .block => |block| {
+                    const stmts = lifted.stmtSpan(block.statements);
+                    if (stmts.len == 0) {
+                        expr_id = block.final_expr;
+                        continue;
+                    }
+                    // SpecConstr normalizes a terminal crash to a statement
+                    // followed by unreachable. No preceding work is admitted.
+                    if (stmts.len != 1 or lifted.getExpr(block.final_expr).data != .@"unreachable") return false;
+                    switch (lifted.getStmt(GuardedList.at(stmts, 0))) {
+                        .crash => return true,
+                        .expr => |child| expr_id = child,
+                        .uninitialized, .let_, .expect, .dbg, .return_ => return false,
+                    }
+                },
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+            }
         }
-        return true;
+    }
+
+    fn isStringLiteral(self: *const InlineAnalyzer, root: Lifted.ExprId) bool {
+        var expr_id = root;
+        while (true) {
+            switch (self.solved.lifted.getExpr(expr_id).data) {
+                .str_lit => return true,
+                .nominal => |backing| expr_id = backing,
+                .typed_boundary => |boundary| expr_id = boundary.value,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+            }
+        }
     }
 
     fn markCycle(self: *InlineAnalyzer, repeated: Lifted.FnId) void {

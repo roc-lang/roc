@@ -258,7 +258,38 @@ const StaticInitializerMachine = struct {
         locals[@intFromEnum(id)] = value;
     }
 
-    fn evaluateStatic(self: *StaticInitializerMachine, id: lir.LIR.StaticDataId) MaterializationError!*SymbolicValue {
+    /// A static value, evaluating first every static value its initializer
+    /// reads, and theirs, from an explicit stack.
+    fn evaluateStatic(self: *StaticInitializerMachine, root: lir.LIR.StaticDataId) MaterializationError!*SymbolicValue {
+        if (try self.readyStatic(root)) |value| return value;
+        var pending: std.ArrayList(lir.LIR.StaticDataId) = .empty;
+        defer pending.deinit(self.allocator());
+        errdefer for (pending.items) |id| {
+            self.static_active[@intFromEnum(id)] = false;
+        };
+        self.static_active[@intFromEnum(root)] = true;
+        try pending.append(self.allocator(), root);
+        while (pending.items.len != 0) {
+            const id = pending.items[pending.items.len - 1];
+            const raw = @intFromEnum(id);
+            const initializer = self.lowered.lir_result.static_data_values.items[raw].initializer orelse
+                staticDataInvariant("static value has neither frozen data nor an initializer");
+            if (try self.unevaluatedStaticRead(initializer)) |dependency| {
+                if (self.static_active[@intFromEnum(dependency)]) staticDataInvariant("static initializer data dependency graph contained a cycle");
+                self.static_active[@intFromEnum(dependency)] = true;
+                try pending.append(self.allocator(), dependency);
+                continue;
+            }
+            self.static_roots[raw] = try self.evaluateProc(initializer);
+            self.static_active[raw] = false;
+            _ = pending.pop();
+        }
+        return self.static_roots[@intFromEnum(root)].?;
+    }
+
+    /// A static value that needs no initializer run: already evaluated, or
+    /// read from frozen data. Null when its initializer must run.
+    fn readyStatic(self: *StaticInitializerMachine, id: lir.LIR.StaticDataId) MaterializationError!?*SymbolicValue {
         const raw = @intFromEnum(id);
         if (raw >= self.static_roots.len) staticDataInvariant("static initializer referenced an unknown static data value");
         if (self.static_roots[raw]) |root| return root;
@@ -271,11 +302,72 @@ const StaticInitializerMachine = struct {
         if (self.lowered.lir_result.static_data_values.items[raw].compile_time_root != null) {
             staticDataInvariant("compile-time value slot requires its completed evaluation payload");
         }
-        self.static_active[raw] = true;
-        defer self.static_active[raw] = false;
-        const root = try self.evaluateProc(self.lowered.lir_result.static_data_values.items[raw].initializer orelse staticDataInvariant("static value has neither frozen data nor an initializer"));
-        self.static_roots[raw] = root;
-        return root;
+        return null;
+    }
+
+    /// The first static value an initializer reads whose own initializer has
+    /// not run yet.
+    fn unevaluatedStaticRead(self: *StaticInitializerMachine, proc_id: lir.LIR.LirProcSpecId) MaterializationError!?lir.LIR.StaticDataId {
+        var current = self.store().getProcSpec(proc_id).body orelse staticDataInvariant("static initializer procedure had no body");
+        while (true) {
+            current = switch (self.store().getCFStmt(current)) {
+                .assign_literal => |assign| blk: {
+                    switch (assign.value) {
+                        .static_data => |dependency| if (self.static_roots[@intFromEnum(dependency)] == null and
+                            self.frozen_roots[@intFromEnum(dependency)] == null)
+                        {
+                            if (try self.readyStatic(dependency) == null) return dependency;
+                        },
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .null_ptr, .proc_ref => {},
+                    }
+                    break :blk assign.next;
+                },
+                .assign_ref => |assign| assign.next,
+                .assign_packed_erased_fn => |assign| assign.next,
+                .assign_low_level => |assign| assign.next,
+                .assign_list => |assign| assign.next,
+                .assign_struct => |assign| assign.next,
+                .assign_tag => |assign| assign.next,
+                .set_local => |assign| assign.next,
+                .incref => |arc| arc.next,
+                .decref => |arc| arc.next,
+                .decref_if_initialized => |arc| arc.next,
+                .free => |arc| arc.next,
+                .ret,
+                .init_uninitialized,
+                .assign_call,
+                .assign_call_erased,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .crash,
+                => return null,
+            };
+        }
     }
 
     fn readFrozenValue(self: *StaticInitializerMachine, symbol: StaticDataSymbolId, value_layout: layout.Idx) MaterializationError!*SymbolicValue {
@@ -1457,90 +1549,151 @@ const StaticDataBuilder = struct {
         };
     }
 
+    /// A relocation list being frozen: the root value's, or a reserved
+    /// allocation node's, whose relocations are offset past its header.
+    const FreezeFrame = struct {
+        symbolic: []const SymbolicRelocation,
+        result: []StaticDataRelocation,
+        written: usize = 0,
+        /// The node whose relocations these are, and its data offset.
+        node: ?struct { index: usize, data_offset: u32 } = null,
+    };
+
+    /// Freeze a relocation list. Each allocation it reaches is reserved as
+    /// a node when first reached and its own relocations are frozen before
+    /// the list continues, on an explicit frame stack.
     fn freezeRelocations(
         self: *StaticDataBuilder,
-        symbolic: []const SymbolicRelocation,
+        root: []const SymbolicRelocation,
     ) MaterializationError![]StaticDataRelocation {
-        const result = try self.allocator.alloc(StaticDataRelocation, symbolic.len);
-        var written: usize = 0;
-        errdefer {
-            deinitRelocationSlice(self.allocator, result[0..written]);
-            self.allocator.free(result);
+        var frames: std.ArrayList(FreezeFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        errdefer for (frames.items) |frame| {
+            deinitRelocationSlice(self.allocator, frame.result[0..frame.written]);
+            self.allocator.free(frame.result);
+        };
+        {
+            const result = try self.allocator.alloc(StaticDataRelocation, root.len);
+            errdefer self.allocator.free(result);
+            try frames.append(self.allocator, .{ .symbolic = root, .result = result });
         }
-        for (symbolic, result) |source, *dest| {
-            switch (source.target) {
-                .frozen_symbol => |symbol| {
-                    const target = self.nodes.items[@intFromEnum(symbol)];
-                    dest.* = .{
-                        .offset = source.offset,
-                        .target_symbol_name = target.symbol_name,
-                        .target = .{ .data_symbol = symbol },
-                        .addend = source.addend,
-                        .kind = source.kind,
-                        .callable_capture_offset = source.callable_capture_offset,
-                    };
-                },
-                .allocation => |allocation| {
-                    const target = try self.freezeAllocation(allocation);
-                    dest.* = .{
-                        .offset = source.offset,
-                        .target_symbol_name = target.symbol_name,
-                        .target = .{ .data_symbol = target.symbol },
-                        .addend = target.addend + source.addend,
-                        .kind = source.kind,
-                        .callable_capture_offset = source.callable_capture_offset,
-                    };
-                },
-                .procedure => |proc_id| {
-                    const cached_name = self.procedure_names.get(proc_id);
-                    const name = cached_name orelse try procSymbolName(self.allocator, self.lowered.lir_result.store.getProcSpec(proc_id).identity);
-                    errdefer if (cached_name == null) self.allocator.free(name);
-                    if (cached_name == null) try self.procedure_names.put(proc_id, name);
-                    dest.* = .{
-                        .offset = source.offset,
-                        .target_symbol_name = name,
-                        .addend = source.addend,
-                        .kind = .function_pointer,
-                        .callable_capture_offset = source.callable_capture_offset,
-                        .procedure = proc_id,
-                        .owns_target_symbol_name = cached_name == null,
-                    };
-                },
-                .rc_helper => |helper| {
-                    const cached_name = self.helper_names.get(helper);
-                    const name = cached_name orelse try atomicRcHelperSymbolName(self.allocator, &self.lowered.lir_result.layouts, helper);
-                    errdefer if (cached_name == null) self.allocator.free(name);
-                    if (cached_name == null) try self.helper_names.put(helper, name);
-                    dest.* = .{
-                        .offset = source.offset,
-                        .target_symbol_name = name,
-                        .addend = source.addend,
-                        .kind = .function_pointer,
-                        .callable_capture_offset = source.callable_capture_offset,
-                        .rc_helper = helper,
-                        .owns_target_symbol_name = cached_name == null,
-                    };
-                },
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.written < frame.symbolic.len) {
+                const source = frame.symbolic[frame.written];
+                const reserved = try self.freezeRelocation(source, &frame.result[frame.written]);
+                frame.written += 1;
+                if (reserved) |allocation| {
+                    const result = try self.allocator.alloc(StaticDataRelocation, allocation.relocations.len);
+                    errdefer self.allocator.free(result);
+                    try frames.append(self.allocator, .{
+                        .symbolic = allocation.relocations,
+                        .result = result,
+                        .node = .{ .index = allocation.node_index, .data_offset = allocation.data_offset },
+                    });
+                }
+                continue;
             }
-            written += 1;
+            const finished = frames.pop().?;
+            const node = finished.node orelse return finished.result;
+            for (finished.result) |*relocation| relocation.offset += node.data_offset;
+            self.allocator.free(self.nodes.items[node.index].relocations);
+            self.nodes.items[node.index].relocations = finished.result;
         }
-        return result;
     }
 
-    fn freezeAllocation(
+    /// An allocation reserved as a node whose relocations are still to
+    /// freeze.
+    const ReservedAllocation = struct {
+        node_index: usize,
+        data_offset: u32,
+        relocations: []const SymbolicRelocation,
+    };
+
+    /// Freeze one relocation into `dest`, reserving the allocation it
+    /// targets when that is not frozen yet.
+    fn freezeRelocation(
+        self: *StaticDataBuilder,
+        source: SymbolicRelocation,
+        dest: *StaticDataRelocation,
+    ) MaterializationError!?ReservedAllocation {
+        switch (source.target) {
+            .frozen_symbol => |symbol| {
+                const target = self.nodes.items[@intFromEnum(symbol)];
+                dest.* = .{
+                    .offset = source.offset,
+                    .target_symbol_name = target.symbol_name,
+                    .target = .{ .data_symbol = symbol },
+                    .addend = source.addend,
+                    .kind = source.kind,
+                    .callable_capture_offset = source.callable_capture_offset,
+                };
+                return null;
+            },
+            .allocation => |allocation| {
+                var reserved: ?ReservedAllocation = null;
+                const target = self.frozen_allocations.get(allocation) orelse blk: {
+                    reserved = try self.reserveAllocation(allocation);
+                    break :blk self.frozen_allocations.get(allocation).?;
+                };
+                dest.* = .{
+                    .offset = source.offset,
+                    .target_symbol_name = target.symbol_name,
+                    .target = .{ .data_symbol = target.symbol },
+                    .addend = target.addend + source.addend,
+                    .kind = source.kind,
+                    .callable_capture_offset = source.callable_capture_offset,
+                };
+                return reserved;
+            },
+            .procedure => |proc_id| {
+                const cached_name = self.procedure_names.get(proc_id);
+                const name = cached_name orelse try procSymbolName(self.allocator, self.lowered.lir_result.store.getProcSpec(proc_id).identity);
+                errdefer if (cached_name == null) self.allocator.free(name);
+                if (cached_name == null) try self.procedure_names.put(proc_id, name);
+                dest.* = .{
+                    .offset = source.offset,
+                    .target_symbol_name = name,
+                    .addend = source.addend,
+                    .kind = .function_pointer,
+                    .callable_capture_offset = source.callable_capture_offset,
+                    .procedure = proc_id,
+                    .owns_target_symbol_name = cached_name == null,
+                };
+                return null;
+            },
+            .rc_helper => |helper| {
+                const cached_name = self.helper_names.get(helper);
+                const name = cached_name orelse try atomicRcHelperSymbolName(self.allocator, &self.lowered.lir_result.layouts, helper);
+                errdefer if (cached_name == null) self.allocator.free(name);
+                if (cached_name == null) try self.helper_names.put(helper, name);
+                dest.* = .{
+                    .offset = source.offset,
+                    .target_symbol_name = name,
+                    .addend = source.addend,
+                    .kind = .function_pointer,
+                    .callable_capture_offset = source.callable_capture_offset,
+                    .rc_helper = helper,
+                    .owns_target_symbol_name = cached_name == null,
+                };
+                return null;
+            },
+        }
+    }
+
+    /// Reserve an allocation's node and symbol before its relocations are
+    /// frozen, so the target-memory graph can represent recursive
+    /// allocation cycles without reconstructing or breaking them.
+    fn reserveAllocation(
         self: *StaticDataBuilder,
         id: SymbolicAllocationId,
-    ) MaterializationError!PointerTarget {
-        if (self.frozen_allocations.get(id)) |target| return target;
+    ) MaterializationError!ReservedAllocation {
         const raw = @intFromEnum(id);
         if (raw >= self.initializer_machine.allocations.items.len) {
             staticDataInvariant("static initializer relocation referenced an unknown allocation");
         }
         const allocation = self.initializer_machine.allocations.items[raw];
 
-        // Reserve the symbol before following its relocations. This makes the
-        // target-memory graph capable of representing recursive allocation
-        // cycles without reconstructing or breaking them.
         const symbol_name = try lir.Program.staticDataNodeSymbolName(self.allocator, self.owner, self.owner_node);
         var node_appended = false;
         errdefer if (!node_appended) self.allocator.free(symbol_name);
@@ -1576,12 +1729,11 @@ const StaticDataBuilder = struct {
             .addend = @intCast(data_offset),
         };
         try self.frozen_allocations.put(id, target);
-
-        const relocations = try self.freezeRelocations(allocation.payload.relocations.items);
-        for (relocations) |*relocation| relocation.offset += data_offset;
-        self.allocator.free(self.nodes.items[node_index].relocations);
-        self.nodes.items[node_index].relocations = relocations;
-        return target;
+        return .{
+            .node_index = node_index,
+            .data_offset = data_offset,
+            .relocations = allocation.payload.relocations.items,
+        };
     }
 
     fn deinitNodes(self: *StaticDataBuilder) void {

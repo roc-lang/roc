@@ -299,8 +299,8 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
-Recursive walks over post-check types and values must have an explicit
-termination argument. A structure reachable after checking can be
+Walks over post-check types and values must have an explicit termination
+argument. A structure reachable after checking can be
 self-referential—a recursive nominal's backing, or the fixpoint value of a
 recursively-constructed chain (an iterator wrapped around itself a runtime
 number of times)—so "this walk terminates" is an assumption, not a property,
@@ -354,6 +354,44 @@ carry no budget: `Shape` trees are finite and acyclic by construction—they are
 produced only by the budgeted derivations and a nominal shape's backing is a
 fresh allocation, never a back-reference—so those walks terminate on the
 structure alone.
+
+### Stack Safety
+
+Valid source depth must never become compiler thread call depth, in any
+stage. This covers every kind of depth a valid program can have: expression
+nesting (including a long left-associative operator chain, which parses as a
+deeply nested binary expression), statement-sequence length, pattern nesting,
+type nesting (a list of lists, a record whose field is a record, a callable
+capturing a callable), and the depth of every structure derived from those:
+checked, solved, and Monotype types, layouts, constant values, match trees,
+statement chains, and procedure graphs. Every walk over such a structure, in
+parsing, canonicalization, checking, checked output, Monotype, lifting,
+SpecConstr, lambda solving and lowering, Boxy, Solved-to-LIR lowering, LIR
+passes, backends, compile-time evaluation, the interpreter, and the type and
+layout stores, keeps its pending work in heap-backed explicit storage: a frame
+stack, a worklist, or an action stack. Direct, indirect, and mutual recursion
+over any of these structures is forbidden. Recursion over the structure of a
+Zig type (a comptime-driven walk of a value's fields) is fixed by the type and
+is not source depth.
+
+A walk that combines its components' answers with "any" or "all" (whether a
+type is uninhabited, whether two types are equivalent, whether an expression
+diverges) runs on `collections.AnyAll`. A walk that builds a result from its
+components' results keeps each unfinished node's partial result in its frame
+and resumes the frame with each component's result. Frames reach their
+components, and allocate ids, interned names, spans, locals, and statements,
+in the same order a direct recursive walk would, so the shape of a walk's
+storage never changes its output.
+
+None of these may stand in for explicit storage: a larger thread stack,
+smaller frames, a depth or nesting limit, flattening a structure before walking
+it, or a work budget. A walk that must terminate on cyclic input does so
+through its own visited or active sets or its proof fuel, never through a
+depth cap.
+
+Stack-safety tests compile and run each deep shape on a thread whose stack is
+far smaller than the shape's depth times any per-level recursion cost, so a
+stage that recurses once per level fails them deterministically.
 
 ### Object Symbol Names
 
@@ -8508,7 +8546,7 @@ complete):
   bound value is the slot read materialized as Try—`#Present(v)` yields
   `Ok(v)`, `#Missing` yields `Err(MissingField)`
   (`optionalDestructTryExprAtNode`, sharing the slot-test shape of
-  `lowerOptionalFieldAccessChain`)—constructed at the binder's own
+  `optionalChainRest`)—constructed at the binder's own
   checked Try node, with the row's `CheckedRecordField.kind` directing
   required-vs-optional (explicit upstream data; destructs themselves
   serialize no kind). Statement and parameter positions route such
@@ -8534,7 +8572,7 @@ complete):
   instantiated, before a callee specialization key can depend on the accessed
   result. A
   chain containing any optional segment lowers per-CHAIN
-  (`lowerOptionalFieldAccessChain`): each `.?` segment is a runtime test
+  (`optionalChainRest`): each `.?` segment is a runtime test
   (a match) on the field's tagged slot—the first `#Missing` slot
   short-circuits to `Err(MissingField)`, a `#Present` payload continues the
   chain, required segments after an optional one ride that Ok path as
@@ -9329,6 +9367,12 @@ Other solved-graph mutations:
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
+- `demandPureStep` / `undoPureDemands` (`setVarContent`)—mechanism: unifying
+  an effect-polymorphic function with a pure one makes each of its effect
+  dependencies pure in place, written before the dependency's own
+  dependencies are demanded so a recursive group terminates; a dependency that
+  is already effectful fails the demand and restores every function still
+  waiting on it to its effect-polymorphic content.
 - `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
@@ -12013,6 +12057,14 @@ from its argument evidence, a hosted `Try` request may be widened by the
 expected result's error labels, and an expected cell carrying generated-private
 evidence becomes the request's own result.
 
+A dispatch expression's result type is likewise instantiated once per lowered
+body for every result-type read that carries no expected cell: an enclosing
+dispatch's or call's operand evidence, a request relation's operand evidence,
+and the expression's own representation selection all read the same result
+node. A result carrying generated-private evidence depends on the read and is
+never shared. Without this, every level of a nested dispatch chain would
+re-instantiate every dispatch beneath it.
+
 The `.lss` strategy consumes these plans while producing Monotype IR. The
 `.boxy` strategy does not enter Monotype; it consumes the same checked dispatch
 plans while lowering checked CIR directly to LIR, choosing dictionary/vtable
@@ -12920,6 +12972,22 @@ owning template identity, optional checked body id, and explicit root expression
 id that worker emission must lower. Lifted, synthetic, intrinsic, pending
 callable-eval roots, and generated runtime functions are not compatibility
 fallbacks for this path.
+
+Procedure emission is an explicit scheduler, not a walk over the procedure
+graph. The first reference to a worker, an erased-callable entry, a derived
+method procedure, an erased-callable adapter, or a static dictionary method
+adapter reserves that procedure's header—its arguments, return layout, and the
+return local whose descriptor says whether the procedure can return a runtime
+descriptor—and queues its body, so building one body never builds another.
+The scheduler builds queued bodies in reservation order, first building the
+workers a body calls directly as the plan records them (its direct, iterator,
+and generated-codec calls; a static method adapter's worker), so those call
+sites read their callees' final signatures. A direct call to a worker whose
+body is not built yet (inside a cycle of those edges, or a call the plan does
+not record as one) uses the provisional descriptor ABI when the callee's
+reserved return local carries a descriptor local, resolved when the callee's
+body finishes; a worker whose reserved return local carries none never
+returns a runtime descriptor, so calls to it need no provisional form.
 
 Stored-function capture initialization precedes ordinary body execution but is
 part of the ownership-neutral worker LIR seen by ARC. Static descriptors needed

@@ -132,146 +132,99 @@ pub const Inventory = struct {
         }
     }
 
+    /// Record every loop-result binding in `id` and the tuple items its uses
+    /// demand. Positions are visited in source order on an explicit stack, so
+    /// a binding is always recorded before the uses in its scope.
     pub fn collect(self: *Inventory, id: Ast.ExprId) std.mem.Allocator.Error!void {
-        var current = id;
-        while (true) {
-            if (@import("builtin").is_test) self.expr_visits += 1;
-            switch (self.program.getExpr(current).data) {
-                .inline_expects_enabled => {},
-                .local => |local| self.useLocal(local, null),
-                .tuple_access => |access| {
-                    const receiver = self.program.getExpr(access.tuple);
-                    if (receiver.data == .local) {
-                        self.useLocal(receiver.data.local, access.elem_index);
-                    } else try self.collect(access.tuple);
+        var stack: std.ArrayList(Ast.ExprChild) = .empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, .{ .expr = id });
+        while (stack.pop()) |child| {
+            // Children are appended in source order, then reversed.
+            const start = stack.items.len;
+            switch (child) {
+                .stmt => |stmt_id| switch (self.program.getStmt(stmt_id)) {
+                    .let_ => |let_| {
+                        if (!let_.recursive) try self.binding(let_.pat, let_.value);
+                        try stack.append(self.allocator, .{ .expr = let_.value });
+                    },
+                    .expr, .expect, .dbg => |expr| try stack.append(self.allocator, .{ .expr = expr }),
+                    .return_ => |ret| try stack.append(self.allocator, .{ .expr = ret.value }),
+                    .uninitialized, .crash => {},
                 },
-                .let_ => |let_| {
-                    try self.binding(let_.bind, let_.value);
-                    try self.collect(let_.value);
-                    current = let_.rest;
-                    continue;
-                },
-                .block => |block| {
-                    try self.statements(block.statements);
-                    current = block.final_expr;
-                    continue;
-                },
-                .loop_ => |loop| {
-                    try self.expressions(loop.initial_values);
-                    try self.collect(loop.body);
-                },
-                .list, .tuple => |items| try self.expressions(items),
-                .record => |record_fields| try self.fields(record_fields),
-                .record_update => |update| {
-                    try self.collect(update.base);
-                    try self.fields(update.fields);
-                },
-                .tag => |tag| try self.expressions(tag.payloads),
-                .nominal, .dbg, .expect => |child| try self.collect(child),
-                .static_data_candidate => |candidate| try self.collect(candidate.runtime_expr),
-                .comptime_value => |candidate| try self.collect(candidate.initializer),
-                .typed_boundary => |boundary| try self.collect(boundary.value),
-                .fn_ref => |ref| try self.captures(ref.captures),
-                .call_value => |call| {
-                    try self.collect(call.callee);
-                    try self.expressions(call.args);
-                },
-                .call_proc => |call| {
-                    try self.expressions(call.args);
-                    try self.captures(call.captures);
-                },
-                .low_level => |call| try self.expressions(call.args),
-                .field_access => |field| try self.collect(field.receiver),
-                .structural_eq => |eq| {
-                    try self.collect(eq.lhs);
-                    try self.collect(eq.rhs);
-                },
-                .structural_hash => |hash| {
-                    try self.collect(hash.value);
-                    try self.collect(hash.hasher);
-                },
-                .if_ => |if_| {
-                    const branches = self.program.ifBranchSpan(if_.branches);
-                    for (0..branches.len) |i| {
-                        const branch = GuardedList.at(branches, i);
-                        try self.collect(branch.cond);
-                        try self.collect(branch.body);
+                .expr => |expr_id| {
+                    if (@import("builtin").is_test) self.expr_visits += 1;
+                    switch (self.program.getExpr(expr_id).data) {
+                        .local => |local| self.useLocal(local, null),
+                        .tuple_access => |access| {
+                            const receiver = self.program.getExpr(access.tuple);
+                            if (receiver.data == .local) {
+                                self.useLocal(receiver.data.local, access.elem_index);
+                            } else try stack.append(self.allocator, .{ .expr = access.tuple });
+                        },
+                        .let_ => |let_| {
+                            try self.binding(let_.bind, let_.value);
+                            try Ast.appendChildren(self.allocator, self.program, expr_id, &stack);
+                        },
+                        .join_point => |join| {
+                            const retained = self.program.typedLocalSpan(join.retained);
+                            for (0..retained.len) |i| self.useLocal(GuardedList.at(retained, i).local, null);
+                            try Ast.appendChildren(self.allocator, self.program, expr_id, &stack);
+                        },
+                        .uninitialized_payload => |payload| self.useLocal(payload.condition, null),
+                        .if_initialized_payload => |payload| {
+                            self.useLocal(payload.payload, null);
+                            try Ast.appendChildren(self.allocator, self.program, expr_id, &stack);
+                        },
+                        .lambda, .def_ref, .fn_def => Common.invariant("pre-lift expression in loop exit demand"),
+                        .inline_expects_enabled,
+                        .unit,
+                        .@"unreachable",
+                        .int_lit,
+                        .dec_lit,
+                        .frac_f32_lit,
+                        .frac_f64_lit,
+                        .str_lit,
+                        .bytes_lit,
+                        .crash,
+                        .comptime_exhaustiveness_failed,
+                        .uninitialized,
+                        .block,
+                        .loop_,
+                        .list,
+                        .tuple,
+                        .record,
+                        .record_update,
+                        .tag,
+                        .nominal,
+                        .dbg,
+                        .expect,
+                        .static_data_candidate,
+                        .comptime_value,
+                        .typed_boundary,
+                        .fn_ref,
+                        .call_value,
+                        .call_proc,
+                        .low_level,
+                        .field_access,
+                        .structural_eq,
+                        .structural_hash,
+                        .if_,
+                        .match_,
+                        .jump,
+                        .break_,
+                        .continue_,
+                        .return_,
+                        .comptime_branch_taken,
+                        .expect_err,
+                        .literal_rejected,
+                        .try_sequence,
+                        .try_record_sequence,
+                        => try Ast.appendChildren(self.allocator, self.program, expr_id, &stack),
                     }
-                    try self.collect(if_.final_else);
                 },
-                .match_ => |match| {
-                    try self.collect(match.scrutinee);
-                    const branches = self.program.branchSpan(match.branches);
-                    for (0..branches.len) |i| {
-                        const branch = GuardedList.at(branches, i);
-                        try self.statements(branch.bindings);
-                        if (branch.guard) |guard| try self.collect(guard);
-                        try self.collect(branch.body);
-                    }
-                },
-                .join_point => |join| {
-                    const retained = self.program.typedLocalSpan(join.retained);
-                    for (0..retained.len) |i| self.useLocal(GuardedList.at(retained, i).local, null);
-                    try self.collect(join.body);
-                    try self.collect(join.remainder);
-                },
-                .jump => |jump| {
-                    try self.expressions(jump.args);
-                    try self.expressions(jump.loop_values);
-                },
-                .break_ => |value| if (value) |expr| try self.collect(expr),
-                .continue_ => |cont| try self.expressions(cont.values),
-                .return_ => |ret| try self.collect(ret.value),
-                .comptime_branch_taken => |taken| try self.collect(taken.body),
-                .expect_err => |err| try self.collect(err.msg),
-                .literal_rejected => |err| try self.collect(err.msg),
-                .uninitialized_payload => |payload| self.useLocal(payload.condition, null),
-                .if_initialized_payload => |payload| {
-                    self.useLocal(payload.payload, null);
-                    try self.collect(payload.cond);
-                    try self.collect(payload.initialized);
-                    try self.collect(payload.uninitialized);
-                },
-                .try_sequence => |seq| {
-                    try self.collect(seq.try_expr);
-                    try self.collect(seq.ok_body);
-                },
-                .try_record_sequence => |seq| {
-                    try self.collect(seq.try_expr);
-                    try self.collect(seq.ok_body);
-                },
-                .lambda, .def_ref, .fn_def => Common.invariant("pre-lift expression in loop exit demand"),
-                .unit, .@"unreachable", .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized => {},
             }
-            return;
+            std.mem.reverse(Ast.ExprChild, stack.items[start..]);
         }
-    }
-
-    fn statements(self: *Inventory, span: Ast.Span(Ast.StmtId)) std.mem.Allocator.Error!void {
-        const stmts = self.program.stmtSpan(span);
-        for (0..stmts.len) |i| switch (self.program.getStmt(GuardedList.at(stmts, i))) {
-            .let_ => |let_| {
-                if (!let_.recursive) try self.binding(let_.pat, let_.value);
-                try self.collect(let_.value);
-            },
-            .expr, .expect, .dbg => |expr| try self.collect(expr),
-            .return_ => |ret| try self.collect(ret.value),
-            .uninitialized, .crash => {},
-        };
-    }
-
-    fn expressions(self: *Inventory, span: Ast.Span(Ast.ExprId)) std.mem.Allocator.Error!void {
-        const exprs = self.program.exprSpan(span);
-        for (0..exprs.len) |i| try self.collect(GuardedList.at(exprs, i));
-    }
-
-    fn fields(self: *Inventory, span: Ast.Span(Ast.FieldExpr)) std.mem.Allocator.Error!void {
-        const items = self.program.fieldExprSpan(span);
-        for (0..items.len) |i| try self.collect(GuardedList.at(items, i).value);
-    }
-
-    fn captures(self: *Inventory, span: Ast.Span(Ast.CaptureOperand)) std.mem.Allocator.Error!void {
-        const items = self.program.captureOperandSpan(span);
-        for (0..items.len) |i| try self.collect(GuardedList.at(items, i).value);
     }
 };
