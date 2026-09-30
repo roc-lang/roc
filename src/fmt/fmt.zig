@@ -501,6 +501,14 @@ const Formatter = struct {
     writer: *std.Io.Writer,
     /// Cached output layout for type annotations and their record fields.
     type_layouts: []TypeLayout,
+    /// Ordinary layout predictions, indexed by the shared AST node domain.
+    node_layouts: []TypeLayout,
+    /// Grouped predictions normalize source-only newlines independently.
+    grouped_layouts: []TypeLayout,
+    /// Prefix counts of comments in inter-token gaps.
+    comment_prefix: []u32,
+    layout_computations: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
+    grouped_layout_computations: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
     options: Options,
     /// Set while formatting a header whose version pin is out of date.
     roc_version_upgrade: ?RocVersionUpgrade = null,
@@ -518,18 +526,42 @@ const Formatter = struct {
     /// Creates a new Formatter for the given parse IR.
     fn init(ast: AST, writer: *std.Io.Writer, options: Options) Allocator.Error!Formatter {
         const type_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
+        errdefer ast.gpa.free(type_layouts);
         @memset(type_layouts, .unknown);
+        const node_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
+        errdefer ast.gpa.free(node_layouts);
+        @memset(node_layouts, .unknown);
+        const grouped_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
+        errdefer ast.gpa.free(grouped_layouts);
+        @memset(grouped_layouts, .unknown);
+        const comment_prefix = try ast.gpa.alloc(u32, ast.tokens.tokens.len + 1);
+        errdefer ast.gpa.free(comment_prefix);
+        comment_prefix[0] = 0;
+        for (0..ast.tokens.tokens.len) |i| {
+            const token: Token.Idx = @intCast(i);
+            const start = if (token == 0) 0 else ast.tokens.resolve(token - 1).end.offset;
+            const end = ast.tokens.resolve(token).start.offset;
+            comment_prefix[i + 1] = comment_prefix[i] + @as(u32, @intFromBool(
+                std.mem.findScalar(u8, ast.env.source[start..end], '#') != null,
+            ));
+        }
 
         return .{
             .ast = ast,
             .writer = writer,
             .type_layouts = type_layouts,
+            .node_layouts = node_layouts,
+            .grouped_layouts = grouped_layouts,
+            .comment_prefix = comment_prefix,
             .options = options,
         };
     }
 
     fn deinit(fmt: *Formatter) void {
         fmt.ast.gpa.free(fmt.type_layouts);
+        fmt.ast.gpa.free(fmt.node_layouts);
+        fmt.ast.gpa.free(fmt.grouped_layouts);
+        fmt.ast.gpa.free(fmt.comment_prefix);
     }
 
     /// Deinits all data owned by the formatter object.
@@ -3703,11 +3735,7 @@ const Formatter = struct {
 
     fn regionHasInteriorComment(fmt: *Formatter, region: AST.TokenizedRegion) bool {
         if (region.end <= region.start + 1) return false;
-        var token = region.start + 1;
-        while (token < region.end) : (token += 1) {
-            if (fmt.hasCommentBefore(token)) return true;
-        }
-        return false;
+        return fmt.comment_prefix[region.end] != fmt.comment_prefix[region.start + 1];
     }
 
     fn regionClosingToken(fmt: *Formatter, region: AST.TokenizedRegion) ?Token.Idx {
@@ -4130,6 +4158,19 @@ const Formatter = struct {
     }
 
     fn groupedExprWillBeMultiline(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
+        const entry = &fmt.grouped_layouts[@intFromEnum(expr_idx)];
+        switch (entry.*) {
+            .compact => return false,
+            .expanded => return true,
+            .unknown => {},
+        }
+        if (builtin.is_test) fmt.grouped_layout_computations += 1;
+        const multiline = fmt.groupedExprWillBeMultilineUncached(expr_idx);
+        entry.* = if (multiline) .expanded else .compact;
+        return multiline;
+    }
+
+    fn groupedExprWillBeMultilineUncached(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
         const expr = fmt.ast.store.getExpr(expr_idx);
         if (expr == .method_call) {
             const method = expr.method_call;
@@ -4212,6 +4253,19 @@ const Formatter = struct {
     }
 
     fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
+        const entry = &fmt.node_layouts[@intFromEnum(item)];
+        switch (entry.*) {
+            .compact => return false,
+            .expanded => return true,
+            .unknown => {},
+        }
+        if (builtin.is_test) fmt.layout_computations += 1;
+        const multiline = fmt.nodeWillBeMultilineUncached(T, item);
+        entry.* = if (multiline) .expanded else .compact;
+        return multiline;
+    }
+
+    fn nodeWillBeMultilineUncached(fmt: *Formatter, comptime T: type, item: T) bool {
         if (T == AST.Expr.Idx) {
             const expr = fmt.ast.store.getExpr(item);
             if (expr == .method_call) {
@@ -6844,4 +6898,64 @@ test "builtin facts are reused across directory files and later paths" {
     try std.testing.expectEqual(syntax, facts.syntax.?);
     try std.testing.expectEqual(position_count, facts.syntax.?.rows.position_cache.count());
     try std.testing.expectEqualStrings("", stderr.written());
+}
+
+test "issue 11889: deeply nested collections compute layouts once per node" {
+    const gpa = std.testing.allocator;
+    const depth = 2000;
+    const input = try gpa.alloc(u8, 4 + depth * 2 + 2);
+    defer gpa.free(input);
+    @memcpy(input[0..4], "x = ");
+    @memset(input[4..][0..depth], '[');
+    input[4 + depth] = '1';
+    @memset(input[5 + depth ..][0..depth], ']');
+    input[input.len - 1] = '\n';
+
+    var env = try ModuleEnv.init(gpa, input);
+    defer env.deinit();
+    const ast = try parse.file(gpa, &env.common);
+    defer ast.deinit();
+    try std.testing.expectEqual(0, ast.parse_diagnostics.items.len);
+    var output = std.Io.Writer.Allocating.init(gpa);
+    defer output.deinit();
+    var fmt = try Formatter.init(ast.*, &output.writer, .{});
+    defer fmt.deinit();
+    try fmt.formatFile();
+    try fmt.flush();
+    try std.testing.expectEqualStrings(input, output.written());
+    try std.testing.expect(fmt.layout_computations >= depth);
+    try std.testing.expect(fmt.layout_computations <= ast.store.nodeCount());
+
+    // Grouping has different newline rules and therefore its own memo.
+    const statement = ast.store.getStatement(ast.store.statementSlice(ast.store.getFile().statements)[0]);
+    const expr = statement.decl.body;
+    try std.testing.expect(!fmt.groupedExprWillBeMultiline(expr));
+    const computations = fmt.grouped_layout_computations;
+    try std.testing.expect(!fmt.groupedExprWillBeMultiline(expr));
+    try std.testing.expectEqual(computations, fmt.grouped_layout_computations);
+    try std.testing.expect(computations <= ast.store.nodeCount());
+}
+
+test "comment prefix matches inter-token scans for every region" {
+    const gpa = std.testing.allocator;
+    const input = "x = [ # first\n [1], # second\n \"# string\", 2 # last\n]\n";
+    var env = try ModuleEnv.init(gpa, input);
+    defer env.deinit();
+    const ast = try parse.file(gpa, &env.common);
+    defer ast.deinit();
+    try std.testing.expectEqual(0, ast.parse_diagnostics.items.len);
+    var output = std.Io.Writer.Allocating.init(gpa);
+    defer output.deinit();
+    var fmt = try Formatter.init(ast.*, &output.writer, .{});
+    defer fmt.deinit();
+    for (0..ast.tokens.tokens.len + 1) |start| {
+        for (start..ast.tokens.tokens.len + 1) |end| {
+            var expected = false;
+            var token = start + 1;
+            while (token < end) : (token += 1) {
+                expected = expected or fmt.hasCommentBefore(@intCast(token));
+            }
+            try std.testing.expectEqual(expected, fmt.regionHasInteriorComment(.{ .start = @intCast(start), .end = @intCast(end) }));
+        }
+    }
 }
