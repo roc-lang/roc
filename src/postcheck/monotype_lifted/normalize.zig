@@ -272,6 +272,12 @@ const Normalizer = struct {
         const result = delivered.?;
         const statements = self.sink(scope_sink);
         if (statements.list.items.len == 0) return .{ .done = result };
+        // The scope's block stands where its source expression did.
+        const saved = self.saveLocation();
+        defer self.restoreLocation(saved);
+        self.program.current_loc = self.program.exprLoc(frame.source);
+        self.program.current_region = self.program.exprRegion(frame.source);
+        self.program.current_inline_scope = self.program.exprInlineScope(frame.source);
         return .{ .done = try self.program.addExpr(.{ .ty = self.program.getExpr(result).ty, .data = .{ .block = .{
             .statements = try self.program.addStmtSpan(statements.list.items),
             .final_expr = result,

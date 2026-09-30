@@ -2176,11 +2176,11 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         // A template miss relates its open interface through a summarized
         // expansion, which instantiates the template's root on detached
         // copies of the request.
-        .nominal_backing_reuses = 13,
+        .nominal_backing_reuses = 10,
         // Each direct call instantiates its callee's checked type once per
         // body and shares that request across its result-type queries and
         // its own lowering.
-        .nominal_backing_instantiations = 29,
+        .nominal_backing_instantiations = 32,
     });
 }
 
@@ -2655,8 +2655,8 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .exact_type_checks = 0,
         // Each template miss also instantiates the template's root once for
         // its interface relations' summarized expansion.
-        .nominal_backing_reuses = 38,
-        .nominal_backing_instantiations = 79,
+        .nominal_backing_reuses = 31,
+        .nominal_backing_instantiations = 86,
     });
 }
 
