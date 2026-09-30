@@ -18,6 +18,7 @@ const RangeProve = @import("range_prove.zig");
 const BoxReuse = @import("box_reuse.zig");
 const ForwardingJoinInline = @import("forwarding_join_inline.zig");
 const TagCaseFusion = @import("tag_case_fusion.zig");
+const KnownTagJump = @import("known_tag_jump.zig");
 
 const Allocator = std.mem.Allocator;
 const LIR = core.LIR;
@@ -125,6 +126,7 @@ const TaskContext = struct {
                     try ForwardingJoinInline.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
                 } else {
                     try TagCaseFusion.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
+                    try KnownTagJump.runProc(&shard, self.proc, scratch_allocator);
                 }
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },

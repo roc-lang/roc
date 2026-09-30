@@ -5701,7 +5701,16 @@ loop control not owned by a loop inside the body remain procedures, and cycles
 consisting entirely of selected inline bodies are rejected before lowering. The
 analyzer records the complete decision before LIR generation; direct
 Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
-body at its unique call site. The existing wrapper eligibility remains available
+body at its unique call site. An argument that is a plain read of a caller
+lexical binding at the parameter's exact type and committed layout binds the
+parameter to that caller local itself; every other argument is evaluated into
+a fresh temp as for a call. The inlined body writes no caller local other than
+the call's result target, which is excluded, so the substituted local holds
+the argument value for the whole body. A snapshot temp would instead be a
+second name bound before the body's branches: when the caller keeps the
+original local on one outcome and the body consumes the parameter on another,
+ARC would retain the value at the snapshot on every path, and a list the body
+appends to would be copied on each call. The existing wrapper eligibility remains available
 for proven small call-through and low-level wrappers even when they have multiple
 direct uses. Checked call-through wrappers also qualify when a single-condition
 `if` has a literal-crash arm and a continuing wrapper arm. The guard and both
@@ -6240,8 +6249,13 @@ stamped procedures, so ordinary dev code pays neither their analysis cost nor
 their structural changes.
 
 A third rewrite, tag-case fusion, runs under lambda-set specialization in every
-inline mode and in every procedure: literal tag edges bypass a join whose body
-immediately matches that tag, so the union is never materialized. The
+inline mode, at every optimization level, and in every procedure: literal tag
+edges bypass a join whose body immediately matches that tag, so the union is
+never materialized. It bounds list copying rather than shaving constant
+factors, so dev builds run it alongside TRMC and loop append promotion: while
+the union is materialized, a value the matching arm keeps is live across the
+producer, and a list the producer appends to is copied on every loop
+iteration. The
 substituted checked wrappers of `.wrappers` mode produce exactly this shape at
 every call site (a `Try` built on each arm and matched at once by the caller),
 as does the iterator-fusion clone of `.none`. A producer edge may release
@@ -6276,6 +6290,35 @@ The original shared continuation keeps its original remainder. Fusion then
 plans against the private clone; it must never copy a shared declaration's
 identity into a second reachable statement or redirect another entry through
 the tag producers.
+
+Known-tag jump threading runs in the same phase, after fusion, and handles a
+tag that reaches its match through joins with other parameters. A flag loop
+(`$done = Bool.True`) ends an iteration by jumping to a merge join with a
+literal tag for the flag and the unchanged loop state for the rest; the merge
+join forwards to the loop header, whose body switches on the flag and jumps to
+the exit. The edge is rewritten to jump straight to the selected exit, which
+removes the forwarded state from that path. Otherwise the state is live across
+the iteration's producers on every path, ARC retains it across the call that
+consumes it, and a list in it is copied each iteration. The rewrite is exact:
+
+- the edge is a linear run of pure local aliases, payload-free tags, literals,
+  structs, and writes of the target join's parameters ending in its jump, and
+  every statement in the run has exactly one structural predecessor;
+- each join it passes through has ordinary parameters only, and its body
+  consists of local aliases, discriminant reads, field reads, literals, join
+  declarations, and writes of the next join's parameters before its jump,
+  until one body reaches a switch whose condition is a known discriminant of
+  a tag built on the edge (directly or through a tag bound once), and whose
+  selected arm is a bare jump to a parameterless join;
+- that exit join lexically encloses the edge, so the new jump is in scope;
+- nothing the exit executes, following its jumps into join bodies, reads a
+  definition the threaded path skips or a parameter the edge would have
+  changed. Parameters the edge passes their own current value are unchanged.
+
+The rewritten edge keeps its statements except the parameter writes and the
+definitions no remaining statement reads, then jumps to the exit. Any other
+shape is left unchanged; nothing is predicted, and the same edge still selects
+the same arm.
 
 The clone propagates constructor values through ordinary bindings and solves
 loop fixed points over their leaves. As a result, `.none` mode does not rebuild
@@ -14478,9 +14521,9 @@ regression fails loudly instead of shipping.
 
 ### Procedure-Local LIR Rewrites
 
-TRMC, forwarding-join inlining, tag-case fusion, join scalarization, loop
-append promotion, range proving, and box reuse preserve their pipeline order
-and existing procedure eligibility. Within one phase, procedure bodies own disjoint
+TRMC, forwarding-join inlining, tag-case fusion and known-tag jump threading,
+join scalarization, loop append promotion, range proving, and box reuse
+preserve their pipeline order and existing procedure eligibility. Within one phase, procedure bodies own disjoint
 writable statement rows. Rewriting reads a frozen phase input and produces a
 sparse patch of those rows, new body-owned data, and one procedure's metadata.
 The coordinator reserves pointer layouts and helper summaries before dispatch;
@@ -15808,8 +15851,11 @@ here first and pinning both its accepted and rejected cases with tests.
 A caller uses restitution only when the result-control relation is explicit in
 LIR. Until that proof succeeds the call continues to target the unconditional
 base procedure, which releases every unreturned owned argument itself. The
-direct call result may pass through pure same-value aliases, then one
-explicit discriminant read must feed a switch. Each explicit switch arm is
+direct call result may pass through pure same-value aliases and join
+declarations, then one explicit discriminant read must feed a switch. A join
+declaration executes only its remainder, so the walk continues there; a
+statement `match` over a call result declares its merge join before switching.
+Each explicit switch arm is
 matched by its integer value; the default arm denotes exactly the signature's
 outcome rows not named by explicit arms. For an argument position, an arm may
 restore the unit only when every outcome reaching that arm carries the bit.
@@ -15855,6 +15901,25 @@ otherwise lacks the exact receipt, the call retains the unconditional base
 convention; a partial set of receipts must never select the complete span.
 Fixed-point revisits replace or clear the whole call-position receipt set
 before recording a new atomic decision.
+
+Evaluating a call argument binds an owned pure same-value alias of the
+caller's local, so the argument and the local are distinct names for one
+ownership place. When the local stays live after the alias, the alias bind
+would ordinarily retain. It instead moves the local's unit into the alias when
+the alias is an argument of a checked direct call reached with only
+same-container aliases, non-RC field reads, and statements that do not mention
+the local in between, and that call's outcome switch restores the local's unit
+on every arm where the local is read again, and when the call's outcome rows
+name no restitutable position other than the alias's. The alias bind registers
+the local as the resource the refinement restores for that position, exactly
+as an ownership-complete field read registers its root, so the call's outcome
+admission sees the root receipt and selects the outcome convention. Admission
+is atomic over every restitutable position, and a moved unit cannot be taken
+back once the alias is bound; with one restitutable position every fact the
+admission checks is already proven at the alias bind. Without
+this, the retained alias would be the call's only argument unit and the callee
+would find its input shared on every call, so an append in a loop would copy
+the list each iteration.
 
 Ownership places compose with restitution. If an ownership-complete field or
 tag-payload read moves a dying aggregate's stored unit into a checked call, a

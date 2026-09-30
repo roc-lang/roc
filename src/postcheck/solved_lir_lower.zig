@@ -7088,8 +7088,21 @@ const Lowerer = struct {
         // model destination demand directly.
         if (capture_arg == null and !is_cold and !has_return_reuse) {
             if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
+                // An argument that reads a caller local at the parameter's
+                // exact type binds the inlined parameter to that local
+                // itself. A snapshot temp would be a second name bound before
+                // the body's branches, so a caller that keeps the local on
+                // one outcome would retain it across every other outcome's
+                // consuming use.
+                const substituted = try self.allocator.alloc(bool, lowered.ids.len);
+                defer self.allocator.free(substituted);
+                for (lowered.exprs, arg_tys, 0..) |arg_expr, arg_ty, i| {
+                    const source = try self.inlineArgumentLocal(arg_expr, arg_ty, lowered.ids[i], call_target);
+                    substituted[i] = source != null;
+                    if (source) |local| lowered.ids[i] = local;
+                }
                 var current = try self.lowerInlineKnownCallInto(where, call_target, callee, lowered.ids, body_expr, after_call);
-                current = try self.prependExprsAtTypes(where, lowered, arg_tys, current);
+                current = try self.prependUnsubstitutedExprsAtTypes(where, lowered, arg_tys, substituted, current);
                 return current;
             }
         }
@@ -10476,21 +10489,69 @@ const Lowerer = struct {
         tys: []const Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        return try self.prependUnsubstitutedExprsAtTypes(where, lowered, tys, null, next);
+    }
+
+    /// Evaluates each argument into its temp, skipping the positions an
+    /// inlined call already bound to the caller locals they read.
+    fn prependUnsubstitutedExprsAtTypes(
+        self: *Lowerer,
+        where: LowerSite,
+        lowered: LoweredExprLocals,
+        tys: []const Type.TypeId,
+        substituted: ?[]const bool,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
         if (lowered.ids.len != tys.len) Common.invariant("typed expression prepend arity differed from local arity");
+        if (substituted) |mask| if (mask.len != tys.len) Common.invariant("inline argument substitution arity differed from local arity");
         var current = next;
         var i = lowered.ids.len;
         while (i > 0) {
             i -= 1;
+            if (substituted) |mask| if (mask[i]) continue;
             if (!self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
             current = try self.lowerExprIntoAtType(where, lowered.ids[i], lowered.exprs[i], tys[i], current);
         }
         i = lowered.ids.len;
         while (i > 0) {
             i -= 1;
+            if (substituted) |mask| if (mask[i]) continue;
             if (self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
             current = try self.lowerExprIntoAtType(where, lowered.ids[i], lowered.exprs[i], tys[i], current);
         }
         return current;
+    }
+
+    /// The caller local an inlined parameter can bind directly: a plain read
+    /// of a lexical binding whose committed type and layout equal the
+    /// parameter's, so lowering the read would emit exactly one local alias.
+    /// The inlined body writes only `call_target` among caller locals, so
+    /// every other local keeps its value for the whole body.
+    fn inlineArgumentLocal(
+        self: *Lowerer,
+        expr_id: Lifted.ExprId,
+        ty: Type.TypeId,
+        temp: LIR.LocalId,
+        call_target: LIR.LocalId,
+    ) Common.LowerError!?LIR.LocalId {
+        const data = self.solved.lifted.getExpr(expr_id).data;
+        if (data != .local) return null;
+        const local = data.local;
+        if (self.aggregate_bindings) |aggregates| {
+            if (aggregates.bindings.contains(local)) return null;
+        }
+        const source = if (self.typed_local_map.get(.{ .local = local, .ty = ty })) |typed|
+            typed
+        else if (self.local_map.get(local)) |plain| blk: {
+            if (try self.lowerLocalTy(local) != ty) return null;
+            break :blk plain;
+        } else return null;
+        if (source == call_target) return null;
+        const temp_layout = self.result.store.getLocal(temp).layout_idx;
+        const source_layout = self.result.store.getLocal(source).layout_idx;
+        if (!self.layoutsMatch(temp_layout, source_layout)) return null;
+        try self.noteLocal(source);
+        return source;
     }
 
     fn prependJoinExprsAtTypes(

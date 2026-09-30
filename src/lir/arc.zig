@@ -4464,7 +4464,24 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
-        const move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
+        var move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
+        if (!move_value and self.ownsUnit(owned, source) and self.localContainsRefcounted(source)) {
+            // The source stays live, but the alias may be the argument of a
+            // checked call whose outcome switch restores the source's unit on
+            // every path that reads the source again. The alias then carries
+            // the source's only unit into that call, as an ownership-complete
+            // field read carries its root's unit. The call must then admit
+            // its outcome convention, and admission is atomic over every
+            // restitutable position; when the alias's position is the only
+            // one, everything admission checks is proven here already.
+            const unit = self.unitOf(source);
+            if (try self.carriedRootRestitution(target, unit, next)) |claim| {
+                if (self.outcomeRestitutableMask(claim.sig) == arc_sig.paramBit(claim.position).?) {
+                    try self.setOutcomeRestoration(claim, true);
+                    move_value = true;
+                }
+            }
+        }
         const release_old_target = try self.takeRebindTarget(owned, target);
         if (move_value) _ = try self.takeUnit(owned, source);
         try self.placeUnit(owned, target);
@@ -4500,7 +4517,7 @@ const Inserter = struct {
         const root_used = try self.ownershipPlaceUsedInPath(next, unit);
         const has_unit = owned.contains(unit);
         const restitution = if (root_used)
-            try self.completeProjectionRestitution(target, unit, next)
+            try self.carriedRootRestitution(target, unit, next)
         else
             null;
         const move_root = has_unit and (!root_used or restitution != null);
@@ -4526,14 +4543,15 @@ const Inserter = struct {
         return false;
     }
 
-    /// Exact initial ownership-place composition rule: between a complete
-    /// projection and its checked direct call, only same-container aliases,
-    /// non-RC field reads, and statements that do not mention the container
-    /// may intervene. The call's explicit outcome switch must then guard every
-    /// later use of the root with restitution.
-    fn completeProjectionRestitution(
+    /// Exact initial ownership-place composition rule: between a binding that
+    /// carries the root's unit (an ownership-complete field read or a pure
+    /// same-value alias of the root) and its checked direct call, only
+    /// same-container aliases, non-RC field reads, and statements that do not
+    /// mention the container may intervene. The call's explicit outcome switch
+    /// must then guard every later use of the root with restitution.
+    fn carriedRootRestitution(
         self: *Inserter,
-        projection: LIR.LocalId,
+        carrier: LIR.LocalId,
         root: LIR.LocalId,
         next: LIR.CFStmtId,
     ) ResourceError!?OutcomeRestitution {
@@ -4571,17 +4589,17 @@ const Inserter = struct {
                 cursor = stmt.assign_low_level.next;
             } else if (stmt == .assign_call) {
                 const args = self.store.getLocalSpan(stmt.assign_call.args);
-                var projection_position: ?usize = null;
+                var carrier_position: ?usize = null;
                 for (0..GuardedList.borrowLen(args)) |position| {
                     const arg = GuardedList.at(args, position);
-                    if (arg == projection) {
-                        if (projection_position != null) return null;
-                        projection_position = position;
+                    if (arg == carrier) {
+                        if (carrier_position != null) return null;
+                        carrier_position = position;
                     } else if (aliasesContain(aliases.items, arg)) {
                         return null;
                     }
                 }
-                if (projection_position) |position| {
+                if (carrier_position) |position| {
                     var sig = self.solution.sigOf(stmt.assign_call.proc);
                     sig.outcomes = self.solution.availableOutcomeSpanOf(stmt.assign_call.proc);
                     if (!self.outcomeArgumentsHaveDistinctPlaces(stmt.assign_call.args, sig)) return null;
@@ -5247,6 +5265,11 @@ const Inserter = struct {
                     },
                     .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
                 }
+            } else if (stmt == .join) {
+                // Declaring a continuation does not execute it; a statement
+                // `match` over the result declares its merge join first and
+                // switches in the join's remainder.
+                cursor = stmt.join.remainder;
             } else if (stmt == .switch_stmt) {
                 if (discriminant == null or stmt.switch_stmt.cond != discriminant.?) return null;
                 return .{ .stmt = cursor };
@@ -13998,6 +14021,93 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     }
     try testing.expect(remaining > 0);
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
+test "RC outcome restitution moves an argument alias's source unit through a match join" {
+    // `match f(list) { Ok(_) => ..., Err(_) => list }` evaluates the argument
+    // into an alias of `list` and declares the match's merge join before
+    // reading the result's discriminant. When only the restoring arm reads
+    // `list` again, the alias carries its only unit into the outcome variant;
+    // when the consuming arm reads it too, the alias must retain.
+    for ([_]bool{ false, true }) |success_reads_input| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+            try f.layouts.ensureZstLayout(),
+            f.list_str,
+        });
+
+        const param = try f.local(f.list_str);
+        const choose_success = try f.local(.i64);
+        const changed = try f.local(f.list_str);
+        const callee_result = try f.local(try_list);
+        const success_ret = try f.ret(callee_result);
+        const success_tag = try f.assignTag(callee_result, 1, changed, success_ret);
+        const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = changed,
+            .op = .list_reverse,
+            .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+            .args = try f.span(&.{param}),
+            .next = success_tag,
+        } }, .test_fixture);
+        const failure_ret = try f.ret(callee_result);
+        const failure_tag = try f.assignTag(callee_result, 0, null, failure_ret);
+        const callee_body = try f.switchStmt(choose_success, mutate, failure_tag, null);
+        const callee = try f.addProc(&.{ param, choose_success }, callee_body, try_list);
+
+        const item = try f.local(.str);
+        const input = try f.local(f.list_str);
+        const argument = try f.local(f.list_str);
+        const caller_choose = try f.local(.i64);
+        const call_result = try f.local(try_list);
+        const discriminant = try f.local(.u8);
+        const merged = try f.local(.i64);
+        const success_value = try f.local(.i64);
+        const failure_value = try f.local(.i64);
+        const merge = f.freshJoinPointId();
+        const merge_ret = try f.ret(merged);
+        const success_jump = try f.store.addCFStmt(.{ .jump = .{ .target = merge } }, .test_fixture);
+        const success_set = try f.store.addCFStmt(.{ .set_local = .{ .target = merged, .value = success_value, .mode = .initialize_join_param, .next = success_jump } }, .test_fixture);
+        const success_done = try f.assignI64(success_value, 1, success_set);
+        const success_body = if (success_reads_input) try f.expectStmt(input, success_done) else success_done;
+        const failure_jump = try f.store.addCFStmt(.{ .jump = .{ .target = merge } }, .test_fixture);
+        const failure_set = try f.store.addCFStmt(.{ .set_local = .{ .target = merged, .value = failure_value, .mode = .initialize_join_param, .next = failure_jump } }, .test_fixture);
+        const failure_done = try f.assignI64(failure_value, 0, failure_set);
+        const failure_body = try f.expectStmt(input, failure_done);
+        const refine = try f.switchStmt(discriminant, success_body, failure_body, null);
+        const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+        const merge_join = try f.store.addCFStmt(.{ .join = .{
+            .id = merge,
+            .params = try f.span(&.{merged}),
+            .body = merge_ret,
+            .remainder = read_discriminant,
+        } }, .test_fixture);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = call_result,
+            .proc = callee,
+            .args = try f.span(&.{ argument, caller_choose }),
+            .next = merge_join,
+        } }, .test_fixture);
+        const choose = try f.assignI64(caller_choose, 1, call);
+        const alias_input = try f.assignRefLocal(argument, input, choose);
+        const make_input = try f.assignList(input, &.{item}, alias_input);
+        const caller_body = try f.assignStr(item, "nested", make_input);
+        _ = try f.addProc(&.{}, caller_body, .i64);
+
+        const base_proc_count = f.store.procSpecCount();
+        try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+        var outcome_call = false;
+        for (0..f.store.cfStmtCount()) |stmt_index| {
+            const stmt = f.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            if (stmt == .assign_call and stmt.assign_call.target == call_result) {
+                outcome_call = stmt.assign_call.proc != callee;
+            }
+        }
+        try testing.expectEqual(!success_reads_input, outcome_call);
+        try testing.expectEqual(base_proc_count + @intFromBool(!success_reads_input), f.store.procSpecCount());
+        try testing.expectEqual(@as(usize, @intFromBool(success_reads_input)), f.countRc(input, .incref) + f.countRc(argument, .incref));
+    }
 }
 
 test "RC outcome restitution spends retained arguments through aliases only on success" {
