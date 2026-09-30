@@ -4151,7 +4151,23 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
-            .list_set, .list_set_in_place_unsafe => {
+            .list_map_cast_unsafe => {
+                // An in-place map's storage keeps every slot, so the cast
+                // output has the input's length.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |in_node| {
+                        if (self.len_terms.get(self.rootOf(in_node))) |len_term| {
+                            if (try self.unknownFor(self.localLayout(s.target))) |out_node| {
+                                try self.len_terms.put(out_node, len_term);
+                                try self.bind(s.target, .{ .node = out_node });
+                                return;
+                            }
+                        }
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
+            .list_set, .list_set_in_place_unsafe, .list_map_write_unsafe => {
                 // Replacing one element preserves the list's length on every
                 // continuing path, so the result shares the input's length
                 // term.
@@ -4382,9 +4398,7 @@ const Pass = struct {
             .list_split_first,
             .list_split_last,
             .list_map_can_reuse,
-            .list_map_cast_unsafe,
             .list_map_extract_unsafe,
-            .list_map_write_unsafe,
             .dict_pseudo_seed,
             .hasher_finish,
             .hasher_write_bool,
