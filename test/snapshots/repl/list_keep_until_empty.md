@@ -5,7 +5,7 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» keep_until([1, 2, 3], |_| Bool.True)
+» List.keep_until([1, 2, 3], |_| Bool.True)
 ~~~
 # OUTPUT
 []

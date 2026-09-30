@@ -5,7 +5,7 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» keep_while([1, 2, 3], |item| item < 3)
+» List.keep_while([1, 2, 3], |item| item < 3)
 ~~~
 # OUTPUT
 [1.0, 2.0]

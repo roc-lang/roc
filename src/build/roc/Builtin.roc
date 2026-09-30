@@ -4574,7 +4574,7 @@ Builtin :: [].{
 		## ```
 		keep_until : List(item), (item -> Bool) -> List(item)
 		keep_until = |items, predicate| {
-		  var $result = List.reserve([], items.len
+		  var $result = List.reserve([], items.len)
 		  for item in items {
 		  	    if predicate(item) == False {
 		  	        $result = $result.append(item)
@@ -4592,7 +4592,7 @@ Builtin :: [].{
 		## ```
 		keep_while : List(item), (item -> Bool) -> List(item)
 		keep_while = |items, predicate| {
-		  var $result = List.reserve([], items.len
+		  var $result = List.reserve([], items.len)
 		  for item in items {
 		  	    if predicate(item) {
 		  	        $result = $result.append(item)
