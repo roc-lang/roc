@@ -7861,12 +7861,12 @@ const Lowerer = struct {
         self.noteErasedOwnerAmbiguous(target);
         const branches = self.solved.lifted.ifBranchSpan(branches_span);
         const done = self.freshJoinPointId();
-        var current = try self.lowerExprIntoAtType(where, target, final_else, result_ty, try self.joinJump(where, done));
+        var current = try self.lowerValueJoinBranchInto(where, target, final_else, result_ty, try self.joinJump(where, done));
         var i = branches.len;
         while (i > 0) {
             i -= 1;
             const branch = GuardedList.at(branches, i);
-            const body = try self.lowerExprIntoAtType(where, target, branch.body, result_ty, try self.joinJump(where, done));
+            const body = try self.lowerValueJoinBranchInto(where, target, branch.body, result_ty, try self.joinJump(where, done));
             const cond_local = try self.addTemp(try self.lowerExprTy(branch.cond));
             const switch_stmt = try self.boolSwitchNoContinuation(where, cond_local, body, current);
             current = try self.lowerExprInto(where, cond_local, branch.cond, switch_stmt);
@@ -7877,6 +7877,34 @@ const Lowerer = struct {
             .body = next,
             .remainder = current,
         } }, where.glue());
+    }
+
+    /// Lowers one branch of an `if`/`match` value join whose parameter is
+    /// `target`; `jump` is the branch's jump to that join. A struct result
+    /// holding refcounted fields is computed into a branch-local and written
+    /// to the parameter by an explicit `initialize_join_param`, the definition
+    /// form that lets ARC take the fields of the dying joined record instead
+    /// of retaining each one and releasing the record whole.
+    fn lowerValueJoinBranchInto(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        body: Lifted.ExprId,
+        result_ty: Type.TypeId,
+        jump: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const target_layout = self.result.layouts.getLayout(self.result.store.getLocal(target).layout_idx);
+        if (target_layout.tag != .struct_ or !self.result.layouts.layoutContainsRefcounted(target_layout)) {
+            return try self.lowerExprIntoAtType(where, target, body, result_ty, jump);
+        }
+        const branch_value = try self.addTemp(result_ty);
+        const initialize = try self.result.store.addCFStmt(.{ .set_local = .{
+            .target = target,
+            .value = branch_value,
+            .mode = .initialize_join_param,
+            .next = jump,
+        } }, where.glue());
+        return try self.lowerExprIntoAtType(where, branch_value, body, result_ty, initialize);
     }
 
     fn lowerInitializedPayloadSwitchInto(
@@ -9107,7 +9135,7 @@ const Lowerer = struct {
         }
 
         pub fn lowerBody(self: MatchTreeCtx, body: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-            return try self.l.lowerExprIntoAtType(self.where, self.target, body, self.result_ty, next);
+            return try self.l.lowerValueJoinBranchInto(self.where, self.target, body, self.result_ty, next);
         }
 
         pub fn guardTemp(self: MatchTreeCtx, guard: Lifted.ExprId) Common.LowerError!LIR.LocalId {

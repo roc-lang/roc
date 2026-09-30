@@ -15946,7 +15946,11 @@ A container qualifies for dismantling when all of the following hold:
 
 - its committed layout is a struct containing at least one refcounted field
 - its binding is owned and bound exactly once, or is a join parameter whose
-  definitions are explicit `initialize_join_param` writes
+  definitions are explicit `initialize_join_param` writes. Lowering gives
+  every `if`/`match` value join whose result is a struct holding refcounted
+  fields this form: each branch computes its value into a branch-local and
+  writes the join parameter with `initialize_join_param`, so a record chosen
+  by an `if`, a `match`, or `?` hands its fields on without retains
 - every occurrence of it is a field read (directly or through a borrowed
   pure same-value alias whose own occurrences are all field reads) or an
   operand-position whole use: moved into an aggregate or a call, returned,
