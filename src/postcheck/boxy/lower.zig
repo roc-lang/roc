@@ -19210,7 +19210,9 @@ const ProcBodyBuilder = struct {
         ret_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        if (call.direct_target == null) {
+        if (call.direct_target == null or
+            self.parent.plan.callIsThroughAlias(.{ .module = self.module.key, .expr = call_expr }))
+        {
             return try self.beginErasedCall(target, ret_ty, call.func, call.args, next);
         }
         if (self.directTargetIsLocalProc(call.direct_target.?)) {
@@ -36224,7 +36226,7 @@ const ProcBodyBuilder = struct {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .dec,
-            .bool, .try_, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => boxyLowerInvariant("numeral had a non-numeric checked builtin nominal type"),
+            .bool, .try_, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => boxyLowerInvariant("numeral had a non-numeric checked builtin nominal type"),
         };
     }
 
@@ -42984,7 +42986,7 @@ fn generatedEncoderKeyMethodForType(
         .dec => "encode_key_dec",
         .f32 => "encode_key_f32",
         .f64 => "encode_key_f64",
-        .try_, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
+        .try_, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
     };
 }
 

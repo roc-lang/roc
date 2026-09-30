@@ -73,6 +73,7 @@
 //! starting_plants! : () => List(Plant)
 //! starting_plants! = || {
 //!     (0.I64..=15)
+//!         .iter()
 //!         .stream()
 //!         .map(|i| random_plant!(i * 12))
 //!         .collect!()
@@ -86,7 +87,7 @@
 //!
 //! ```roc
 //! starting_plants! = || {
-//!     range_iter = 0.I64..=15
+//!     range_iter = (0.I64..=15).iter()
 //!
 //!     source_stream = {
 //!         len_if_known: Known(16),
@@ -3198,7 +3199,7 @@ const Pass = struct {
     /// representation for its result, so the return type is not its checked
     /// procedure identity.
     fn callIsSuffixAppend(self: *Pass, call: DirectCall) bool {
-        if (call.iterator_procedure != .iter_append) return false;
+        if (call.iterator_procedure != .append) return false;
         const raw = @intFromEnum(call.fn_id);
         if (raw >= self.program.fnCount()) return false;
         return self.program.typedLocalSpan(self.program.getFnAt(raw).args).len == 2;
@@ -7810,6 +7811,21 @@ const Cloner = struct {
             .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         }
 
+        // Different outer constructors cannot expose shared leaves to one continuation.
+        if (task.joins.len == 1 and task.joins[0].binding == .pattern and task.joins[0].sites.items.len > 1) {
+            const sites = task.joins[0].sites.items;
+            const outer_values = try self.pass.allocator.alloc(Value, sites.len);
+            defer self.pass.allocator.free(outer_values);
+            for (sites, outer_values) |site, *value| {
+                if (site.values.len != 1) Common.invariant("let-of-case pattern join site did not supply one value");
+                value.* = site.values[0];
+            }
+            if (!self.valuesShareOuterSkeleton(outer_values)) {
+                self.let_case_builds.shrinkRetainingCapacity(task.frame_index);
+                return .{ .ret = .{ .maybe_data = null } };
+            }
+        }
+
         // Wrap the rewritten case in its live join points, innermost last so
         // every jump site in the case sits inside each join's remainder.
         frame.index = task.joins.len;
@@ -8375,6 +8391,54 @@ const Cloner = struct {
     const let_case_join_leaf_budget: u32 = 1024;
     const let_case_join_param_cap: usize = 64;
 
+    /// Whether every value has the same outermost constructor: the same tag,
+    /// record fields, tuple arity, nominal type, or callable target and
+    /// capture identities. Only such values decompose into shared leaves.
+    fn valuesShareOuterSkeleton(self: *Cloner, values: []const Value) bool {
+        const first = values[0];
+        for (values[1..]) |other| {
+            if (std.meta.activeTag(other) != std.meta.activeTag(first)) return false;
+            switch (first) {
+                .expr, .runtime_anchor, .static_data_candidate => return false,
+                .tag => |first_tag| {
+                    const other_tag = other.tag;
+                    if (other_tag.ty != first_tag.ty) return false;
+                    if (!self.pass.program.names.tagLabelTextEql(other_tag.name, first_tag.name)) return false;
+                    if (other_tag.payloads.len != first_tag.payloads.len) return false;
+                },
+                .record => |first_record| {
+                    const other_record = other.record;
+                    if (other_record.ty != first_record.ty) return false;
+                    if (other_record.fields.len != first_record.fields.len) return false;
+                    for (other_record.fields, first_record.fields) |other_field, first_field| {
+                        if (!self.pass.program.names.recordFieldLabelTextEql(other_field.name, first_field.name)) return false;
+                    }
+                },
+                .tuple => |first_tuple| {
+                    const other_tuple = other.tuple;
+                    if (other_tuple.ty != first_tuple.ty) return false;
+                    if (other_tuple.items.len != first_tuple.items.len) return false;
+                },
+                .nominal => |first_nominal| {
+                    if (other.nominal.ty != first_nominal.ty) return false;
+                },
+                .callable => |first_callable| {
+                    const other_callable = other.callable;
+                    if (other_callable.ty != first_callable.ty) return false;
+                    if (other_callable.fn_id != first_callable.fn_id) return false;
+                    if (other_callable.captures.len != first_callable.captures.len) return false;
+                    for (other_callable.captures, first_callable.captures) |other_capture, first_capture| {
+                        if (other_capture.id != first_capture.id) return false;
+                    }
+                },
+            }
+        }
+        return switch (first) {
+            .expr, .runtime_anchor, .static_data_candidate => false,
+            .tag, .record, .tuple, .nominal, .callable => true,
+        };
+    }
+
     /// Structure-decompose the values every site supplies for one binder
     /// slot. Where all sites agree on the same constructor skeleton, the
     /// skeleton is rebuilt over fresh parameter locals minted for its opaque
@@ -8398,48 +8462,10 @@ const Cloner = struct {
         const values = task.values;
         if (task.params.items.len >= let_case_join_param_cap) return false;
         if (task.budget.admit(1) != .admitted) return false;
-        switch (values[0]) {
-            .expr, .runtime_anchor, .static_data_candidate => return false,
-            .tag => |first| for (values[1..]) |other| {
-                if (other != .tag) return false;
-                const other_tag = other.tag;
-                if (other_tag.ty != first.ty) return false;
-                if (!self.pass.program.names.tagLabelTextEql(other_tag.name, first.name)) return false;
-                if (other_tag.payloads.len != first.payloads.len) return false;
-            },
-            .record => |first| for (values[1..]) |other| {
-                if (other != .record) return false;
-                const other_record = other.record;
-                if (other_record.ty != first.ty) return false;
-                if (other_record.fields.len != first.fields.len) return false;
-                for (other_record.fields, first.fields) |other_field, first_field| {
-                    if (!self.pass.program.names.recordFieldLabelTextEql(other_field.name, first_field.name)) return false;
-                }
-            },
-            .tuple => |first| for (values[1..]) |other| {
-                if (other != .tuple) return false;
-                const other_tuple = other.tuple;
-                if (other_tuple.ty != first.ty) return false;
-                if (other_tuple.items.len != first.items.len) return false;
-            },
-            .nominal => |first| for (values[1..]) |other| {
-                if (other != .nominal) return false;
-                if (other.nominal.ty != first.ty) return false;
-            },
-            .callable => |first| {
-                task.iterator_step = first.iterator_step;
-                for (values[1..]) |other| {
-                    if (other != .callable) return false;
-                    const other_callable = other.callable;
-                    if (other_callable.ty != first.ty) return false;
-                    if (other_callable.fn_id != first.fn_id) return false;
-                    if (other_callable.captures.len != first.captures.len) return false;
-                    task.iterator_step = task.iterator_step and other_callable.iterator_step;
-                    for (other_callable.captures, first.captures) |other_capture, first_capture| {
-                        if (other_capture.id != first_capture.id) return false;
-                    }
-                }
-            },
+        if (!self.valuesShareOuterSkeleton(values)) return false;
+        if (values[0] == .callable) {
+            task.iterator_step = values[0].callable.iterator_step;
+            for (values[1..]) |other| task.iterator_step = task.iterator_step and other.callable.iterator_step;
         }
         return true;
     }
@@ -8925,6 +8951,13 @@ const Cloner = struct {
                 self.nextBlockStatement(frame, task);
             },
             BlockValueCursor.let_continuation => {
+                const value = input.?.get(.value);
+                if (value != .expr and task.statements.items.len == 0 and !task.terminated) {
+                    task.bindings.appendChain(task.block_bindings.*);
+                    if (task.stmt_context) |context| context.restore(self);
+                    task.stmt_context = null;
+                    return self.finishBlockValueTask(task, value);
+                }
                 // The continuation's value is branch-built. The block
                 // keeps it as its recorded tail so a case over this
                 // block reads the arms' structure instead of one
@@ -13065,6 +13098,7 @@ const Cloner = struct {
                         },
                         .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
                             frame.stage = .from_value;
+                            if (isOpaqueBehindWrappers(record_value)) return .{ .done = .unknown };
                             frame.record = recordFromValue(record_value) orelse switch (record_value) {
                                 .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
                                 .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
@@ -13099,6 +13133,7 @@ const Cloner = struct {
                         },
                         .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
                             frame.stage = .from_value;
+                            if (isOpaqueBehindWrappers(tuple_value)) return .{ .done = .unknown };
                             frame.tuple = tupleFromValue(tuple_value) orelse switch (tuple_value) {
                                 .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
                                 .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
@@ -13124,7 +13159,7 @@ const Cloner = struct {
             .tag => |tag_pat| {
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
                 if (frame.stage == .start) {
-                    if (value == .expr) return .{ .done = .unknown };
+                    if (isOpaqueBehindWrappers(value)) return .{ .done = .unknown };
                     frame.tag = tagFromValue(value) orelse switch (value) {
                         .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
                         .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
@@ -13165,6 +13200,16 @@ const Cloner = struct {
             .str_pattern,
             => return .{ .done = .unknown },
         }
+    }
+
+    /// Whether a nominal pattern's backing pattern binds its value only
+    /// through record-field or tuple-item reads, which apply to the nominal
+    /// value itself.
+    fn patternProjectsNominalBacking(self: *const Cloner, backing_pat: Ast.PatId) bool {
+        return switch (self.pass.program.getPat(backing_pat).data) {
+            .record, .tuple => true,
+            .bind, .wildcard, .as, .tag, .nominal, .list, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => false,
+        };
     }
 
     fn bindPatToReusableValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
@@ -13286,7 +13331,11 @@ const Cloner = struct {
                     .runtime_anchor => |anchor| .{ frame.pat_id, anchor.structure.* },
                     .static_data_candidate => |candidate| .{ frame.pat_id, candidate.structure.* },
                     .nominal => |nominal| .{ backing_pat, nominal.backing.* },
-                    .expr, .tag, .record, .tuple, .callable => return .{ .done = false },
+                    .expr => |receiver| if (canReadFieldsFromExpr(self.pass.program, receiver) and self.patternProjectsNominalBacking(backing_pat))
+                        .{ backing_pat, value }
+                    else
+                        return .{ .done = false },
+                    .tag, .record, .tuple, .callable => return .{ .done = false },
                 };
                 self.wrapper_strip_depth += 1;
                 frame.stage = .nominal;
@@ -15726,6 +15775,24 @@ fn itemFromValueStripping(start: Value, index: u32, strip_depth: usize) ?Value {
     }
 }
 
+/// Whether stripping every value wrapper, including nominal backings, leaves only
+/// an opaque runtime expression. A nominal such as `Bool` can wrap a runtime
+/// local, so its constructor is unknown even though the wrapper is structured.
+fn isOpaqueBehindWrappers(start: Value) bool {
+    var value = start;
+    var depth: usize = 0;
+    while (true) : (depth += 1) {
+        if (depth >= value_wrapper_strip_cap) Common.invariant("isOpaqueBehindWrappers followed a value wrapper chain past the strip cap");
+        value = switch (value) {
+            .runtime_anchor => |anchor| anchor.structure.*,
+            .static_data_candidate => |candidate| candidate.structure.*,
+            .nominal => |nominal| nominal.backing.*,
+            .expr => return true,
+            .tag, .record, .tuple, .callable => return false,
+        };
+    }
+}
+
 fn tagFromValue(value: Value) ?TagValue {
     return tagFromValueStripping(value, 0);
 }
@@ -16764,7 +16831,7 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
         const expensive_arg = try program.addExpr(.{ .ty = tag_ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = producer },
             .args = .empty(),
-            .iterator_procedure = .iter_single,
+            .iterator_procedure = .single,
         } } });
         const duplicate = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
             .callee = .{ .lifted = consumers[0] },
@@ -17778,6 +17845,13 @@ test "static match verdicts separate definite no-match from statically undecidab
     const nominal_value = Value{ .nominal = .{ .ty = union_ty, .backing = &backing } };
     try std.testing.expectEqual(MatchVerdict.match, try cloner.bindPatToValue(nominal_pat, nominal_value));
     try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(nominal_pat, opaque_value));
+
+    // A structured wrapper does not make its opaque backing statically known.
+    const wrapped_opaque = Value{ .nominal = .{ .ty = union_ty, .backing = &opaque_value } };
+    const record_pat = try program.addPat(.{ .ty = u8_ty, .data = .{ .record = Ast.Span(Ast.RecordDestruct).empty() } });
+    try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(foo_pat, wrapped_opaque));
+    try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(both_undecidable, wrapped_opaque));
+    try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(record_pat, wrapped_opaque));
 }
 
 test "static value matchers bound wrapper strips over a cyclic value" {

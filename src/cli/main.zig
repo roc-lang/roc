@@ -40,6 +40,7 @@ pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_i
 
 const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
+const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
 const reporting = @import("reporting");
 const parse = @import("parse");
@@ -10249,6 +10250,27 @@ test "LLVM fuzz output uses position-independent code" {
     try std.testing.expect(!llvmObjectUsesPic(.x64musl, .exe, false));
 }
 
+test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
+    const expected = [_]struct { RocTarget, Sha256Rounds }{
+        // x86-64-v3 has no SHA extension, so no x86_64 feature level carries it.
+        .{ .x64musl, .portable },
+        .{ .x64v1musl, .portable },
+        .{ .x64mac, .portable },
+        .{ .arm64musl, .aarch64_sha2 },
+        .{ .arm64glibc, .aarch64_sha2 },
+        .{ .arm64win, .aarch64_sha2 },
+        .{ .arm64mac, .aarch64_sha2 },
+        .{ .arm64v1musl, .portable },
+        .{ .arm64v1win, .portable },
+        .{ .arm32musl, .portable },
+        .{ .wasm32, .portable },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[1], Sha256Rounds.forCpu(std_target.cpu));
+    }
+}
+
 test "wasm32 LLVM objects are always position-independent" {
     try std.testing.expect(llvmObjectUsesPic(.wasm32, .archive, false));
     try std.testing.expect(llvmObjectUsesPic(.wasm32, .exe, false));
@@ -10361,11 +10383,13 @@ fn compileLlvmAppObject(
         .features = llvm_features,
         .debug = args.debug,
         .fuzz = args.fuzz,
-        .link_builtins = true,
+        .link_builtins = .{
+            // Linked LLVM output uses the symbol ABI: builtins reach the host
+            // through extern symbols, never through a RocOps parameter.
+            .host_call_extern = true,
+            .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+        },
         .pic = pic,
-        // Linked LLVM output uses the symbol ABI: builtins reach the host
-        // through extern symbols, never through a RocOps parameter.
-        .host_call_extern = true,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 

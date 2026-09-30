@@ -333,10 +333,10 @@ fn setSelectionOnly(selection: *Selection, value: []const u8, arg: []const u8) !
 
 /// Fail before doing anything else when this aarch64 machine lacks SHA-256
 /// instructions. aarch64 targets have them in their CPU baseline and
-/// `src/base/Sha256.zig` has no software rounds for them, so on such
+/// `src/base/sha256.zig` has no software rounds for them, so on such
 /// a machine every artifact minici builds would die of SIGILL the first time it
 /// digests a type. The message says so instead. x86_64 machines choose rounds
-/// at runtime (`dispatches_at_runtime` in src/base/sha256_rounds.zig) or build
+/// at runtime (`dispatches_at_runtime` in src/base/sha256.zig) or build
 /// with the portable rounds (`uses_software_rounds` there, i.e. x86_64 macOS),
 /// so they need no instructions and are let through.
 fn requireSha256Hardware() void {
@@ -349,7 +349,7 @@ fn requireSha256Hardware() void {
         \\MiniCI: this CPU has no SHA-256 instructions (the ARMv8 `sha2` crypto extension).
         \\roc requires them on aarch64: type digests are computed with the CPU's SHA-256
         \\instructions and there are no software rounds for it (see
-        \\src/base/Sha256.zig and addSha256Floor in build.zig).
+        \\src/base/sha256.zig and addSha256Floor in build.zig).
         \\An aarch64 CPU without them is not a supported machine for building or running
         \\the roc compiler, so this run stops here rather than failing later with SIGILL.
         \\

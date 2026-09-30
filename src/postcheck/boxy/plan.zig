@@ -1120,6 +1120,10 @@ pub const ProgramPlan = struct {
     roots: std.ArrayList(RootPlan),
     workers: std.ArrayList(WorkerPlan),
     direct_calls: std.ArrayList(DirectCallPlan),
+    /// Calls whose checked direct target is an exact procedure alias. Boxy
+    /// lowers these through the alias's materialized callable value, as a
+    /// call of that value.
+    alias_calls: std.ArrayList(CheckedExprIdentity),
     call_operands: std.ArrayList(CallOperand),
     dictionary_dispatches: std.ArrayList(DictionaryDispatchPlan),
     nested_callable_uses: std.ArrayList(NestedCallableUsePlan),
@@ -1187,6 +1191,7 @@ pub const ProgramPlan = struct {
             .roots = .empty,
             .workers = .empty,
             .direct_calls = .empty,
+            .alias_calls = .empty,
             .call_operands = .empty,
             .dictionary_dispatches = .empty,
             .nested_callable_uses = .empty,
@@ -1307,6 +1312,7 @@ pub const ProgramPlan = struct {
         self.dictionary_dispatches.deinit(self.allocator);
         self.call_operands.deinit(self.allocator);
         self.direct_calls.deinit(self.allocator);
+        self.alias_calls.deinit(self.allocator);
         self.workers.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.* = ProgramPlan.init(self.allocator);
@@ -1709,6 +1715,15 @@ pub const ProgramPlan = struct {
             if (direct.caller == caller and exprRefEql(direct.call, call)) return direct;
         }
         return null;
+    }
+
+    /// Whether a call's checked direct target is an exact procedure alias,
+    /// which Boxy calls through the alias's callable value.
+    pub fn callIsThroughAlias(self: *const ProgramPlan, call: CheckedExprIdentity) bool {
+        for (self.alias_calls.items) |alias_call| {
+            if (exprRefEql(alias_call, call)) return true;
+        }
+        return false;
     }
 
     pub fn dictionaryDispatchPlanForCall(
@@ -4359,15 +4374,16 @@ const Builder = struct {
             .call_after_args => |site| {
                 const call = site.view.checked_bodies.expr(site.expr).data.call;
                 _ = try self.analyzeType(site.view, call.source_fn_ty_payload);
-                const local_proc_direct_target = if (call.direct_target) |target|
-                    self.directTargetIsLocalProc(site.view, target)
-                else
-                    false;
-                const local_proc_worker_call = local_proc_direct_target and self.directTargetHasNoCaptures(site.view, call.direct_target.?);
+                // A call through an exact procedure alias calls the alias's
+                // callable value; it has no direct target to plan.
+                const direct_target = call.direct_target orelse return;
+                if (self.directTargetIsThroughAlias(site.view, direct_target)) return;
+                const local_proc_direct_target = self.directTargetIsLocalProc(site.view, direct_target);
+                const local_proc_worker_call = local_proc_direct_target and self.directTargetHasNoCaptures(site.view, direct_target);
                 if (local_proc_worker_call or !local_proc_direct_target) {
                     try actions.append(self.allocator, .{ .direct_call_target = site });
                 } else {
-                    try actions.append(self.allocator, .{ .nested_callable_use = .{ .view = site.view, .target = call.direct_target.?, .func = call.func } });
+                    try actions.append(self.allocator, .{ .nested_callable_use = .{ .view = site.view, .target = direct_target, .func = call.func } });
                 }
             },
             .block_statement => |state| {
@@ -5154,6 +5170,7 @@ const Builder = struct {
                         .u64x2,
                         .i64x2,
                         .iter,
+                        .stream,
                         .parse_tag_union_spec,
                         .fields,
                         .field,
@@ -5403,6 +5420,7 @@ const Builder = struct {
                         .u64x2,
                         .i64x2,
                         .iter,
+                        .stream,
                         .parse_tag_union_spec,
                         .fields,
                         .field,
@@ -5951,12 +5969,19 @@ const Builder = struct {
                 try actions.append(self.allocator, exprAction(view, if_.final_else));
             },
             .call => |call| {
-                const local_proc_direct_target = if (call.direct_target) |target|
+                const direct_target: ?checked.ResolvedValueId = if (call.direct_target) |target|
+                    if (self.directTargetIsThroughAlias(view, target)) null else target
+                else
+                    null;
+                if (call.direct_target != null and direct_target == null) {
+                    try self.plan.alias_calls.append(self.allocator, .{ .module = view.key, .expr = expr_id });
+                }
+                const local_proc_direct_target = if (direct_target) |target|
                     self.directTargetIsLocalProc(view, target)
                 else
                     false;
-                const local_proc_worker_call = local_proc_direct_target and self.directTargetHasNoCaptures(view, call.direct_target.?);
-                if (call.direct_target == null or (local_proc_direct_target and !local_proc_worker_call)) {
+                const local_proc_worker_call = local_proc_direct_target and self.directTargetHasNoCaptures(view, direct_target.?);
+                if (direct_target == null or (local_proc_direct_target and !local_proc_worker_call)) {
                     try actions.append(self.allocator, exprAction(view, call.func));
                 } else {
                     const func = view.checked_bodies.expr(call.func);
@@ -16573,6 +16598,29 @@ const Builder = struct {
         };
     }
 
+    /// Whether a checked direct target is an exact procedure alias: a local
+    /// alias, or a procedure use whose binding is a callable-eval template
+    /// (checking classifies only exact procedure aliases of those as direct).
+    fn directTargetIsThroughAlias(self: *Builder, view: ModuleView, target: checked.ResolvedValueId) bool {
+        const procedure = switch (self.resolvedValueRecord(view, target).ref) {
+            .local_proc => |local| return local.is_alias,
+            .top_level_proc, .imported_proc, .promoted_top_level_proc => |procedure| procedure,
+            .platform_required_proc => |required| required.procedure,
+            .hosted_proc => return false,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => boxyPlanInvariant("checked direct call target did not reference a procedure"),
+        };
+        const body_is_callable_eval = switch (procedure.binding) {
+            .top_level => |binding_ref| self.moduleForId(binding_ref.artifact).top_level_procedure_bindings.get(binding_ref.binding).body == .callable_eval_template,
+            .platform_required => |required| self.moduleForId(required.app_value.artifact).top_level_procedure_bindings.get(required.procedure_binding).body == .callable_eval_template,
+            .imported => |imported| blk: {
+                const imported_view = self.moduleForId(imported.artifact);
+                break :blk self.importedProcedureBinding(imported_view, imported).body == .callable_eval_template;
+            },
+            .hosted => false,
+        };
+        return body_is_callable_eval;
+    }
+
     fn pendingCallableEvalExprForBody(
         self: *Builder,
         view: ModuleView,
@@ -18446,6 +18494,7 @@ fn generatedParserScalarMethod(builtin: checked.CheckedBuiltinNominal) ?[]const 
         .dict,
         .set,
         .iter,
+        .stream,
         .parse_tag_union_spec,
         .fields,
         .field,
@@ -18494,6 +18543,7 @@ fn generatedParserKeyMethod(view: ModuleView, ty: checked.CheckedTypeId) ?[]cons
             .dict,
             .set,
             .iter,
+            .stream,
             .parse_tag_union_spec,
             .fields,
             .field,
@@ -18574,6 +18624,7 @@ fn generatedEncoderScalarMethod(builtin: checked.CheckedBuiltinNominal) ?[]const
         .dict,
         .set,
         .iter,
+        .stream,
         .parse_tag_union_spec,
         .fields,
         .field,
@@ -18622,6 +18673,7 @@ fn generatedEncoderKeyMethod(view: ModuleView, ty: checked.CheckedTypeId) ?[]con
             .dict,
             .set,
             .iter,
+            .stream,
             .parse_tag_union_spec,
             .fields,
             .field,
