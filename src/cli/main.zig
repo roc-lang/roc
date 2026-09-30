@@ -17595,8 +17595,8 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
         .prepared_statement_rows = 100,
         .appended_statements = 30,
         .peak_retained_shards = 8,
-        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8 },
-        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7 },
+        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9 },
+        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6, 7, 8 },
     });
     try std.testing.expectEqualStrings("Tasks submitted", rows[0].name);
     try std.testing.expectEqual(@as(u64, 10), rows[0].count);
