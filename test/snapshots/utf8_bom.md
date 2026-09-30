@@ -53,14 +53,6 @@ EndOfFile,
 							(e-tag (raw "Ok"))
 							(e-record))))))))
 ~~~
-# FORMATTED
-~~~roc
-
-main! = |_args| {
-	echo!("ok")
-	Ok({})
-}
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
@@ -80,7 +72,7 @@ main! = |_args| {
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 246)
+					(e-call (constraint-fn-var 242)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
 						(e-string

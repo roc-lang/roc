@@ -147,7 +147,7 @@ main = build(1.U64, "not a number")
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "good"))))
-						(e-interpolation (constraint-fn-var 295) (dispatcher-var 30)
+						(e-interpolation (constraint-fn-var 298) (dispatcher-var 30)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -159,7 +159,7 @@ main = build(1.U64, "not a number")
 							(p-assign (ident "#interp_1"))
 							(e-lookup-local
 								(p-assign (ident "bad"))))
-						(e-interpolation (constraint-fn-var 313) (dispatcher-var 38)
+						(e-interpolation (constraint-fn-var 316) (dispatcher-var 38)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -168,7 +168,7 @@ main = build(1.U64, "not a number")
 								(e-literal (string "")))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 342)
+		(e-call (constraint-fn-var 345)
 			(e-lookup-local
 				(p-assign (ident "build")))
 			(e-typed-int (value "1") (type "U64"))
