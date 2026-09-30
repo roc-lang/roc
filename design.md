@@ -10657,6 +10657,22 @@ relation is applied. Different constraint inputs instantiate fresh cells from
 that snapshot rather than re-expanding the same nominal declarations. Local
 method signatures remain context-owned and are not shared through this cache.
 
+An ordinary specialization edge applies its complete contracts as one
+summarized relation, in its own key domain: the checked requirement row,
+method scope, complete evidence, and the identity of the edge's substitution
+cells. The first edge with that input relates every contract over detached
+copies of the substitution; each later one replays the result in one step,
+so an edge's contract work does not repeat per requirement for every use of
+the same scheme at the same types. An edge whose contracts relate nothing
+(no selected target and no checked structural derivation) applies nothing.
+A template specialization miss whose open interface has dispatch or
+specialization relations applies them through the same procedure dependency
+summary an interface dependency uses, keyed by its specialization evidence, so
+independent roots requesting one template at equal interfaces expand its
+relations once. A requesting body with an instantiated codec contract relates
+the template's relations in that body instead, because the contract is part of
+their input.
+
 Interface summaries are immutable constraints over explicit input roots. They
 preserve unresolved variables and their defaults, row tails, variable and
 field-presence sharing, recursive topology, and producer-owned representation

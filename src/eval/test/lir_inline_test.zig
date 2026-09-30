@@ -819,6 +819,39 @@ test "nominal record reserves unnamed padding fields without inflating alignment
     try std.testing.expectEqual(@as(u64, 4), layout_val.alignment(.u64).toByteUnits());
 }
 
+/// A module whose unannotated `big` chains `links` method calls, used by
+/// `uses` expects, each lowered as its own root.
+fn methodChainExpectCounters(links: usize, uses: usize) TestError!MonoLower.SpecializationCounters {
+    const allocator = std.testing.allocator;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "big = |a| {\n    b0 = a\n");
+    for (1..links + 1) |i| try source.print(allocator, "    b{d} = b{d}.map(|x| x + 1)\n", .{ i, i - 1 });
+    try source.print(allocator, "    b{d}\n}}\n", .{links});
+    for (0..uses) |i| try source.print(allocator, "expect big([{d}.I64]) == [{d}]\n", .{ i, i + links });
+    try source.appendSlice(allocator, "main = 0\n");
+
+    var counters: MonoLower.SpecializationCounters = .{};
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source.items, .{
+        .specialization_counters = &counters,
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    return counters;
+}
+
+test "a generic method chain's relations are expanded once however many roots use it" {
+    // Every expect is its own root and requests `big` at the same type. Only
+    // the first request expands `big`'s dispatch relations and relates its
+    // evidence contracts; the rest replay that expansion's summary.
+    const few = try methodChainExpectCounters(6, 2);
+    const many = try methodChainExpectCounters(6, 5);
+    try std.testing.expect(few.template_dispatch_relation_replays > 0);
+    try std.testing.expectEqual(few.template_dispatch_relation_replays, many.template_dispatch_relation_replays);
+    try std.testing.expect(few.evidence_contract_relations > 0);
+    try std.testing.expectEqual(few.evidence_contract_relations, many.evidence_contract_relations);
+}
+
 test "generic nominal record instantiates unnamed padding to the argument's size" {
     const allocator = std.testing.allocator;
     // A type-parameterized unnamed field (`_ : a`) must reserve the *instantiated*
@@ -2140,7 +2173,10 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 160,
         .max_specialization_type_digest_nodes_visited = 160,
         .exact_type_checks = 0,
-        .nominal_backing_reuses = 8,
+        // A template miss relates its open interface through a summarized
+        // expansion, which instantiates the template's root on detached
+        // copies of the request.
+        .nominal_backing_reuses = 13,
         // Each direct call instantiates its callee's checked type once per
         // body and shares that request across its result-type queries and
         // its own lowering.
@@ -2617,8 +2653,10 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 360,
         .max_specialization_type_digest_nodes_visited = 360,
         .exact_type_checks = 0,
-        .nominal_backing_reuses = 30,
-        .nominal_backing_instantiations = 66,
+        // Each template miss also instantiates the template's root once for
+        // its interface relations' summarized expansion.
+        .nominal_backing_reuses = 38,
+        .nominal_backing_instantiations = 79,
     });
 }
 
