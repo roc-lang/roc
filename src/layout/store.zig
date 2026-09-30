@@ -2264,6 +2264,19 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, 8 + max_payload_size, max_alignment));
     }
 
+    /// Whether a value stored in this layout is described by a Boxy
+    /// descriptor wherever one governs it: a box, or a struct, tag union,
+    /// list, or vector whose parts can hold Boxy values. List operations and
+    /// the runtime read a governed list item through the list's descriptor.
+    pub fn layoutTakesBoxyStructuralDesc(self: *const Self, idx: Idx) bool {
+        const value_layout = self.getLayout(idx);
+        return switch (value_layout.tag) {
+            .erased_box, .box, .list, .list_of_zst, .struct_, .tag_union => true,
+            .scalar => value_layout.getScalar().tag == .vector,
+            .box_of_zst, .closure, .erased_callable, .zst, .ptr => false,
+        };
+    }
+
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
     }

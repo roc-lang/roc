@@ -14074,11 +14074,15 @@ context argument. The runtime receives in-process ABI selection as an explicit
 flag; it does not infer the convention from whether the context pointer is null.
 
 List operations that can copy or release descriptor-governed items use the
-corresponding `roc_boxy_list_*` ABI in dev, LLVM, and wasm. The call passes the
-exact descriptor attached to the input or result list plus the committed
-item layout; the runtime projects the item descriptor and performs the
-operation's internal ownership work. Concrete item layouts continue to use
-the ordinary builtin ABI with concrete RC helpers. A backend must never set an
+corresponding `roc_boxy_list_*` ABI in dev, LLVM, and wasm. An item is
+descriptor-governed when its list carries a descriptor and its layout is one a
+descriptor describes (`layoutTakesBoxyStructuralDesc`: a box, or a struct, tag
+union, list, or vector, any of which can hold a Boxy box inside it), the same
+rule the interpreter reads. The call passes the exact descriptor attached to
+the input or result list plus the committed item layout; the runtime projects
+the item descriptor and performs the operation's internal ownership work. A
+list without a descriptor, or whose items are scalars, continues to use the
+ordinary builtin ABI with concrete RC helpers. A backend must never set an
 "items are refcounted" flag while supplying a missing callback, derive a
 callback from erased storage, or inspect a descriptor to choose RC behavior.
 An erased-box list that reaches such an operation without its explicit list

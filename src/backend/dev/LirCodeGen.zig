@@ -17828,8 +17828,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_layout = list_abi.elem_layout_idx orelse return null;
             const elem_layout_value = self.layout_store.getLayout(elem_layout);
             const elem_is_erased_box = elem_layout_value.tag == .erased_box;
-            const elem_is_box = elem_is_erased_box or elem_layout_value.tag == .box;
-            if (!elem_is_box) return null;
+            if (!self.layout_store.layoutTakesBoxyStructuralDesc(elem_layout)) return null;
 
             for (list_locals) |local| {
                 if (self.store.getLocal(local).boxy_desc) |desc| {

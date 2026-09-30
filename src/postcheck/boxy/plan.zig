@@ -5856,8 +5856,48 @@ const Builder = struct {
                                 encoding_type,
                             );
                         },
+                        .try_ => {
+                            const try_payloads = checkedTryPayloads(view, shape.ty) orelse
+                                boxyPlanInvariant("Builtin.Try generated encoder type had no payloads");
+                            const kinds = checkedTryErrorKinds(view, try_payloads.err) orelse
+                                boxyPlanInvariant("generated Try encoder had unsupported error tags");
+                            if (kinds.other) {
+                                boxyPlanInvariant("generated Try encoder had unsupported error tags");
+                            }
+                            if (kinds.missing) {
+                                boxyPlanInvariant("generated root Try encoder included Missing");
+                            }
+                            var found = false;
+                            for (self.plan.generated_encoder_try_plans.items) |planned| {
+                                if (planned.worker == worker and typeRefEql(planned.try_type, shape)) {
+                                    if (!typeRefEql(planned.ok_type, typeRef(view, try_payloads.ok)) or
+                                        planned.missing != kinds.missing or planned.null != kinds.null)
+                                    {
+                                        boxyPlanInvariant("generated Try encoder shape had conflicting plans");
+                                    }
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) try self.plan.generated_encoder_try_plans.append(self.allocator, .{
+                                .worker = worker,
+                                .try_type = shape,
+                                .ok_type = typeRef(view, try_payloads.ok),
+                                .missing = kinds.missing,
+                                .null = kinds.null,
+                            });
+                            if (kinds.null) {
+                                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_null", null);
+                            }
+                            try self.planGeneratedEncoderShape(
+                                worker,
+                                contract_worker,
+                                typeRef(view, try_payloads.ok),
+                                typeRef(view, try_payloads.ok),
+                                encoding_type,
+                            );
+                        },
                         .bool,
-                        .try_,
                         .str,
                         .u8,
                         .i8,
@@ -5917,47 +5957,6 @@ const Builder = struct {
                             }
                         }
                     }
-                }
-
-                if (checkedTryPayloads(view, shape.ty)) |try_payloads| {
-                    const kinds = checkedTryErrorKinds(view, try_payloads.err) orelse
-                        boxyPlanInvariant("generated Try encoder had unsupported error tags");
-                    if (kinds.other) {
-                        boxyPlanInvariant("generated Try encoder had unsupported error tags");
-                    }
-                    if (kinds.missing) {
-                        boxyPlanInvariant("generated root Try encoder included Missing");
-                    }
-                    var found = false;
-                    for (self.plan.generated_encoder_try_plans.items) |planned| {
-                        if (planned.worker == worker and typeRefEql(planned.try_type, shape)) {
-                            if (!typeRefEql(planned.ok_type, typeRef(view, try_payloads.ok)) or
-                                planned.missing != kinds.missing or planned.null != kinds.null)
-                            {
-                                boxyPlanInvariant("generated Try encoder shape had conflicting plans");
-                            }
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) try self.plan.generated_encoder_try_plans.append(self.allocator, .{
-                        .worker = worker,
-                        .try_type = shape,
-                        .ok_type = typeRef(view, try_payloads.ok),
-                        .missing = kinds.missing,
-                        .null = kinds.null,
-                    });
-                    if (kinds.null) {
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_null", null);
-                    }
-                    try self.planGeneratedEncoderShape(
-                        worker,
-                        contract_worker,
-                        typeRef(view, try_payloads.ok),
-                        typeRef(view, try_payloads.ok),
-                        encoding_type,
-                    );
-                    return;
                 }
 
                 const shape_rep = try self.analyzeType(view, shape.ty);

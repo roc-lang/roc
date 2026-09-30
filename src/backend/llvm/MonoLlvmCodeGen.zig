@@ -9963,7 +9963,7 @@ pub const MonoLlvmCodeGen = struct {
         const elem_layout = abi.elem_layout_idx orelse return null;
         const elem_layout_value = self.layoutValue(elem_layout);
         const elem_is_erased_box = elem_layout_value.tag == .erased_box;
-        if (!elem_is_erased_box and elem_layout_value.tag != .box) return null;
+        if (!self.layouts().layoutTakesBoxyStructuralDesc(elem_layout)) return null;
 
         for (list_locals) |local| {
             if (self.store.getLocal(local).boxy_desc) |desc| {

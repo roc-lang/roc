@@ -888,23 +888,7 @@ pub const BoxyRuntime = struct {
     }
 
     pub fn layoutNeedsBoxyStructuralDesc(self: *const BoxyRuntime, layout_idx: layout_mod.Idx) bool {
-        const value_layout = self.layout_store.getLayout(layout_idx);
-        return switch (value_layout.tag) {
-            .erased_box,
-            .box,
-            .list,
-            .list_of_zst,
-            .struct_,
-            .tag_union,
-            => true,
-            .scalar => value_layout.getScalar().tag == .vector,
-            .box_of_zst,
-            .closure,
-            .erased_callable,
-            .zst,
-            .ptr,
-            => false,
-        };
+        return self.layout_store.layoutTakesBoxyStructuralDesc(layout_idx);
     }
 
     pub fn boxyDynamicPayloadAllocationContainsRc(desc: *const LirProgram.BoxyTypeDesc) bool {

@@ -2319,18 +2319,20 @@ const ProcedureBuilder = struct {
             );
         }
 
-        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-        for (requirement_args) |arg| {
-            try self.result.boxy_desc_refs.append(
-                self.allocator,
-                try self.staticDescRefForWorkerRepWithSourceMap(
-                    arg.rep,
-                    null,
-                    &requirement_sources,
-                    desc_context,
-                ),
+        // Building a descriptor can append its own nested references, so the
+        // argument descriptors are all built before their span is laid out.
+        const arg_desc_refs = try self.allocator.alloc(LIR.BoxyDescRef, requirement_args.len);
+        defer self.allocator.free(arg_desc_refs);
+        for (requirement_args, arg_desc_refs) |arg, *ref| {
+            ref.* = try self.staticDescRefForWorkerRepWithSourceMap(
+                arg.rep,
+                null,
+                &requirement_sources,
+                desc_context,
             );
         }
+        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, arg_desc_refs);
 
         const call_desc_plan = if (requirement_desc_sources) |sources|
             try self.staticMethodCallDescRefsForEvidence(
@@ -4268,14 +4270,14 @@ const ProcedureBuilder = struct {
         const operand_desc = try self.derivedOperandDescRef(rep_id, env, frame_template, shape, frame_desc_refs.items);
         const arg_layout_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
         try self.result.boxy_method_arg_layouts.appendSlice(self.allocator, &.{ source_layout, second_layout });
+        // Building a descriptor can append its own nested references, so both
+        // are built before their span is laid out.
+        const second_desc = switch (method) {
+            .equality => operand_desc,
+            .hash => try self.staticDescRefForRep(second_rep),
+        };
         const arg_desc_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
-        try self.result.boxy_desc_refs.appendSlice(self.allocator, &.{
-            operand_desc,
-            switch (method) {
-                .equality => operand_desc,
-                .hash => try self.staticDescRefForRep(second_rep),
-            },
-        });
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, &.{ operand_desc, second_desc });
         const hidden_sources_start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
         for (0..frame_desc_refs.items.len) |index| {
             try self.result.boxy_method_hidden_desc_sources.append(self.allocator, .{ .slot = @intCast(index) });
@@ -7222,7 +7224,16 @@ const ProcedureBuilder = struct {
             .dynamic_box => try proc.dynamicTagPayloadLocalForChildren(self.plan.childSlice(variant.variant.payloads)),
         };
         const construct = try proc.assignGeneratedParserMultiTag(value, shape_rep, variant, payload, items, success);
-        return try self.lowerGeneratedTupleFinish(proc, shape_rep, payload.local, items, construct);
+        // The payloads are fields of the variant's payload struct, which the
+        // tag's descriptor describes; the struct is not a value of its own.
+        const fields = try self.allocator.alloc(LIR.LocalId, items.len);
+        defer self.allocator.free(fields);
+        for (items, fields) |item, *field| field.* = item.value;
+        return try self.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = payload.local,
+            .fields = try self.result.store.addLocalSpan(fields),
+            .next = construct,
+        } }, proc.derivedOrigin());
     }
 
     fn lowerGeneratedFieldNamesRenameFieldsInto(
