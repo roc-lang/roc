@@ -28,6 +28,7 @@ const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
 const collections = @import("collections");
+const base = @import("base");
 const bytebox = @import("bytebox");
 const builtins = @import("builtins");
 const BuiltinFn = builtins.builtin_registry.BuiltinFn;
@@ -427,6 +428,7 @@ const CustomCase = enum {
     default_platform_stack_overflow_arm64mac,
     default_platform_stack_overflow_x64win,
     default_platform_stack_overflow_arm64win,
+    bidi_source_security,
     fmt_reformats_file,
     fmt_does_not_change_file,
     fmt_stdin_formats,
@@ -1961,6 +1963,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check fails on unformatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/needs_formatting.roc", .exit = .failure, .contains_any = &.{.{ .needles = &format_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on well-formatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/well_formatted.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on expression break", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/BreakExpressionInLoop.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "bidi source controls are rejected without formatting or execution", .body = .{ .custom = .bidi_source_security } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt reformats file in place", .body = .{ .custom = .fmt_reformats_file } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt does not change well-formatted file", .body = .{ .custom = .fmt_does_not_change_file } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --stdin formats unformatted input", .body = .{ .custom = .fmt_stdin_formats } },
@@ -3627,6 +3630,7 @@ fn runCustomCase(
         .default_platform_stack_overflow_arm64mac => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64mac, .stack_overflow),
         .default_platform_stack_overflow_x64win => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64win, .stack_overflow),
         .default_platform_stack_overflow_arm64win => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64win, .stack_overflow),
+        .bidi_source_security => customBidiSourceSecurity(io, allocator, &env, &timer, timeout_ms),
         .fmt_reformats_file => customFmtReformatsFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_does_not_change_file => customFmtDoesNotChangeFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_stdin_formats => customFmtStdin(io, allocator, &env, &timer, timeout_ms, false),
@@ -13523,4 +13527,43 @@ test "static CLI cases honor LLVM availability before name filters" {
         try std.testing.expectEqual(@as(usize, @intFromBool(include_llvm)), speed_count);
         try std.testing.expectEqual(@as(usize, 3), other_count);
     }
+}
+
+fn customBidiSourceSecurity(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "Bidi\u{202e}.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "bidi path allocation: {}", .{err});
+    for (base.bidi.controls, 0..) |control, index| {
+        // Exercise both headerless modules and app headers. The missing
+        // platform must never be resolved before the source-policy error.
+        const prefix = if (index % 2 == 0)
+            "main! = || { 1 } # "
+        else
+            "app [main!] { pf: platform \"missing-platform/main.roc\" }\nmain! = || { 1 } # ";
+        const source = std.mem.concat(allocator, u8, &.{ prefix, control.utf8, "\n" }) catch |err|
+            return customInfraFailure(allocator, timer, "bidi fixture allocation: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = source }) catch |err|
+            return customInfraFailure(allocator, timer, "bidi fixture write: {}", .{err});
+        const commands = [_][]const []const u8{ &.{ "check", "--no-cache" }, &.{"check"}, &.{"check"}, &.{ "run", "--no-cache" }, &.{ "build", "--no-cache" }, &.{ "test", "--no-cache" }, &.{"fmt"}, &.{ "fmt", "--check" }, &.{ "fmt", "--stdin" } };
+        for (commands) |args| {
+            const stdin = std.mem.eql(u8, args[args.len - 1], "--stdin");
+            const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "bidi source checks timed out");
+            const result = runRocInEnv(io, allocator, env, args, if (stdin) null else path, .absolute, &.{}, if (stdin) source else null, remaining) catch |err|
+                return customInfraFailure(allocator, timer, "bidi command: {}", .{err});
+            if (checkCommandExpectation(allocator, result, .{
+                .args = args,
+                .exit = .{ .code = 1 },
+                .contains = &.{.{ .stream = .stderr, .text = "bidirectional control" }},
+            })) |message| return failureFromRun(allocator, timer, result, message);
+            for ([_][]const u8{ result.stdout, result.stderr }) |output| {
+                var iter = base.bidi.Iterator{ .bytes = output };
+                if (iter.next() != null) return customFailure(allocator, timer, "bidi control leaked into diagnostics", .{});
+            }
+            if (stdin and result.stdout.len != 0) return customFailure(allocator, timer, "unsafe formatted source emitted on stdout", .{});
+            const after = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4096)) catch |err|
+                return customInfraFailure(allocator, timer, "bidi fixture read: {}", .{err});
+            if (!std.mem.eql(u8, after, source)) return customFailure(allocator, timer, "unsafe file changed by formatter", .{});
+        }
+    }
+    return null;
 }

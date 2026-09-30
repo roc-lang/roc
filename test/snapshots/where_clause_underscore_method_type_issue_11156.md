@@ -136,12 +136,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Try(a, [ParseError]) where [a.parser_for : Encoding.JsonEncoding -> (Encoding.JsonState -> Try({ rest: Encoding.JsonState, value: a }, [InvalidJson(Str), ..errs]))]"))
+		(patt (type "Str -> Try(a, [ParseError]) where [a.parser_for : Encoding.JsonEncoding -> (Encoding.JsonState -> Try({ rest: Encoding.JsonState, value: a }, [InvalidJson(Str)]))]"))
 		(patt (type "Try({ hi: Dec }, [ParseError])")))
 	(type_decls
 		(nominal (type "Blub")
 			(ty-header (name "Blub"))))
 	(expressions
-		(expr (type "Str -> Try(a, [ParseError]) where [a.parser_for : Encoding.JsonEncoding -> (Encoding.JsonState -> Try({ rest: Encoding.JsonState, value: a }, [InvalidJson(Str), ..errs]))]"))
+		(expr (type "Str -> Try(a, [ParseError]) where [a.parser_for : Encoding.JsonEncoding -> (Encoding.JsonState -> Try({ rest: Encoding.JsonState, value: a }, [InvalidJson(Str)]))]"))
 		(expr (type "Try({ hi: Dec }, [ParseError])"))))
 ~~~

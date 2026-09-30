@@ -220,8 +220,6 @@ ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) = .empty,
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
-/// Solved variances of local type declarations' formals, by declaration.
-decl_formal_variances: std.AutoHashMapUnmanaged(CIR.Statement.Idx, []FormalVariance) = .empty,
 /// Reusable visited set for validating the concrete content of values passed
 /// to `Str.inspect`. Each value is a bitset of occurrence positions because
 /// the same type variable can appear both as a row tail and as an ordinary
@@ -651,6 +649,9 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// `annotation_implicit_open_exts` slices it per annotation for the post-body
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
+/// Scoped sink owned by the alias declaration currently being constructed.
+alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
+nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
 annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange),
 /// The `implicit_open_exts` ranges of top-level VALUE bindings that do not
 /// generalize (a weak shared row; design.md "Polarity"). Grounded to `[]`
@@ -3231,9 +3232,6 @@ pub fn fixupTypeWriter(self: *Self) void {
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
     self.canonical_key_writer.deinit();
-    var decl_variances = self.decl_formal_variances.valueIterator();
-    while (decl_variances.next()) |variances| self.gpa.free(variances.*);
-    self.decl_formal_variances.deinit(self.gpa);
     self.owner_envs_by_identity.deinit(self.gpa);
     self.regions.deinit(self.gpa);
     self.problems.deinit(self.gpa);
@@ -3284,6 +3282,9 @@ pub fn deinit(self: *Self) void {
     self.erroneous_pattern_statements.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
     self.host_boundary_annotations.deinit(self.gpa);
+    var position_values = self.nominal_positions.valueIterator();
+    while (position_values.next()) |positions| if (positions.*) |items| self.gpa.free(items);
+    self.nominal_positions.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
@@ -7549,6 +7550,8 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
         .polarity_var_ident = self.cir.idents.polarity_var,
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = .resolve_by_polarity,
+        .nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition },
+        .alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused },
         .current_polarity = .pos,
     };
     self.var_map.clearRetainingCapacity();
@@ -7701,6 +7704,9 @@ fn instantiateVarPolarized(
         .current_reach = reach,
         .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
+        .preserved_marker_exts = self.alias_hidden_exts,
+        .nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition },
+        .alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused },
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
@@ -8170,6 +8176,9 @@ fn instantiateVarWithSubsPolarized(
         .current_reach = reach,
         .try_nominal = self.tryNominalIdent(),
         .opened_marker_exts = &opened_marker_exts,
+        .preserved_marker_exts = self.alias_hidden_exts,
+        .nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition },
+        .alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused },
     };
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, .none);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
@@ -14093,6 +14102,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                         .{ .ident_idx = alias_lhs.relative_name },
                         alias_rhs_var,
                         &.{},
+                        0,
                         self.aliasOriginModule(),
                         @intFromEnum(type_alias.alias_stmt_idx),
                         self.cir.module_role == .builtin,
@@ -14622,6 +14632,7 @@ fn generateForClauseAliasApplication(
             decl_alias.ident,
             self.types.getAliasBackingVar(decl_alias),
             anno_arg_vars,
+            @intCast(anno_arg_vars.len),
             decl_alias.origin_module,
             decl_alias.source_decl.toOptional(),
             decl_alias.source_decl.originIsBuiltin(),
@@ -16776,6 +16787,7 @@ fn predeclareAliasDecl(
             .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
+            @intCast(header_vars.len),
             self.aliasOriginModule(),
             @intFromEnum(decl_var),
             self.cir.module_role == .builtin,
@@ -17026,10 +17038,9 @@ const GenTypeAnnoCtx = union(enum) {
 
     /// Generate everything at and beneath this position with a different
     /// opening behaviour. Used for an argument substituted for a formal whose
-    /// variance is UNKNOWN: opening must be refused at every depth, not just
-    /// at the argument's own root, because polarity FLIPS on the way down (a
-    /// function's parameters negate) and so a closing polarity reopens one
-    /// level in.
+    /// declaration is rejected: opening is disabled at every depth, not just
+    /// at the argument's own root: a nested function establishes an output
+    /// return even beneath an input position.
     fn withOpening(self: GenTypeAnnoCtx, opening: AnnotationGenCtx.OpeningBehavior) GenTypeAnnoCtx {
         return switch (self) {
             .annotation => |anno_ctx| .{ .annotation = .{
@@ -17052,7 +17063,8 @@ const GenTypeAnnoCtx = union(enum) {
             .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
                 // A declaration standing as the whole where-method signature
                 // is walked by the instantiator from its direct result.
-                .signature, .result => .result,
+                .signature => .signature,
+                .result => .result,
                 .try_row => .try_row,
                 .nested => .nested,
             },
@@ -17088,7 +17100,7 @@ const GenTypeAnnoCtx = union(enum) {
             // decide); a nominal body has no use-site polarity, so its rows
             // close as written.
             .type_decl => |decl| switch (decl.type_) {
-                .alias => .preserve,
+                .alias => .preserve_output,
                 .nominal => .close,
             },
         };
@@ -17614,647 +17626,141 @@ fn builtinTrySourceDecl(self: *const Self) ?u32 {
     return @intFromEnum(indices.try_type);
 }
 
-/// Whether an external type reference resolves into the builtin module.
-fn externalTypeRefTargetsBuiltin(self: *const Self, import_idx: CIR.Import.Idx) bool {
-    const module_idx = self.cir.imports.getResolvedModule(import_idx) orelse return false;
-    if (module_idx >= self.imported_modules.len) return false;
-    return self.imported_modules[module_idx].module_role == .builtin;
-}
-
-/// Whether this type application is the builtin `Try(ok, err)`. A `Try`
-/// result's ERROR row is the only position below a where-method signature's
-/// direct result that the result-row widening adapter re-tags (design.md
-/// "Result-Row Widening Adapter"), so it is the only nested output position
-/// that keeps per-use opening.
-///
-/// The application's BASE decides this, not the name it was written with.
-/// Shadowing a builtin type is only a warning and the local binding wins, so
-/// `Try(a, b) := [Yes(a), No(b)]` in scope makes a written `Try(ok, err)` that
-/// LOCAL nominal—matching on the interned name alone would open a row
-/// lowering will not adapt, which is a wrong tag layout rather than a
-/// diagnostic. `Try` is not one of the compiler-constructed builtin
-/// annotations (`List`, `Box`, the numerics), so `.builtin` is never it.
-fn annoApplyIsBuiltinTry(self: *const Self, apply: CIR.TypeAnno.Apply) bool {
-    if (self.cir.store.sliceTypeAnnos(apply.args).len != 2) return false;
-    const try_source_decl = self.builtinTrySourceDecl() orelse return false;
-    return switch (apply.base) {
-        .builtin, .pending => false,
-        // Only inside Builtin itself does a local declaration name the builtin
-        // `Try`; anywhere else a local `Try` is the user's own declaration.
-        .local => |local| self.isCheckingBuiltinModuleDirectly() and
-            @intFromEnum(local.decl_idx) == try_source_decl,
-        .external => |ext| self.externalTypeRefTargetsBuiltin(ext.module_idx) and
-            ext.target_node_idx == try_source_decl,
-        .external_identity => |ext| self.identityTypeRefTargetsBuiltin(ext.module_identity) and
-            ext.target_node_idx == try_source_decl,
+/// Source-formal adapter positions from the completed declaration graph.
+/// Every occurrence participates; an unreachable occurrence keeps a shared
+/// actual closed. The visited (variable, reach) pairs make recursion finite.
+fn applicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *Env, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error![]GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach {
+    const Reach = GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach;
+    const args = self.cir.store.sliceTypeAnnos(apply.args);
+    const result = try self.gpa.alloc(Reach, args.len);
+    errdefer self.gpa.free(result);
+    @memset(result, .nested);
+    const initial = switch (ctx) {
+        .type_decl => return result,
+        .annotation => |annotation| if (annotation.opening == .per_use) annotation.adapter_reach else return result,
     };
-}
-
-/// Which of `apply`'s OWN argument indices lands in the builtin `Try`'s ERROR
-/// argument, crossing transparent alias declarations.
-///
-/// `annoApplyIsBuiltinTry` answers only for a `Try` written directly, so an
-/// alias over `Try` whose FORMAL is the error row (`Res(e) : Try(Str, e)`) had
-/// every argument of `Res([IoErr])` generated out of reach - while lowering
-/// crosses the same alias and WOULD re-tag that row: `closedResultRowOrNull`
-/// reads the return through `resolvedPayload`, which walks alias backings, and
-/// `hostedTryNamedOrNull` (src/postcheck/monotype/lower.zig:13046) crosses them
-/// by design. The opened set was therefore strictly smaller than the adaptable
-/// set, which is under-opening: safe (an ordinary mismatch) but wrong, since
-/// keeping the opened set equal to the adaptable set is the rule this whole
-/// axis exists to hold.
-///
-/// Fail-closed everywhere: any shape not recognized exactly returns null, which
-/// is the `.nested` answer this walk replaced.
-fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) Allocator.Error!?usize {
-    // Type-argument index of `Builtin.Try`'s error row. Deliberately the same
-    // constant as the Monotype relation's
-    // (`src/postcheck/monotype/lower.zig:1727`) and the instantiator's
-    // (`src/types/instantiate.zig:36`).
-    const try_error_type_arg_index: usize = 1;
-    if (self.annoApplyIsBuiltinTry(apply)) return try_error_type_arg_index;
-
-    // `origin[i]` is the index, among the ORIGINAL reference's arguments, that
-    // the current layer's argument `i` came from.
-    var origin = std.ArrayListUnmanaged(usize).empty;
-    defer origin.deinit(self.gpa);
-    var next_origin = std.ArrayListUnmanaged(usize).empty;
-    defer next_origin.deinit(self.gpa);
-    const args_len = self.cir.store.sliceTypeAnnos(apply.args).len;
-    try origin.ensureTotalCapacity(self.gpa, args_len);
-    for (0..args_len) |index| origin.appendAssumeCapacity(index);
-
-    // A declaration chain that closes on itself stops at the first repeated
-    // declaration. Null is the fail-closed answer there: a cyclic alias is
-    // already reported as `recursive_alias` by the caller's
-    // `ensureTypeDeclGenerated`.
-    var visited = std.AutoHashMapUnmanaged(CIR.Statement.Idx, void).empty;
-    defer visited.deinit(self.gpa);
-
-    var current = apply;
-    while (true) {
-        // Cross-module aliases are deliberately out of scope: the declaration's
-        // CIR lives in another module. Fail-closed, so it is a limitation
-        // rather than a wrong answer.
-        const base_ref = switch (current.base) {
-            .local => |local_ref| local_ref,
-            .builtin, .external, .external_identity, .pending => return null,
-        };
-        if ((try visited.getOrPut(self.gpa, base_ref.decl_idx)).found_existing) return null;
-        const alias_decl = switch (self.cir.store.getStatement(base_ref.decl_idx)) {
-            .s_alias_decl => |decl| decl,
-            .s_decl,
-            .s_var,
-            .s_var_uninitialized,
-            .s_reassign,
-            .s_crash,
-            .s_dbg,
-            .s_expr,
-            .s_expect,
-            .s_for,
-            .s_while,
-            .s_infinite_loop,
-            .s_breakable_loop,
-            .s_break,
-            .s_return,
-            .s_import,
-            .s_nominal_decl,
-            .s_where_alias_decl,
-            .s_type_anno,
-            .s_type_var_alias,
-            .s_runtime_error,
-            => return null,
-        };
-        const formals = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(alias_decl.header).args);
-        // The reference's arguments are substituted for the header's formals
-        // positionally; any other arity is a canonicalization error already
-        // reported elsewhere.
-        if (formals.len != origin.items.len) return null;
-
-        const body = switch (self.cir.store.getTypeAnno(self.annoSkipParens(alias_decl.anno))) {
-            .apply => |body_apply| body_apply,
-            .rigid_var,
-            .rigid_var_lookup,
-            .underscore,
-            .lookup,
-            .tag_union,
-            .tag,
-            .tuple,
-            .record,
-            .@"fn",
-            .parens,
-            .malformed,
-            => return null,
-        };
-        const body_args = self.cir.store.sliceTypeAnnos(body.args);
-
-        if (self.annoApplyIsBuiltinTry(body)) {
-            if (body_args.len <= try_error_type_arg_index) return null;
-            const formal_index = self.annoFormalIndex(body_args[try_error_type_arg_index], formals) orelse return null;
-            return origin.items[formal_index];
-        }
-
-        // An alias over an alias: keep walking only while every argument is
-        // passed straight through as one of this declaration's own formals. A
-        // computed argument (`Outer(e) : Inner(List(e))`) puts the row
-        // somewhere no adapter reaches, so it stops the walk.
-        next_origin.clearRetainingCapacity();
-        try next_origin.ensureTotalCapacity(self.gpa, body_args.len);
-        for (body_args) |body_arg| {
-            const formal_index = self.annoFormalIndex(body_arg, formals) orelse return null;
-            next_origin.appendAssumeCapacity(origin.items[formal_index]);
-        }
-        const previous = origin;
-        origin = next_origin;
-        next_origin = previous;
-        current = body;
-    }
-}
-
-/// The index within `formals` of the declaration formal `anno_idx` names, or
-/// null when `anno_idx` is not a bare reference to one of them.
-fn annoFormalIndex(self: *const Self, anno_idx: CIR.TypeAnno.Idx, formals: []const CIR.TypeAnno.Idx) ?usize {
-    const name = self.annoRigidVarName(anno_idx) orelse return null;
-    for (formals, 0..) |formal_idx, index| {
-        const formal_name = self.annoRigidVarName(formal_idx) orelse continue;
-        if (formal_name.eql(name)) return index;
-    }
-    return null;
-}
-
-/// The type-variable name `anno_idx` is, looking through parentheses and
-/// through a `.rigid_var_lookup` to the `.rigid_var` that introduced it. Null
-/// for every other shape.
-fn annoRigidVarName(self: *const Self, anno_idx: CIR.TypeAnno.Idx) ?Ident.Idx {
-    var current = anno_idx;
-    var remaining: usize = @intCast(self.cir.store.nodes.len());
-    while (remaining > 0) : (remaining -= 1) {
-        switch (self.cir.store.getTypeAnno(current)) {
-            .rigid_var => |rigid| return rigid.name,
-            .rigid_var_lookup => |lookup| current = lookup.ref,
-            .parens => |parens| current = parens.anno,
-            .apply,
-            .underscore,
-            .lookup,
-            .tag_union,
-            .tag,
-            .tuple,
-            .record,
-            .@"fn",
-            .malformed,
-            => return null,
-        }
-    }
-    return null;
-}
-
-/// `anno_idx` with every layer of parentheses removed.
-fn annoSkipParens(self: *const Self, anno_idx: CIR.TypeAnno.Idx) CIR.TypeAnno.Idx {
-    var current = anno_idx;
-    var remaining: usize = @intCast(self.cir.store.nodes.len());
-    while (remaining > 0) : (remaining -= 1) {
-        switch (self.cir.store.getTypeAnno(current)) {
-            .parens => |parens| current = parens.anno,
-            .apply,
-            .rigid_var,
-            .rigid_var_lookup,
-            .underscore,
-            .lookup,
-            .tag_union,
-            .tag,
-            .tuple,
-            .record,
-            .@"fn",
-            .malformed,
-            => return current,
-        }
-    }
-    return current;
-}
-
-/// Where a type declaration's body places one of its own formals, relative to
-/// the declaration's root.
-///
-/// A reference's argument stands wherever the declaration puts the formal it
-/// is substituted for, so the argument is generated at the reference's
-/// polarity COMPOSED with this—the same position the type spelled out in place
-/// would have. `Handler(e) : e -> Str` puts `e` in an input position, so the
-/// `[A, B]` of `Handler([A, B])` written as an output is generated closed,
-/// exactly like the `[A, B] -> Str` the reference stands for. Without the
-/// composition the argument inherited the REFERENCE's polarity and opened,
-/// and an annotation that the direct spelling enforces was not enforced
-/// through the alias.
-///
-/// This is the polarity counterpart of `instantiationReach`: reach already
-/// re-decides itself inside the referenced declaration, and polarity did not.
-///
-/// A shape the walk does not model contributes a COVARIANT occurrence, which
-/// keeps the reference's own polarity. That default is only sound where the
-/// shape genuinely preserves polarity; a position whose variance is UNKNOWN
-/// must not take it, because covariance is the most permissive answer and
-/// guessing it un-enforces the annotation. Unknown variance is `.invariant`
-/// instead; see `applyDeclKnowledge`.
-const FormalVariance = enum {
-    /// The declaration body never names this formal.
-    unused,
-    /// Only positions that preserve the reference's polarity, plus every
-    /// position this walk does not model (see above).
-    covariant,
-    /// Only positions that negate it.
-    contravariant,
-    /// Both. One variable cannot be open on the output side and closed on the
-    /// input side, so an invariant argument is generated closed whatever the
-    /// reference's own polarity is.
-    invariant,
-
-    /// This formal's variance given one more occurrence's.
-    fn join(self: FormalVariance, other: FormalVariance) FormalVariance {
-        if (self == .unused) return other;
-        if (other == .unused) return self;
-        if (self == other) return self;
-        return .invariant;
-    }
-
-    /// The polarity an argument substituted for this formal is generated at,
-    /// given the polarity of the reference itself.
-    fn compose(self: FormalVariance, reference: Polarity) Polarity {
-        return switch (self) {
-            .unused, .covariant => reference,
-            .contravariant => reference.flip(),
-            .invariant => .neg,
-        };
-    }
-};
-
-/// What this walk can know about the declaration a type application
-/// references.
-///
-/// The two non-local cases used to share one `null`, and sharing it was a bug:
-/// "the compiler built this application and it is covariant" and "this
-/// declaration lives in a module I cannot read" were both answered with the
-/// most permissive variance. An annotation the local spelling enforces was
-/// then not enforced through an imported alias.
-const ApplyDeclKnowledge = union(enum) {
-    /// The declaration is in THIS module, so its body can be walked for the
-    /// real variance of each formal.
-    local: CIR.Statement.Idx,
-    /// Compiler-owned, and covariant in every formal. Two kinds qualify: a
-    /// `.builtin` application (`List`, `Box`, the numerics), and a reference
-    /// into the `Builtin` module.
-    ///
-    /// The second rests on a PROPERTY of `Builtin` rather than a list of
-    /// names: every parameterized declaration there is covariant in each of
-    /// its formals, or leaves that formal unused. The near misses are worth
-    /// knowing, because they are what a future declaration would have to
-    /// avoid: `Iter(item)` and `Stream(item)` each put their formal under an
-    /// arrow (`step : () -> [One({ item : item, ... }), ...]`) and are
-    /// covariant only because it lands in that arrow's RESULT, and
-    /// `Dict(k, v)` carries its formals inside a `List((k, v))` payload
-    /// rather than a function at all. A `Builtin` declaration placing a
-    /// formal in an arrow's ARGUMENT would be contravariant, and this class
-    /// would then answer it covariantly—reopening the hole `unknown` closes.
-    covariant,
-    /// Another module's declaration. Its CIR and its formal names live in
-    /// stores this walk cannot read, so its variance is UNKNOWN, and unknown
-    /// is treated as the most RESTRICTIVE variance: invariant, which generates
-    /// the argument closed whatever the reference's own polarity is. Guessing
-    /// covariance instead would open a row the declaration may hold
-    /// contravariantly, which is the annotation silently ceasing to bound the
-    /// caller. Recording each declaration's variance in the checked module
-    /// data an importer already reads (design.md "Polarity") would replace
-    /// this with the real answer; that is a pure relaxation, since it can only
-    /// ever accept more programs.
-    unknown,
-};
-
-/// Which of the three `ApplyDeclKnowledge` cases this application is.
-fn applyDeclKnowledge(self: *const Self, apply: CIR.TypeAnno.Apply) ApplyDeclKnowledge {
-    return switch (apply.base) {
-        .builtin => .covariant,
-        .local => |local_ref| .{ .local = local_ref.decl_idx },
-        .external => |ext| if (self.externalTypeRefTargetsBuiltin(ext.module_idx))
-            .covariant
-        else
-            .unknown,
-        .pending => |pend| if (self.externalTypeRefTargetsBuiltin(pend.module_idx))
-            .covariant
-        else
-            .unknown,
-        .external_identity => |ext| if (self.identityTypeRefTargetsBuiltin(ext.module_identity))
-            .covariant
-        else
-            .unknown,
+    if (initial == .nested) return result;
+    const declaration = switch (apply.base) {
+        .builtin, .pending => return result,
+        .local => |local| blk: {
+            if (self.isForClauseAliasStatement(local.decl_idx)) return result;
+            if (!try self.ensureTypeDeclGenerated(local.decl_idx, env)) return result;
+            break :blk ModuleEnv.varFrom(local.decl_idx);
+        },
+        .external => |external| (try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse return result).local_var,
+        .external_identity => |external| (try self.resolveVarFromExternalIdentity(external.module_identity, external.target_node_idx) orelse return result).local_var,
     };
-}
-
-/// The variance of each formal of the declaration an application references,
-/// for the application's arguments.
-const ArgVariances = union(enum) {
-    /// The application is not modeled; every argument keeps the
-    /// application's own polarity.
-    none,
-    /// Every formal has this variance.
-    uniform: FormalVariance,
-    /// A local declaration's formals, in order.
-    per_formal: []const FormalVariance,
-
-    fn composeArg(self: ArgVariances, index: usize, reference: Polarity) Polarity {
-        return switch (self) {
-            .none => reference,
-            .uniform => |variance| variance.compose(reference),
-            .per_formal => |variances| variances[index].compose(reference),
-        };
-    }
-};
-
-/// The variance of each formal of the declaration `apply` references. A
-/// local declaration's formals come from `localDeclFormalVariances`; a
-/// reference whose declaration is not local answers from
-/// `ApplyDeclKnowledge`, for every formal at once. `none` when a local
-/// declaration is not an alias or nominal declaration, or its arity differs
-/// from the application's (reported by the caller).
-fn applyFormalVariances(self: *Self, apply: CIR.TypeAnno.Apply) Allocator.Error!ArgVariances {
-    const args_len = self.cir.store.sliceTypeAnnos(apply.args).len;
-    const local_decl_idx = switch (self.applyDeclKnowledge(apply)) {
-        .local => |decl_idx| decl_idx,
-        .covariant => return .{ .uniform = .covariant },
-        .unknown => return .{ .uniform = .invariant },
+    const content = self.types.resolveVar(declaration).desc.content;
+    const formals = switch (content) {
+        .alias => |alias| self.types.sliceAliasArgs(alias),
+        .structure => |flat| switch (flat) {
+            .nominal_type => |nominal| self.types.sliceNominalArgs(nominal),
+            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .tag_union, .empty_record, .empty_tag_union => unreachable,
+        },
+        .err => return result,
+        .flex, .rigid, .field_presence => unreachable,
     };
-    const variances = try self.localDeclFormalVariances(local_decl_idx) orelse return .none;
-    if (variances.len != args_len) return .none;
-    return .{ .per_formal = variances };
-}
-
-/// Where a position of a declaration body sits relative to the
-/// declaration's root: an occurrence of a formal there has this variance.
-const VariancePosition = enum {
-    covariant,
-    contravariant,
-    invariant,
-
-    fn flip(self: VariancePosition) VariancePosition {
-        return switch (self) {
-            .covariant => .contravariant,
-            .contravariant => .covariant,
-            .invariant => .invariant,
-        };
-    }
-
-    /// The position of an argument substituted for a formal of `variance`
-    /// in a reference standing at this position. A formal the declaration
-    /// never names places its argument where the reference itself stands.
-    fn through(self: VariancePosition, variance: FormalVariance) VariancePosition {
-        return switch (variance) {
-            .unused, .covariant => self,
-            .contravariant => self.flip(),
-            .invariant => .invariant,
-        };
-    }
-
-    fn occurrence(self: VariancePosition) FormalVariance {
-        return switch (self) {
-            .covariant => .covariant,
-            .contravariant => .contravariant,
-            .invariant => .invariant,
-        };
-    }
-};
-
-/// The variance of each of `decl_idx`'s own formals within its body, or
-/// null when `decl_idx` is not an alias or nominal declaration.
-///
-/// A declaration's variance depends on the variances of the local
-/// declarations its body references, which may reference it back
-/// (`Tree(a) := [Node(Tree(a)), Leaf(a)]`). Every declaration reachable from
-/// `decl_idx` is solved together, starting from `unused` and walking every
-/// body with the current estimates until no estimate changes. Each round's
-/// occurrences join into the previous estimates, so a variance only rises
-/// through a finite lattice and the rounds terminate. Results are memoized per
-/// declaration.
-fn localDeclFormalVariances(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!?[]const FormalVariance {
-    if (self.decl_formal_variances.get(decl_idx)) |variances| return variances;
-    if (self.typeDeclBody(decl_idx) == null) return null;
-
-    // The unsolved declarations reachable from `decl_idx`, in discovery order.
-    var group = std.ArrayListUnmanaged(CIR.Statement.Idx).empty;
-    defer group.deinit(self.gpa);
-    var solving = std.AutoHashMapUnmanaged(CIR.Statement.Idx, []FormalVariance).empty;
-    defer {
-        var owned = solving.valueIterator();
-        while (owned.next()) |variances| self.gpa.free(variances.*);
-        solving.deinit(self.gpa);
-    }
-    var pending = std.ArrayListUnmanaged(CIR.TypeAnno.Idx).empty;
+    if (formals.len != args.len) return result; // Existing arity diagnostic follows.
+    const seen_formals = try self.gpa.alloc(bool, formals.len);
+    defer self.gpa.free(seen_formals);
+    @memset(seen_formals, false);
+    const Item = struct { var_: Var, reach: Reach };
+    var pending: std.ArrayList(Item) = .empty;
     defer pending.deinit(self.gpa);
-
-    try self.addVarianceGroupMember(decl_idx, &group, &solving);
-    var member_index: usize = 0;
-    while (member_index < group.items.len) : (member_index += 1) {
-        const body = self.typeDeclBody(group.items[member_index]).?.body;
-        pending.clearRetainingCapacity();
-        try pending.append(self.gpa, body);
-        while (pending.pop()) |anno_idx| {
-            if (self.cir.store.getTypeAnno(anno_idx) == .apply) {
-                const apply = self.cir.store.getTypeAnno(anno_idx).apply;
-                switch (self.applyDeclKnowledge(apply)) {
-                    .local => |referenced| if (!self.decl_formal_variances.contains(referenced) and
-                        !solving.contains(referenced) and self.typeDeclBody(referenced) != null)
-                    {
-                        try self.addVarianceGroupMember(referenced, &group, &solving);
-                    },
-                    .covariant, .unknown => {},
-                }
-            }
-            try self.appendTypeAnnoChildren(anno_idx, &pending);
+    var visited: std.AutoHashMapUnmanaged(Item, void) = .empty;
+    defer visited.deinit(self.gpa);
+    try pending.append(self.gpa, .{ .var_ = declaration, .reach = initial });
+    while (pending.pop()) |item| {
+        const resolved = self.types.resolveVar(item.var_);
+        const entry = try visited.getOrPut(self.gpa, .{ .var_ = resolved.var_, .reach = item.reach });
+        if (entry.found_existing) continue;
+        var formal_found = false;
+        for (formals, 0..) |formal, index| {
+            if (self.types.resolveVar(formal).var_ != resolved.var_) continue;
+            formal_found = true;
+            result[index] = if (!seen_formals[index]) item.reach else if (result[index] == .nested or item.reach == .nested) .nested else if (result[index] == item.reach) item.reach else .try_row;
+            seen_formals[index] = true;
+        }
+        if (formal_found) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .reach = item.reach }),
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    for (self.types.sliceVars(func.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .reach = .nested });
+                    try pending.append(self.gpa, .{ .var_ = func.ret, .reach = base.annotation_positions.functionReturnReach(item.reach) });
+                    for (self.types.sliceVars(func.effect_deps)) |dep| try pending.append(self.gpa, .{ .var_ = dep, .reach = .nested });
+                },
+                .nominal_type => |nominal| {
+                    const is_try = nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
+                    for (self.types.sliceNominalArgs(nominal), 0..) |arg, index| try pending.append(self.gpa, .{
+                        .var_ = arg,
+                        .reach = base.annotation_positions.nominalArgumentReach(item.reach, is_try, index),
+                    });
+                },
+                .tuple => |tuple| for (self.types.sliceVars(tuple.elems)) |arg| {
+                    try pending.append(self.gpa, .{ .var_ = arg, .reach = .nested });
+                },
+                .record => |record| {
+                    for (0..record.fields.count) |index| try pending.append(self.gpa, .{ .var_ = self.types.getRecordFieldAt(record.fields, @intCast(index)).presence.typeVar(), .reach = .nested });
+                    try pending.append(self.gpa, .{ .var_ = record.ext, .reach = .nested });
+                },
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |index| {
+                        const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                        for (self.types.sliceVars(tag.args)) |arg| try pending.append(self.gpa, .{ .var_ = arg, .reach = .nested });
+                    }
+                    try pending.append(self.gpa, .{ .var_ = union_.ext, .reach = item.reach });
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .err, .field_presence => {},
         }
     }
-
-    var round = std.ArrayListUnmanaged(FormalVariance).empty;
-    defer round.deinit(self.gpa);
-    var walk = std.ArrayListUnmanaged(VarianceWalkItem).empty;
-    defer walk.deinit(self.gpa);
-    var children = std.ArrayListUnmanaged(CIR.TypeAnno.Idx).empty;
-    defer children.deinit(self.gpa);
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (group.items) |member| {
-            const current = solving.get(member).?;
-            round.clearRetainingCapacity();
-            try round.appendNTimes(self.gpa, .unused, current.len);
-            try self.accumulateFormalVariances(member, round.items, &solving, &walk, &children);
-            // Each round's occurrences join the previous estimate, so
-            // estimates only rise through a finite lattice and the rounds
-            // terminate.
-            for (current, round.items) |*estimate, next| {
-                const joined = estimate.join(next);
-                if (joined == estimate.*) continue;
-                estimate.* = joined;
-                changed = true;
-            }
-        }
-    }
-
-    try self.decl_formal_variances.ensureUnusedCapacity(self.gpa, @intCast(group.items.len));
-    for (group.items) |member| {
-        const solved = solving.fetchRemove(member).?;
-        self.decl_formal_variances.putAssumeCapacity(member, solved.value);
-    }
-    return self.decl_formal_variances.get(decl_idx).?;
+    return result;
 }
 
-fn addVarianceGroupMember(
-    self: *Self,
-    decl_idx: CIR.Statement.Idx,
-    group: *std.ArrayListUnmanaged(CIR.Statement.Idx),
-    solving: *std.AutoHashMapUnmanaged(CIR.Statement.Idx, []FormalVariance),
-) Allocator.Error!void {
-    const formals = self.typeDeclBody(decl_idx).?.formals;
-    try group.ensureUnusedCapacity(self.gpa, 1);
-    try solving.ensureUnusedCapacity(self.gpa, 1);
-    const variances = try self.gpa.alloc(FormalVariance, formals.len);
-    @memset(variances, .unused);
-    group.appendAssumeCapacity(decl_idx);
-    solving.putAssumeCapacity(decl_idx, variances);
+const annotation_positions = @import("annotation_positions.zig");
+const NominalPositionKey = struct { owner: *const ModuleEnv, statement: CIR.Statement.Idx };
+
+fn annotationPositionOwner(context: *const anyopaque, owner: *const ModuleEnv, identity: base.ModuleIdentity.Idx) *const ModuleEnv {
+    const self: *const Self = @ptrCast(@alignCast(context));
+    return self.moduleEnvForIdentity(owner, identity).env;
 }
 
-/// An alias or nominal declaration's formals and body.
-const TypeDeclBody = struct {
-    formals: []const CIR.TypeAnno.Idx,
-    body: CIR.TypeAnno.Idx,
-};
-
-fn typeDeclBody(self: *const Self, decl_idx: CIR.Statement.Idx) ?TypeDeclBody {
-    const header, const body = switch (self.cir.store.getStatement(decl_idx)) {
-        .s_alias_decl => |decl| .{ decl.header, decl.anno },
-        .s_nominal_decl => |decl| .{ decl.header, decl.anno },
-        .s_decl,
-        .s_var,
-        .s_var_uninitialized,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => return null,
-    };
-    return .{ .formals = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args), .body = body };
-}
-
-/// Every child annotation of `anno_idx`.
-fn appendTypeAnnoChildren(self: *const Self, anno_idx: CIR.TypeAnno.Idx, out: *std.ArrayListUnmanaged(CIR.TypeAnno.Idx)) Allocator.Error!void {
-    switch (self.cir.store.getTypeAnno(anno_idx)) {
-        .rigid_var, .rigid_var_lookup, .lookup, .underscore, .malformed => {},
-        .parens => |parens| try out.append(self.gpa, parens.anno),
-        .@"fn" => |func| {
-            try out.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(func.args));
-            try out.append(self.gpa, func.ret);
-        },
-        .tag_union => |tag_union| {
-            try out.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag_union.tags));
-            if (tag_union.ext) |ext| try out.append(self.gpa, ext);
-        },
-        .tag => |tag| try out.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tag.args)),
-        .tuple => |tuple| try out.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(tuple.elems)),
-        .record => |record| {
-            for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                try out.append(self.gpa, self.cir.store.getAnnoRecordField(field_idx).ty);
-            }
-            if (record.ext) |ext| try out.append(self.gpa, ext);
-        },
-        .apply => |apply| try out.appendSlice(self.gpa, self.cir.store.sliceTypeAnnos(apply.args)),
+fn declarationPositions(self: *Self, owner: *const ModuleEnv, statement: CIR.Statement.Idx) std.mem.Allocator.Error!?[]annotation_positions.Positions {
+    const key = NominalPositionKey{ .owner = owner, .statement = statement };
+    const entry = try self.nominal_positions.getOrPut(self.gpa, key);
+    if (!entry.found_existing) {
+        entry.value_ptr.* = null;
+        entry.value_ptr.* = try annotation_positions.analyzeDeclaration(self.gpa, .{
+            .context = self,
+            .builtin_owner = self.builtin_ctx.builtin_module,
+            .resolve = annotationPositionOwner,
+        }, owner, statement);
     }
+    return entry.value_ptr.*;
 }
 
-/// One position of a declaration body still to be visited.
-const VarianceWalkItem = struct {
-    anno: CIR.TypeAnno.Idx,
-    position: VariancePosition,
-};
+fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, index: u32, surrounding: Polarity) std.mem.Allocator.Error!?Polarity {
+    const self: *Self = @ptrCast(@alignCast(context));
+    // Compiler primitives have no source body; their actuals inherit position.
+    const statement = nominal.sourceDeclOptional() orelse return surrounding;
+    const owner = self.moduleEnvForIdentity(self.cir, nominal.origin_module).env;
+    const positions = (try self.declarationPositions(owner, @enumFromInt(statement))) orelse return null; // Rejected source has no position transfer.
+    std.debug.assert(index < positions.len);
+    return positions[index].polarity(surrounding);
+}
 
-/// Join into `out[i]` the variance of every occurrence of `decl_idx`'s
-/// formal `i` within its body, reading the variances of the declarations it
-/// references from the memo or from the group being solved.
-fn accumulateFormalVariances(
-    self: *Self,
-    decl_idx: CIR.Statement.Idx,
-    out: []FormalVariance,
-    solving: *const std.AutoHashMapUnmanaged(CIR.Statement.Idx, []FormalVariance),
-    walk: *std.ArrayListUnmanaged(VarianceWalkItem),
-    children: *std.ArrayListUnmanaged(CIR.TypeAnno.Idx),
-) Allocator.Error!void {
-    const decl = self.typeDeclBody(decl_idx).?;
-    walk.clearRetainingCapacity();
-    // A declaration's body root is an output position relative to the
-    // declaration itself, the same convention `generateAnnotationType` starts
-    // an annotation walk with.
-    try walk.append(self.gpa, .{ .anno = decl.body, .position = .covariant });
-    while (walk.pop()) |here| {
-        switch (self.cir.store.getTypeAnno(here.anno)) {
-            .rigid_var, .rigid_var_lookup => {
-                if (self.annoFormalIndex(here.anno, decl.formals)) |formal_index| {
-                    out[formal_index] = out[formal_index].join(here.position.occurrence());
-                }
-            },
-            .parens => |parens| try walk.append(self.gpa, .{ .anno = parens.anno, .position = here.position }),
-            .@"fn" => |func| {
-                // The same rule the annotation walk uses: argument positions
-                // negate the surrounding polarity, the return preserves it.
-                for (self.cir.store.sliceTypeAnnos(func.args)) |arg_anno_idx| {
-                    try walk.append(self.gpa, .{ .anno = arg_anno_idx, .position = here.position.flip() });
-                }
-                try walk.append(self.gpa, .{ .anno = func.ret, .position = here.position });
-            },
-            .tag_union, .tag, .tuple, .record => {
-                children.clearRetainingCapacity();
-                try self.appendTypeAnnoChildren(here.anno, children);
-                try walk.ensureUnusedCapacity(self.gpa, children.items.len);
-                for (children.items) |child| walk.appendAssumeCapacity(.{ .anno = child, .position = here.position });
-            },
-            .apply => |inner| {
-                // A nested reference composes the same way the top-level one
-                // does, and it splits the same three ways
-                // (`ApplyDeclKnowledge`): a local declaration composes through
-                // its own formals' variances, a compiler-owned one is
-                // covariant, and one this walk cannot read places its
-                // arguments at an invariant position, since the declaration
-                // on the other side may place them either way.
-                const inner_args = self.cir.store.sliceTypeAnnos(inner.args);
-                const inner_variances: ?[]const FormalVariance = switch (self.applyDeclKnowledge(inner)) {
-                    .local => |referenced| if (self.decl_formal_variances.get(referenced)) |solved|
-                        solved
-                    else if (solving.get(referenced)) |estimate|
-                        estimate
-                    else
-                        null,
-                    .covariant, .unknown => null,
-                };
-                const unknown = self.applyDeclKnowledge(inner) == .unknown;
-                for (inner_args, 0..) |inner_arg_idx, inner_index| {
-                    const position: VariancePosition = if (unknown)
-                        .invariant
-                    else if (inner_variances) |variances|
-                        if (variances.len == inner_args.len) here.position.through(variances[inner_index]) else here.position
-                    else
-                        here.position;
-                    try walk.append(self.gpa, .{ .anno = inner_arg_idx, .position = position });
-                }
-            },
-            // No formal can be named by any of these.
-            .lookup, .underscore, .malformed => {},
-        }
+fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) std.mem.Allocator.Error!?bool {
+    const self: *Self = @ptrCast(@alignCast(context));
+    const statement = alias.source_decl.toOptional() orelse return true; // Compiler abstract alias arguments are bookkeeping.
+    const owner = self.moduleEnvForIdentity(self.cir, alias.origin_module).env;
+    for (owner.for_clause_aliases.items.items) |abstract| {
+        if (@intFromEnum(abstract.alias_stmt_idx) == statement) return true;
     }
+    const positions = (try self.declarationPositions(owner, @enumFromInt(statement))) orelse return null; // Rejected source has no argument-usage facts.
+    std.debug.assert(index < positions.len);
+    return positions[index].isEmpty();
 }
 
 /// Report and poison a type reference that names a where alias, which is a set
@@ -18693,10 +18199,16 @@ const AnnoGenState = union(enum) {
         method_stage: u8 = 0,
     },
     apply: struct {
-        arg_variances: ArgVariances,
-        try_error_arg_index: ?usize,
-        try_error_row_reachable: bool,
-        variance_unknown: bool,
+        /// Each argument's adapter reach. Owned.
+        reaches: []GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach = &.{},
+        /// Each argument's formal's declaration positions, or null for a
+        /// rejected declaration or arity. Owned.
+        positions: ?[]annotation_positions.Positions = null,
+        /// Waiting for the referenced local declaration, generated before
+        /// argument reaches are read from it.
+        awaiting_reach_decl: bool = false,
+        /// Argument reaches and positions are computed.
+        prepared: bool = false,
         /// Waiting for the referenced local declaration.
         awaiting_decl: bool = false,
     },
@@ -18733,6 +18245,11 @@ const DeclGenFrame = struct {
     /// Whether generating the body filled `type_decl_rigid_vars` with the
     /// header's rigid variables.
     filled_rigid_vars: bool = false,
+    /// An alias body's hidden polarity parameters, collected while its
+    /// annotation generates and installed as `alias_hidden_exts` until the
+    /// frame finishes. Heap-allocated because frames move as the stack grows.
+    hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
+    outer_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
     stage: enum { start, alias_body, nominal_body, where_params, where_receiver, where_owners, finish } = .start,
     index: u32 = 0,
     where_scratch_top: ?u32 = null,
@@ -18899,7 +18416,11 @@ fn releaseAnnoGenScratch(self: *Self, frame: *AnnoGenFrame) void {
         .tag_union => |state| self.scratch_tags.clearFrom(state.scratch_top),
         .record => |state| self.scratch_record_fields.clearFrom(state.scratch_top),
         .tuple => |state| self.scratch_vars.clearFrom(state.scratch_top),
-        .none, .rigid, .apply, .lookup_awaiting_decl, .func => {},
+        .apply => |state| {
+            self.gpa.free(state.reaches);
+            if (state.positions) |positions| self.gpa.free(positions);
+        },
+        .none, .rigid, .lookup_awaiting_decl, .func => {},
     }
     frame.state = .none;
 }
@@ -18908,6 +18429,12 @@ fn restoreDeclGenScope(self: *Self, frame: *DeclGenFrame) void {
     if (frame.where_scratch_top) |top| self.scratch_static_dispatch_constraints.clearFrom(top);
     frame.where_scratch_top = null;
     if (frame.filled_rigid_vars) self.type_decl_rigid_vars.clearRetainingCapacity();
+    if (frame.hidden_exts) |hidden_exts| {
+        self.alias_hidden_exts = frame.outer_hidden_exts;
+        hidden_exts.deinit(self.gpa);
+        self.gpa.destroy(hidden_exts);
+        frame.hidden_exts = null;
+    }
     switch (frame.mode) {
         .ensure => |ensure| {
             self.seen_annos.leaveScope(ensure.anno_scope);
@@ -19032,6 +18559,7 @@ fn stepDeclGen(self: *Self, frame: *DeclGenFrame, input: ?TypeGenResult, env: *E
         .alias_body => {
             const alias = decl.s_alias_decl;
             const backing_var: Var = ModuleEnv.varFrom(alias.anno);
+            try self.finishAliasDeclarationParameters(decl_var, frame.hidden_exts.?.items);
             if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
                 self.markTypeDeclInvalid(decl_idx);
                 try self.markErroneous(decl_var);
@@ -19131,6 +18659,7 @@ fn beginAliasDeclBody(
                 .{ .ident_idx = header.relative_name },
                 ModuleEnv.varFrom(alias.anno),
                 header_vars,
+                @intCast(header_vars.len),
                 self.aliasOriginModule(),
                 @intFromEnum(decl_idx),
                 self.cir.module_role == .builtin,
@@ -19138,6 +18667,12 @@ fn beginAliasDeclBody(
             env,
         );
     }
+
+    const hidden_exts = try self.gpa.create(std.ArrayListUnmanaged(Var));
+    hidden_exts.* = .empty;
+    frame.hidden_exts = hidden_exts;
+    frame.outer_hidden_exts = self.alias_hidden_exts;
+    self.alias_hidden_exts = hidden_exts;
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
     frame.filled_rigid_vars = true;
@@ -19160,6 +18695,42 @@ fn beginAliasDeclBody(
         .is_opaque = false,
         .num_args = @intCast(header_args.len),
     } }, .polarity = .pos } } };
+}
+
+/// Complete a declaration shell before ensureTypeDeclGenerated publishes it.
+/// The backing and source arguments retain their exact existing identities.
+fn finishAliasDeclarationParameters(self: *Self, decl_var: Var, hidden: []const Var) Allocator.Error!void {
+    const content = self.types.resolveVar(decl_var).desc.content;
+    if (content == .err) return;
+    const alias = content.alias;
+    var args: std.ArrayList(Var) = .empty;
+    defer args.deinit(self.gpa);
+    try args.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+    // Instantiation records each newly copied marker once. A source argument
+    // shared by several nested aliases still contributes just one parameter.
+    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer seen.deinit(self.gpa);
+    for (hidden) |var_| {
+        const root = self.types.resolveVar(var_).var_;
+        const entry = try seen.getOrPut(self.gpa, root);
+        if (!entry.found_existing) try args.append(self.gpa, root);
+    }
+    const completed = try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+        alias.ident,
+        self.types.getAliasBackingVar(alias),
+        args.items,
+        alias.source_arg_count,
+        alias.origin_module,
+        alias.source_decl.toOptional(),
+        alias.source_decl.originIsBuiltin(),
+    );
+    try self.types.setVarContent(decl_var, completed);
+}
+
+fn freshAliasHiddenExt(self: *Self, env: *Env, region: Region) Allocator.Error!Var {
+    const variable = try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, region);
+    try self.alias_hidden_exts.?.append(self.gpa, variable);
+    return variable;
 }
 
 fn beginNominalDeclBody(
@@ -19255,8 +18826,8 @@ const anno_gen_done: TypeGenStep = .{ .done = .anno };
 /// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
 ///
 /// `polarity` is the position of this anno within the annotation being
-/// generated: annotations start at `.pos` (output) and function argument
-/// positions negate it. Extensionless tag unions are implicitly opened in
+/// generated: annotations start at `.pos` (output), and each function resets
+/// arguments to `.neg` and its return to `.pos`. Extensionless tag unions are implicitly opened in
 /// `.pos` positions (see `AnnotationGenCtx.opening`); within type
 /// declarations polarity is unused because the open-vs-closed decision is
 /// deferred to use-site instantiation via polarity vars.
@@ -19425,14 +18996,13 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
         },
         .apply => |a| return self.stepApplyAnnoGen(frame, a, input, env),
         .@"fn" => |func| {
-            // Argument positions negate the surrounding polarity; the return
-            // position preserves it.
+            // Each function establishes its own input and output positions.
             if (entering) frame.state = .{ .func = .{} };
             const state = &frame.state.func;
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             if (frame.index < args_anno_slice.len) {
                 frame.index += 1;
-                return annoGenChild(args_anno_slice[frame.index - 1], ctx.withReach(.nested), polarity.flip());
+                return annoGenChild(args_anno_slice[frame.index - 1], ctx.withReach(.nested), .neg);
             }
             if (!state.ret_requested) {
                 state.ret_requested = true;
@@ -19440,19 +19010,12 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                 // result within the adapter's reach; any function nested deeper
                 // is out of reach.
                 const ret_ctx = switch (ctx) {
-                    .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
-                        // The where-method signature's OWN function: its direct
-                        // result is the row the adapter re-tags.
-                        .signature => ctx.withReach(.result),
-                        // A function nested inside a result row, inside a `Try`
-                        // row, or anywhere else is out of the adapter's reach.
-                        .result, .try_row, .nested => ctx.withReach(.nested),
-                    },
+                    .annotation => |anno_ctx| ctx.withReach(base.annotation_positions.functionReturnReach(anno_ctx.adapter_reach)),
                     // A declaration body has no use-site result position to reach;
                     // `withReach` is a no-op on `.type_decl` (see `withReach`).
                     .type_decl => ctx.withReach(.nested),
                 };
-                return annoGenChild(func.ret, ret_ctx, polarity);
+                return annoGenChild(func.ret, ret_ctx, .pos);
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
             const fn_type = inner_blk: {
@@ -19690,67 +19253,44 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
     const anno_region = frame.region;
     if (frame.state == .none) {
         if (try self.rejectWhereAliasInTypePosition(a.name, a.base, anno_var, anno_region, env)) return anno_gen_done;
-
+        frame.state = .{ .apply = .{} };
+        // Argument reaches are read from the referenced declaration, so a
+        // local one is generated first, as a child of this frame.
+        const reaches_read_declaration = switch (ctx) {
+            .annotation => |annotation| annotation.opening == .per_use and annotation.adapter_reach != .nested,
+            .type_decl => false,
+        };
+        switch (a.base) {
+            .local => |local| if (reaches_read_declaration and !self.isForClauseAliasStatement(local.decl_idx)) {
+                frame.state.apply.awaiting_reach_decl = true;
+                return .{ .request = .{ .decl = local.decl_idx } };
+            },
+            .builtin, .external, .external_identity, .pending => {},
+        }
+    }
+    if (frame.state.apply.awaiting_reach_decl) {
+        frame.state.apply.awaiting_reach_decl = false;
+        _ = input.?.decl;
+    }
+    if (!frame.state.apply.prepared) {
         // Generate the types for the arguments. Each argument stands
         // wherever the referenced DECLARATION puts the formal it is
         // substituted for, so its polarity is the application's composed
-        // with that formal's variance (`applyFormalVariances`): `Try(U8,
+        // with that formal's exact declaration positions: `Try(U8,
         // [E])` holds its error row covariantly, so `[E]` in an output
         // position is an output position too, while `Handler(e) : e -> Str`
         // holds `e` contravariantly, so the `[A, B]` of `Handler([A, B])`
         // is generated closed exactly like the `[A, B] -> Str` the
-        // reference stands for. An argument whose declaration the walk does
-        // not model keeps the application's own polarity. A `Try` written
-        // as the direct result also passes the adapter's reach to its
-        // ERROR row; every other application argument puts its arguments
-        // out of reach.
-        //
-        // The ok row is deliberately NOT reachable. The result-row
-        // widening adapter re-tags only the error row: `closedResultRowOrNull`
-        // reads `nominal.args[1]`, and `hostedTryReturnInjectionExpr`
-        // asserts the ok type is unchanged. Opening the ok row per use
-        // would let a body use widen a position lowering cannot adapt,
-        // which is a wrong tag layout rather than a diagnostic. Keeping
-        // the opened set equal to the adaptable set is the rule stated in
-        // design.md "Result-Row Widening Adapter".
-        // Exhaustive by construction: adding an `AdapterReach` variant is a
-        // compile error here rather than a silent `false`.
-        const reach_admits_try_error_row = switch (ctx) {
-            .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
-                // The signature's direct result is the only position whose
-                // `Try` the adapter re-tags.
-                .result => true,
-                // In practice a where-method signature is a function, so
-                // the `.@"fn"` arm re-aims `.signature` to `.result`
-                // before any apply is reached. `.try_row` reaches nothing
-                // below itself. `.nested` is out of reach.
-                .signature, .try_row, .nested => false,
-            },
-            .type_decl => false,
-        };
-        // `applyTryErrorArgIndex`, not `annoApplyIsBuiltinTry`: the error
-        // cell is found across transparent alias layers, the same ones
-        // lowering crosses, so an alias whose FORMAL is the error row opens
-        // exactly like a `Try` written directly.
-        const try_error_arg_index = try self.applyTryErrorArgIndex(a);
-        frame.state = .{
-            .apply = .{
-                .arg_variances = .none,
-                .try_error_arg_index = try_error_arg_index,
-                .try_error_row_reachable = try_error_arg_index != null and reach_admits_try_error_row,
-                // An UNKNOWN variance cannot be expressed as a polarity. Polarity
-                // flips on the way down—a function's parameters negate—so the
-                // closing polarity an invariant formal composes to reopens one
-                // level in, and `Lib.Producer([A] -> Str)` would open the `[A]` it
-                // must keep as written. Refusing to open at every depth is the
-                // answer that stays conservative under descent.
-                .variance_unknown = switch (self.applyDeclKnowledge(a)) {
-                    .unknown => true,
-                    .local, .covariant => false,
-                },
-            },
-        };
-        frame.state.apply.arg_variances = try self.applyFormalVariances(a);
+        // reference stands for. A `Try` written as the direct result also
+        // passes the adapter's reach to its ERROR row; every other
+        // application argument puts its arguments out of reach.
+        frame.state.apply.reaches = try self.applicationArgumentReaches(a, env, ctx);
+        frame.state.apply.positions = try annotation_positions.analyze(self.gpa, .{
+            .builtin_owner = self.builtin_ctx.builtin_module,
+            .context = self,
+            .resolve = annotationPositionOwner,
+        }, self.cir, a);
+        frame.state.apply.prepared = true;
     }
     const state = &frame.state.apply;
     const anno_args = self.cir.store.sliceTypeAnnos(a.args);
@@ -19759,15 +19299,14 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
         if (frame.index < anno_args.len) {
             const arg_index = frame.index;
             frame.index += 1;
-            const reached_arg_ctx = if (state.try_error_row_reachable and arg_index == state.try_error_arg_index.?)
-                ctx.withReach(.try_row)
-            else
-                ctx.withReach(.nested);
-            const arg_ctx = if (state.variance_unknown)
+            const reached_arg_ctx = ctx.withReach(state.reaches[arg_index]);
+            // A null result belongs only to rejected declaration/arity
+            // diagnostics, never to a valid type application.
+            const arg_ctx = if (state.positions == null)
                 reached_arg_ctx.withOpening(.as_written)
             else
                 reached_arg_ctx;
-            const arg_polarity = state.arg_variances.composeArg(arg_index, polarity);
+            const arg_polarity = if (state.positions) |positions| positions[arg_index].polarity(polarity) else .neg;
             return annoGenChild(anno_args[arg_index], arg_ctx, arg_polarity);
         }
 
@@ -20182,7 +19721,10 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
         break :inner_blk switch (ctx) {
             .annotation => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
             .type_decl => |decl| switch (decl.type_) {
-                .alias => try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, anno_region),
+                .alias => if (polarity == .pos)
+                    try self.freshAliasHiddenExt(env, anno_region)
+                else
+                    try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
                 .nominal => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
             },
         };
@@ -29591,12 +29133,6 @@ fn copyVarFromOtherModule(
         .other_cir_node_idx = target_node_idx,
         .other_cir = other_module_env,
     };
-}
-
-/// Whether a content identity in this module's table names the compiler's
-/// baked `Builtin` module.
-fn identityTypeRefTargetsBuiltin(self: *const Self, module_identity: base.ModuleIdentity.Idx) bool {
-    return module_identity == self.builtin_origin_identity;
 }
 
 fn checkAssociatedLookup(

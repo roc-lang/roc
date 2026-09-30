@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const bidi = @import("base").bidi;
 
 const source_region = @import("source_region.zig");
 const Allocator = std.mem.Allocator;
@@ -142,7 +143,7 @@ pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, pal
 pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
     try writer.writeAll("**");
-    try writer.writeAll(report.title);
+    try bidi.writeVisible(writer, report.title);
     try writer.writeAll("**\n");
     if (report.headline.elementCount() > 0) {
         try renderDocumentToMarkdown(&report.headline, writer, config);
@@ -301,7 +302,8 @@ fn writeColoredSummary(
     if (line.len == 0) return;
     const base = @intFromPtr(line.ptr) - @intFromPtr(plain.ptr);
     var current: []const u8 = "";
-    for (line, 0..) |b, k| {
+    var k: usize = 0;
+    while (k < line.len) : (k += 1) {
         const c = colors[base + k];
         if (!std.mem.eql(u8, c, current)) {
             if (c.len == 0) {
@@ -311,7 +313,12 @@ fn writeColoredSummary(
             }
             current = c;
         }
-        try writer.writeByte(b);
+        if (bidi.at(line[k..])) |control| {
+            try writer.writeAll(control.visible);
+            k += control.utf8.len - 1;
+        } else {
+            try writer.writeByte(line[k]);
+        }
     }
     if (current.len > 0) try writer.writeAll(palette.reset);
 }
@@ -350,7 +357,14 @@ fn wrapSummary(text: []const u8, width: usize, out: *std.array_list.Managed([]co
 /// Write `s` with every ASCII letter uppercased. Snapshot EXPECTED sections use
 /// uppercase titles even though rendered diagnostic headers use lowercase.
 pub fn writeShouted(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!void {
-    for (s) |c| {
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (bidi.at(s[i..])) |control| {
+            try writer.writeAll(control.visible);
+            i += control.utf8.len - 1;
+            continue;
+        }
+        const c = s[i];
         try writer.writeByte(if (c >= 'a' and c <= 'z') c - ('a' - 'A') else c);
     }
 }
@@ -359,7 +373,14 @@ pub fn writeShouted(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!vo
 /// the header text. Titles are validated as ASCII, so a byte
 /// iterator suffices.
 pub fn writeLowercased(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!void {
-    for (s) |c| {
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (bidi.at(s[i..])) |control| {
+            try writer.writeAll(control.visible);
+            i += control.utf8.len - 1;
+            continue;
+        }
+        const c = s[i];
         try writer.writeByte(std.ascii.toLower(c));
     }
 }
@@ -377,10 +398,10 @@ fn writeLocation(
     const start = filenameStart(path);
     if (start > 0) {
         try writer.writeAll(palette.secondary);
-        try writer.writeAll(path[0..start]);
+        try bidi.writeVisible(writer, path[0..start]);
     }
     try writer.writeAll(palette.primary);
-    try writer.writeAll(path[start..]);
+    try bidi.writeVisible(writer, path[start..]);
     try writer.writeAll(palette.secondary);
     try writer.print(":{d}:{d}", .{ line, column });
 }
@@ -545,7 +566,7 @@ fn renderSecondaryRegion(
     const body = std.mem.trim(u8, preceding_text, " \n\r\t");
 
     if (body.len > 0) {
-        try writer.writeAll(body);
+        try bidi.writeVisible(writer, body);
         try writer.writeByte('\n');
     }
 
@@ -562,7 +583,16 @@ fn writeReportSnippet(writer: *std.Io.Writer, palette: ColorPalette, highlight_c
     defer snippet.deinit();
     for (snippet.rows.items, 0..) |row, index| {
         const line = snippet.line(row);
-        for (line) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
+        var i: usize = 0;
+        while (i < line.len) {
+            if (bidi.at(line[i..])) |control| {
+                try writer.writeAll(control.visible);
+                i += control.utf8.len;
+            } else {
+                try writer.writeByte(if (line[i] == '\t') ' ' else line[i]);
+                i += 1;
+            }
+        }
         try writer.writeByte('\n');
         if (source_region.underlineAppliesToLine(start_line, end_line, start_line + @as(u32, @intCast(index)))) {
             const caret = snippet.caret(line);
@@ -650,19 +680,19 @@ fn wrapAndEmitBelowLine(
         }
         try writer.splatByteAll(' ', base_indent);
         if (first) {
-            try writer.writeAll(prefix);
+            try bidi.writeVisible(writer, prefix);
             first = false;
         } else {
             try writer.splatByteAll(' ', lead);
         }
-        try writer.writeAll(body[start..end]);
+        try bidi.writeVisible(writer, body[start..end]);
         try writer.writeByte('\n');
         start = end;
     }
     if (first) {
         // Body was empty (prefix only)—still emit it.
         try writer.splatByteAll(' ', base_indent);
-        try writer.writeAll(prefix);
+        try bidi.writeVisible(writer, prefix);
         try writer.writeByte('\n');
     }
 }
@@ -958,7 +988,21 @@ fn renderElementAs(comptime target: RenderTarget, element: DocumentElement, writ
             }
         },
         .raw => |content| if (ctx.source_selection == null) {
-            if (ctx.summary) |summary| try summary.append(content, "") else try writer.writeAll(content);
+            if (ctx.summary) |summary| {
+                try summary.append(content, "");
+            } else if (target == .html) {
+                // Raw HTML retains its markup, but control markers are text.
+                var controls = bidi.Iterator{ .bytes = content };
+                var start: usize = 0;
+                while (controls.next()) |occurrence| {
+                    try writer.writeAll(content[start..occurrence.offset]);
+                    try writeEscapedHtml(writer, occurrence.control.visible);
+                    start = controls.offset;
+                }
+                try writer.writeAll(content[start..]);
+            } else {
+                try bidi.writeVisible(writer, content);
+            }
         },
         .reflowing_text => |text| if (ctx.source_selection == null) {
             if (ctx.summary) |summary| try summary.append(text, "") else try S.writeText(ctx, writer, text);
@@ -1026,7 +1070,10 @@ fn writeCaretRowForLine(
         if (target == .color_terminal) {
             try writer.writeAll(ctx.palette.colorForAnnotation(span.annotation));
         }
-        try writer.splatBytesAll("^", span.length);
+        const start = @min(line.text.len, span.start_column -| 1);
+        const end = @min(line.text.len, start + span.length);
+        const beyond_line = span.length - (end - start);
+        try writer.splatBytesAll("^", @max(source_region.displayWidth(line.text[start..end]) + beyond_line, 1));
         if (target == .color_terminal) {
             try writer.writeAll(ctx.palette.reset);
         }
@@ -1051,7 +1098,7 @@ fn regionUnderline(region: SourceCodeDisplayRegion) [1]UnderlineRegion {
 /// text (every target but HTML).
 fn writePlainLink(writer: *std.Io.Writer, url: []const u8) error{WriteFailed}!void {
     try writer.writeAll("<");
-    try writer.writeAll(url);
+    try bidi.writeVisible(writer, url);
     try writer.writeAll(">");
 }
 
@@ -1091,7 +1138,7 @@ const TerminalStyle = struct {
     const concat_close = "";
 
     fn writeText(_: *RenderCtx, writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
-        try writer.writeAll(text);
+        try bidi.writeVisible(writer, text);
     }
 
     fn openInline(ctx: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
@@ -1135,7 +1182,7 @@ const TerminalStyle = struct {
         while (lines.next()) |line| {
             try writeGutter(writer, palette, line.number, layout.line_number_width);
             if (layout.highlight_source) try writer.writeAll(palette.colorForAnnotation(layout.display.region_annotation));
-            try writer.writeAll(line.text);
+            try bidi.writeVisible(writer, line.text);
             if (layout.highlight_source) try writer.writeAll(palette.reset);
             try writer.writeByte('\n');
             if (line.hasCarets()) {
@@ -1147,7 +1194,7 @@ const TerminalStyle = struct {
 
     fn writeMultiRegion(ctx: *RenderCtx, writer: *std.Io.Writer, multi: SourceCodeMultiRegion) error{WriteFailed}!void {
         const palette = ctx.palette;
-        try writer.writeAll(multi.source);
+        try bidi.writeVisible(writer, multi.source);
         try writer.writeByte('\n');
         for (multi.regions) |region| {
             try writer.writeAll(palette.colorForAnnotation(region.annotation));
@@ -1177,7 +1224,7 @@ const MarkdownStyle = struct {
     const concat_close = "";
 
     fn writeText(_: *RenderCtx, writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
-        try writer.writeAll(text);
+        try bidi.writeVisible(writer, text);
     }
 
     fn openInline(ctx: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
@@ -1204,7 +1251,7 @@ const MarkdownStyle = struct {
 
     fn writeSourceLayout(ctx: *RenderCtx, writer: *std.Io.Writer, layout: source_region.Layout) error{WriteFailed}!void {
         try writer.writeAll("```roc\n");
-        try writer.writeAll(layout.display.line_text);
+        try bidi.writeVisible(writer, layout.display.line_text);
         try writer.writeAll("\n```\n");
         var lines = layout.lines();
         while (lines.next()) |line| {
@@ -1214,7 +1261,7 @@ const MarkdownStyle = struct {
 
     fn writeMultiRegion(_: *RenderCtx, writer: *std.Io.Writer, multi: SourceCodeMultiRegion) error{WriteFailed}!void {
         try writer.writeAll("```roc\n");
-        try writer.writeAll(multi.source);
+        try bidi.writeVisible(writer, multi.source);
         try writer.writeAll("\n```\n");
         for (multi.regions) |region| {
             try writer.print("- Line {d}:{d}-{d}:{d}\n", .{ region.start_line, region.start_column, region.end_line, region.end_column });
@@ -1223,7 +1270,8 @@ const MarkdownStyle = struct {
 
     fn writeSourceLocation(_: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
         const path = sanitisePathForSnapshots(location.filename orelse "<source>");
-        try writer.print("{s}:{d}:{d}", .{ path, location.line, location.column });
+        try bidi.writeVisible(writer, path);
+        try writer.print(":{d}:{d}", .{ location.line, location.column });
     }
 };
 
@@ -1314,7 +1362,7 @@ const LspStyle = struct {
     const concat_close = "";
 
     fn writeText(_: *RenderCtx, writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
-        try writer.writeAll(text);
+        try bidi.writeVisible(writer, text);
     }
 
     fn openInline(_: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
@@ -1338,14 +1386,14 @@ const LspStyle = struct {
     fn writeSourceLayout(ctx: *RenderCtx, writer: *std.Io.Writer, layout: source_region.Layout) error{WriteFailed}!void {
         var lines = layout.lines();
         while (lines.next()) |line| {
-            try writer.writeAll(line.text);
+            try bidi.writeVisible(writer, line.text);
             try writer.writeByte('\n');
             if (line.hasCarets()) try writeCaretRowForLine(.language_server, ctx, writer, line);
         }
     }
 
     fn writeMultiRegion(_: *RenderCtx, writer: *std.Io.Writer, multi: SourceCodeMultiRegion) error{WriteFailed}!void {
-        try writer.writeAll(multi.source);
+        try bidi.writeVisible(writer, multi.source);
         try writer.writeByte('\n');
         for (multi.regions) |region| {
             try writer.print("  {}:{}-{}:{}\n", .{ region.start_line, region.start_column, region.end_line, region.end_column });
@@ -1354,7 +1402,8 @@ const LspStyle = struct {
 
     fn writeSourceLocation(_: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
         const path = sanitisePathForSnapshots(location.filename orelse "<source>");
-        try writer.print("{s}:{d}:{d}", .{ path, location.line, location.column });
+        try bidi.writeVisible(writer, path);
+        try writer.print(":{d}:{d}", .{ location.line, location.column });
     }
 };
 
@@ -1365,7 +1414,14 @@ fn decimalWidth(n: u32) usize {
 }
 
 fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
-    for (text) |char| {
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        if (bidi.at(text[i..])) |control| {
+            try writeEscapedHtml(writer, control.visible);
+            i += control.utf8.len - 1;
+            continue;
+        }
+        const char = text[i];
         switch (char) {
             '<' => try writer.writeAll("&lt;"),
             '>' => try writer.writeAll("&gt;"),
@@ -1556,4 +1612,27 @@ test "report below-source hook preserves nested source style and top-level frami
     defer out.deinit();
     try renderBelowContent(&out.writer, ColorPalette.NO_COLOR, ReportingConfig.initColorTerminal(), "", &elements, 1, 0, testing.allocator);
     try testing.expectEqualStrings("\n2 │ alpha\n  │ ^^^^^\n\nalpha\n^^^^^\n\n", out.written());
+}
+
+test "bidi controls are visible in every diagnostic target" {
+    const gpa = testing.allocator;
+    for (bidi.controls) |control| {
+        const text = try std.mem.concat(gpa, u8, &.{ "before ", control.utf8, " after." });
+        defer gpa.free(text);
+        var report = try Report.init(gpa, "Bidi Test", text, .runtime_error);
+        defer report.deinit();
+        try report.document.addText(text);
+        try report.document.addRaw(text);
+        const info = try @import("base").RegionInfo.position(text, &.{0}, 7, @intCast(7 + control.utf8.len));
+        try report.document.addSourceRegion(info, .error_highlight, text, text, &.{0});
+        inline for (std.meta.tags(RenderTarget)) |target| {
+            var output = std.Io.Writer.Allocating.init(gpa);
+            defer output.deinit();
+            try renderReport(&report, &output.writer, target);
+            var iter = bidi.Iterator{ .bytes = output.written() };
+            try testing.expect(iter.next() == null);
+            try testing.expect(std.mem.find(u8, output.written(), control.abbreviation) != null);
+            if (target == .html) try testing.expect(std.mem.find(u8, output.written(), "&lt;U+") != null);
+        }
+    }
 }
