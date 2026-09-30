@@ -369,6 +369,13 @@ const MeetBound = struct {
     assumed: u64 = 0,
 };
 
+/// Best slack a bounds query has found to one root, with the pending
+/// assumptions the path that found it touched.
+const QueryBest = struct {
+    c: i128,
+    assumed: u64 = 0,
+};
+
 /// Bound on synthesized upper bounds per met local.
 const meet_bound_cap: usize = 6;
 
@@ -689,7 +696,7 @@ const Pass = struct {
     progress_epoch: u32,
     max_join_id: u32,
     scratch: std.ArrayList(CFStmtId),
-    query_best: collections.DenseMap(NodeId, i128),
+    query_best: collections.DenseMap(NodeId, QueryBest),
     /// Scratch for `dedupeFacts`.
     fact_seen: std.AutoHashMap(FactKey, void),
     /// Assumption bits of the facts the current fact-graph query relaxed
@@ -757,7 +764,7 @@ const Pass = struct {
             .progress_epoch = 0,
             .max_join_id = 0,
             .scratch = .empty,
-            .query_best = collections.DenseMap(NodeId, i128).init(allocator),
+            .query_best = collections.DenseMap(NodeId, QueryBest).init(allocator),
             .fact_seen = std.AutoHashMap(FactKey, void).init(allocator),
             .rewrites = 0,
             .proof_records = .empty,
@@ -1037,7 +1044,7 @@ const Pass = struct {
     /// edges forward: from `r <= x + c` and a bound on `x`, `r` is bounded.
     fn hiConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(start, 0);
+        try self.query_best.put(start, .{ .c = 0 });
         var best: i128 = self.nodes.items[start].hi;
         var steps: usize = 0;
         var changed = true;
@@ -1045,11 +1052,11 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, next_acc);
+                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
                     const through = clampSlack(self.nodes.items[fact.b].hi + next_acc);
                     if (through < best) best = through;
@@ -1064,7 +1071,7 @@ const Pass = struct {
     /// edges backward: from `x <= r + c` and a bound on `x`, `r` is bounded.
     fn loConstOfRoot(self: *Pass, start: NodeId) ResourceError!i128 {
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(start, 0);
+        try self.query_best.put(start, .{ .c = 0 });
         var best: i128 = self.nodes.items[start].lo;
         var steps: usize = 0;
         var changed = true;
@@ -1072,11 +1079,11 @@ const Pass = struct {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.b) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.a);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.a, next_acc);
+                    try self.query_best.put(fact.a, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
                     const through = clampSlack(self.nodes.items[fact.a].lo - next_acc);
                     if (through > best) best = through;
@@ -1101,25 +1108,25 @@ const Pass = struct {
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(ra, 0);
+        try self.query_best.put(ra, .{ .c = 0 });
         var steps: usize = 0;
         var changed = true;
         while (changed and steps < query_visit_cap) : (steps += 1) {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, next_acc);
+                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
                     changed = true;
                 }
             }
         }
         if (self.query_best.get(rb)) |acc| {
-            if (acc <= m) return true;
+            if (acc.c <= m) return true;
         }
 
         // Constant route: every value of ra is at most every value of rb + m.
@@ -1146,25 +1153,25 @@ const Pass = struct {
         const shift = self.offHiOf(a) - self.offLoOf(b);
         if (ra == rb) return shift;
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(ra, 0);
+        try self.query_best.put(ra, .{ .c = 0 });
         var steps: usize = 0;
         var changed = true;
         while (changed and steps < query_visit_cap) : (steps += 1) {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, next_acc);
+                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
                     changed = true;
                 }
             }
         }
         const acc = self.query_best.get(rb) orelse return null;
-        return acc + shift;
+        return acc.c + shift;
     }
 
     /// Node for the mathematical sum of two dynamic values, or null when they
@@ -3094,27 +3101,30 @@ const Pass = struct {
     /// path facts, found by walking fact edges forward from its root.
     fn reachableBounds(self: *Pass, node_id: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
-        var bounds: QueryBounds = .{};
         const node = self.nodes.items[node_id];
-        bounds.append(.{ .root = node.root, .c = node.off_hi });
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(node.root, 0);
+        try self.query_best.put(node.root, .{ .c = 0 });
         var steps: usize = 0;
         var changed = true;
         while (changed and steps < query_visit_cap) : (steps += 1) {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.a) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.b);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.b, next_acc);
+                    try self.query_best.put(fact.b, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
-                    bounds.append(.{ .root = fact.b, .c = next_acc + node.off_hi, .assumed = self.query_used });
                     changed = true;
                 }
             }
+        }
+        // One bound per reached root, at the tightest slack the walk found.
+        var bounds: QueryBounds = .{};
+        var it = self.query_best.iterator();
+        while (it.next()) |entry| {
+            bounds.append(.{ .root = entry.key_ptr.*, .c = entry.value_ptr.c + node.off_hi, .assumed = entry.value_ptr.assumed });
         }
         return try self.normalizeUpperBounds(bounds, node);
     }
@@ -3207,27 +3217,30 @@ const Pass = struct {
     /// term's root. Smaller `c` is the stronger claim.
     fn lenLowerBounds(self: *Pass, len_node: NodeId) ResourceError!MeetBounds {
         self.query_used = 0;
-        var bounds: QueryBounds = .{};
         const node = self.nodes.items[len_node];
-        bounds.append(.{ .root = node.root, .c = -node.off_lo });
         self.query_best.clearRetainingCapacity();
-        try self.query_best.put(node.root, -node.off_lo);
+        try self.query_best.put(node.root, .{ .c = -node.off_lo });
         var steps: usize = 0;
         var changed = true;
         while (changed and steps < query_visit_cap) : (steps += 1) {
             changed = false;
             for (self.facts.items) |fact| {
                 const acc = self.query_best.get(fact.b) orelse continue;
-                const next_acc = clampSlack(acc + fact.c);
+                const next_acc = clampSlack(acc.c + fact.c);
                 const known = self.query_best.get(fact.a);
-                if (known == null or next_acc < known.?) {
+                if (known == null or next_acc < known.?.c) {
                     if (self.query_best.count() >= query_visit_cap and known == null) continue;
-                    try self.query_best.put(fact.a, next_acc);
+                    try self.query_best.put(fact.a, .{ .c = next_acc, .assumed = acc.assumed | fact.assumed });
                     self.query_used |= fact.assumed;
-                    bounds.append(.{ .root = fact.a, .c = next_acc, .assumed = self.query_used });
                     changed = true;
                 }
             }
+        }
+        // One bound per reached root, at the tightest slack the walk found.
+        var bounds: QueryBounds = .{};
+        var it = self.query_best.iterator();
+        while (it.next()) |entry| {
+            bounds.append(.{ .root = entry.key_ptr.*, .c = entry.value_ptr.c, .assumed = entry.value_ptr.assumed });
         }
         return try self.normalizeLowerBounds(bounds, node);
     }
