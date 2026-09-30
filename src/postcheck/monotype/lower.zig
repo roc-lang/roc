@@ -23589,9 +23589,10 @@ const BodyContext = struct {
         slice: InstSliceTask,
         fields: InstFieldsTask,
         tags: InstTagsTask,
-        nominal: InstNominalTask,
-        /// Boxed, like `decl_backing`: both are far larger than every other
-        /// task, and pooled frame stacks hold one frame per nesting level.
+        /// Boxed, like `decl_backing` and `declared_order`: the three are far
+        /// larger than every other task, and pooled frame stacks hold one
+        /// frame per nesting level.
+        nominal: *InstNominalTask,
         declared_order: *InstDeclaredOrderTask,
         decl_backing: *InstDeclBackingTask,
     };
@@ -23674,9 +23675,10 @@ const BodyContext = struct {
 
     fn destroyInstTaskBox(self: *BodyContext, task: InstTask) void {
         switch (task) {
+            .nominal => |boxed| self.allocator.destroy(boxed),
             .declared_order => |boxed| self.allocator.destroy(boxed),
             .decl_backing => |boxed| self.allocator.destroy(boxed),
-            .node, .slice, .fields, .tags, .nominal => {},
+            .node, .slice, .fields, .tags => {},
         }
     }
 
@@ -23699,7 +23701,7 @@ const BodyContext = struct {
             .slice => |*task| self.stepInstSlice(frame, task, input),
             .fields => |*task| self.stepInstFields(frame, task, input),
             .tags => |*task| self.stepInstTags(frame, task, input),
-            .nominal => |*task| self.stepInstNominal(frame, task, input),
+            .nominal => |task| self.stepInstNominal(frame, task, input),
             .declared_order => |task| self.stepInstDeclaredOrder(frame, task, input),
             .decl_backing => |task| self.stepInstDeclBacking(frame, task, input),
         };
@@ -23794,7 +23796,7 @@ const BodyContext = struct {
                 } });
             },
             .nominal => |nominal| blk: {
-                if (input == null) return .{ .call = .{ .nominal = .{ .checked_ty = task.checked_ty, .nominal = nominal } } };
+                if (input == null) return .{ .call = .{ .nominal = try self.boxInstTask(InstNominalTask, .{ .checked_ty = task.checked_ty, .nominal = nominal }) } };
                 break :blk input.?.get(.node);
             },
         };
