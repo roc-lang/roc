@@ -693,24 +693,30 @@ pub const InvalidLocalReason = enum(u8) {
 
 /// Render the message for a failed invariant check into `buffer`. The
 /// values arrive as integers from generated code; one outside its enum
-/// is reported as such rather than trusted.
-pub fn formatInvalidLocal(buffer: *[192]u8, kind: u8, reason: u8, local: u32, proc: u64, stmt: u32) []const u8 {
+/// is reported as such rather than trusted. The procedure is named by the
+/// two halves of the 128 bits its `roc__p` symbol spells, and the local by
+/// its position in that procedure's frame, so the message means the same
+/// thing in every program that links the procedure's code.
+pub fn formatInvalidLocal(buffer: *[192]u8, kind: u8, reason: u8, frame_index: u32, proc_high: u64, proc_low: u64) []const u8 {
     const kind_name: []const u8 = if (std.enums.fromInt(InvalidLocalKind, kind)) |k| @tagName(k) else "unknown";
     const received: []const u8 = if (std.enums.fromInt(InvalidLocalReason, reason)) |r| r.describe() else "an invalid value (unknown reason)";
-    var local_buffer: [10]u8 = undefined;
-    var proc_buffer: [20]u8 = undefined;
-    var stmt_buffer: [10]u8 = undefined;
+    var index_buffer: [10]u8 = undefined;
+    var proc_buffer: [32]u8 = undefined;
+    for ([_]u64{ proc_high, proc_low }, 0..) |half, half_index| {
+        for (0..16) |digit| {
+            const shift: u6 = @intCast(60 - 4 * digit);
+            proc_buffer[half_index * 16 + digit] = "0123456789abcdef"[@as(usize, @intCast((half >> shift) & 0xf))];
+        }
+    }
     const parts = [_][]const u8{
         "LIR/codegen invariant violated: ",
         kind_name,
         " local ",
-        unsignedIntToStr(u32, &local_buffer, local),
+        if (frame_index == std.math.maxInt(u32)) "outside the frame" else unsignedIntToStr(u32, &index_buffer, frame_index),
+        " of roc__p",
+        &proc_buffer,
         " received ",
         received,
-        " at proc ",
-        unsignedIntToStr(u64, &proc_buffer, proc),
-        " stmt ",
-        unsignedIntToStr(u32, &stmt_buffer, stmt),
     };
     var len: usize = 0;
     for (parts) |part| {
@@ -723,24 +729,24 @@ pub fn formatInvalidLocal(buffer: *[192]u8, kind: u8, reason: u8, local: u32, pr
 /// Report a failed dev-backend Debug invariant check on a local. Generated
 /// code passes the check's identity as integers and this formats the
 /// message, so a check site carries no message bytes of its own.
-pub fn roc_builtins_debug_invalid_local(kind: u8, reason: u8, local: u32, proc: u64, stmt: u32) callconv(.c) void {
+pub fn roc_builtins_debug_invalid_local(kind: u8, reason: u8, frame_index: u32, proc_high: u64, proc_low: u64) callconv(.c) void {
     const roc_ops = in_process_host.ops();
     var buffer: [192]u8 = undefined;
-    roc_ops.crash(formatInvalidLocal(&buffer, kind, reason, local, proc, stmt));
+    roc_ops.crash(formatInvalidLocal(&buffer, kind, reason, frame_index, proc_high, proc_low));
 }
 
 test "formatInvalidLocal renders the check identity and reason" {
     var buffer: [192]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: str local 7004 received an invalid RocStr (null bytes pointer) at proc 4066 stmt 1357",
-        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 7004, 4066, 1357),
+        "LIR/codegen invariant violated: str local 7 of roc__p0dd5e7903b5a4e63af0a004f1598b1ae received an invalid RocStr (null bytes pointer)",
+        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 7, 0x0dd5e7903b5a4e63, 0xaf0a004f1598b1ae),
     );
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: box local 3 received a non-aligned pointer at proc 9 stmt 2",
+        "LIR/codegen invariant violated: box local 3 of roc__p00000000000000090000000000000002 received a non-aligned pointer",
         formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.box), @intFromEnum(InvalidLocalReason.non_aligned_pointer), 3, 9, 2),
     );
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: unknown local 1 received an invalid value (unknown reason) at proc 2 stmt 3",
+        "LIR/codegen invariant violated: unknown local 1 of roc__p00000000000000020000000000000003 received an invalid value (unknown reason)",
         formatInvalidLocal(&buffer, 200, 200, 1, 2, 3),
     );
 }
@@ -748,11 +754,11 @@ test "formatInvalidLocal renders the check identity and reason" {
 test "formatInvalidLocal fits maximum identifiers and the longest reason" {
     var buffer: [192]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: unknown local 4294967295 received an invalid RocStr (misaligned allocation pointer) at proc 18446744073709551615 stmt 4294967295",
-        formatInvalidLocal(&buffer, 200, @intFromEnum(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u32)),
+        "LIR/codegen invariant violated: unknown local outside the frame of roc__pffffffffffffffffffffffffffffffff received an invalid RocStr (misaligned allocation pointer)",
+        formatInvalidLocal(&buffer, 200, @intFromEnum(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u64)),
     );
     try std.testing.expectEqualStrings(
-        "LIR/codegen invariant violated: str local 0 received an invalid RocStr (null bytes pointer) at proc 0 stmt 0",
+        "LIR/codegen invariant violated: str local 0 of roc__p00000000000000000000000000000000 received an invalid RocStr (null bytes pointer)",
         formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 0, 0, 0),
     );
 }
