@@ -1322,7 +1322,10 @@ pub const DeferredImportRef = extern struct {
     not_found_failure: DeferredRefFailure,
     /// See `Flags`.
     flags: u8,
-    _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    /// For an entry with `Flags.allows_tag_member`, the node that accesses the
+    /// member: the call written `Q.U.v(...)`, or this entry's own node when the
+    /// member is not called.
+    tag_member_access_node: u32 = 0,
     /// For `receiver_method_owner`, the node whose type variable holds the
     /// method's checked type.
     method_binding_type_node: u32,
@@ -1338,6 +1341,9 @@ pub const DeferredImportRef = extern struct {
     /// whether these two hold one; otherwise the node's own region is used.
     diagnostic_region_start: u32,
     diagnostic_region_end: u32,
+    /// For an entry with `Flags.allows_tag_member`, where the qualified tag
+    /// `Alias.Path.U` ends in the source. It starts where the node does.
+    tag_receiver_end: u32 = 0,
 
     /// Bit flags recording source-local facts the drain needs.
     pub const Flags = struct {
@@ -1366,6 +1372,11 @@ pub const DeferredImportRef = extern struct {
         /// none, the qualifier names the module and `Name` names one of its
         /// exposed types.
         pub const tag_after_import_alias: u8 = 1 << 6;
+        /// The reference is written `Alias.Path.U.v` with `U` spelled as a tag
+        /// and `v` as a value. When the import has no value at that path but
+        /// `Alias.Path` names a nominal type, `Alias.Path.U` is a qualified tag
+        /// and `v` is a member accessed on it.
+        pub const allows_tag_member: u8 = 1 << 7;
     };
 
     pub fn has(self: @This(), flag: u8) bool {
