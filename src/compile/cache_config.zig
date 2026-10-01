@@ -255,7 +255,9 @@ pub const Constants = struct {
     ///      separate Stream builtin change.
     /// 115: Reserved for wide-representation-capacity.
     /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
-    pub const CACHE_VERSION = 116;
+    /// 117: Raw alias types record the source argument boundary before their
+    ///      hidden polarity parameters.
+    pub const CACHE_VERSION = 117;
 };
 
 /// Configuration for the Roc cache system.
