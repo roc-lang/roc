@@ -231,6 +231,11 @@ pub const FnTemplate = struct {
     /// whose closed types commit the same layouts share one procedure
     /// (design.md "Layout-Keyed Builtin Procedures").
     procedure_keyed_by_layout: bool = false,
+    /// The checked template is called at exactly one site of its module's
+    /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
+    /// when Monotype finalizes the program. Dev inline analysis decides
+    /// single-use inlining by this fact, which every program agrees on.
+    single_source_call: bool = false,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),

@@ -7003,9 +7003,12 @@ fn customIssue11826CacheOwnershipVariants(
 // if every program compiles a procedure the cache offers to the same LIR: the
 // same ownership signature, uniqueness facts, inline decisions, and refcount
 // atomicity. `ROC_PACK_TRACE` prints a program-independent LIR fingerprint
-// for each procedure a pack offers and each one a build lowers; across the
-// app's build, its edited warm build, and the edited app's cold build, every
-// offered identity must have one fingerprint.
+// for each specialization a pack offers and each one a build lowers, by the
+// key a pack serves it by, and for each procedure a build lowers, by its
+// identity. Across the app's build, its edited warm build, and the edited
+// app's cold build, every offered key must have one fingerprint, and the two
+// builds of the edited source must lower every procedure they both lower
+// identically.
 fn customCacheFingerprintsAgree(
     io: std.Io,
     allocator: Allocator,
@@ -7018,7 +7021,7 @@ fn customCacheFingerprintsAgree(
         .dir_name = "cache_fingerprints",
         .platform = "test/fx-open/platform/main.roc",
         .platform_spelling = "../../fx-open/platform/main.roc",
-        .sources = &.{ "test/cli/cache_fingerprints/Helpers.roc", "test/cli/cache_fingerprints/main.roc", "test/cli/cache_fingerprints/edited.roc" },
+        .sources = &.{ "test/cli/cache_fingerprints/Helpers.roc", "test/cli/cache_fingerprints/Extra.roc", "test/cli/cache_fingerprints/main.roc", "test/cli/cache_fingerprints/edited.roc" },
         .app_name = "main.roc",
     }, &app)) |failure| return failure;
     const edited = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "edited.roc" }) catch |err|
@@ -7095,7 +7098,7 @@ fn customCacheFingerprintsAgree(
         return customFailure(allocator, timer, "the edited app printed {s} warm but {s} cold", .{ outputs[1], outputs[2] });
     }
 
-    // identity -> first fingerprint seen, and whether a second build saw it.
+    // key -> first fingerprint seen, and whether a second build saw it.
     const Seen = struct { fingerprint: []const u8, build: usize, shared: bool };
     var seen = std.StringHashMap(Seen).init(allocator);
     defer seen.deinit();
@@ -7108,30 +7111,52 @@ fn customCacheFingerprintsAgree(
             const kind = fields.next() orelse continue;
             const is_offer = std.mem.eql(u8, kind, "offer");
             if (!is_offer and !std.mem.eql(u8, kind, "compiled")) continue;
-            const identity = fields.next() orelse continue;
+            const key = fields.next() orelse continue;
             const fingerprint = fields.next() orelse continue;
-            if (is_offer) offered.put(identity, {}) catch |err|
+            if (is_offer) offered.put(key, {}) catch |err|
                 return customInfraFailure(allocator, timer, "failed to record an offer: {}", .{err});
-            const entry = seen.getOrPut(identity) catch |err|
+            const entry = seen.getOrPut(key) catch |err|
                 return customInfraFailure(allocator, timer, "failed to record a fingerprint: {}", .{err});
             if (!entry.found_existing) {
                 entry.value_ptr.* = .{ .fingerprint = fingerprint, .build = build_index, .shared = false };
                 continue;
             }
             if (entry.value_ptr.build != build_index) entry.value_ptr.shared = true;
-            if (!std.mem.eql(u8, entry.value_ptr.fingerprint, fingerprint)) {
-                // Only an identity a pack offers can be linked into another
-                // program; an unkeyed root may change with its source.
-                entry.value_ptr.fingerprint = "conflict";
-            }
+            if (!std.mem.eql(u8, entry.value_ptr.fingerprint, fingerprint)) entry.value_ptr.fingerprint = "conflict";
         }
     }
+    // The edited source's warm and cold builds lower the same procedures,
+    // except those the warm build links from the cache.
+    var warm_lowered = std.StringHashMap([]const u8).init(allocator);
+    defer warm_lowered.deinit();
+    var same_source_compared: usize = 0;
+    for ([_]usize{ 1, 2 }) |build_index| {
+        var lines = std.mem.splitScalar(u8, traces[build_index], '\n');
+        while (lines.next()) |line| {
+            var fields = std.mem.tokenizeScalar(u8, line, ' ');
+            if (!std.mem.eql(u8, fields.next() orelse continue, "lowered")) continue;
+            const identity = fields.next() orelse continue;
+            const fingerprint = fields.next() orelse continue;
+            if (build_index == 1) {
+                warm_lowered.put(identity, fingerprint) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to record a lowered procedure: {}", .{err});
+                continue;
+            }
+            const warm = warm_lowered.get(identity) orelse continue;
+            if (!std.mem.eql(u8, warm, fingerprint)) {
+                return customFailure(allocator, timer, "procedure {s} lowers differently in the edited app's warm and cold builds", .{identity});
+            }
+            same_source_compared += 1;
+        }
+    }
+    if (same_source_compared == 0) return customFailure(allocator, timer, "the edited app's warm and cold builds lowered no procedure in common", .{});
+
     var compared: usize = 0;
     var iter = offered.keyIterator();
-    while (iter.next()) |identity| {
-        const entry = seen.get(identity.*).?;
+    while (iter.next()) |key| {
+        const entry = seen.get(key.*).?;
         if (std.mem.eql(u8, entry.fingerprint, "conflict")) {
-            return customFailure(allocator, timer, "procedure {s} is offered by the object cache but compiles to different LIR in different programs", .{identity.*});
+            return customFailure(allocator, timer, "specialization {s} is offered by the object cache but compiles to different LIR in different programs", .{key.*});
         }
         if (entry.shared) compared += 1;
     }
