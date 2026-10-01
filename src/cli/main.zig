@@ -8888,7 +8888,9 @@ fn compileModulePack(
 
 /// Write this build's packs into the object cache: the root module's pack
 /// from the artifacts of the program just compiled, and a pack program for
-/// every other module in view whose pack is not in the store yet. Packs are
+/// every other module in view whose pack is not in the store yet, except the
+/// app module when the platform is the root, since no other program imports
+/// it. Packs are
 /// filed by module identity and artifact key, so an unchanged module's pack
 /// is found and left alone.
 fn writePacksToStore(
@@ -8904,14 +8906,21 @@ fn writePacksToStore(
     target: RocTarget,
 ) CliMainError!void {
     if (std.c.getenv("ROC_PACK_TRACE") != null) {
-        // What this program lowered from source, for comparison with what
-        // the packs it read and wrote offer under the same identities.
+        // What this program lowered from source: every procedure by identity,
+        // for comparison with another build of the same source, and every
+        // specialization by the key a pack serves it by, for comparison with
+        // what packs offer under that key.
         const program_store = &app_lowered.lir_result.store;
         for (program_store.getProcSpecs(), 0..) |proc, index| {
             if (proc.body == null) continue;
             const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
             const fingerprint = try procFingerprint(ctx.gpa, app_lowered, proc_id);
-            std.debug.print("compiled {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, program_store.procDebugName(proc_id) orelse "" });
+            std.debug.print("lowered {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, program_store.procDebugName(proc_id) orelse "" });
+        }
+        for (app_lowered.lir_result.spec_procs.items) |spec_proc| {
+            if (program_store.getProcSpec(spec_proc.proc).body == null) continue;
+            const fingerprint = try procFingerprint(ctx.gpa, app_lowered, spec_proc.proc);
+            std.debug.print("compiled {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, program_store.procDebugName(spec_proc.proc) orelse "" });
         }
     }
     if (app_artifacts) |set| {
@@ -8925,9 +8934,19 @@ fn writePacksToStore(
             }
         }
     }
+    // An app module is never imported, so its procedures only ever link into
+    // builds of that app, which read the pack written above from the
+    // program just compiled. A pack program of its own would only repeat it.
+    const app_key: ?check.CheckedArtifact.CheckedModuleArtifactKey = if (build_env.getAppSemanticData()) |app|
+        if (app.checked_artifact) |app_artifact| app_artifact.key else null
+    else
+        null;
     const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(artifacts);
     for (artifacts) |artifact| {
+        if (app_key) |key| {
+            if (std.meta.eql(artifact.key, key)) continue;
+        }
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
         const origin = placement.origin;
         const identity = placement.identity;
@@ -8935,6 +8954,9 @@ fn writePacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
+        if (std.c.getenv("ROC_PACK_TRACE") != null) {
+            std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
+        }
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
         defer pack.deinit();
         const set = &(pack.compiled.artifacts orelse continue);
@@ -8988,6 +9010,11 @@ fn packFileBytes(
             withheld += 1;
             continue;
         }
+        // A linking program inlines it rather than calling it.
+        if (proc.inlined_at_calls) {
+            withheld += 1;
+            continue;
+        }
         // Boxy statements index the program's own descriptor sidecar, and a
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
@@ -9001,7 +9028,7 @@ fn packFileBytes(
         // its producer's code; only a body lowered here has a fingerprint.
         if (trace and proc.body != null) {
             const fingerprint = try procFingerprint(allocator, lowered, spec_proc.proc);
-            std.debug.print("offer {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
+            std.debug.print("offer {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
         }
         try specs.append(allocator, .{
             .key = spec_proc.key,
@@ -12814,7 +12841,7 @@ test "runtime specialization strategy helpers" {
 test "post-check optimization scope per opt level" {
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.size));
-    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers_and_source_single_use, postCheckInlineModeForOpt(.dev));
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
@@ -12837,7 +12864,10 @@ test "only optimized builds emit thread-confined count updates" {
 
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
-        .size, .speed, .dev => .wrappers,
+        .size, .speed => .wrappers,
+        // The object cache links dev procedures into other programs, so dev
+        // decides inlining from source alone, the same in every program.
+        .dev => .wrappers_and_source_single_use,
         .interpreter => .none,
     };
 }

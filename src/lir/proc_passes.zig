@@ -131,7 +131,7 @@ const TaskContext = struct {
                     try ForwardingJoinInline.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
                 } else {
                     try TagCaseFusion.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
-                    try KnownTagJump.runProc(&shard, self.proc, scratch_allocator);
+                    try KnownTagJump.runProc(&shard, self.proc, scratch_allocator, &joins);
                 }
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },

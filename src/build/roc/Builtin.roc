@@ -5396,10 +5396,6 @@ Builtin :: [].{
 		## expect !Bool.False == Bool.True
 		## ```
 		not : Bool -> Bool
-		not = |bool| match bool {
-			Bool.True => Bool.False
-			Bool.False => Bool.True
-		}
 
 		## Returns `Bool.True` if the two booleans are the same, and `Bool.False` if they are different.
 		is_eq : Bool, Bool -> Bool

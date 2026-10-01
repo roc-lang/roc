@@ -657,6 +657,11 @@ const LowerSite = struct {
     /// inlined callee body.
     outer: LIR.InlineScopeId,
     mode: Mode,
+    /// The lifted function whose body this construct belongs to: the
+    /// procedure being lowered, or the callee of the inlined call around it.
+    /// It owns the calls lowered here, which decides whether a
+    /// source-single-use callee is inlined (`SolvedInline.Plan.bodyForCall`).
+    owner: ?Lifted.FnId = null,
 
     const Mode = enum {
         /// Lowering a user-written construct.
@@ -1520,6 +1525,7 @@ const Lowerer = struct {
             .inline_scope = try self.liftedInlineScopeUnder(self.solved.lifted.exprInlineScope(expr_id), parent.outer),
             .outer = parent.outer,
             .mode = .source,
+            .owner = parent.owner,
         };
     }
 
@@ -1533,6 +1539,7 @@ const Lowerer = struct {
             .inline_scope = try self.liftedInlineScopeUnder(self.solved.lifted.stmtInlineScope(stmt_id), parent.outer),
             .outer = parent.outer,
             .mode = .source,
+            .owner = parent.owner,
         };
     }
 
@@ -2233,7 +2240,7 @@ const Lowerer = struct {
             try self.add(.{ .proc = target });
             const spec = self.lowerer.fn_specs.items[@intFromEnum(target)];
             if (spec.abi == .finite and spec.capture_ty == null and !is_cold and !spec.return_reuse.enabled()) {
-                if (try self.lowerer.inlineBodyForKnownCall(target)) |body| try self.add(.{ .expr = body });
+                if (try self.lowerer.inlineBodyForKnownCall(target, null)) |body| try self.add(.{ .expr = body });
             }
         }
 
@@ -2592,7 +2599,8 @@ const Lowerer = struct {
                 };
 
                 const erased_owner_use_start = self.erased_call_owner_uses.items.len;
-                const where = try self.bodySite(body_expr);
+                var where = try self.bodySite(body_expr);
+                where.owner = spec.source;
                 var body = try self.lowerExprReturn(where, body_expr, entry.ret);
                 if (self.return_forwarding_repeatable_depth != 0) {
                     Common.invariant("function lowering left a repeatable return-forwarding region active");
@@ -2925,6 +2933,7 @@ const Lowerer = struct {
             .rc_ret_unique = if (cached) |hit| hit.rc_ret_unique else false,
             .rc_ret_unique_fields = if (cached) |hit| hit.rc_ret_unique_fields else 0,
             .rc_ret_conditions = cached_ret_conditions,
+            .inlined_at_calls = self.inline_plan.kind(spec.source) != .none,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
         if (self.proc_debug_names) {
@@ -2936,9 +2945,9 @@ const Lowerer = struct {
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
                 // A program that keeps its keyed specializations lowers each
-                // one's body as a procedure, except a single-use body, which
-                // is lowered at its call site alone and so is not kept.
-                const kept = self.keep_specialization_procs and !self.inline_plan.isSingleUse(spec.source);
+                // one's body as a procedure, except a body its calls inline,
+                // which a program linking the pack would inline too.
+                const kept = self.keep_specialization_procs and self.inline_plan.kind(spec.source) == .none;
                 if (plain_spec and (kept or !self.keep_specialization_procs)) {
                     try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
@@ -7671,7 +7680,7 @@ const Lowerer = struct {
         // input, so preserve the specialized call boundary until inlining can
         // model destination demand directly.
         if (task.capture_arg == null and !task.is_cold and !has_return_reuse) {
-            if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
+            if (try self.inlineBodyForKnownCall(callee, task.where.owner)) |body_expr| {
                 // An argument that reads a caller local at the parameter's
                 // exact type binds the inlined parameter to that local
                 // itself. A snapshot temp would be a second name bound before
@@ -7758,6 +7767,7 @@ const Lowerer = struct {
         // call's scope, whose call site is this call.
         var callee_parent = task.where;
         callee_parent.outer = try self.addKnownCallInlineScope(task.where, source_fn, task.body_expr);
+        callee_parent.owner = spec.source;
         frame.cursor = 1;
         return .{ .call = exprTask(callee_parent, task.target, task.body_expr, null, task.next) };
     }
@@ -9395,9 +9405,12 @@ const Lowerer = struct {
         return try self.lowerTypeSpan(self.solved_types.span(func.args));
     }
 
-    fn inlineBodyForKnownCall(self: *Lowerer, callee: Type.FnId) Common.LowerError!?Lifted.ExprId {
+    /// The body to inline for a direct call to `callee` lowered in `owner`'s
+    /// body. Worker preparation passes no owner, which admits every body the
+    /// call could inline.
+    fn inlineBodyForKnownCall(self: *Lowerer, callee: Type.FnId, owner: ?Lifted.FnId) Common.LowerError!?Lifted.ExprId {
         const spec = self.fn_specs.items[@intFromEnum(callee)];
-        const body_expr = self.inline_plan.bodyForFn(spec.source) orelse return null;
+        const body_expr = self.inline_plan.bodyForCall(spec.source, owner) orelse return null;
 
         if (spec.abi != .finite) Common.invariant("inline plan selected a non-finite function spec");
         if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
