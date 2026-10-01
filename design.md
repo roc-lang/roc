@@ -9739,6 +9739,13 @@ must not request descriptors for uninstantiated scheme parameters. Declarations
 whose binders are captured still provide the runtime value required by those
 explicit capture edges.
 
+A closure's captures are the values its captured binders hold at the closure's
+declaration. Constructing the callable at a later use reads the same values only
+for immutable binders. For every capture whose checked binder is `reassignable`,
+the declaring body reserves a snapshot local, assigns the binder's current value
+to it at the declaration, and every construction of that closure's callable in
+the body reads the snapshot instead of the binder's current local.
+
 Restoring a non-function `ConstStore` value in `.boxy` directly emits LIR for
 the requested checked type. The const node is read from the module that owns the
 stored value, while checked type interpretation uses the module named by the

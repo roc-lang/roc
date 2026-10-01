@@ -13607,6 +13607,10 @@ const ProcBodyBuilder = struct {
     scoped_descriptor_locals_start: usize = 0,
     local_descriptor_environments: std.ArrayList(LocalDescriptorEnvironment),
     descriptor_transfer_aliases: std.ArrayList(DescriptorTransferAlias),
+    /// The values a declared local closure's reassignable captures held at
+    /// its declaration. Every construction of that closure's callable reads
+    /// these instead of the variables' current values.
+    closure_capture_snapshots: std.ArrayList(ClosureCaptureSnapshot) = .empty,
     /// This frame is a template dictionary's method adapter, which binds
     /// descriptors the building frame supplied.
     template_frame_descriptors: bool = false,
@@ -13654,6 +13658,12 @@ const ProcBodyBuilder = struct {
     const DescriptorTransferAlias = struct {
         source: LIR.LocalId,
         target: LIR.LocalId,
+    };
+
+    const ClosureCaptureSnapshot = struct {
+        closure: Plan.CheckedExprIdentity,
+        /// One entry per source capture, null for an immutable capture.
+        locals: []?LIR.LocalId,
     };
 
     const PatternMiss = struct {
@@ -14105,6 +14115,8 @@ const ProcBodyBuilder = struct {
     }
 
     fn deinit(self: *ProcBodyBuilder) void {
+        for (self.closure_capture_snapshots.items) |snapshot| self.parent.allocator.free(snapshot.locals);
+        self.closure_capture_snapshots.deinit(self.parent.allocator);
         self.literal_locals.deinit(self.parent.allocator);
         self.worker_return_descriptor_initializers.deinit(self.parent.allocator);
         self.stored_capture_initializers.deinit(self.parent.allocator);
@@ -18490,7 +18502,7 @@ const ProcBodyBuilder = struct {
                         if (source_capture_index >= source_captures.len) {
                             boxyLowerInvariant("boxy callable capture plan had more value captures than the source closure");
                         }
-                        field_local.* = self.localForPattern(source_captures[source_capture_index].pattern);
+                        field_local.* = self.sourceCaptureLocal(source, maybe_expr, source_capture_index, source_captures[source_capture_index]);
                         source_capture_index += 1;
                     }
                 },
@@ -24649,7 +24661,10 @@ const ProcBodyBuilder = struct {
             };
             if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) continue;
             switch (statement.data) {
-                .decl => |decl| if (!self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern),
+                .decl => |decl| {
+                    if (!self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern);
+                    try self.reserveClosureCaptureSnapshots(decl.expr);
+                },
                 .var_ => |decl| try self.reservePatternBindings(decl.pattern),
                 .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
@@ -24705,6 +24720,96 @@ const ProcBodyBuilder = struct {
         const source = try self.addFrameLocalForType(pattern.ty);
         const bound = try self.bindReassignPatternFromLocal(pattern_id, source, reassigned_binders, next);
         return try self.lowerExprInto(source, expr_id, bound);
+    }
+
+    /// The closure a local declaration binds, when it binds one.
+    fn declaredClosureExpr(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) ?checked.CheckedExprId {
+        const site = nestedCallableSiteExprForExpr(self.module, expr_id) orelse return null;
+        if (self.module.checked_bodies.expr(site).data != .closure) return null;
+        return site;
+    }
+
+    fn captureIsReassignable(self: *ProcBodyBuilder, capture: checked.CheckedCapture) bool {
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@intFromEnum(capture.pattern)] orelse
+            boxyLowerInvariant("boxy closure capture referenced a non-binding pattern");
+        return self.module.checked_bodies.patternBinder(binder).reassignable;
+    }
+
+    /// A declared closure's callable is constructed at each use, but its
+    /// captures are the values at the declaration. A reassignable capture can
+    /// change in between, so its declaration-time value gets its own local.
+    fn reserveClosureCaptureSnapshots(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) Allocator.Error!void {
+        const closure_expr = self.declaredClosureExpr(expr_id) orelse return;
+        const captures = self.callableExprCaptures(closure_expr);
+        for (captures) |capture| {
+            if (self.captureIsReassignable(capture)) break;
+        } else return;
+
+        const closure = Plan.CheckedExprIdentity{ .module = self.module.key, .expr = closure_expr };
+        if (self.closureCaptureSnapshotLocals(closure) != null) {
+            boxyLowerInvariant("boxy reserved a declared closure's capture snapshots twice");
+        }
+        const locals = try self.parent.allocator.alloc(?LIR.LocalId, captures.len);
+        errdefer self.parent.allocator.free(locals);
+        for (captures, locals) |capture, *local| {
+            if (!self.captureIsReassignable(capture)) {
+                local.* = null;
+                continue;
+            }
+            const binder = self.module.checked_bodies.pattern_binder_by_pattern[@intFromEnum(capture.pattern)].?;
+            const rep = self.binderStorageRep(binder);
+            local.* = if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(rep).layoutIdx()))
+                try self.addFrameLocalForRepWithFreshDescriptor(rep)
+            else
+                try self.addFrameLocalForRep(rep);
+        }
+        try self.closure_capture_snapshots.append(self.parent.allocator, .{ .closure = closure, .locals = locals });
+    }
+
+    fn closureCaptureSnapshotLocals(self: *ProcBodyBuilder, closure: Plan.CheckedExprIdentity) ?[]?LIR.LocalId {
+        for (self.closure_capture_snapshots.items) |snapshot| {
+            if (snapshot.closure.expr == closure.expr and checked_moduleKeyEqual(snapshot.closure.module, closure.module)) {
+                return snapshot.locals;
+            }
+        }
+        return null;
+    }
+
+    fn prependClosureCaptureSnapshots(
+        self: *ProcBodyBuilder,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const closure_expr = self.declaredClosureExpr(expr_id) orelse return next;
+        const locals = self.closureCaptureSnapshotLocals(.{ .module = self.module.key, .expr = closure_expr }) orelse return next;
+        var continuation = next;
+        for (self.callableExprCaptures(closure_expr), locals) |capture, maybe_local| {
+            const local = maybe_local orelse continue;
+            continuation = try self.assignLocal(local, self.localForPattern(capture.pattern), continuation);
+        }
+        return continuation;
+    }
+
+    /// The local holding one source capture of a callable being constructed.
+    fn sourceCaptureLocal(
+        self: *ProcBodyBuilder,
+        source: Plan.WorkerSource,
+        maybe_expr: ?checked.CheckedExprId,
+        capture_index: usize,
+        capture: checked.CheckedCapture,
+    ) LIR.LocalId {
+        const closure: ?Plan.CheckedExprIdentity = if (maybe_expr) |expr_id|
+            .{ .module = self.module.key, .expr = expr_id }
+        else switch (source) {
+            .nested_expr => |expr_ref| expr_ref,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .generated_interpolation_step => null,
+        };
+        if (closure) |closure_ref| {
+            if (self.closureCaptureSnapshotLocals(closure_ref)) |locals| {
+                if (locals[capture_index]) |local| return local;
+            }
+        }
+        return self.localForPattern(capture.pattern);
     }
 
     fn declOmitsRuntimeBinding(
@@ -26546,7 +26651,10 @@ const ProcBodyBuilder = struct {
             return try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
         };
         return switch (statement.data) {
-            .decl => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
+            .decl => |decl| try self.prependClosureCaptureSnapshots(
+                decl.expr,
+                try self.lowerDeclPattern(decl.pattern, decl.expr, next),
+            ),
             // A promoted procedure is declared by its own template.
             .promoted_proc => next,
             .var_ => |decl| try self.lowerDeclPattern(decl.pattern, decl.expr, next),
