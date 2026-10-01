@@ -20842,7 +20842,9 @@ const ExprCheckFrame = struct {
         if (self.mb_anno_vars) |anno_vars| {
             // Unify the anno with the expr var
             const annotation_result = try checker.unifyInContext(anno_vars.anno_var, self.expr_var, env, anno_vars.context);
-            if (annotation_result.isProblem()) {
+            if (!annotation_result.isEstablished()) {
+                // Suppression by an erroneous annotation does not establish
+                // the relation either; its executable value must be retired.
                 // The diagnostic belongs to checking, but later stages need an
                 // explicit executable value. End-of-check poisoning replaces this
                 // expression with a runtime error while the binding retains the
