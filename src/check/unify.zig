@@ -2898,32 +2898,33 @@ const Unifier = struct {
     fn funcForMerge(self: *Self, vars: *const ResolvedVarDescs, selected: Func) std.mem.Allocator.Error!Func {
         const a_func = vars.a.desc.content.unwrapFunc() orelse return selected;
         const b_func = vars.b.desc.content.unwrapFunc() orelse return selected;
-        const capacity = a_func.effect_deps.len() + b_func.effect_deps.len();
-        if (capacity == 0) return selected;
-
-        var deps_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.scratch.gpa);
-        const deps_alloc = deps_sfa.get();
-        var deps = try std.ArrayList(Var).initCapacity(deps_alloc, capacity);
-        defer deps.deinit(deps_alloc);
-
-        for ([_]Var.SafeList.Range{ a_func.effect_deps, b_func.effect_deps }) |range| {
-            var i: u32 = 0;
-            while (i < range.len()) : (i += 1) {
-                const dep = self.types_store.getVarAt(range, i);
-                const dep_root = self.types_store.resolveVar(dep).var_;
-                var seen = false;
-                for (deps.items) |existing| {
-                    if (self.types_store.resolveVar(existing).var_ == dep_root) {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (!seen) deps.appendAssumeCapacity(dep_root);
-            }
+        var merged = selected;
+        if (a_func.effect_deps.len() == 0) {
+            merged.effect_deps = b_func.effect_deps;
+            return merged;
+        }
+        if (b_func.effect_deps.len() == 0 or std.meta.eql(a_func.effect_deps, b_func.effect_deps)) {
+            merged.effect_deps = a_func.effect_deps;
+            return merged;
         }
 
-        var merged = selected;
-        merged.effect_deps = try self.types_store.appendVars(deps.items);
+        // Dependency identity is the current solved root. This index belongs to
+        // this merge only; no root identity survives a subsequent solver write.
+        self.scratch.effect_dependency_seen.clearRetainingCapacity();
+        self.scratch.effect_dependencies.clearRetainingCapacity();
+        const capacity = a_func.effect_deps.len() + b_func.effect_deps.len();
+        try self.scratch.effect_dependencies.ensureTotalCapacity(self.scratch.gpa, capacity);
+        for ([_]Var.SafeList.Range{ a_func.effect_deps, b_func.effect_deps }) |range| {
+            for (self.types_store.sliceVars(range)) |dep| {
+                const dep_root = self.types_store.resolveVar(dep).var_;
+                const entry = try self.scratch.effect_dependency_seen.getOrPut(dep_root);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = {};
+                    self.scratch.effect_dependencies.appendAssumeCapacity(dep_root);
+                }
+            }
+        }
+        merged.effect_deps = try self.types_store.appendVars(self.scratch.effect_dependencies.items);
         return merged;
     }
 
@@ -4131,6 +4132,10 @@ pub const Scratch = struct {
     // used by caller of unify
     fresh_vars: VarSafeList,
 
+    /// Linear, merge-local union of directed effect formulas.
+    effect_dependency_seen: collections.DenseMap(Var, void),
+    effect_dependencies: std.ArrayListUnmanaged(Var) = .empty,
+
     // explicit unification work stack
     unify_work_stack: WorkFrame.SafeList,
     mismatch_flags: MkSafeList(bool),
@@ -4317,6 +4322,7 @@ pub const Scratch = struct {
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
+            .effect_dependency_seen = collections.DenseMap(Var, void).init(gpa),
             .unify_work_stack = try WorkFrame.SafeList.initCapacity(gpa, 32),
             .mismatch_flags = try MkSafeList(bool).initCapacity(gpa, 8),
             .mismatch_evidence = .{},
@@ -4353,6 +4359,8 @@ pub const Scratch = struct {
     /// Deinit scratch
     pub fn deinit(self: *Self) void {
         self.fresh_vars.deinit(self.gpa);
+        self.effect_dependency_seen.deinit();
+        self.effect_dependencies.deinit(self.gpa);
         self.unify_work_stack.deinit(self.gpa);
         self.mismatch_flags.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);

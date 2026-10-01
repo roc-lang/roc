@@ -842,8 +842,8 @@ pub const Instantiator = struct {
         return machine.value_stack.pop().?;
     }
 
-    /// Copy the head of one var: resolve it, share it when rank says so,
-    /// reuse an existing mapping, and otherwise mint + register the
+    /// Copy the head of one var: resolve it, reuse an existing substitution,
+    /// share it when rank says so, and otherwise mint + register the
     /// placeholder and either fill it immediately (contents with no children)
     /// or push the frame that will fill it. Returns true when the result var
     /// is already on the value stack; false when a frame was pushed.
@@ -855,6 +855,15 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
+
+        // The root and its explicit scheme requirements use one substitution.
+        // An established copy takes precedence over ordinary rank-based sharing.
+        if (self.var_map.count() > 0) {
+            if (self.var_map.get(resolved_var)) |fresh_var| {
+                try machine.value_stack.append(self.store.gpa, fresh_var);
+                return true;
+            }
+        }
 
         // Ordinary instantiation shares every non-generalized var. A binding
         // explicitly classified as a scheme instead copies the non-generalized
@@ -882,14 +891,6 @@ pub const Instantiator = struct {
             };
             if (!copy_structure and !is_polarity_marker) {
                 try machine.value_stack.append(self.store.gpa, resolved_var);
-                return true;
-            }
-        }
-
-        // Check if we've already instantiated this variable
-        if (self.var_map.count() > 0) {
-            if (self.var_map.get(resolved_var)) |fresh_var| {
-                try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
             }
         }

@@ -1345,3 +1345,102 @@ test "check - branch whose type contains an already-reported error adds no type 
     try test_env.assertOneCanError("Name Not In Scope");
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
 }
+
+// Regression for https://github.com/roc-lang/roc/issues/11940.
+// A pure annotation must reject effects reached through an inferred method helper.
+test "check - repro - issue 11940 - pure annotation rejects effectful for_each helper" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\summarize : List(Str) -> U64
+        \\summarize = |lines| {
+        \\    print_all!(lines)
+        \\    lines.len()
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check - issue 11940 - effectful annotation accepts for_each helper" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\summarize! : List(Str) => U64
+        \\summarize! = |lines| {
+        \\    print_all!(lines)
+        \\    lines.len()
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 11940 - deferred method helper has independent pure and effectful uses" {
+    const src =
+        \\Pure := {}.{
+        \\    run! : Pure -> U64
+        \\    run! = |_| 7
+        \\}
+        \\Effectful := {}.{
+        \\    run! : Effectful => U64
+        \\    run! = |_| 7
+        \\}
+        \\apply = |value| value.run!()
+        \\
+        \\pure_result : Pure -> U64
+        \\pure_result = |value| apply(value)
+        \\effectful_result! : Effectful => U64
+        \\effectful_result! = |value| apply(value)
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 11940 - imported deferred method helper rejects a pure annotation" {
+    var helper = try TestEnv.init("Helper",
+        \\Helper :: [].{
+        \\    apply = |value| value.run!()
+        \\}
+    );
+    defer helper.deinit();
+    try helper.assertNoErrors();
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import Helper
+        \\Effectful := {}.{
+        \\    run! : Effectful => U64
+        \\    run! = |_| 7
+        \\}
+        \\result : Effectful -> U64
+        \\result = |value| Helper.apply(value)
+    , "Helper", &helper);
+    defer test_env.deinit();
+    try test_env.assertCanErrors(&.{});
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check - issue 11940 - creating an effectful callback leaves its enclosing function pure" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\make_callback : List(Str) -> (() => {})
+        \\make_callback = |lines| || print_all!(lines)
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}

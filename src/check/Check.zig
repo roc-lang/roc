@@ -76,26 +76,8 @@ const no_type_decl_dense_index = std.math.maxInt(u32);
 
 const no_def_group = std.math.maxInt(u32);
 
-const FunctionEffectState = enum {
-    pure,
-    effectful,
-    unresolved,
-};
-
-const FunctionEffectResolution = enum {
-    visiting,
-    pure,
-    effectful,
-    unresolved,
-
-    fn state(self: @This()) FunctionEffectState {
-        return switch (self) {
-            .visiting, .pure => .pure,
-            .effectful => .effectful,
-            .unresolved => .unresolved,
-        };
-    }
-};
+const effect_solver = @import("effect_solver.zig");
+const FunctionEffectState = effect_solver.State;
 
 const ExpectEffectSlotId = enum(u32) { _ };
 
@@ -1075,8 +1057,10 @@ effectful_lambda_bodies: std.AutoHashMap(CIR.Expr.Idx, void),
 /// nested function type and removed before returning to the parent body.
 pending_function_effect_dependencies: std.ArrayListUnmanaged(Var),
 function_effect_dependency_frame_starts: std.ArrayListUnmanaged(usize),
-/// Reusable sparse memo for one directed function-effect graph query.
-function_effect_resolution: collections.DenseMap(Var, FunctionEffectResolution),
+/// Active function frames below this offset belong to a forcing definition.
+function_effect_dependency_scope_start: usize = 0,
+/// Reusable sparse directed solver. Sessions never cross source-store mutations.
+function_effect_resolution: effect_solver.Solver,
 /// Scratch for `beginCommitProbe`: the caller env's var-pool length per rank
 /// at probe start, restored on a failed probe's rollback. One buffer suffices
 /// because commit-probes never nest. The type store's trail-based savepoints
@@ -3238,7 +3222,7 @@ fn initAssumePrepared(
         .effectful_lambda_bodies = std.AutoHashMap(CIR.Expr.Idx, void).init(gpa),
         .pending_function_effect_dependencies = .empty,
         .function_effect_dependency_frame_starts = .empty,
-        .function_effect_resolution = collections.DenseMap(Var, FunctionEffectResolution).init(gpa),
+        .function_effect_resolution = effect_solver.Solver.init(gpa),
         .probe_var_pool_lens = .empty,
         .where_method_use_record_by_fn_var = rehydrated_where_method_uses,
     };
@@ -13533,7 +13517,7 @@ fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
         // Finalization runs after the last type mutation, so one memo serves
         // every watcher. Ordinary effect queries clear this cache because roots
         // may change between calls; no such invalidation is possible here.
-        self.function_effect_resolution.clearRetainingCapacity();
+        self.function_effect_resolution.reset();
 
         for (self.expect_dispatch_effect_watchers.items) |watcher| {
             const fn_root = self.types.resolveVar(watcher.fn_var).var_;
@@ -13592,119 +13576,42 @@ fn varIsEffectfulFunction(self: *Self, var_: Var) Allocator.Error!bool {
     return try self.functionEffectState(var_) == .effectful;
 }
 
-/// Resolve the directed effect formula carried by a function type. The memo is
-/// per query because union-find roots can change after any subsequent
-/// unification. A visiting back-edge contributes no effect by itself; this is
-/// the SCC base case, while any positive or unresolved dependency reachable
-/// outside the cycle still propagates back to every caller in the cycle.
+/// Terminal effects need no graph allocation. A nonterminal query starts a
+/// fresh solver session because ordinary unification can change any dependency.
 fn functionEffectState(self: *Self, var_: Var) Allocator.Error!FunctionEffectState {
-    self.function_effect_resolution.clearRetainingCapacity();
+    self.function_effect_resolution.reset();
     return self.functionEffectStateHelp(var_);
 }
 
-/// A function type whose effect depends on the effects of other types still
-/// being resolved.
-const FunctionEffectFrame = struct {
-    root: Var,
-    /// The effect dependencies of an effect-polymorphic function, or null
-    /// for an alias waiting on its backing type.
-    deps: ?Var.SafeList.Range,
-    index: u32 = 0,
-    result: FunctionEffectState = .pure,
-};
-
+/// Boundary consumers share one session only while the source graph is settled.
 fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffectState {
-    var frames: std.ArrayList(FunctionEffectFrame) = .empty;
-    defer frames.deinit(self.gpa);
-    var input: ?FunctionEffectState = null;
-    var next: ?Var = var_;
-    while (true) {
-        if (next) |current| {
-            next = null;
-            const resolved = self.types.resolveVar(current);
-            const root = resolved.var_;
-            if (self.function_effect_resolution.get(root)) |memo| {
-                input = memo.state();
-            } else {
-                try self.function_effect_resolution.put(root, .visiting);
-                const state: ?FunctionEffectState = switch (resolved.desc.content) {
-                    .alias => |alias| blk: {
-                        try frames.append(self.gpa, .{ .root = root, .deps = null });
-                        next = self.types.getAliasBackingVar(alias);
-                        break :blk null;
-                    },
-                    .err, .field_presence => .pure,
-                    .flex, .rigid => .unresolved,
-                    .structure => |flat| switch (flat) {
-                        // A pure function type carries no effect dependencies: unifying an
-                        // effect-polymorphic function with a pure one makes each
-                        // dependency pure and discharges the formula.
-                        .fn_pure => |func| blk: {
-                            std.debug.assert(func.effect_deps.len() == 0);
-                            break :blk .pure;
-                        },
-                        .fn_effectful => .effectful,
-                        .fn_unbound => |func| blk: {
-                            if (func.effect_deps.len() == 0) break :blk .unresolved;
-                            try frames.append(self.gpa, .{ .root = root, .deps = func.effect_deps });
-                            next = self.types.getVarAt(func.effect_deps, 0);
-                            break :blk null;
-                        },
-                        .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => .pure,
-                    },
-                };
-                if (state) |finished| {
-                    try self.recordFunctionEffectState(root, finished);
-                    input = finished;
-                }
-            }
-            if (next != null) continue;
-        }
+    return self.function_effect_resolution.resolve(self.types, var_);
+}
 
-        const dep_state = input.?;
-        input = null;
-        if (frames.items.len == 0) return dep_state;
-        const top = &frames.items[frames.items.len - 1];
-        const finished: ?FunctionEffectState = if (top.deps) |deps| blk: {
-            switch (dep_state) {
-                .effectful => break :blk .effectful,
-                .unresolved => top.result = .unresolved,
-                .pure => {},
-            }
-            top.index += 1;
-            if (top.index < deps.len()) {
-                next = self.types.getVarAt(deps, top.index);
-                break :blk null;
-            }
-            break :blk top.result;
-        } else dep_state;
-        if (finished) |state| {
-            const root = top.root;
-            _ = frames.pop();
-            try self.recordFunctionEffectState(root, state);
-            input = state;
-        }
+/// Calls retain unresolved effect formulas until their dispatch and arguments
+/// settle. Creating a callback value contributes no effect to its caller.
+fn recordCallEffect(self: *Self, function_var: Var) Allocator.Error!bool {
+    switch (try self.functionEffectState(function_var)) {
+        .pure => return false,
+        .effectful => {
+            self.markCurrentHoistObservableEffect();
+            return true;
+        },
+        .unresolved => {
+            try self.recordCurrentFunctionEffectDependency(function_var);
+            return false;
+        },
     }
 }
 
-fn recordFunctionEffectState(self: *Self, root: Var, state: FunctionEffectState) Allocator.Error!void {
-    try self.function_effect_resolution.put(root, switch (state) {
-        .pure => .pure,
-        .effectful => .effectful,
-        .unresolved => .unresolved,
-    });
-}
-
 fn recordCurrentFunctionEffectDependency(self: *Self, function_var: Var) Allocator.Error!void {
-    if (self.function_effect_dependency_frame_starts.items.len == 0) return;
+    if (self.function_effect_dependency_frame_starts.items.len == self.function_effect_dependency_scope_start) return;
     // The unifier rewrites a dependency in place when a pure function type
     // demands it, which needs the dependency to already have a function shape.
     std.debug.assert(self.varIsFunctionType(function_var) or self.types.resolveVar(function_var).desc.content == .err);
     const root = self.types.resolveVar(function_var).var_;
-    const start = self.function_effect_dependency_frame_starts.items[self.function_effect_dependency_frame_starts.items.len - 1];
-    for (self.pending_function_effect_dependencies.items[start..]) |existing| {
-        if (self.types.resolveVar(existing).var_ == root) return;
-    }
+    // Each call contributes one edge. Repeated calls may share a target; keeping
+    // those edges is linear in source calls and needs no mutable-root index.
     try self.pending_function_effect_dependencies.append(self.gpa, root);
 }
 
@@ -13731,9 +13638,9 @@ fn lambdaBodyIsEffectful(self: *Self, lambda_idx: CIR.Expr.Idx) Allocator.Error!
     if (self.effectful_lambda_bodies.contains(lambda_idx)) return true;
     const resolved = self.types.resolveVar(ModuleEnv.varFrom(lambda_idx));
     const func = resolved.desc.content.unwrapFunc() orelse return false;
-    var i: u32 = 0;
-    while (i < func.effect_deps.len()) : (i += 1) {
-        if (try self.functionEffectState(self.types.getVarAt(func.effect_deps, i)) == .effectful) return true;
+    self.function_effect_resolution.reset();
+    for (self.types.sliceVars(func.effect_deps)) |dep| {
+        if (try self.functionEffectStateHelp(dep) == .effectful) return true;
     }
     return false;
 }
@@ -13800,6 +13707,9 @@ fn callTargetIsInFlightRecursiveRef(self: *const Self, func_expr_idx: CIR.Expr.I
 }
 
 fn checkEffectfulFunctionName(self: *Self, pattern_idx: CIR.Pattern.Idx, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    // An invalid function already owns its checking diagnostic. Its rejected
+    // inferred body must not also suggest changing the declared function name.
+    if (self.erroneous_value_exprs.contains(expr_idx)) return;
     const ident = self.getPatternIdent(pattern_idx) orelse return;
     if (ident.attributes.effectful) return;
     if (!try self.exprHasEffectfulFunctionBody(expr_idx)) return;
@@ -14941,11 +14851,15 @@ const DefActivity = struct {
         exhaustiveness_scope: ?ExhaustivenessContext.Scope,
         checking_immediate_callee: bool,
         active_scheme_root: ?Var,
+        function_effect_dependency_scope_start: usize,
+        current_expect_effect_slot: ?ExpectEffectSlotId,
     };
 
     /// Restore the saved state, innermost replacement first.
     fn restore(state: *DefActivity, checker: *Self) void {
         const saved = state.saved orelse return;
+        checker.current_expect_effect_slot = saved.current_expect_effect_slot;
+        checker.function_effect_dependency_scope_start = saved.function_effect_dependency_scope_start;
         checker.active_scheme_root = saved.active_scheme_root;
         checker.checking_immediate_callee = saved.checking_immediate_callee;
         if (saved.exhaustiveness_scope) |scope| scope.leave();
@@ -15007,8 +14921,14 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
         .exhaustiveness_scope = null,
         .checking_immediate_callee = self.checking_immediate_callee,
         .active_scheme_root = self.active_scheme_root,
+        .function_effect_dependency_scope_start = self.function_effect_dependency_scope_start,
+        .current_expect_effect_slot = self.current_expect_effect_slot,
     };
     errdefer state.restore(self);
+    // A definition forced by a forward reference has its own effect context.
+    // Suspending frames by offset preserves outer storage without copying it.
+    self.function_effect_dependency_scope_start = self.function_effect_dependency_frame_starts.items.len;
+    self.current_expect_effect_slot = null;
 
     // Make as processing
     const def_name = self.getPatternIdent(def.pattern);
@@ -16394,22 +16314,26 @@ fn stepBoundary(self: *Self, state: *BoundaryActivity, input: ?CheckActivityResu
 /// dependency formula is part of the generalized scheme and will be resolved
 /// after call-site arguments instantiate and unify it.
 fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot) Allocator.Error!void {
+    self.function_effect_resolution.reset();
+    // Solve the immutable boundary graph once before materializing any result.
+    // Terminal kinds and formulas without dependencies need no sparse slots.
+    for (roots) |root| {
+        const content = self.types.resolveVar(root.interface).desc.content;
+        if (content != .structure or content.structure != .fn_unbound) continue;
+        if (content.structure.fn_unbound.effect_deps.len() == 0) continue;
+        _ = try self.functionEffectStateHelp(root.interface);
+    }
     for (roots) |root| {
         const resolved = self.types.resolveVar(root.interface);
-        const flat = switch (resolved.desc.content) {
-            .structure => |flat| flat,
-            .flex, .rigid, .alias, .field_presence, .err => continue,
-        };
-        if (try self.functionEffectState(resolved.var_) != .effectful) continue;
-        switch (flat) {
-            .fn_unbound => |func| try self.types.setVarContent(resolved.var_, .{ .structure = .{ .fn_effectful = func } }),
-            // A pure function type has no effect dependencies, so its effect
-            // state is always pure.
-            .fn_pure => unreachable,
-            .fn_effectful => {},
-            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => continue,
+        const content = resolved.desc.content;
+        if (content != .structure or content.structure != .fn_unbound) continue;
+        const func = content.structure.fn_unbound;
+        if (func.effect_deps.len() == 0) continue;
+        if (self.function_effect_resolution.solvedState(resolved.var_) == .effectful) {
+            try self.types.setVarContent(resolved.var_, .{ .structure = .{ .fn_effectful = func } });
         }
     }
+    self.function_effect_resolution.reset();
 }
 
 /// Drain the current frame's pending dispatch targets: check each target's
@@ -25826,10 +25750,7 @@ fn resumeMethodCallCheck(self: *Self, task: *ExprTask, state: *MethodCallCheck, 
                 .method_call,
             );
         }
-        if (try self.varIsEffectfulFunction(constraint_fn_var)) {
-            self.markCurrentHoistObservableEffect();
-            task.does_fx = true;
-        }
+        task.does_fx = try self.recordCallEffect(constraint_fn_var) or task.does_fx;
     }
     return .done;
 }
@@ -25861,10 +25782,7 @@ fn resumeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck) 
     }
     _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs);
 
-    if (try self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
-        self.markCurrentHoistObservableEffect();
-        task.does_fx = true;
-    }
+    task.does_fx = try self.recordCallEffect(method_call.constraint_fn_var) or task.does_fx;
     return .done;
 }
 
@@ -25976,10 +25894,7 @@ fn resumeTypeMethodCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck
             method_call.args,
             constraint_fn_var,
         );
-        if (try self.varIsEffectfulFunction(constraint_fn_var)) {
-            self.markCurrentHoistObservableEffect();
-            task.does_fx = true;
-        }
+        task.does_fx = try self.recordCallEffect(constraint_fn_var) or task.does_fx;
     }
     return .done;
 }
@@ -26001,10 +25916,7 @@ fn resumeTypeDispatchCallCheck(self: *Self, task: *ExprTask, state: *OperandsChe
     }
     _ = try self.retireCallLikeExprWithErroneousOperands(frame.expr_idx, frame.expr_var, arg_expr_idxs);
 
-    if (try self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
-        self.markCurrentHoistObservableEffect();
-        task.does_fx = true;
-    }
+    task.does_fx = try self.recordCallEffect(method_call.constraint_fn_var) or task.does_fx;
     return .done;
 }
 
@@ -32084,7 +31996,9 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
     // Round zero: semantic judgments immediately before this boundary can
     // ground a deferred receiver without adding an ordinary constraint. Let
     // every such relation propagate through its callable signature before we
-    // classify any literal as an unconstrained default candidate.
+    // classify any literal as an unconstrained default candidate. Newly copied
+    // attached and explicit relations join the same quiescent frontier.
+    try self.checkInstantiatedStaticDispatchConstraints(env, false, .ordinary);
     try self.quiesceConstraints(env, false);
 
     // Round-scoped scratch. Front-loaded as Check fields; cleared at the start
@@ -32260,6 +32174,8 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         }
 
         // --- 4. Cascade the constraints the commits unblocked. ---
+        try self.quiesceConstraints(env, true);
+        try self.checkInstantiatedStaticDispatchConstraints(env, true, .ordinary);
         try self.quiesceConstraints(env, true);
     }
 }
