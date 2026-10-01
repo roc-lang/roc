@@ -280,7 +280,9 @@ pub const Constants = struct {
     ///      compile-time values and test results record checked-error crashes.
     /// 126: Evidence paths store shared prefixes instead of complete paths.
     /// 127: Type descriptors mark declared nominal backing structure.
-    pub const CACHE_VERSION = 127;
+    /// 128: Stored closure captures record whether each is a lexical capture
+    ///      or a top-level compile-time root's recursive binding.
+    pub const CACHE_VERSION = 128;
 };
 
 /// Configuration for the Roc cache system.

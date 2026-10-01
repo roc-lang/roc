@@ -3031,6 +3031,7 @@ const Lowerer = struct {
                 .binder = local.binder,
                 .capture_id = local.capture_id,
                 .checked_capture_id = local.checked_capture_id,
+                .capture_kind = local.capture_kind,
                 .ty = self.solved.local_tys.items[@intFromEnum(capture.local)],
             });
         }
@@ -4189,6 +4190,7 @@ const Lowerer = struct {
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
+                .capture_kind = capture.capture_kind,
                 .ty = capture_ty,
                 .storage_ty = try self.captureFieldStorageType(capture, capture_ty),
             });
@@ -5078,6 +5080,7 @@ const Lowerer = struct {
                 Common.invariant("ConstStore capture field had no checked capture identity");
             task.slots[task.index] = .{
                 .id = checked_capture_id,
+                .kind = field.capture_kind,
                 .slot = @intCast(task.index),
                 .ty = undefined,
                 .plan = undefined,

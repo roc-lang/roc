@@ -473,6 +473,7 @@ const Solver = struct {
                 .binder = local.binder,
                 .capture_id = local.capture_id,
                 .checked_capture_id = local.checked_capture_id,
+                .capture_kind = local.capture_kind,
                 .ty = self.localTy(capture.local),
             };
         }

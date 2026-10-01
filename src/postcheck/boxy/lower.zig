@@ -16088,6 +16088,12 @@ const ProcBodyBuilder = struct {
 
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
+            // A recursive-binding capture fills no worker slot: the body
+            // reaches its root through a top-level reference, not the binder.
+            switch (capture.kind) {
+                .lexical => {},
+                .recursive_binding => continue,
+            }
             const binder = capture.id.binder();
             const ty = checkedBinderType(self.module, binder);
             const target_rep = self.repForType(ty);
@@ -44141,8 +44147,13 @@ const ConstPlanBuilder = struct {
                     }
                     const source_capture = stored_capture orelse
                         boxyLowerInvariant("static erased callable capture was absent from ConstStore function");
+                    switch (source_capture.kind) {
+                        .lexical => {},
+                        .recursive_binding => boxyLowerInvariant("static erased callable worker slot named a recursive-binding capture"),
+                    }
                     current.slots[current.slot_count] = .{
                         .id = source_capture.id,
+                        .kind = .lexical,
                         .slot = @intCast(field_index),
                         .ty = source_capture.ty,
                         .plan = undefined,
@@ -44192,7 +44203,17 @@ const ConstPlanBuilder = struct {
                     .hidden_desc, .hidden_dict, .hidden_literal => boxyLowerInvariant("static erased callable required hidden descriptor or dictionary captures"),
                 }
             }
-            if (value_capture_count != fn_value.captures.len) {
+            // A stored recursive-binding capture has no worker slot: the
+            // worker reaches that root through its own top-level reference,
+            // so the frozen environment holds only the lexical captures.
+            var lexical_capture_count: usize = 0;
+            for (fn_value.captures) |stored| {
+                switch (stored.kind) {
+                    .lexical => lexical_capture_count += 1,
+                    .recursive_binding => {},
+                }
+            }
+            if (value_capture_count != lexical_capture_count) {
                 boxyLowerInvariant("static erased callable capture plan disagreed with ConstStore captures");
             }
             build.current = .{
