@@ -99,6 +99,8 @@ const ExpectEffectSlotId = enum(u32) { _ };
 
 const ExpectEffectSlot = struct {
     region: Region,
+    /// The condition the effect makes erroneous.
+    body: CIR.Expr.Idx,
     effectful: bool = false,
 };
 
@@ -13199,7 +13201,7 @@ fn checkExpectBody(
     expect_region: Region,
 ) std.mem.Allocator.Error!bool {
     const slot: ExpectEffectSlotId = @enumFromInt(self.expect_effect_slots.items.len);
-    try self.expect_effect_slots.append(self.gpa, .{ .region = expect_region });
+    try self.expect_effect_slots.append(self.gpa, .{ .region = expect_region, .body = body });
 
     const saved_expect_slot = self.current_expect_effect_slot;
     self.current_expect_effect_slot = slot;
@@ -13256,6 +13258,15 @@ fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
             .region = slot.region,
         } });
+        // The diagnostic owns the failure, so the condition becomes the
+        // checked runtime error every checker-owned problem leaves behind.
+        // Effects are known only now, after the general erroneous-expression
+        // sweep, so the replacement happens here.
+        if (self.cir.store.getExpr(slot.body) == .e_runtime_error) continue;
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(slot.body),
+        } });
+        try self.replaceExprWithRuntimeError(slot.body, diagnostic_idx);
     }
 }
 
