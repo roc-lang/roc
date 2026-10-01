@@ -27465,8 +27465,9 @@ const ProcBodyBuilder = struct {
         // ABI: each variant's payload in its own argument's representation.
         // Boxy stores `Try` payloads in erased storage, so compute the builtin
         // into that concrete ABI and cross the explicit descriptor-guided
-        // representation boundary afterwards.
-        if (Plan.builtinTryArgs(self.module.checked_types, result_ty) != null) {
+        // representation boundary afterwards. `compare` likewise writes the
+        // closed `[Before, Same, After]` that Boxy keeps as an open row.
+        if (Plan.builtinTryArgs(self.module.checked_types, result_ty) != null or op == .compare) {
             const result_rep = self.repForType(result_ty);
             const concrete_rep = self.parent.plan.hostRepFor(result_rep);
             const concrete_layout = self.workerRuntimeLayoutForRep(concrete_rep).layoutIdx();
@@ -27515,9 +27516,10 @@ const ProcBodyBuilder = struct {
         // comparator's exact ABI representation before the call.
         if (op == .list_sort_with) {
             if (lowered.len != 2) boxyLowerInvariant("list_sort_with did not take a list and a comparator");
-            const comparator_rep = self.repForType(self.module.checked_bodies.expr(args[1]).ty);
-            const abi_rep = self.parent.plan.hostRepFor(comparator_rep);
-            if (abi_rep != comparator_rep) {
+            const boxed_comparator_rep = self.repForType(self.module.checked_bodies.expr(args[1]).ty);
+            const comparator_rep = self.repQuery().requiredSingleChild(boxed_comparator_rep, .box_payload).rep;
+            const abi_rep = self.parent.plan.sortComparatorAbiRep(comparator_rep);
+            if (!try self.parent.plan.repsStructurallyIdentical(self.parent.allocator, abi_rep, comparator_rep)) {
                 const abi_comparator = try self.addFrameBoundaryTargetLocalForRep(abi_rep);
                 const arg_locals = [_]LIR.LocalId{ lowered[0], abi_comparator };
                 var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
@@ -27529,13 +27531,7 @@ const ProcBodyBuilder = struct {
                 } }, self.origin);
                 // A boxed callable is stored as the callable itself, so the
                 // boundary wraps the callable in an adapter for its ABI result.
-                continuation = try self.assignRepresentationBoundaryConsumingSource(
-                    abi_comparator,
-                    lowered[1],
-                    self.repQuery().requiredSingleChild(abi_rep, .box_payload).rep,
-                    self.repQuery().requiredSingleChild(comparator_rep, .box_payload).rep,
-                    continuation,
-                );
+                continuation = try self.assignRepresentationBoundaryConsumingSource(abi_comparator, lowered[1], abi_rep, comparator_rep, continuation);
                 return try self.prependLoweredExprs(args, lowered, continuation);
             }
         }

@@ -10011,13 +10011,20 @@ reconstructed from erased worker children. Wrappers and adapters consume the
 planned pair, including its exact tag payload types and descriptor provenance.
 Equal storage layouts alone do not permit aliasing boundary result locals.
 
-A compiler-backed low-level operation returning builtin `Try` requests an exact
-ABI representation of its checked result during planning. This opens nominal
-arguments and applies checked row defaults in the ABI context. The operation
-writes that complete concrete result, then an explicit descriptor-guided
-adapter converts it into the worker representation. Worker error-row boxes are
-not builtin result slots, and changing only the outer `Try` layout does not
-describe its nested payload storage.
+A compiler-backed low-level operation returning builtin `Try`, and the
+`compare` operation returning the closed `[Before, Same, After]` that Boxy keeps
+as an open output row, requests an exact ABI representation of its checked
+result during planning. This opens nominal arguments and applies checked row
+defaults in the ABI context. The operation writes that complete concrete result,
+then an explicit descriptor-guided adapter converts it into the worker
+representation. Worker error-row boxes are not builtin result slots, and
+changing only the outer `Try` layout does not describe its nested payload
+storage.
+
+The sort low-level calls its boxed comparator through a planned ABI
+representation: the comparator's arguments keep their worker representation and
+its ordering result is that closed union. Lowering wraps a callback whose result
+row is open in an adapter for that ABI before the call.
 
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
