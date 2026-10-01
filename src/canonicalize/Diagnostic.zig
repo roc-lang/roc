@@ -407,6 +407,11 @@ pub const Diagnostic = union(enum) {
         duplicate_region: Region,
         original_region: Region,
     },
+    duplicate_pattern_binder: struct {
+        ident: Ident.Idx,
+        duplicate_region: Region,
+        original_region: Region,
+    },
     duplicate_tag: struct {
         tag_name: Ident.Idx,
         duplicate_region: Region,
@@ -550,6 +555,7 @@ pub const Diagnostic = union(enum) {
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
+            .duplicate_pattern_binder => |d| d.duplicate_region,
             .duplicate_tag => |d| d.duplicate_region,
             .empty_tuple => |d| d.region,
             .f64_pattern_literal => |d| d.region,
