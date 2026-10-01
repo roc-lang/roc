@@ -27456,6 +27456,8 @@ fn exhaustiveBuiltinIdents(self: *const Self, open_cache: *exhaustive.NominalOpe
         .f32 = self.cir.idents.f32,
         .f64 = self.cir.idents.f64,
         .dec = self.cir.idents.dec,
+        .list = self.cir.idents.list,
+        .builtin_list = self.cir.idents.builtin_list,
     };
 }
 
