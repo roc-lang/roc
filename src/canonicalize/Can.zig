@@ -461,6 +461,14 @@ interp_tmp_counter: u32 = 0,
 /// Whether the current declaration-pattern canonicalization should reuse
 /// existing mutable binders when it encounters `$name` patterns.
 allow_pattern_var_reuse: bool = false,
+/// Names bound by the open pattern binder groups, innermost group last. A
+/// group is one pattern, every argument pattern of one lambda, or every part of
+/// one split destructuring declaration; a name may be bound at most once per
+/// group. Groups nest because a pattern group can enclose expressions, such as
+/// a destructured part's value, that canonicalize patterns of their own.
+pattern_binders: std.ArrayList(PatternBinder) = .empty,
+/// Start of the innermost open pattern binder group within `pattern_binders`.
+pattern_binder_group_start: usize = 0,
 /// Whether the current declaration-pattern canonicalization reused any
 /// existing mutable binder. `canonicalizeBlockDecl` uses this explicit fact to
 /// emit `s_reassign` instead of `s_decl` for mixed structural reassignments
@@ -819,6 +827,7 @@ pub fn deinit(
     self.scratch_defining_bound_vars.deinit();
     self.scratch_reassign_targets.deinit();
     self.scratch_local_function_patterns.deinit();
+    self.pattern_binders.deinit(gpa);
     self.scratch_block_local_defs.deinit();
     self.scratch_local_type_decls.deinit(gpa);
     self.scratch_global_value_defs.deinit(gpa);
@@ -5515,6 +5524,9 @@ fn canonicalizeDestructuredLiteralDecl(
     var pending: std.ArrayList(PendingDestructuredLiteralPart) = .empty;
     defer pending.deinit(self.env.gpa);
     try self.pushDestructuredLiteralParts(&pending, decl.pattern, decl.body);
+    // The split parts form one binder group, so `(x, x) = (1, 2)` is rejected.
+    const enclosing_binder_group = self.beginPatternBinderGroup();
+    defer self.endPatternBinderGroup(enclosing_binder_group);
     while (pending.pop()) |item| {
         if (item.part == .pattern and self.destructuredLiteralShapesMatch(item.part.pattern, item.value_expr)) {
             try self.pushDestructuredLiteralParts(&pending, item.part.pattern, item.value_expr);
@@ -5710,7 +5722,8 @@ fn canonicalizeDestructuredLiteralDef(
         self.adopting_forward_decl = parser_decl_idx;
         defer self.adopting_forward_decl = saved_adopting_forward_decl;
         break :blk switch (item.part) {
-            .pattern => |sub_pattern| try self.canonicalizePatternOrMalformed(sub_pattern),
+            .pattern => |sub_pattern| try self.canonicalizePatternInGroup(sub_pattern) orelse
+                try self.pushPatternNotCanonicalized(sub_pattern),
             .name => |name| try self.bindDestructuredName(name.ident, name.region),
         };
     };
@@ -5810,6 +5823,7 @@ fn destructuredLiteralPatternBindsName(self: *Self, root: AST.Pattern.Idx, name:
 /// of a reference ahead of the declaration when there is one, otherwise a new
 /// binder introduced into scope like a punned record field's.
 fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    if (try self.claimPatternBinder(ident, region)) |duplicate| return duplicate;
     if (self.adoptForwardBinder(ident, region)) |placeholder| {
         try self.warnAboutBindingName(ident, region, .immutable);
         return placeholder;
@@ -11789,16 +11803,21 @@ fn runExprKernel(
                     errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                     const args_start = self.env.store.scratch.?.patterns.top();
-                    for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
-                        if (try self.canonicalizePattern(arg_pattern_idx)) |pattern_idx| {
-                            try self.env.store.scratch.?.patterns.append(pattern_idx);
-                        } else {
-                            const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
-                            const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
-                            const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
-                                .region = arg_region,
-                            } });
-                            try self.env.store.scratch.?.patterns.append(malformed_idx);
+                    {
+                        // The arguments form one binder group, so `|x, x|` is rejected.
+                        const enclosing_binder_group = self.beginPatternBinderGroup();
+                        defer self.endPatternBinderGroup(enclosing_binder_group);
+                        for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
+                            if (try self.canonicalizePatternInGroup(arg_pattern_idx)) |pattern_idx| {
+                                try self.env.store.scratch.?.patterns.append(pattern_idx);
+                            } else {
+                                const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
+                                const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
+                                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
+                                    .region = arg_region,
+                                } });
+                                try self.env.store.scratch.?.patterns.append(malformed_idx);
+                            }
                         }
                     }
                     const args_span = try self.env.store.patternSpanFrom(args_start);
@@ -15928,15 +15947,15 @@ fn canonicalizePatternOrMalformed(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!Pattern.Idx {
-    if (try self.canonicalizePattern(ast_pattern_idx)) |idx| {
-        return idx;
-    } else {
-        const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(ast_pattern_idx).to_tokenized_region());
-        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
-            .region = pattern_region,
-        } });
-        return malformed_idx;
-    }
+    return try self.canonicalizePattern(ast_pattern_idx) orelse
+        try self.pushPatternNotCanonicalized(ast_pattern_idx);
+}
+
+fn pushPatternNotCanonicalized(self: *Self, ast_pattern_idx: AST.Pattern.Idx) std.mem.Allocator.Error!Pattern.Idx {
+    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(ast_pattern_idx).to_tokenized_region());
+    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
+        .region = pattern_region,
+    } });
 }
 
 /// A declaration binding a name that was referenced ahead of it. A plainly
@@ -17883,6 +17902,16 @@ pub fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!?Pattern.Idx {
+    const enclosing_binder_group = self.beginPatternBinderGroup();
+    defer self.endPatternBinderGroup(enclosing_binder_group);
+    return self.canonicalizePatternInGroup(ast_pattern_idx);
+}
+
+/// Canonicalizes a pattern whose binders join the current pattern binder group.
+fn canonicalizePatternInGroup(
+    self: *Self,
+    ast_pattern_idx: AST.Pattern.Idx,
+) std.mem.Allocator.Error!?Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -17906,6 +17935,10 @@ pub fn canonicalizePattern(
                 .ident => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                        if (try self.claimPatternBinder(ident_idx, region)) |duplicate| {
+                            last_pattern = duplicate;
+                            continue :patternkernel_loop .dispatch;
+                        }
                         if (self.adoptForwardBinder(ident_idx, region)) |placeholder| {
                             try self.warnAboutBindingName(ident_idx, region, .immutable);
                             last_pattern = placeholder;
@@ -17987,6 +18020,10 @@ pub fn canonicalizePattern(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const name_region = self.parse_ir.tokens.resolve(e.ident_tok);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                        if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                            last_pattern = duplicate;
+                            continue :patternkernel_loop .dispatch;
+                        }
                         // Create a Pattern node for our mutable identifier
                         const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{
                             .ident = ident_idx,
@@ -18274,8 +18311,9 @@ pub fn canonicalizePattern(
                 try stacks.pushParse(frame_allocator, sub_pattern_idx);
             } else {
                 // Simple case: Create the RecordDestruct for this field
-                const adopted_binder = self.adoptForwardBinder(field_name_ident, field_region);
-                const assign_pattern_idx = adopted_binder orelse
+                const duplicate_binder = try self.claimPatternBinder(field_name_ident, field_region);
+                const adopted_binder = if (duplicate_binder == null) self.adoptForwardBinder(field_name_ident, field_region) else null;
+                const assign_pattern_idx = duplicate_binder orelse adopted_binder orelse
                     try self.env.addPattern(Pattern{ .assign = .{ .ident = field_name_ident } }, field_region);
                 if (adopted_binder != null) {
                     try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable);
@@ -18294,8 +18332,8 @@ pub fn canonicalizePattern(
                 try self.env.store.addScratchRecordDestruct(destruct_idx);
 
                 // Introduce the identifier into scope (an adopted binder is
-                // already there)
-                if (adopted_binder == null) {
+                // already there, and a duplicate binder binds nothing)
+                if (duplicate_binder == null and adopted_binder == null) {
                     switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, field_name_ident, assign_pattern_idx, true)) {
                         .success => try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable),
                         .shadowing_warning => |shadowed_pattern_idx| {
@@ -18451,10 +18489,14 @@ pub fn canonicalizePattern(
                 // Handle named vs unnamed rest patterns
                 var current_rest_pattern: ?Pattern.Idx = null;
                 if (ast_pattern.list_rest.name) |name_tok| {
-                    if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| {
+                    if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| list_rest_name: {
                         // Create an assign pattern for the rest variable
                         // Use the region of just the identifier token, not the full rest pattern
                         const name_region = self.parse_ir.tokens.resolve(name_tok);
+                        if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                            current_rest_pattern = duplicate;
+                            break :list_rest_name;
+                        }
                         const adopted_binder = self.adoptForwardBinder(ident_idx, name_region);
                         const assign_idx = adopted_binder orelse try self.env.addPattern(Pattern{ .assign = .{
                             .ident = ident_idx,
@@ -18565,6 +18607,10 @@ pub fn canonicalizePattern(
             // Resolve the identifier name
             if (self.parse_ir.tokens.resolveIdentifier(state.name)) |ident_idx| {
                 const name_region = self.parse_ir.tokens.resolve(state.name);
+                if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                    last_pattern = duplicate;
+                    continue :patternkernel_loop .dispatch;
+                }
                 // Create the as pattern
                 const adopted_binder = self.adoptForwardAsBinder(ident_idx, inner_pattern, state.region);
                 const pattern_idx = adopted_binder orelse try self.env.addPattern(Pattern{
@@ -18624,6 +18670,41 @@ pub fn canonicalizePattern(
     }
 
     return last_pattern;
+}
+
+const PatternBinder = struct {
+    ident: Ident.Idx,
+    region: Region,
+};
+
+/// Opens a pattern binder group nested inside the current one. Returns the
+/// enclosing group's start, which the caller passes to `endPatternBinderGroup`.
+fn beginPatternBinderGroup(self: *Self) usize {
+    const enclosing_start = self.pattern_binder_group_start;
+    self.pattern_binder_group_start = self.pattern_binders.items.len;
+    return enclosing_start;
+}
+
+fn endPatternBinderGroup(self: *Self, enclosing_start: usize) void {
+    self.pattern_binders.shrinkRetainingCapacity(self.pattern_binder_group_start);
+    self.pattern_binder_group_start = enclosing_start;
+}
+
+/// Claims `ident` for the open pattern binder group. Returns null when the
+/// name is not yet bound in the group; otherwise reports the repetition and
+/// returns the malformed pattern that replaces the repeated binder.
+fn claimPatternBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!?Pattern.Idx {
+    for (self.pattern_binders.items[self.pattern_binder_group_start..]) |binder| {
+        if (binder.ident.eql(ident)) {
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .duplicate_pattern_binder = .{
+                .ident = ident,
+                .duplicate_region = region,
+                .original_region = binder.region,
+            } });
+        }
+    }
+    try self.pattern_binders.append(self.env.gpa, .{ .ident = ident, .region = region });
+    return null;
 }
 
 /// Check if a pattern is a var

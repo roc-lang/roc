@@ -2616,6 +2616,45 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .duplicate_pattern_binder => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+
+            var report = try Report.init(allocator, "Duplicate Name In Pattern", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The name ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is bound more than once in this pattern.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                duplicate_region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("It was first bound here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Each name in a pattern must be different. To check whether two values are equal, give them different names and compare them in a guard:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock("(a, b) if a == b => ...");
+
+            break :blk report;
+        },
         .duplicate_tag => |data| blk: {
             const tag_name = self.getIdent(data.tag_name);
             const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
