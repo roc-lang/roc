@@ -20279,10 +20279,14 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
-        // A quote conversion's argument is concrete Str. Its remaining type
-        // parameters (including the conversion error) belong to the selected
-        // dictionary method, rather than to an explicit argument at this call.
-        if (self.module.checked_bodies.expr(planned.call.expr).data == .str_from_quote) {
+        // A quote or interpolation conversion's leading argument is concrete
+        // Str. Its remaining type parameters (including a conversion error)
+        // belong to the selected dictionary method, rather than to an explicit
+        // argument at this call.
+        if (switch (self.module.checked_bodies.expr(planned.call.expr).data) {
+            .str_from_quote, .interpolation => true,
+            .pending, .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+        }) {
             try self.bindQuoteDictionaryDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
         }
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, lowered, arg_reps, arg_reps);
