@@ -1687,6 +1687,35 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
+        // With encoded capacity 10, the old LLVM fast path mistook a five-byte
+        // allocation for enough space for the eight-byte store at offset one.
+        // Requiring growth makes the invalid capacity observable as well as
+        // checking the appended bytes, without relying on malloc detecting it.
+        .name = "low_level - append_le_bytes grows past decoded capacity #11917",
+        .source =
+        \\{
+        \\    bytes = List.with_capacity(5).append(1.U8)
+        \\    result = 0x0807060504030201.U64.append_le_bytes_to(bytes, 8).ok_or([])
+        \\    (result, result.capacity() >= result.len())
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([1, 1, 2, 3, 4, 5, 6, 7, 8], True)" },
+    },
+    .{
+        .name = "low_level - append_le_bytes exact capacity and word slack #11917",
+        .source =
+        \\{
+        \\    append_header = |capacity| {
+        \\        bytes = List.with_capacity(capacity).append(1.U8)
+        \\        result = 0x0807060504030201.U64.append_le_bytes_to(bytes, 4).ok_or([])
+        \\        (result, result.capacity())
+        \\    }
+        \\    (append_header(5), append_header(8), append_header(9), append_header(13))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(([1, 1, 2, 3, 4], 5), ([1, 1, 2, 3, 4], 8), ([1, 1, 2, 3, 4], 9), ([1, 1, 2, 3, 4], 13))" },
+    },
+    .{
         .name = "low_level - List.with_capacity of non refcounted elements creates empty list",
         .source =
         \\{
