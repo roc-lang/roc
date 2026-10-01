@@ -80,31 +80,40 @@ const ContractEnv = struct {
         return true;
     }
 
-    fn alloc(self: *ContractEnv, length: usize, alignment: usize) ?*anyopaque {
+    /// `roc_alloc` and `roc_realloc` must not return to Roc without an
+    /// allocation, so an allocator failure traps with its report recorded.
+    fn abortAllocation(_: *ContractEnv) noreturn {
+        @trap();
+    }
+
+    fn alloc(self: *ContractEnv, length: usize, alignment: usize) *anyopaque {
         if (alignment == 0 or (alignment & (alignment - 1)) != 0) {
             self.allocatorFail("invalid alignment");
-            return null;
+            self.abortAllocation();
         }
         if (length > ~@as(usize, 0) - canary_size - canary_size - alignment) {
             self.allocatorFail("allocation size overflow");
-            return null;
+            self.abortAllocation();
         }
 
         const total = canary_size + alignment - 1 + length + canary_size;
-        const raw: [*]u8 = @ptrCast(host_alloc.alloc(backing, total, alignment) orelse return null);
+        const raw: [*]u8 = @ptrCast(host_alloc.alloc(backing, total, alignment) orelse {
+            self.allocatorFail("allocation failed");
+            self.abortAllocation();
+        });
         const user_start = @addWithOverflow(@intFromPtr(raw), canary_size);
         if (user_start[1] != 0) {
             self.allocatorFail("user pointer overflow");
-            return null;
+            self.abortAllocation();
         }
         const user_addr = alignForward(user_start[0], alignment) orelse {
             self.allocatorFail("user pointer alignment overflow");
-            return null;
+            self.abortAllocation();
         };
         const user: [*]u8 = @ptrFromInt(user_addr);
         if (user_addr % alignment != 0) {
             self.allocatorFail("returned pointer is not aligned");
-            return null;
+            self.abortAllocation();
         }
 
         var slot: ?*Allocation = null;
@@ -117,7 +126,7 @@ const ContractEnv = struct {
         const allocation = slot orelse {
             host_alloc.dealloc(backing, @ptrCast(raw), alignment);
             self.allocatorFail("allocation table exhausted");
-            return null;
+            self.abortAllocation();
         };
 
         @memset((user - canary_size)[0..canary_size], canary_byte);
@@ -153,21 +162,21 @@ const ContractEnv = struct {
         self.live_alloc_count -= 1;
     }
 
-    fn realloc(self: *ContractEnv, ptr: ?*anyopaque, new_length: usize, alignment: usize) ?*anyopaque {
+    fn realloc(self: *ContractEnv, ptr: ?*anyopaque, new_length: usize, alignment: usize) *anyopaque {
         const raw_ptr = ptr orelse return self.alloc(new_length, alignment);
         const old = self.findAllocation(raw_ptr) orelse {
             self.allocatorFail("realloc unknown pointer");
-            return null;
+            self.abortAllocation();
         };
         if (old.alignment != alignment) {
             self.allocatorFail("realloc alignment mismatch");
-            return null;
+            self.abortAllocation();
         }
-        if (!self.checkCanaries(old)) return null;
+        if (!self.checkCanaries(old)) self.abortAllocation();
 
         const old_user = old.user.?;
         const copy_length = @min(old.length, new_length);
-        const new_ptr = self.alloc(new_length, alignment) orelse return null;
+        const new_ptr = self.alloc(new_length, alignment);
         const new_user: [*]u8 = @ptrCast(new_ptr);
         @memcpy(new_user[0..copy_length], old_user[0..copy_length]);
         if (!bytesEqual(new_user[0..copy_length], old_user[0..copy_length])) {
@@ -208,7 +217,7 @@ var roc_host = abi.RocHost{
     .roc_crashed = &hostCrashed,
 };
 
-fn hostAlloc(roc_host_ptr: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostAlloc(roc_host_ptr: *abi.RocHost, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const env: *ContractEnv = @ptrCast(@alignCast(roc_host_ptr.env));
     return env.alloc(length, alignment);
 }
@@ -218,7 +227,7 @@ fn hostDealloc(roc_host_ptr: *abi.RocHost, ptr: *anyopaque, alignment: usize) ca
     env.dealloc(ptr, alignment);
 }
 
-fn hostRealloc(roc_host_ptr: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostRealloc(roc_host_ptr: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const env: *ContractEnv = @ptrCast(@alignCast(roc_host_ptr.env));
     return env.realloc(ptr, new_length, alignment);
 }
@@ -239,7 +248,7 @@ fn hostCrashed(roc_host_ptr: *abi.RocHost, bytes: [*]const u8, len: usize) callc
     env.fail("roc_crashed");
 }
 
-fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     return contract_env.alloc(length, alignment);
 }
 
@@ -247,7 +256,7 @@ fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
     contract_env.dealloc(ptr, alignment);
 }
 
-fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return contract_env.realloc(ptr, new_length, alignment);
 }
 

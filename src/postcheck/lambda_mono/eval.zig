@@ -3232,10 +3232,10 @@ pub const Evaluator = struct {
         return &self.roc_ops.?;
     }
 
-    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *Evaluator = @ptrCast(@alignCast(ops.env));
-        const ptr = allocAligned(self.alloc(), length, alignment) orelse return null;
-        self.ops_alloc_sizes.put(@intFromPtr(ptr), length) catch return null;
+        const ptr = allocAligned(self.alloc(), length, alignment) orelse outOfMemory();
+        self.ops_alloc_sizes.put(@intFromPtr(ptr), length) catch outOfMemory();
         return @ptrCast(ptr);
     }
 
@@ -3244,9 +3244,9 @@ pub const Evaluator = struct {
         _ = self.ops_alloc_sizes.remove(@intFromPtr(ptr));
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *Evaluator = @ptrCast(@alignCast(ops.env));
-        const new_ptr = allocAligned(self.alloc(), new_length, alignment) orelse return null;
+        const new_ptr = allocAligned(self.alloc(), new_length, alignment) orelse outOfMemory();
         const old_size = self.ops_alloc_sizes.get(@intFromPtr(ptr)) orelse 0;
         const copy = @min(old_size, new_length);
         if (copy > 0) {
@@ -3254,8 +3254,14 @@ pub const Evaluator = struct {
             @memcpy(new_ptr[0..copy], src[0..copy]);
         }
         _ = self.ops_alloc_sizes.remove(@intFromPtr(ptr));
-        self.ops_alloc_sizes.put(@intFromPtr(new_ptr), new_length) catch return null;
+        self.ops_alloc_sizes.put(@intFromPtr(new_ptr), new_length) catch outOfMemory();
         return @ptrCast(new_ptr);
+    }
+
+    /// Builtins write through every allocation they receive, so a failed
+    /// one cannot be reported back to them.
+    fn outOfMemory() noreturn {
+        @panic("Lambda Mono evaluator ran out of memory in a builtin allocation");
     }
 
     fn rocNoopBytesFn(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}

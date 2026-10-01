@@ -2843,6 +2843,7 @@ const InterpreterProgram = struct {
         errdefer self.static_strings.deinit();
         self.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.static_strings.view(), self.host.ops());
         errdefer self.interpreter.deinit();
+        self.host.bindInterpreter(&self.interpreter);
         self.interpreter.dict_seed_mode = .comptime_zero;
         self.interpreter.failure_origins = self.slots.failure_origins;
         self.slots.image.resolveFunctionRelocations(.{ .resolve = resolveFunction }) catch |err| switch (err) {
@@ -2879,6 +2880,7 @@ const InterpreterProgram = struct {
         errdefer child.static_callables.deinit(allocator);
         child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.interpreter.static_strings, child.host.ops());
         errdefer child.interpreter.deinit();
+        child.host.bindInterpreter(&child.interpreter);
         child.interpreter.dict_seed_mode = .comptime_zero;
         child.interpreter.failure_origins = child.slotEnvironment().failure_origins;
         child.interpreter.static_data_demand = .{ .context = child, .ensure = ensureStaticData };
@@ -5231,6 +5233,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     owner.base_callables_ready = false;
     owner.static_strings = try Interpreter.buildStaticStrings(allocator, &result.store);
     owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.static_strings.view(), owner.host.ops());
+    owner.host.bindInterpreter(&owner.interpreter);
     defer owner.deinit();
     try owner.refreshCallableMetadata();
     if (nested) {
@@ -5461,6 +5464,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer static_strings.deinit();
     var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), static_strings.view(), host.ops());
     defer interpreter.deinit();
+    host.bindInterpreter(&interpreter);
     interpreter.setStaticData(data.addresses, &.{});
     try std.testing.expectError(error.RuntimeError, interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool }));
     try std.testing.expectEqualStrings("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry", interpreter.getRuntimeErrorMessage().?);
@@ -5527,6 +5531,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer mapped_static_strings.deinit();
     var mapped_interpreter = try Interpreter.initWithBoxyTables(allocator, &view.store, &view.layouts, Interpreter.BoxyTables.fromImageView(&view), mapped_static_strings.view(), host.ops());
     defer mapped_interpreter.deinit();
+    host.bindInterpreter(&mapped_interpreter);
     mapped_data.install(&mapped_interpreter);
     var mapped_answer: u8 = 0;
     _ = try mapped_interpreter.runEntrypoint(&view, 0, null, @ptrCast(&mapped_answer));
