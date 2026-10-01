@@ -88,7 +88,7 @@ NO CHANGE
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 236)
+		(e-call (constraint-fn-var 240)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-lambda
 				(args
