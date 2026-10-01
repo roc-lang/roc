@@ -321,7 +321,7 @@ run = |sql| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 516)
+								(e-call (constraint-fn-var 509)
 									(e-lookup-local
 										(p-assign (ident "mutual_recursive_methods_underscore_hole_row_var_issue_11605.Client.command")))
 									(e-lookup-local

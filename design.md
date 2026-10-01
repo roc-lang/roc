@@ -6793,6 +6793,31 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Concrete Builtin Numeral Introduction
+
+A numeric expression may omit constructing its `from_numeral` signature graph
+when its explicit suffix, or the checking context supplied by its enclosing
+construction, already names a concrete builtin numeric declaration and its exact
+literal fits that declaration. `checkConcreteBuiltinNumeral` introduces the
+ordinary builtin nominal through `unifyWith`, leaving the enclosing expression's
+ordinary expected-type relation in place. This is a mechanism: builtin conversion
+at this already fixed type has no user computation or remaining obligation, and
+the checked numeral has the same concrete type and absent custom dispatch plan
+as after ordinary constraint solving. CIR retains an explicit literal plan with
+an absent constraint-function variable; finalization still seals that occurrence
+as `builtin_direct` or a checked error. Consumers must not invent a callable for
+that absent obligation.
+
+Only producer-owned builtin declaration identity qualifies. Transparent aliases
+may be followed; nominal wrappers, custom suffixes, borrowed record-field context,
+unresolved and generalized targets do not qualify. An invalid literal keeps its
+ordinary conversion constraint and occurrence-specific diagnostics. No arbitrary
+candidate is selected, no shared mutable signature is introduced, and no checked
+dispatch plan is restamped. Expression literals only are covered; pattern equality
+requirements retain their existing introduction path. Tests in
+`issue_11960_test.zig` pin concrete, inferred, custom, and rejected cases, and the
+absence of per-literal signature graphs for concrete builtin lists.
+
 ### Expected Shape Context
 
 An expected aggregate shape guides construction but introduces no new value
@@ -9378,6 +9403,11 @@ site to any family below must classify it here.
   are related, so it redirects there with the lower of the two ranks.
 
 Other solved-graph mutations:
+
+- `checkConcreteBuiltinNumeral`—mechanism: Concrete Builtin Numeral
+  Introduction (above). Uses the existing `unifyWith` descriptor-introduction
+  mechanism for a proved concrete builtin conversion; does not mutate the
+  context's type or introduce a redirect rule.
 
 - `recordForMerge` / `tagUnionForMerge`—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes

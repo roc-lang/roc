@@ -9209,6 +9209,59 @@ fn exactNumeralInfoForLiteral(self: *const Self, literal: ModuleEnv.NumeralLiter
 
 const NumeralOccurrence = enum { expression, pattern };
 
+/// Concrete Builtin Numeral Introduction (design.md): a producer-supplied
+/// concrete builtin target and an exact successful fit leave no conversion
+/// obligation to solve. All other occurrences retain their ordinary constraint.
+fn checkConcreteBuiltinNumeral(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    occurrence_var: Var,
+    region: Region,
+    expected: Expected,
+    env: *Env,
+) Allocator.Error!bool {
+    const suffix = self.cir.numericSuffixTargetForNode(node_idx);
+    const kind: CIR.NumKind = if (suffix) |target| switch (target.target()) {
+        .builtin => |kind| kind,
+        .local, .external, .external_identity, .invalid => return false,
+        .pending => unreachable,
+    } else context: {
+        const context = expected.aggregateType() orelse return false;
+        if (context.record_field != null) return false;
+        var target = context.var_;
+        while (true) {
+            const content = self.types.resolveVar(target).desc.content;
+            switch (content) {
+                .alias => |alias| target = self.types.getAliasBackingVar(alias),
+                .structure => |structure| switch (structure) {
+                    .nominal_type => |nominal| break :context self.builtinNumKindFromNominalType(nominal) orelse return false,
+                    .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return false,
+                },
+                .flex, .rigid, .field_presence, .err => return false,
+            }
+        }
+    };
+    const literal = self.recordedNumeralLiteralForNode(node_idx);
+    var info = try self.exactNumeralInfoForLiteral(literal, region);
+    info.explicit_suffix = suffix != null;
+    if (validateBuiltinFromNumeralLiteral(kind, info) != null) return false;
+    try self.unifyWith(occurrence_var, try self.mkBuiltinNumberTypeContentFromKind(kind), env);
+    try self.cir.store.recordLiteralDispatchPlan(node_idx, .numeral, occurrence_var, null, null);
+    return true;
+}
+
+fn checkNumeralExpression(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    occurrence_var: Var,
+    region: Region,
+    expected: Expected,
+    env: *Env,
+) Allocator.Error!void {
+    if (try self.checkConcreteBuiltinNumeral(node_idx, occurrence_var, region, expected, env)) return;
+    try self.checkNumeralLiteral(node_idx, occurrence_var, region, .expression, null, env);
+}
+
 /// Check one exact numeric source occurrence. Exact digits and the optional
 /// resolved suffix target are producer-owned node data shared by expressions
 /// and patterns; patterns add only the equality requirement needed for matching.
@@ -11834,7 +11887,7 @@ fn literalDispatchPlanMatchesConstraint(
     // The raw callable is the literal occurrence's stable identity. Distinct
     // occurrences may share both a receiver root and a callable equivalence
     // class after unification, so either resolved root would conflate owners.
-    return plan.fn_var == @intFromEnum(constraint.fn_var) and
+    return plan.fnVar() == constraint.fn_var and
         self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root);
 }
 
@@ -11902,7 +11955,8 @@ fn poisonLiteralFailureOwners(
 
         for (self.cir.store.literalDispatchPlans()) |plan| {
             if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
-            if (self.types.resolveVar(@enumFromInt(plan.fn_var)).var_ != literal_fn_root) continue;
+            const plan_fn_var = plan.fnVar() orelse continue;
+            if (self.types.resolveVar(plan_fn_var).var_ != literal_fn_root) continue;
             const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
             const owner: CIR.Node.Idx = if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag))
                 @enumFromInt(plan.node_idx)
@@ -21168,25 +21222,25 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         .e_num => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env),
+                .num_unbound, .int_unbound => try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env),
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent(num.kind), env),
             }
         },
         .e_num_from_numeral => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env);
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env);
             }
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env);
             }
         },
         .e_dec => |frac| {
@@ -21196,7 +21250,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env);
             }
         },
         .e_dec_small => |frac| {
@@ -21206,19 +21260,19 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+                try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env);
             }
         },
         .e_typed_int => {
             // Typed integer literal like 123.U64
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env);
         },
         .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env);
         },
         .e_typed_num_from_numeral => {
-            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
+            try self.checkNumeralExpression(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, nested_expected, env);
         },
         // list //
         .e_empty_list => {
@@ -38951,14 +39005,16 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
         }
 
         const target_var: Var = @enumFromInt(plan.target_var);
-        const fn_var: Var = @enumFromInt(plan.fn_var);
+        const maybe_fn_var = plan.fnVar();
         const resolution: can.NodeStore.LiteralDispatchPlan.Resolution = resolution: {
             // A dispatch-specific rejection is stronger than a concrete
             // builtin target (for example, an out-of-range U8 literal).
-            if (self.types.varStaticDispatchRejected(fn_var) or
-                self.dispatchDerivationHasRejectedAncestor(fn_var))
-            {
-                break :resolution .checked_error;
+            if (maybe_fn_var) |fn_var| {
+                if (self.types.varStaticDispatchRejected(fn_var) or
+                    self.dispatchDerivationHasRejectedAncestor(fn_var))
+                {
+                    break :resolution .checked_error;
+                }
             }
 
             const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
@@ -38981,6 +39037,8 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
                 break :resolution .builtin_direct;
             }
 
+            const fn_var = maybe_fn_var orelse
+                std.debug.panic("validated builtin numeral lost its concrete builtin target", .{});
             visited.clearRetainingCapacity();
             if (try self.literalTargetContainsIdentity(target_var, &visited)) {
                 break :resolution .specialization_dispatch;

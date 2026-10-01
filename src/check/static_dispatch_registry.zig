@@ -2380,13 +2380,13 @@ pub const StaticDispatchPlanTable = struct {
                 .method = try names.internMethodName("from_numeral"),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.target_var)),
-                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var)),
+                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, numeral_plan.fnVar().?),
                 .args = ar,
                 .result_mode = .value,
             });
             try plan_sources.append(allocator, .{
                 .dispatcher_var = @enumFromInt(numeral_plan.target_var),
-                .constraint_fn_var = @enumFromInt(numeral_plan.fn_var),
+                .constraint_fn_var = numeral_plan.fnVar().?,
             });
             try numeral_by_node.put(allocator, node, plan_id);
         }
@@ -2435,13 +2435,13 @@ pub const StaticDispatchPlanTable = struct {
                 .method = try names.internMethodName("from_quote"),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.target_var)),
-                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var)),
+                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, quote_plan.fnVar().?),
                 .args = ar,
                 .result_mode = .value,
             });
             try plan_sources.append(allocator, .{
                 .dispatcher_var = @enumFromInt(quote_plan.target_var),
-                .constraint_fn_var = @enumFromInt(quote_plan.fn_var),
+                .constraint_fn_var = quote_plan.fnVar().?,
             });
             try quote_by_node.put(allocator, node, plan_id);
         }
