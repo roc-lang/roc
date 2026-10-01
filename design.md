@@ -10376,8 +10376,51 @@ selected compile-time roots did not need it, but a runtime body references that
 binding, planning records a `RuntimeCallableEvalUsePlan` containing the exact
 module-qualified checked producer expression. Lowering evaluates that producer
 in its owning module with an isolated binder environment; caller-module binder
-ids and lambda arguments are unavailable there. This is explicit checked-stage
-data, not recovery from the lookup, name, or callable shape.
+ids and lambda arguments are unavailable there. The environment is isolated
+within the owning module too, so two uses in one caller each lower the
+producer's binders afresh. This is explicit checked-stage data, not recovery
+from the lookup, name, or callable shape.
+
+A pending binding is generalized (a non-context-free type is exactly what
+leaves it pending), so the producer's checked types mention the binding's
+quantified variables, which no worker scheme of the caller quantifies. Each
+use instantiates that scheme: the plan records, per quantified variable, the
+caller type the use substitutes for it. The variables are the scheme the
+binding's compile-time root entry wrapper records, and the caller types are
+the checked use-site substitution recorded at the lookup, in the same slot
+order; a disagreement in length is a planning invariant violation. While
+lowering the producer inline, the caller binds each variable's descriptor
+requirement to the descriptor of its substituted caller type (static, or the
+caller's own descriptor when that type is itself dynamic), and restores its
+bindings afterwards. Descriptor-need planning applies the same substitution:
+a caller that would need a quantified variable of a binding it evaluates
+inline needs the descriptor leaves of the substituted caller type instead, so
+the variable never becomes a hidden descriptor parameter of the caller.
+
+The substitution closes transitively. A pending binding used inside another
+pending binding's producer is lowered inline in the same caller, and its
+caller types are written in the outer binding's quantified variables; those
+are replaced by their own substituted caller types, so the inner variable's
+descriptor leaves are the caller's. Lowering needs no extra step for this:
+the outer binding's variables are already bound when the inner producer's
+descriptors are materialized.
+
+A recursive use substitutes like any other. A recursive direct call takes its
+callee's descriptors from the checked call relation instead, but an inline
+producer has no call relation, so the use-site substitution is its only
+binding. Checking records an annotated recursive use, in flight or replayed at
+the group boundary, against the binding's own scheme, so its substitution is
+in that scheme's slot order.
+
+The substitution covers descriptors only. A pending callable binding whose
+scheme carries a static-dispatch constraint would need its dictionary
+substituted the same way, and that is not yet implemented: checking rejects a
+constrained top-level *data* value as a polymorphic value, but a constrained
+callable value whose producer is a general expression reaches Boxy, and its
+producer's dictionary has no binding there (a known gap, not an invariant).
+
+A use whose checked substitution holds an erroneous type lowers as the
+reported error (`runtime_error`), and its producer is not planned at that use.
 
 When a pending callable-eval binding is itself selected as a private worker,
 planning follows that same checked producer expression. A producer that is an
