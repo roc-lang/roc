@@ -25050,7 +25050,7 @@ const BodyContext = struct {
         expansion.* = .{
             .caller = self,
             .replay_state = replay_state,
-            .input_arena = std.heap.ArenaAllocator.init(self.allocator),
+            .input_arena = self.graph.acquireArena(),
         };
         var expanding = false;
         defer if (!expanding) expansion.destroy();
@@ -25260,7 +25260,7 @@ const BodyContext = struct {
             if (expansion.callee_ctx_live) expansion.callee_ctx.deinit();
             if (expansion.restores_current) expansion.replay_state.current = expansion.parent;
             if (expansion.restores_use_summaries) expansion.replay_state.use_finished_summaries = expansion.saved_use_summaries;
-            expansion.input_arena.deinit();
+            expansion.caller.graph.releaseArena(expansion.input_arena);
             expansion.request_roots.deinit(allocator);
             allocator.destroy(expansion);
         }

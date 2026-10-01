@@ -791,6 +791,14 @@ pub const InterfaceConstraints = struct {
             }
             self.bytes.appendSliceAssumeCapacity(bytes);
         }
+        /// One byte, which is what nearly every index, length and tag
+        /// encodes to; it needs no slice copy.
+        inline fn byte(self: *IdentityWriter, value: u8) Allocator.Error!void {
+            if (self.bytes.items.len == self.bytes.capacity) {
+                try self.bytes.ensureUnusedCapacity(self.graph.allocator, @max(1, self.bytes.capacity));
+            }
+            self.bytes.appendAssumeCapacity(value);
+        }
         fn text(self: *IdentityWriter, bytes: []const u8) Allocator.Error!void {
             try self.write(u64, @intCast(bytes.len));
             try self.raw(bytes);
@@ -847,9 +855,10 @@ pub const InterfaceConstraints = struct {
                 .int => {
                     // Local indices, lengths, and enum tags are predominantly
                     // small. A minimal varint keeps exact topology compact.
+                    var bits: u64 = @intCast(value);
+                    if (bits < 0x80) return self.byte(@intCast(bits));
                     var encoded: [10]u8 = undefined;
                     var len: usize = 0;
-                    var bits: u64 = @intCast(value);
                     while (bits >= 0x80) : (bits >>= 7) {
                         encoded[len] = @as(u8, @truncate(bits)) | 0x80;
                         len += 1;
@@ -857,7 +866,7 @@ pub const InterfaceConstraints = struct {
                     encoded[len] = @intCast(bits);
                     try self.raw(encoded[0 .. len + 1]);
                 },
-                .bool => try self.raw(&.{if (value) 1 else 0}),
+                .bool => try self.byte(if (value) 1 else 0),
                 .void => {},
                 .noreturn,
                 .float,
@@ -2010,6 +2019,9 @@ pub const InstGraph = struct {
     spare_seal_lists: std.ArrayList(GraphTypeFinals.SealLists) = .empty,
     /// The stack the uninhabitedness scans run on, kept between scans.
     uninhabited_scan_scratch: GraphUninhabitedScan.Eval.Scratch = .{},
+    /// Emptied arenas that keep their buffers, for work that needs a
+    /// short-lived arena many times over.
+    spare_arenas: std.ArrayList(std.heap.ArenaAllocator) = .empty,
     /// Roots whose every reachable node was found resolved, stamped with the
     /// `resolved_epoch` current at that walk. Resolvedness survives every
     /// union (a concrete class always wins over a variable), every content
@@ -2212,6 +2224,8 @@ pub const InstGraph = struct {
         self.containment_visit_epochs.deinit(allocator);
         self.current_durable.deinit();
         self.uninhabited_scan_scratch.deinit(allocator);
+        for (self.spare_arenas.items) |*spare| spare.deinit();
+        self.spare_arenas.deinit(allocator);
         for (self.spare_seal_stacks.items) |*stack| stack.deinit(allocator);
         self.spare_seal_stacks.deinit(allocator);
         for (self.spare_seal_lists.items) |*lists| lists.deinit(allocator);
@@ -3296,6 +3310,25 @@ pub const InstGraph = struct {
         defer self.node_set_pool.release(&visiting);
         return try self.mayFinalizeAsUninhabitedInner(self.find(raw_node), &visiting);
     }
+
+    /// An empty arena, reusing a released arena's buffers when one is spare.
+    pub fn acquireArena(self: *InstGraph) std.heap.ArenaAllocator {
+        return self.spare_arenas.pop() orelse std.heap.ArenaAllocator.init(self.allocator);
+    }
+
+    /// Empty an arena from `acquireArena` and keep its buffers for the next
+    /// one. An arena that grew large is freed instead, as is one the spare
+    /// list has no room for.
+    pub fn releaseArena(self: *InstGraph, used: std.heap.ArenaAllocator) void {
+        var released = used;
+        if (released.queryCapacity() > spare_arena_capacity or !released.reset(.retain_capacity)) {
+            released.deinit();
+            return;
+        }
+        self.spare_arenas.append(self.allocator, released) catch released.deinit();
+    }
+
+    const spare_arena_capacity = 256 * 1024;
 
     fn mayFinalizeAsUninhabitedInner(
         self: *InstGraph,
