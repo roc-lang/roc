@@ -316,9 +316,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("u8_list_get_unsafe")) |ident| {
         try low_level_map.put(ident, .list_get_unsafe);
     }
-    if (env.common.findIdent("list_prefetch")) |ident| {
-        try low_level_map.put(ident, .list_prefetch);
-    }
     if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
         try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
     }

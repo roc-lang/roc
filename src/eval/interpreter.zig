@@ -6602,8 +6602,6 @@ pub const Interpreter = struct {
             },
 
             // ── List ops ──
-            // A hint only: nothing to do, and nothing to return.
-            .list_prefetch => Value.zst,
             .list_len => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);

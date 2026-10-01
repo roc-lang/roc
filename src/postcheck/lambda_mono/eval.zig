@@ -1566,7 +1566,6 @@ pub const Evaluator = struct {
             .list_len,
             .list_capacity,
             .list_get_unsafe,
-            .list_prefetch,
             .list_append_unsafe,
             .list_concat,
             .list_with_capacity,
@@ -2815,7 +2814,6 @@ pub const Evaluator = struct {
         const ListOp = enum {
             list_len,
             list_get_unsafe,
-            list_prefetch,
             list_append_unsafe,
             list_prepend,
             list_concat,
@@ -2846,8 +2844,6 @@ pub const Evaluator = struct {
         const arena = self.alloc();
         switch (list_op) {
             .list_len => return self.canonicalInt(.u64, @intCast(args[0].list.len)),
-            // A hint only; its result is the empty record.
-            .list_prefetch => return .{ .record = &.{} },
             .list_get_unsafe => {
                 const index = readInt(u64, args[1]);
                 const list = args[0].list;

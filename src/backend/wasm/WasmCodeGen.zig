@@ -12590,12 +12590,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // List operations
-        // A hint only: WebAssembly has no prefetch, so the result is the
-        // empty value and nothing else is emitted.
-        .list_prefetch => {
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-        },
         .list_len => {
             // Load length from RocList struct (offset 4)
             try self.emitProcLocal(GuardedList.at(args, 0));
@@ -15832,7 +15826,6 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_len,
         .list_capacity,
         .list_get_unsafe,
-        .list_prefetch,
         .list_append_unsafe,
         .list_concat,
         .list_with_capacity,

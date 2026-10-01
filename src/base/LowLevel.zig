@@ -59,11 +59,6 @@ pub const LowLevel = enum(u16) {
     list_len,
     list_capacity,
     list_get_unsafe,
-    /// `List.prefetch`: a hint that the item at an index is about to be
-    /// read or written. It reads nothing and changes nothing; a backend
-    /// with no prefetch instruction emits no code for it, and an index
-    /// outside the list is harmless.
-    list_prefetch,
     list_append_unsafe,
     list_concat,
     list_append_range_within,
@@ -869,7 +864,7 @@ pub const LowLevel = enum(u16) {
     /// operands retain their ordinary allocation-lifetime requirements.
     /// Kept as static operation data rather than widening every LIR statement.
     pub fn representationArgs(self: LowLevel) u64 {
-        if (self == .list_len or self == .list_capacity or self == .list_prefetch) return argMask(&.{0});
+        if (self == .list_len or self == .list_capacity) return argMask(&.{0});
         return 0;
     }
 
@@ -887,7 +882,6 @@ pub const LowLevel = enum(u16) {
     pub fn procedureKeyedByLayout(self: LowLevel) bool {
         return switch (self) {
             .list_len,
-            .list_prefetch,
             .list_capacity,
             .list_get_unsafe,
             .list_append_unsafe,
@@ -1656,7 +1650,6 @@ pub const LowLevel = enum(u16) {
             .str_get_utf8_byte_unsafe,
             .list_len,
             .list_capacity,
-            .list_prefetch,
             .list_slack_unique,
             .bool_not,
             .bool_likely,
