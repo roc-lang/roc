@@ -205,3 +205,63 @@ test "issue 11312: a root reading an annotated constant whose initializer was re
         \\
     , null, "bad + 1");
 }
+
+// repro for https://github.com/roc-lang/roc/issues/11923
+// The `parser_for` codec call reaches `Format.parse_u8` through the format's
+// method, so the expect is blocked by its type mismatch instead of being
+// lowered and evaluated.
+test "issue 11923: an expect reaching an erroneous format method through a codec is not evaluated" {
+    try expectRecovery(
+        \\Format := [Default].{
+        \\    parse_u8 : Format, {} -> Try({ value : U8, rest : {} }, [Bad])
+        \\    parse_u8 = |_, _| Err(OtherErr)
+        \\}
+        \\expect (U8.parser_for(Format.Default))({}) == Err(Bad)
+        \\
+    , null, "(U8.parser_for(Format.Default))({}) == Err(Bad)");
+}
+
+test "issue 11923: a root whose call-site evidence selects an erroneous method is not evaluated" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    describe : Thing -> Str
+        \\    describe = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\f = |x| x.describe()
+        \\thing : Thing
+        \\thing = Thing
+        \\result = f(thing) == "x"
+        \\
+    , null, "f(thing) == \"x\"");
+}
+
+test "issue 11923: a root whose structural equality reaches an erroneous is_eq is not evaluated" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    is_eq : Thing, Thing -> Bool
+        \\    is_eq = |_, _| {
+        \\        crash YYYYY
+        \\        Bool.True
+        \\    }
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\result = [thing] == [thing]
+        \\
+    , null, "[thing] == [thing]");
+}
+
+test "issue 11923: an expect reaching an erroneous format method through a generic codec call is not evaluated" {
+    try expectRecovery(
+        \\Format := [Default].{
+        \\    parse_u8 : Format, {} -> Try({ value : U8, rest : {} }, [Bad])
+        \\    parse_u8 = |_, _| Err(OtherErr)
+        \\}
+        \\p = |fmt| U8.parser_for(fmt)
+        \\expect (p(Format.Default))({}) == Err(Bad)
+        \\
+    , null, "(p(Format.Default))({}) == Err(Bad)");
+}

@@ -28116,8 +28116,10 @@ fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, root
 /// with a runtime error would report that already-reported problem a second
 /// time as a compile-time crash, so it is not requested. This includes expect
 /// roots, which are counted as compiler errors without execution. Reachability
-/// follows each procedure template's explicit procedure references, constant
-/// references, and closed dispatch targets, local and imported. The result is
+/// follows every call edge checking recorded for a procedure template, local and
+/// imported: procedure and constant references, direct dispatch targets, the
+/// method calls inside generated codec derivations, and the evidence each
+/// instantiation site and direct target carries. The result is
 /// recorded per template so importing modules consume it directly; a module
 /// whose bodies and imports contain no checked error records nothing and
 /// performs no traversal.
@@ -28134,11 +28136,73 @@ const CheckedErrorReachability = struct {
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    template_refs: *const TemplateIteratorRefs,
 
     const Target = union(enum) {
         none,
         reaches,
         local: canonical.CheckedProcedureTemplateId,
+    };
+
+    /// The template whose outgoing edges are being recorded, with the shared
+    /// reachability state those edges feed.
+    const Recorder = struct {
+        allocator: Allocator,
+        reaches: []bool,
+        dependents: []std.ArrayList(canonical.CheckedProcedureTemplateId),
+        work: *std.ArrayList(canonical.CheckedProcedureTemplateId),
+        owner: canonical.CheckedProcedureTemplateId,
+
+        fn record(self: Recorder, target: Target) Allocator.Error!void {
+            try recordTarget(self.allocator, self.reaches, self.dependents, self.work, self.owner, target);
+        }
+    };
+
+    /// Evidence nodes and generated-codec derivations already expanded for the
+    /// current owner. A recursive type's codec derivation names itself, and a
+    /// shared evidence node can appear under several sites.
+    const EvidenceVisits = struct {
+        nodes: std.DynamicBitSetUnmanaged,
+        derivations: std.DynamicBitSetUnmanaged,
+        touched_nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
+        touched_derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
+
+        fn init(allocator: Allocator, plans: *const static_dispatch.StaticDispatchPlanTable) Allocator.Error!EvidenceVisits {
+            var nodes = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.evidence_nodes.len);
+            errdefer nodes.deinit(allocator);
+            return .{
+                .nodes = nodes,
+                .derivations = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.generated_codec_derivations.len),
+            };
+        }
+
+        fn deinit(self: *EvidenceVisits, allocator: Allocator) void {
+            self.nodes.deinit(allocator);
+            self.derivations.deinit(allocator);
+            self.touched_nodes.deinit(allocator);
+            self.touched_derivations.deinit(allocator);
+        }
+
+        fn reset(self: *EvidenceVisits) void {
+            for (self.touched_nodes.items) |id| self.nodes.unset(@intFromEnum(id));
+            for (self.touched_derivations.items) |id| self.derivations.unset(@intFromEnum(id));
+            self.touched_nodes.clearRetainingCapacity();
+            self.touched_derivations.clearRetainingCapacity();
+        }
+
+        fn visitNode(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.EvidenceNodeId) Allocator.Error!bool {
+            if (self.nodes.isSet(@intFromEnum(id))) return false;
+            self.nodes.set(@intFromEnum(id));
+            try self.touched_nodes.append(allocator, id);
+            return true;
+        }
+
+        fn visitDerivation(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!bool {
+            if (self.derivations.isSet(@intFromEnum(id))) return false;
+            self.derivations.set(@intFromEnum(id));
+            try self.touched_derivations.append(allocator, id);
+            return true;
+        }
     };
 
     fn publish(
@@ -28161,21 +28225,45 @@ const CheckedErrorReachability = struct {
         }
         var work = std.ArrayList(canonical.CheckedProcedureTemplateId).empty;
         defer work.deinit(allocator);
+        var visits = try EvidenceVisits.init(allocator, self.static_dispatch_plans);
+        defer visits.deinit(allocator);
 
+        const plans = self.static_dispatch_plans;
+        const refs = self.template_refs;
         for (self.templates.templates.items, 0..) |template, raw| {
             const id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(raw)));
             if (self.bodyContainsDiagnosticError(template.body)) {
                 try markReached(allocator, reaches, &work, id);
             }
+            const recorder = Recorder{
+                .allocator = allocator,
+                .reaches = reaches,
+                .dependents = dependents,
+                .work = &work,
+                .owner = id,
+            };
+            visits.reset();
             const refs_end = template.resolved_value_refs.start + template.resolved_value_refs.len;
             for (self.resolved_value_refs.template_refs[template.resolved_value_refs.start..refs_end]) |ref_id| {
-                const target = self.resolvedRefTarget(self.resolved_value_refs.records[@intFromEnum(ref_id)].ref);
-                try recordTarget(allocator, reaches, dependents, &work, id, target);
+                const record = self.resolved_value_refs.records[@intFromEnum(ref_id)];
+                try recorder.record(self.resolvedRefTarget(record.ref));
+                try self.recordSiteEvidence(&visits, recorder, record.expr);
             }
-            const plans_end = template.direct_dispatch_plans.start + template.direct_dispatch_plans.len;
-            for (self.static_dispatch_plans.direct_template_refs[template.direct_dispatch_plans.start..plans_end]) |plan_id| {
-                const target = self.directDispatchTarget(self.static_dispatch_plans.plans[@intFromEnum(plan_id)]);
-                try recordTarget(allocator, reaches, dependents, &work, id, target);
+            const scheme_uses = refs.scheme_use_spans[raw];
+            for (refs.scheme_use_sites[scheme_uses.start..][0..scheme_uses.len]) |site| {
+                try self.recordSiteEvidence(&visits, recorder, site.checked_expr);
+            }
+            const scope_sites = refs.scope_site_spans[raw];
+            for (refs.scope_sites[scope_sites.start..][0..scope_sites.len]) |site| {
+                try self.recordSiteEvidence(&visits, recorder, site.checked_expr);
+            }
+            const direct = template.direct_dispatch_plans;
+            for (plans.direct_template_refs[direct.start..][0..direct.len]) |plan_id| {
+                try self.recordDispatchPlan(&visits, recorder, plans.plans[@intFromEnum(plan_id)]);
+            }
+            const relations = template.dispatch_relations;
+            for (plans.dispatch_relation_refs[relations.start..][0..relations.len]) |plan_id| {
+                try self.recordDispatchPlan(&visits, recorder, plans.plans[@intFromEnum(plan_id)]);
             }
         }
 
@@ -28356,24 +28444,113 @@ const CheckedErrorReachability = struct {
         return self.importedRootTarget(imported, root);
     }
 
-    fn directDispatchTarget(self: CheckedErrorReachability, plan: static_dispatch.StaticDispatchCallPlan) Target {
-        const direct = switch (plan.resolution) {
-            .direct_closed, .direct_parametric => |direct| direct,
-            .direct_pending,
-            .evidence_dependent,
-            .structural,
-            .@"unreachable",
-            .checked_error,
-            => checkedArtifactInvariant("checked-error reachability read a direct dispatch span entry without a direct target", .{}),
-        };
-        return switch (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind) {
-            .procedure => |procedure| switch (procedure.runtime_target) {
-                .procedure => self.templateTarget(procedure.template),
-                .low_level, .intrinsic, .graph_participating => .none,
+    fn recordDispatchPlan(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!void {
+        switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| {
+                if (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind == .structural) {
+                    checkedArtifactInvariant("direct checked call targeted a structural derivation", .{});
+                }
+                try self.recordEvidenceNode(visits, recorder, direct.evidence);
             },
-            .local_proc => .none,
-            .structural => checkedArtifactInvariant("direct checked call targeted a structural derivation", .{}),
-        };
+            .structural => if (plan.generated_codec_derivation) |derivation| {
+                try self.recordCodecDerivation(visits, recorder, derivation);
+            },
+            .checked_error => try recorder.record(.reaches),
+            // The enclosing callable's evidence supplies this target, so the
+            // edge belongs to the instantiation site that supplies it.
+            .evidence_dependent, .@"unreachable" => {},
+            .direct_pending => checkedArtifactInvariant("checked-error reachability read an unfinalized direct call", .{}),
+        }
+    }
+
+    fn recordSiteEvidence(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+        expr: CheckedExprId,
+    ) Allocator.Error!void {
+        const evidence = self.static_dispatch_plans.siteEvidence(expr) orelse return;
+        try self.recordEvidenceSlice(visits, recorder, evidence);
+    }
+
+    fn recordEvidenceSlice(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+        evidence: []const static_dispatch.CheckedEvidence,
+    ) Allocator.Error!void {
+        for (evidence) |entry| try self.recordEvidence(visits, recorder, entry);
+    }
+
+    fn recordEvidence(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+        evidence: static_dispatch.CheckedEvidence,
+    ) Allocator.Error!void {
+        switch (evidence.resolution) {
+            .direct => |node| try self.recordEvidenceNode(visits, recorder, node),
+            .structural => |structural| if (structural.generated_codec_derivation) |derivation| {
+                try self.recordCodecDerivation(visits, recorder, derivation);
+            },
+            .checked_error => try recorder.record(.reaches),
+            // Forwarded obligations are supplied by an enclosing instantiation
+            // site, and an unreachable obligation lowers to a crash, never a call.
+            .constraint, .from_callable, .from_scheme, .unreachable_value => {},
+        }
+        const contracts = evidence.callable_contracts;
+        try self.recordEvidenceSlice(visits, recorder, self.static_dispatch_plans.evidence_refs[contracts.start..][0..contracts.len]);
+    }
+
+    fn recordEvidenceNode(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+        id: static_dispatch.EvidenceNodeId,
+    ) Allocator.Error!void {
+        if (!try visits.visitNode(recorder.allocator, id)) return;
+        const node = self.static_dispatch_plans.evidenceNode(id);
+        switch (node.target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .procedure => try recorder.record(self.templateTarget(procedure.template)),
+                .low_level, .intrinsic, .graph_participating => {},
+            },
+            // A local procedure's body belongs to the template that declares it.
+            .local_proc => {},
+            // A structural target's body is the derivation it names below.
+            .structural => {},
+        }
+        if (node.generated_codec_derivation) |derivation| {
+            try self.recordCodecDerivation(visits, recorder, derivation);
+        }
+        switch (node.nested) {
+            .resolved => |nested| try self.recordEvidenceSlice(visits, recorder, self.static_dispatch_plans.evidence_refs[nested.start..][0..nested.len]),
+            // Checking recorded no per-edge evidence entries for this target.
+            .from_callable => {},
+        }
+    }
+
+    fn recordCodecDerivation(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+        id: static_dispatch.GeneratedCodecDerivationId,
+    ) Allocator.Error!void {
+        if (!try visits.visitDerivation(recorder.allocator, id)) return;
+        const derivation = self.static_dispatch_plans.generated_codec_derivations[@intFromEnum(id)];
+        for (derivation.callsSlice(self.static_dispatch_plans)) |call| {
+            switch (call.resolution) {
+                .callable => |node| try self.recordEvidenceNode(visits, recorder, node),
+                .structural => |nested| try self.recordCodecDerivation(visits, recorder, nested),
+                .checked_error => try recorder.record(.reaches),
+                .pending => checkedArtifactInvariant("checked-error reachability read an unlinked generated codec call", .{}),
+            }
+        }
     }
 };
 
@@ -37870,6 +38047,7 @@ pub fn publishFromTypedModule(
         .hoisted_constants = &hoisted_constants,
         .const_templates = &const_templates,
         .static_dispatch_plans = &static_dispatch_plans,
+        .template_refs = &template_iterator_refs,
     }).publish(allocator, any_diagnostic_error, compile_time_roots.roots);
     try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     template_iterator_refs.deinit(allocator);

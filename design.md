@@ -576,7 +576,9 @@ lowers to is never reported a second time as a compile-time crash. Top-level
 roots get the same guarantee from CheckedModule construction, which records in
 `checked_error_templates` every procedure template whose evaluation can reach a
 checked runtime error. It follows each template's explicit procedure
-references, constant references, and closed dispatch targets to a fixpoint,
+references, constant references, direct dispatch targets, the method calls
+recorded in generated codec derivations, and the checked evidence carried by
+each instantiation site and direct target to a fixpoint,
 reads an imported template's answer from the importing CheckedModule's view of
 that module's `checked_error_templates` list, and never requests a compile-time
 root whose entry wrapper is in the list. This includes expect roots: a checked
