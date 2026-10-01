@@ -1861,7 +1861,7 @@ pub fn roc_boxy_list_reserve_for_append(
         alignment,
         spare,
         element_width,
-        true,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),
