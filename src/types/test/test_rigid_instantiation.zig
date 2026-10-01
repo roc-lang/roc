@@ -695,3 +695,37 @@ test "instantiate - rejected nominal positions produce error and unwind partial 
         try std.testing.expect(env.types.resolveVar(independent).desc.content == .flex);
     }
 }
+
+test "instantiate - effect formula and explicit requirement reuse one structural substitution" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const quantified = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    const ret = try env.types.freshFromContentWithRank(.{ .structure = .empty_record }, .outermost);
+    const callable = try env.types.freshFromContentWithRank(
+        try env.types.mkFuncUnbound(&.{quantified}, ret),
+        .outermost,
+    );
+    const scheme = try env.types.freshFromContentWithRank(
+        try env.types.mkFuncUnboundWithEffectDeps(&.{}, ret, &.{callable}),
+        .generalized,
+    );
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+    };
+    const fresh_scheme = try instantiator.instantiateTypeScheme(scheme);
+    const fresh_func = env.types.resolveVar(fresh_scheme).desc.content.structure.fn_unbound;
+    const fresh_callable = env.types.sliceVars(fresh_func.effect_deps)[0];
+    try std.testing.expect(fresh_callable != callable);
+    // Subsequent scheme requirements use the existing substitution even when
+    // their callable's original rank would ordinarily require sharing.
+    try std.testing.expectEqual(fresh_callable, try instantiator.instantiateVar(callable));
+    const fresh_arg = env.types.sliceVars(env.types.resolveVar(fresh_callable).desc.content.structure.fn_unbound.args)[0];
+    try std.testing.expect(fresh_arg != quantified);
+    try std.testing.expectEqual(ret, env.types.resolveVar(fresh_callable).desc.content.structure.fn_unbound.ret);
+}

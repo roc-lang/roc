@@ -93,6 +93,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_9711_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10093_test.zig"));
     std.testing.refAllDecls(@import("test/repros_test.zig"));
+    std.testing.refAllDecls(@import("effect_solver.zig"));
     std.testing.refAllDecls(@import("test/typed_cir_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10338_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10690_test.zig"));
