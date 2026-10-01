@@ -10621,6 +10621,7 @@ const Builder = struct {
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                     if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                    if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                     const spec_request = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                     if (!try source_ctx.graph.typeIsResolved(spec_request)) continue;
                     const spec_fn_ty = try source_ctx.activeTypeFromNode(spec_request);
@@ -10642,6 +10643,7 @@ const Builder = struct {
                         if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                        if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                         if (signature_relation == .exact_graph and
                             source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
                         {
@@ -10679,6 +10681,7 @@ const Builder = struct {
                             if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                            if (!nestedSpecReusableAt(source_ctx.draft, spec, request_owner)) continue;
                             if (signature_relation == .exact_graph and
                                 source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
                             {
@@ -15916,6 +15919,10 @@ const ActiveCallableEvalBinding = struct {
     root: checked.ComptimeRootId,
     request_node: NodeId,
     local: DraftLocalId,
+    /// Owner whose body the reserved local is bound in. A read from deeper
+    /// in the ownership chain makes every function between them lexically
+    /// dependent (`BodyDraftStore.markRecursiveBindingRead`).
+    owner: DraftOwner,
     used: bool = false,
 };
 
@@ -16696,6 +16703,17 @@ const DraftStructuralEqMethodCall = struct {
     callee: DraftFnSlot,
 };
 
+/// Whether a request lowered in `request_owner` may reuse nested
+/// specialization `spec` of the same lexical owner. A body that reads an
+/// enclosing expansion's recursive-binding local names that local directly
+/// (it is not a checked capture), and a second expansion under the same owner
+/// reserves a different local; only a request inside `spec`'s own body is
+/// lowered where the local it names is in scope.
+fn nestedSpecReusableAt(draft: *const BodyDraftStore, spec: *const DraftNestedSpec, request_owner: DraftOwner) bool {
+    if (!spec.reads_recursive_binding) return true;
+    return draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id);
+}
+
 const DraftNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
@@ -16718,6 +16736,11 @@ const DraftNestedSpec = struct {
     lexical_owner: DraftOwner,
     requires_local: bool,
     local_context_dependent: bool,
+    /// Whether this body reads a recursive-binding local reserved by an
+    /// enclosing expansion (`BodyDraftStore.markRecursiveBindingRead`). That
+    /// local belongs to one expansion, so this body is reused only by a
+    /// request lowered inside its own body, where the same local is in scope.
+    reads_recursive_binding: bool = false,
     symbol: Common.Symbol,
     fn_id: DraftFnId,
     /// Exact alpha-normalized shape of the unresolved request before this nested
@@ -17502,6 +17525,58 @@ const BodyDraftStore = struct {
         stored.parent_owner = self.current_owner;
         try self.fns.append(self.allocator, stored);
         return id;
+    }
+
+    /// Record that the body being lowered reads a recursive-binding local
+    /// reserved in `binding_owner`'s body: a callable-eval binding, an active
+    /// constant binding, or an active ConstStore node binding.
+    ///
+    /// Such a local is not a checked capture. Whether a body names it depends
+    /// on the context the body was lowered in, so every function between
+    /// the read and `binding_owner` is lexically dependent: its specialization
+    /// identity omits the local, so it must never be merged with, or
+    /// committed as, an equal-looking specialization lowered elsewhere,
+    /// where that local is not in scope.
+    fn markRecursiveBindingRead(self: *BodyDraftStore, binding_owner: DraftOwner) void {
+        var cursor = self.current_owner;
+        var remaining = self.fns.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            if (std.meta.eql(cursor, binding_owner)) return;
+            switch (cursor) {
+                .root, .reserved_fn => Common.invariant("recursive binding read was outside the ownership chain of its binding"),
+                .draft_fn => |fn_id| {
+                    const raw = @intFromEnum(fn_id);
+                    if (raw >= self.fns.items.len) {
+                        Common.invariant("draft owner ancestry referenced an unknown function");
+                    }
+                    self.markDraftFnLexicallyDependent(fn_id);
+                    cursor = self.fns.items[raw].parent_owner;
+                },
+            }
+        }
+        Common.invariant("draft function ownership ancestry contained a cycle");
+    }
+
+    fn markDraftFnLexicallyDependent(self: *BodyDraftStore, fn_id: DraftFnId) void {
+        for (self.nested_specs.items) |*spec| {
+            if (spec.fn_id != fn_id) continue;
+            spec.requires_local = true;
+            spec.local_context_dependent = true;
+            spec.reads_recursive_binding = true;
+            return;
+        }
+        for (self.template_specs.items) |*spec| {
+            if (spec.fn_id != fn_id) continue;
+            // Only a lexically dependent procedure body stays inside its
+            // owner; a context-free one becomes a top-level definition, which
+            // can name no enclosing local.
+            if (!spec.local_context_dependent) {
+                Common.invariant("context-free procedure body read an enclosing recursive binding");
+            }
+            spec.requires_local = true;
+            return;
+        }
+        Common.invariant("draft function had no owning nested or template specialization");
     }
 
     /// Return whether `owner` is currently lowering inside `ancestor`'s body.
@@ -34390,6 +34465,7 @@ const BodyContext = struct {
 
             try relateRequestComponent(self.graph, active.request_node, request_fn_node);
             self.draft.active_callable_eval_bindings.items[index].used = true;
+            self.draft.markRecursiveBindingRead(active.owner);
             return try self.addExprWithTypeCell(
                 DraftTypeCell.fromGraphNode(request_fn_node),
                 .{ .local = active.local },
@@ -34422,6 +34498,7 @@ const BodyContext = struct {
             .root = root_id,
             .request_node = request_fn_node,
             .local = local,
+            .owner = self.draft.current_owner,
         });
         return local;
     }
@@ -34478,6 +34555,7 @@ const BodyContext = struct {
                 break :blk reserved;
             };
             self.draft.active_const_node_bindings.items[index].used = true;
+            self.draft.markRecursiveBindingRead(active.owner);
             return try self.addExprWithTypeCell(request_cell, .{ .local = local });
         }
 
@@ -42681,6 +42759,7 @@ const BodyContext = struct {
             const active = self.draft.active_const_bindings.items[index];
             if (constUseEql(active.const_use, const_use.const_ref)) {
                 self.draft.active_const_bindings.items[index].used = true;
+                self.draft.markRecursiveBindingRead(active.owner);
                 try self.materializeActiveConstBinding(id);
                 return active.local;
             }
@@ -42696,6 +42775,7 @@ const BodyContext = struct {
             const active = self.draft.active_const_bindings.items[index];
             if (moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes) and active.binder == binder) {
                 self.draft.active_const_bindings.items[index].used = true;
+                self.draft.markRecursiveBindingRead(active.owner);
                 try self.materializeActiveConstBinding(id);
                 return;
             }

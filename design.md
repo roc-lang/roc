@@ -12026,7 +12026,14 @@ owned only by an unresolved callee body are present in the checked interface
 program and have already participated in the request's relation closure.
 Lexically context-dependent local procedures still lower in their owning graph
 because that lexical context is an explicit input rather than a context-free
-specialization key.
+specialization key. A nested function whose body reads a recursive-binding
+local reserved by an enclosing expansion (a callable-eval binding, an active
+constant binding, or an active ConstStore node binding) is lexically dependent
+in exactly this way, as is every function between that read and the
+binding's owner: the local is not a checked capture, so the function's
+specialization identity cannot name it, and such a body is never merged with
+or committed as an equal-looking specialization lowered where that local is
+not in scope.
 
 A deferred procedure-template request has two distinct sources of type
 evidence. Caller value flow owns the request's function arguments and return;
