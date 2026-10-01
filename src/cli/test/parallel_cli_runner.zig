@@ -6717,8 +6717,10 @@ fn customIssue11826CacheOwnershipVariants(
             return customInfraFailure(allocator, timer, "failed to clone pack statistics environment: {}", .{err}),
     };
     defer stats_env.env_map.deinit();
-    stats_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
-        return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+    for ([_][]const u8{ "ROC_PACK_STATS", "ROC_PACK_TRACE" }) |key| {
+        stats_env.env_map.put(key, "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+    }
     for ([_][]const u8{ "cold", "warm" }) |name| {
         const exe = std.fmt.allocPrint(allocator, "{s}/issue_11826_{s}", .{ env.dirs.work_dir, name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
@@ -6730,6 +6732,12 @@ fn customIssue11826CacheOwnershipVariants(
             return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "dev build with the object cache did not succeed");
+        }
+        // The platform is this program's root, so the app is one of its
+        // modules; it is never imported, so no build compiles a pack program
+        // for it when the program's own pack already holds its code.
+        if (std.mem.find(u8, built.stderr, "module pack app_cache_variant\n") != null) {
+            return failureFromRun(allocator, timer, built, "a build compiled a pack program for the app module");
         }
         if (std.mem.eql(u8, name, "warm")) {
             const hits_at = std.mem.find(u8, built.stderr, hits_marker) orelse

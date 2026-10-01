@@ -8856,7 +8856,9 @@ fn compileModulePack(
 
 /// Write this build's packs into the object cache: the root module's pack
 /// from the artifacts of the program just compiled, and a pack program for
-/// every other module in view whose pack is not in the store yet. Packs are
+/// every other module in view whose pack is not in the store yet, except the
+/// app module when the platform is the root, since no other program imports
+/// it. Packs are
 /// filed by module identity and artifact key, so an unchanged module's pack
 /// is found and left alone.
 fn writePacksToStore(
@@ -8900,9 +8902,19 @@ fn writePacksToStore(
             }
         }
     }
+    // An app module is never imported, so its procedures only ever link into
+    // builds of that app, which read the pack written above from the
+    // program just compiled. A pack program of its own would only repeat it.
+    const app_key: ?check.CheckedArtifact.CheckedModuleArtifactKey = if (build_env.getAppSemanticData()) |app|
+        if (app.checked_artifact) |app_artifact| app_artifact.key else null
+    else
+        null;
     const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(artifacts);
     for (artifacts) |artifact| {
+        if (app_key) |key| {
+            if (std.meta.eql(artifact.key, key)) continue;
+        }
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
         const origin = placement.origin;
         const identity = placement.identity;
@@ -8910,6 +8922,9 @@ fn writePacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
+        if (std.c.getenv("ROC_PACK_TRACE") != null) {
+            std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
+        }
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
         defer pack.deinit();
         const set = &(pack.compiled.artifacts orelse continue);
