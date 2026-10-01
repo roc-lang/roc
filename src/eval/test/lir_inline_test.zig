@@ -606,7 +606,10 @@ fn runLoweredWithHostEvents(
         .proc_id = try rootProc(lowered),
         .arg_layouts = arg_layouts,
     }) catch |err| switch (err) {
-        error.Crash => return runtime_env.snapshot(allocator),
+        error.Crash => {
+            runtime_env.noteCrash(interpreter.getCrashMessage());
+            return runtime_env.snapshot(allocator);
+        },
         error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
@@ -3559,7 +3562,7 @@ test "boxy lowering preserves a runtime-built crash message" {
 
     _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
         try std.testing.expectEqual(error.Crash, err);
-        try std.testing.expectEqualStrings(expected_message, interpreter.getCrashMessage() orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualStrings(expected_message, interpreter.getCrashMessage());
         return;
     };
     return error.TestUnexpectedResult;

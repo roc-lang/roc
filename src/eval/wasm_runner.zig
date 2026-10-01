@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const bytebox = @import("bytebox");
+const sljmp = @import("sljmp");
 const collections = @import("collections");
 const HostEvent = @import("runtime_host.zig").HostEvent;
 const BuiltinSignatures = @import("backend").wasm.BuiltinSignatures;
@@ -181,6 +182,8 @@ const WasmRunState = struct {
     crashed: bool = false,
     crash_message: ?[]u8 = null,
     crash_message_oom: bool = false,
+    /// Where `wasmDecCrashed` leaves a native Dec builtin that crashed.
+    dec_crash_jmp_buf: ?*sljmp.JmpBuf = null,
     events: std.ArrayListUnmanaged(HostEvent) = .empty,
 
     fn init(allocator: std.mem.Allocator, heap_base: u32) WasmRunState {
@@ -1034,9 +1037,7 @@ fn hostDecDiv(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
         state.recordCrash("Decimal division by 0!");
         return;
     }
-    var dec_ops = wasmDecRocOps(state);
-    const result = builtins.dec.divC(lhs, rhs, &dec_ops);
-    if (state.crashed) return;
+    const result = callDecBuiltin(state, builtins.dec.divC, .{ lhs, rhs }) orelse return;
     writeI128ToMem(buffer, @intCast(params[2].I32), result);
 }
 
@@ -1050,9 +1051,7 @@ fn hostDecDivTrunc(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
         state.recordCrash("Decimal division by 0!");
         return;
     }
-    var dec_ops = wasmDecRocOps(state);
-    const result = builtins.dec.divTruncC(lhs, rhs, &dec_ops);
-    if (state.crashed) return;
+    const result = callDecBuiltin(state, builtins.dec.divTruncC, .{ lhs, rhs }) orelse return;
     writeI128ToMem(buffer, @intCast(params[2].I32), result);
 }
 
@@ -1082,9 +1081,7 @@ fn hostDecPow(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
         return;
     }
 
-    var dec_ops = wasmDecRocOps(state);
-    const result = builtins.dec.powC(base, exponent, &dec_ops);
-    if (state.crashed) return;
+    const result = callDecBuiltin(state, builtins.dec.powC, .{ base, exponent }) orelse return;
     writeI128ToMem(buffer, result_ptr, result);
 }
 
@@ -1099,8 +1096,7 @@ fn hostDecAtan2(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 
     const y = RocDec{ .num = readI128FromMem(buffer, lhs_ptr) };
     const x = RocDec{ .num = readI128FromMem(buffer, rhs_ptr) };
-    var dec_ops = wasmDecRocOps(state);
-    const result = builtins.dec.atan2C(y, x, &dec_ops);
+    const result = callDecBuiltin(state, builtins.dec.atan2C, .{ y, x }) orelse return;
     writeI128ToMem(buffer, result_ptr, result);
 }
 
@@ -1124,17 +1120,15 @@ fn hostDecUnaryMath(state: *WasmRunState, module: *bytebox.ModuleInstance, param
         .sin, .cos, .tan, .atan => {},
     }
 
-    var dec_ops = wasmDecRocOps(state);
     const result = switch (op) {
-        .sqrt => builtins.dec.sqrtC(arg, &dec_ops),
-        .sin => builtins.dec.sinC(arg, &dec_ops),
-        .cos => builtins.dec.cosC(arg, &dec_ops),
-        .tan => builtins.dec.tanC(arg, &dec_ops),
-        .asin => builtins.dec.asinC(arg, &dec_ops),
-        .acos => builtins.dec.acosC(arg, &dec_ops),
-        .atan => builtins.dec.atanC(arg, &dec_ops),
-    };
-    if (state.crashed) return;
+        .sqrt => callDecBuiltin(state, builtins.dec.sqrtC, .{arg}),
+        .sin => callDecBuiltin(state, builtins.dec.sinC, .{arg}),
+        .cos => callDecBuiltin(state, builtins.dec.cosC, .{arg}),
+        .tan => callDecBuiltin(state, builtins.dec.tanC, .{arg}),
+        .asin => callDecBuiltin(state, builtins.dec.asinC, .{arg}),
+        .acos => callDecBuiltin(state, builtins.dec.acosC, .{arg}),
+        .atan => callDecBuiltin(state, builtins.dec.atanC, .{arg}),
+    } orelse return;
     writeI128ToMem(buffer, result_ptr, result);
 }
 
@@ -3030,6 +3024,23 @@ fn wasmDecExpectFailed(ops: *WasmRocOps, bytes: [*]const u8, len: usize) callcon
 fn wasmDecCrashed(ops: *WasmRocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const state: *WasmRunState = @ptrCast(@alignCast(ops.env));
     state.recordCrash(bytes[0..len]);
+    const jmp_buf = state.dec_crash_jmp_buf orelse
+        @panic("wasm runner invariant violated: a Dec builtin crashed outside callDecBuiltin");
+    state.dec_crash_jmp_buf = null;
+    sljmp.longjmp(jmp_buf, 1);
+}
+
+/// Run a native Dec builtin for a wasm import. `roc_crashed` never returns,
+/// so a crash in the builtin is recorded and leaves through this boundary,
+/// and the import returns without a result. The wasm caller then reaches the
+/// `unreachable` after the failed operation and the runner reports the crash.
+fn callDecBuiltin(state: *WasmRunState, comptime func: anytype, args: anytype) ?i128 {
+    var dec_ops = wasmDecRocOps(state);
+    var jmp_buf: sljmp.JmpBuf = undefined;
+    state.dec_crash_jmp_buf = &jmp_buf;
+    defer state.dec_crash_jmp_buf = null;
+    if (sljmp.setjmp(&jmp_buf) != 0) return null;
+    return @call(.auto, func, args ++ .{&dec_ops});
 }
 
 fn wasmDecRocOps(state: *WasmRunState) WasmRocOps {

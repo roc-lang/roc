@@ -867,7 +867,6 @@ fn writeI64Result(ret: ?[*]u8, value: i64) void {
 fn callBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i64 {
     const payload_ptr = boxed orelse {
         ops.crash("host attempted to call a null boxed erased callable");
-        unreachable;
     };
     const payload = builtins.erased_callable.payloadPtr(payload_ptr);
     var call_args = I64ToI64Args{ .arg0 = arg0 };
@@ -890,7 +889,6 @@ fn callBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i
 fn consumeBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i64 {
     const payload_ptr = boxed orelse {
         ops.crash("host attempted to call a null boxed erased callable");
-        unreachable;
     };
     const payload = builtins.erased_callable.payloadPtr(payload_ptr);
     var call_args = I64ToI64Args{ .arg0 = arg0 };
@@ -910,7 +908,6 @@ fn consumeBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64
 fn callBoxedTransitionWithoutReuse(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8) i64 {
     const outer_ptr = boxed orelse {
         ops.crash("host attempted to call a null boxed transition");
-        unreachable;
     };
     defer builtins.erased_callable.decref(outer_ptr, ops);
 
@@ -928,7 +925,6 @@ fn callBoxedTransitionWithoutReuse(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8
 
     const inner_ptr = inner orelse {
         ops.crash("boxed transition returned a null boxed callable");
-        unreachable;
     };
     defer builtins.erased_callable.decref(inner_ptr, ops);
     const inner_payload = builtins.erased_callable.payloadPtr(inner_ptr);
@@ -1030,10 +1026,7 @@ fn hostTreeClonePayload(tree: *const HostTree, ops: *builtins.host_abi.RocOps) H
             .discriminant = 1,
             .padding = [_]u8{0} ** 7,
         },
-        else => blk: {
-            ops.crash("host boxed recursive tree capture had invalid discriminant");
-            break :blk undefined;
-        },
+        else => ops.crash("host boxed recursive tree capture had invalid discriminant"),
     };
 }
 
@@ -1124,7 +1117,6 @@ fn hostedHostBoxedWithBoxedCapture(inner: ?[*]u8, bonus: i64) callconv(.c) ?[*]u
         builtins.erased_callable.incref(inner_ptr, 1, ops);
     } else {
         ops.crash("host boxed callable capture received null inner callable");
-        unreachable;
     }
     defer builtins.erased_callable.decref(inner, ops);
 
@@ -1225,11 +1217,9 @@ fn hostedHostStoreSeed(boxed: ?[*]u8) callconv(.c) void {
     const ops = g_roc_ops.?;
     if (stored_seed != null) {
         ops.crash("host was given a second seed while still holding one");
-        unreachable;
     }
     stored_seed = boxed orelse {
         ops.crash("host was given a null seed");
-        unreachable;
     };
 }
 
@@ -1237,7 +1227,6 @@ fn hostedHostTakeSeed() callconv(.c) ?[*]u8 {
     const ops = g_roc_ops.?;
     const seed = stored_seed orelse {
         ops.crash("host was asked for a seed it was never given");
-        unreachable;
     };
     stored_seed = null;
     return seed;
@@ -1251,7 +1240,6 @@ fn hostedHostStoreBoxed(boxed: ?[*]u8) callconv(.c) void {
     }
     const new_boxed = boxed orelse {
         ops.crash("host attempted to store a null boxed erased callable");
-        unreachable;
     };
     builtins.erased_callable.incref(new_boxed, 1, ops);
     stored_boxed_callable = new_boxed;

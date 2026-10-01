@@ -1889,7 +1889,7 @@ fn evalInterpreterProgramRoots(
                     break :failure switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         error.RuntimeError, error.DivisionByZero => {
-                            const message = interpreter.getRuntimeErrorMessage() orelse host.crash_message orelse "compile-time evaluation failed";
+                            const message = interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed";
                             failed_message = message;
                             break :blk .{ .const_node = try appendCrashConst(module, message) };
                         },
@@ -1898,7 +1898,7 @@ fn evalInterpreterProgramRoots(
                             break :blk .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
                         },
                         error.Crash => {
-                            const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
+                            const message = interpreter.getCrashMessage();
                             failed_message = message;
                             break :blk .{ .const_node = try appendCrashConst(module, message) };
                         },
@@ -2276,9 +2276,9 @@ fn evalInterpreterLiteralRoot(
             if (program.demand_error) |cause| return cause;
             const message = switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                error.RuntimeError, error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse program.host.crash_message orelse "compile-time evaluation failed",
+                error.RuntimeError, error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed",
                 error.ComptimeExhaustiveness => "compile-time exhaustiveness failure",
-                error.Crash => interpreter.getCrashMessage() orelse program.host.crash_message orelse "Roc crashed",
+                error.Crash => interpreter.getCrashMessage(),
                 error.UnsupportedHostedFunction => finalizationInvariant("literal root reached an unsupported hosted function"),
                 error.InvalidHostedFunctionSignature => finalizationInvariant("literal root reached an invalid hosted function signature"),
                 // expect_err statements only occur in top-level expect test roots.
@@ -4216,7 +4216,7 @@ fn evalCompileTimeRoot(
                 return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, owners, lir_result, message) } };
             },
             error.Crash => {
-                const message = interpreter.getCrashMessage() orelse "Roc crashed";
+                const message = interpreter.getCrashMessage();
                 return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, owners, lir_result, message) } };
             },
             error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
@@ -5155,7 +5155,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         for (0..@as(usize, if (cycle) 1 else 2)) |_| {
             if (failure_message) |message| {
                 try std.testing.expectError(error.Crash, consumer.interpreter.eval(.{ .proc_id = consumer_proc, .ret_layout = .str }));
-                try std.testing.expectEqualStrings(message, consumer.interpreter.getCrashMessage().?);
+                try std.testing.expectEqualStrings(message, consumer.interpreter.getCrashMessage());
                 if (!cycle) {
                     try std.testing.expectEqual(base.SourceLoc{ .file = 0, .line = 7, .column = 3 }, consumer.interpreter.getFailedSourceLoc().?);
                     try std.testing.expectEqual(base.Region.from_raw_offsets(40, 51), consumer.interpreter.getFailedCheckedRegion().?);
@@ -5179,7 +5179,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         const stored: *const builtins.str.RocStr = @ptrCast(@alignCast(bytes + message_offset));
         try std.testing.expectEqualStrings(message, stored.asSlice());
         try std.testing.expectError(error.Crash, owner.interpreter.eval(.{ .proc_id = consumer_proc, .ret_layout = .str }));
-        try std.testing.expectEqualStrings(message, owner.interpreter.getCrashMessage().?);
+        try std.testing.expectEqualStrings(message, owner.interpreter.getCrashMessage());
     } else {
         const value = try owner.interpreter.eval(.{ .proc_id = source_proc, .ret_layout = .str });
         try owner.publishRoot(&lowered, module_id, .{ .checked = root_id }, .{

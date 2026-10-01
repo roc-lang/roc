@@ -567,7 +567,6 @@ fn leave(g: *GlobalBoxyRuntime) void {
 
 fn abiCrash(g: *GlobalBoxyRuntime, comptime what: []const u8) noreturn {
     g.runtime.roc_ops.crash("boxy runtime " ++ what ++ " failed");
-    unreachable;
 }
 
 /// Fixed-buffer message builder for the crash paths below.
@@ -642,7 +641,6 @@ fn abiCrashMissingDescriptorCapture(
     message.str("; supplied capture ids=");
     message.uintList(g.capture_ids);
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashNullErasedArgDescriptor(
@@ -659,7 +657,6 @@ fn abiCrashNullErasedArgDescriptor(
     message.uint(key.descriptor_index);
     message.str(")");
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashMissingErasedArgDescriptor(
@@ -678,7 +675,6 @@ fn abiCrashMissingErasedArgDescriptor(
     message.str("); supplied keys=");
     message.keyList(supplied_keys);
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashDuplicateErasedArgDescriptor(
@@ -695,7 +691,6 @@ fn abiCrashDuplicateErasedArgDescriptor(
     message.uint(key.descriptor_index);
     message.str(")");
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn layoutIdx(raw: u32) layout_mod.Idx {

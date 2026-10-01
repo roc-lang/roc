@@ -168,9 +168,12 @@ pub const RocOps = extern struct {
     /// Called when an inline `expect` fails, with the UTF-8 message bytes and length.
     roc_expect_failed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
     /// Called when the Roc program crashes (e.g. integer overflow), with the UTF-8 message
-    /// bytes and length. The host must stop execution of the Roc program and not return to it
-    /// (a platform host aborts; the compiler-internal host longjmps out), so it never returns
-    /// to Roc—but the type stays `void` since a longjmp-based host is not statically noreturn.
+    /// bytes and length. The host must stop execution of the Roc program and never return to
+    /// it: a platform host exits the process, and a host that keeps running (like the
+    /// compiler's own hosts) longjmps to a point outside the Roc code it called. Every Roc
+    /// call site follows this call with a trap, so a host that returns anyway terminates the
+    /// process there. The type stays `void` because C cannot spell `noreturn` on a function
+    /// pointer, and a longjmp-based host is not statically noreturn either.
     roc_crashed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
     /// Hosted functions provided by the platform (sorted alphabetically by name).
     /// These are effectful operations like I/O that the platform provides to Type Modules.
@@ -182,13 +185,16 @@ pub const RocOps = extern struct {
     // load from a mutable table and an indirect call on every allocation.
     // An in-process host enters a per-thread `RocOps` and needs the dispatch.
 
-    /// Helper to crash the Roc program. The host does not return control to Roc.
-    pub fn crash(self: *RocOps, msg: []const u8) void {
-        const trace = tracy.trace(@src());
-        defer trace.end();
-
-        if (comptime host_role == .platform) return extern_host.roc_crashed(msg.ptr, msg.len);
-        self.roc_crashed(self, msg.ptr, msg.len);
+    /// Crash the Roc program. The host never returns control to Roc; if it
+    /// returns anyway, the trap after the call terminates the process instead
+    /// of letting the caller run on past a failed operation.
+    pub fn crash(self: *RocOps, msg: []const u8) noreturn {
+        if (comptime host_role == .platform) {
+            extern_host.roc_crashed(msg.ptr, msg.len);
+        } else {
+            self.roc_crashed(self, msg.ptr, msg.len);
+        }
+        @trap();
     }
 
     /// Helper to send debug output to the host.
@@ -246,3 +252,82 @@ pub const RocOps = extern struct {
         self.roc_dealloc(self, ptr, alignment);
     }
 };
+
+/// A host that breaks the `roc_crashed` contract by returning.
+const ReturningCrashHost = struct {
+    fn rocAlloc(_: *RocOps, _: usize, _: usize) callconv(.c) ?*anyopaque {
+        return null;
+    }
+    fn rocDealloc(_: *RocOps, _: *anyopaque, _: usize) callconv(.c) void {}
+    fn rocRealloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
+        return null;
+    }
+    fn rocMessage(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+
+    fn ops() RocOps {
+        return .{
+            .env = undefined,
+            .roc_alloc = &rocAlloc,
+            .roc_dealloc = &rocDealloc,
+            .roc_realloc = &rocRealloc,
+            .roc_dbg = &rocMessage,
+            .roc_expect_failed = &rocMessage,
+            .roc_crashed = &rocMessage,
+            .hosted_fns = emptyHostedFunctions(),
+        };
+    }
+
+    fn divideDecByZero() void {
+        var roc_ops = ops();
+        const dec = @import("dec.zig");
+        _ = dec.RocDec.fromU64(1).div(dec.RocDec.fromU64(0), &roc_ops);
+    }
+
+    fn repeatPastTheAddressSpace() void {
+        var roc_ops = ops();
+        const str = @import("str.zig");
+        _ = str.repeatC(str.RocStr.fromSliceSmall("ab"), ~@as(u64, 0), &roc_ops);
+    }
+};
+
+/// Run `work` in a child process and require that it dies on a trap instead
+/// of exiting normally after its crash.
+fn expectChildTraps(comptime work: fn () void) error{ ForkFailed, WaitFailed, SkipZigTest, TestUnexpectedResult }!void {
+    const std = @import("std");
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag != .linux and !builtin.os.tag.isDarwin()) return error.SkipZigTest;
+
+    const pid = std.c.fork();
+    if (pid < 0) return error.ForkFailed;
+    if (pid == 0) {
+        // The test runner's fault handler would report the trap as a failure
+        // of this test through the parent's pipe; let the kernel end the
+        // child instead.
+        const default_action: std.c.Sigaction = .{
+            .handler = .{ .handler = std.c.SIG.DFL },
+            .mask = std.mem.zeroes(std.c.sigset_t),
+            .flags = 0,
+        };
+        _ = std.c.sigaction(.ILL, &default_action, null);
+        _ = std.c.sigaction(.TRAP, &default_action, null);
+        work();
+        std.c._exit(0);
+    }
+
+    var status: c_int = 0;
+    while (std.c.waitpid(pid, &status, 0) < 0) {
+        if (@as(std.c.E, @enumFromInt(std.c._errno().*)) != .INTR) return error.WaitFailed;
+    }
+    const raw: u32 = @bitCast(status);
+    const signal = raw & 0x7f;
+    // A child that ran on past the crash exits normally, with signal 0.
+    try std.testing.expect(signal == @intFromEnum(std.c.SIG.ILL) or signal == @intFromEnum(std.c.SIG.TRAP));
+}
+
+test "a host returning from roc_crashed traps after Dec division by zero" {
+    try expectChildTraps(ReturningCrashHost.divideDecByZero);
+}
+
+test "a host returning from roc_crashed traps after Str.repeat length overflow" {
+    try expectChildTraps(ReturningCrashHost.repeatPastTheAddressSpace);
+}

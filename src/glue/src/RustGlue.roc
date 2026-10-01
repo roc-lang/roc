@@ -2843,6 +2843,8 @@ generate_runtime_symbol_externs_rust =
 	\\    pub fn roc_realloc(ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void;
 	\\    pub fn roc_dbg(bytes: *const u8, len: usize);
 	\\    pub fn roc_expect_failed(bytes: *const u8, len: usize);
+	\\    /// Must never return: end the process. Roc code traps right after this
+	\\    /// call, so returning terminates the process.
 	\\    pub fn roc_crashed(bytes: *const u8, len: usize);
 	\\}
 	\\

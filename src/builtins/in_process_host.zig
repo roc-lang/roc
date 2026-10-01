@@ -139,6 +139,7 @@ fn symbolExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) v
 
 fn symbolCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     host_abi.extern_host.roc_crashed(bytes, len);
+    @trap();
 }
 
 /// A `RocOps` whose every operation is the process's runtime symbol.
@@ -183,15 +184,13 @@ fn rocExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
 }
 
 fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
-    const o = requireOps();
-    o.roc_crashed(o, bytes, len);
+    requireOps().crash(bytes[0..len]);
 }
 
 fn rocExpectObserved(site: u32, passed: u8) callconv(.c) void {
     const o = requireOps();
     const observer = current_expect_observer orelse {
         o.crash("a test expect ran under a host with no expect observer");
-        unreachable;
     };
     observer(o, site, passed);
 }
