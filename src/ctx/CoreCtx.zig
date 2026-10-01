@@ -50,6 +50,10 @@ pub const VTable = struct {
     /// truncating it if it does.
     writeFile: *const fn (?*anyopaque, std.Io, []const u8, []const u8) WriteError!void,
 
+    /// Produce a file incrementally. Implementations must consume the stream
+    /// before returning; no producer or buffer pointers escape this call.
+    writeFileStream: *const fn (?*anyopaque, std.Io, []const u8, FileStream) WriteError!void = &missingWriteFileStream,
+
     /// Return `true` if a file or directory exists at `path`.
     fileExists: *const fn (?*anyopaque, std.Io, []const u8) bool,
 
@@ -191,6 +195,17 @@ pub fn readFileInto(self: Self, path: []const u8, buffer: []u8) ReadError!usize 
 /// Write `data` to `path`, creating or truncating the file.
 pub fn writeFile(self: Self, path: []const u8, data: []const u8) WriteError!void {
     return self.vtable.writeFile(self.ctx, self.std_io, path, data);
+}
+
+/// A borrowed producer for a file's complete contents.
+pub const FileStream = struct {
+    context: *const anyopaque,
+    write: *const fn (*const anyopaque, *std.Io.Writer) std.Io.Writer.Error!void,
+};
+
+/// Write a producer's bytes without allocating a complete file-sized buffer.
+pub fn writeFileStream(self: Self, path: []const u8, stream: FileStream) WriteError!void {
+    return self.vtable.writeFileStream(self.ctx, self.std_io, path, stream);
 }
 
 /// Return `true` if a file (or directory) exists at `path`.
@@ -515,6 +530,7 @@ const os_vtable = VTable{
     .readFile = &osReadFile,
     .readFileInto = &osReadFileInto,
     .writeFile = &osWriteFile,
+    .writeFileStream = &osWriteFileStream,
     .fileExists = &osFileExists,
     .stat = &osStat,
     .listDir = &osListDir,
@@ -715,6 +731,19 @@ fn osReadFileInto(_: ?*anyopaque, std_io: std.Io, path: []const u8, buffer: []u8
     };
     defer file.close(std_io);
     return file.readPositionalAll(std_io, buffer, 0) catch return error.IoError;
+}
+
+fn missingWriteFileStream(_: ?*anyopaque, _: std.Io, _: []const u8, _: FileStream) WriteError!void {
+    return error.IoError;
+}
+
+fn osWriteFileStream(_: ?*anyopaque, io: std.Io, path: []const u8, stream: FileStream) WriteError!void {
+    const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch return error.IoError;
+    defer file.close(io);
+    var buffer: [8192]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    stream.write(stream.context, &writer.interface) catch return error.IoError;
+    writer.interface.flush() catch return error.IoError;
 }
 
 fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u8) WriteError!void {

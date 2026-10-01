@@ -167,6 +167,31 @@ pub const CacheManager = struct {
         data: []const u8,
         entries_dir: []const u8,
     ) void {
+        self.storeEntry(allocator, kind, cache_key, .{ .bytes = data }, data.len, entries_dir);
+    }
+
+    /// Atomically persist a known-size entry emitted incrementally by its producer.
+    pub fn storeStream(
+        self: *Self,
+        cache_key: [32]u8,
+        stream: CoreCtx.FileStream,
+        size: usize,
+        entries_dir: []const u8,
+    ) void {
+        self.storeEntry(self.allocator, .checked, cache_key, .{ .stream = stream }, size, entries_dir);
+    }
+
+    const EntrySource = union(enum) { bytes: []const u8, stream: CoreCtx.FileStream };
+
+    fn storeEntry(
+        self: *Self,
+        allocator: Allocator,
+        kind: Kind,
+        cache_key: [32]u8,
+        source: EntrySource,
+        size: usize,
+        entries_dir: []const u8,
+    ) void {
         if (!self.config.enabled) return;
 
         self.ensureCacheSubdirWith(allocator, cache_key, entries_dir) catch |err| {
@@ -191,7 +216,11 @@ pub const CacheManager = struct {
         };
         defer allocator.free(temp_path);
 
-        self.roc_ctx.writeFile(temp_path, data) catch |err| {
+        const write_result = switch (source) {
+            .bytes => |data| self.roc_ctx.writeFile(temp_path, data),
+            .stream => |stream| self.roc_ctx.writeFileStream(temp_path, stream),
+        };
+        write_result catch |err| {
             self.roc_ctx.deleteFile(temp_path) catch {};
             self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
             self.recordStoreFailureFor(kind);
@@ -205,7 +234,7 @@ pub const CacheManager = struct {
             return;
         };
 
-        self.recordStoreFor(kind, data.len);
+        self.recordStoreFor(kind, size);
     }
 
     pub fn loadRawBytes(self: *Self, cache_key: [32]u8, entries_dir: []const u8) ?[]const u8 {

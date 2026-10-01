@@ -2932,8 +2932,12 @@ than a silent writer of undefined bytes:
 - *Scrubbable*: undefined bytes or bits exist, but the value itself identifies
   every one of them—a tagged union's discriminant names the live variant, an
   optional's null bit names an empty payload, a narrow scalar's declared width
-  names its value bits. Those are canonicalized into a writer-owned copy; the
-  source is never modified, so a frozen or shared store may be serialized.
+  names its value bits. The writer records the type-specific canonicalization
+  operation with the borrowed source slice. It scrubs the destination when
+  gathering into a buffer, or bounded per-type scratch when streaming to a file.
+  Neither scratch storage nor relocation metadata grows with the number of rows
+  in a column. The source is never modified, so a frozen or shared store may be
+  serialized.
 
 A fixed layout is the author's byte map, so an `extern struct` must declare the
 bytes its alignment adds, as an explicitly zero-defaulted reserved field, and every
@@ -2949,6 +2953,11 @@ safe: their inter-field gaps are scrubbable, but a member whose undefined bytes
 nothing identifies makes the whole type a compile error, exactly as a fixed layout
 would be. A checked store may keep an ergonomic in-memory shape, but not an
 unrepresentable one.
+
+Checked-module cache publication streams the header and the two relocatable
+bodies to a private staging file, then atomically renames it. It never gathers
+another full-entry heap buffer. A failed write or rename removes the staging file
+and records a cache-write failure; partial data is never published as an entry.
 
 Serialization never writes spare capacity. A `SafeMultiList` persists its live
 rows as `std.MultiArrayList`'s own column layout with capacity equal to length, so
