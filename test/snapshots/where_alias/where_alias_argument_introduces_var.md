@@ -82,9 +82,9 @@ render = |value, fmt| value.encode(fmt).finish()
 			(args
 				(p-assign (ident "value"))
 				(p-assign (ident "fmt")))
-			(e-dispatch-call (method "finish") (constraint-fn-var 254)
+			(e-dispatch-call (method "finish") (constraint-fn-var 258)
 				(receiver
-					(e-dispatch-call (method "encode") (constraint-fn-var 251)
+					(e-dispatch-call (method "encode") (constraint-fn-var 255)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))

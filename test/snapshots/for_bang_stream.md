@@ -45,6 +45,7 @@ top_level = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - for_bang_stream.md:14:12:14:15
+EFFECTFUL FUNCTION NAME - for_bang_stream.md:14:1:14:9
 MISSING METHOD - for_bang_stream.md:25:14:25:15
 EFFECTFUL TOP LEVEL VALUE - for_bang_stream.md:31:13:37:2
 # PROBLEMS
@@ -358,7 +359,7 @@ top_level = {
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$total"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 385)
+							(e-dispatch-call (method "plus") (constraint-fn-var 389)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$total"))))
@@ -415,7 +416,7 @@ top_level = {
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$total"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 519)
+							(e-dispatch-call (method "plus") (constraint-fn-var 523)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$total"))))

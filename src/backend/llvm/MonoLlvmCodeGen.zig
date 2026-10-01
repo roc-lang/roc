@@ -4859,6 +4859,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.rocListLenOffset())), self.localLayout(target)),
             .list_capacity => try self.emitListCapacity(target, GuardedList.at(arg_locals, 0)),
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
+            .list_prefetch => try self.emitListPrefetch(arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
             .list_append_unsafe => try self.emitListAppendUnsafe(target, arg_locals),
             .list_concat => try self.emitListConcat(target, arg_locals, unique_args),
@@ -10137,6 +10138,35 @@ pub const MonoLlvmCodeGen = struct {
             .i8,
             builder.intValue(.i8, @intFromEnum(mode)) catch return error.OutOfMemory,
         );
+    }
+
+    /// Hint that the item at an index is about to be read or written. The
+    /// address is computed without an in-bounds claim, since the index need
+    /// not lie inside the list and the hint never touches memory.
+    fn emitListPrefetch(self: *MonoLlvmCodeGen, args: anytype) Error!void {
+        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        if (abi.elem_size == 0) return;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
+        const idx = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
+        const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const addr = wip.gep(.normal, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
+        // Arguments after the address: prepare for a write, keep in every
+        // cache level, data cache.
+        _ = wip.callIntrinsic(
+            .normal,
+            .none,
+            .prefetch,
+            &.{try self.ptrType()},
+            &.{
+                addr,
+                builder.intValue(.i32, 1) catch return error.OutOfMemory,
+                builder.intValue(.i32, 3) catch return error.OutOfMemory,
+                builder.intValue(.i32, 1) catch return error.OutOfMemory,
+            },
+            "",
+        ) catch return error.OutOfMemory;
     }
 
     fn emitListGetUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {

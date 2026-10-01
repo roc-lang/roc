@@ -9614,6 +9614,34 @@ test "check type - polarity - annotated value shares one weak row across uses" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - polarity - a weak value row widened by a use is grounded at its tail" {
+    // `choice` widens `e`'s shared weak row to `[A, Boom]`, so after solving
+    // the annotation's extension is a tag row whose own tail is still open.
+    // The module grounds that tail, so importers see the closed row
+    // `[A, Boom]` and cannot widen it further.
+    const source_lib =
+        \\module [e, choice]
+        \\
+        \\e : [Boom]
+        \\e = Boom
+        \\
+        \\choice = if Bool.True e else A
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try lib_env.typeProblemCount());
+
+    const source_main =
+        \\import Lib
+        \\
+        \\wider : [A, Boom, C]
+        \\wider = Lib.e
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
 test "check type - polarity - a defaulted field use may widen a weak value row" {
     // A defaulted record field's default expression is an ordinary USE SITE,
     // so it may widen the weak row of the value it names—exactly like the

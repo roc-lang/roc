@@ -3,10 +3,11 @@
 //! A loop written with a flag (`$done = Bool.True`) ends an iteration by
 //! jumping to a merge join with a literal tag for the flag and the unchanged
 //! loop state for everything else. The merge join forwards its parameters to
-//! the loop header, whose body immediately switches on the flag and jumps to
-//! the exit. Along that edge the switch outcome is already explicit in the
-//! LIR: the edge constructs the tag. Rewriting the edge to jump to the
-//! selected exit continuation removes the forwarded state from the path, so
+//! the loop header, whose body switches on the flag (or on `bool_not` of it,
+//! for `while !$done`) and exits. Along that edge the switch outcome is
+//! already explicit in the LIR: the edge constructs the tag. Rewriting the
+//! edge to jump to the selected exit continuation removes the forwarded
+//! state from the path, so
 //! a value the exit never reads is no longer live across the iteration's
 //! producers. Without this, ARC must retain loop state across the call that
 //! consumes it on every iteration, and a list in that state is copied each
@@ -14,7 +15,9 @@
 //!
 //! The rewrite is exact. The edge's statements, the forwarding bodies, the
 //! header's prefix before its switch, and the selected arm must have the
-//! declared shapes; the exit continuation must lexically enclose the edge;
+//! declared shapes; the exit continuation must lexically enclose the edge
+//! (a selected arm that is not a bare jump becomes the body of a fresh join
+//! declared around its switch, which encloses an edge inside that switch);
 //! and nothing the exit executes may read a local whose value the rewrite
 //! would change. Any other shape is left unchanged.
 
@@ -52,14 +55,24 @@ const Env = collections.DenseMap(LocalId, Value);
 const Candidate = struct {
     /// The edge's statements in execution order, ending with its jump.
     chain: []CFStmtId,
-    exit: LIR.JoinPointId,
+    exit: Exit,
+};
+
+/// Where the threaded edge jumps.
+const Exit = union(enum) {
+    /// A parameterless join the selected arm jumps to.
+    join: LIR.JoinPointId,
+    /// A selected arm that is not a bare jump. The rewrite declares a fresh
+    /// parameterless join around the switch whose body is this arm, so the
+    /// switch and the edge both jump to it.
+    arm: struct { switch_stmt: CFStmtId, arm: CFStmtId },
 };
 
 /// Rewrite every eligible edge of one procedure. Layouts are not consulted:
 /// only statement structure and explicit tag discriminants decide, where a
 /// literal with the `bool` layout is a payload-free tag whose discriminant is
 /// its value.
-pub fn runProc(store: *LirStore, proc: LIR.LirProcSpecId, allocator: Allocator) ResourceError!void {
+pub fn runProc(store: *LirStore, proc: LIR.LirProcSpecId, allocator: Allocator, joins: *body_clone.JoinParamIndex) ResourceError!void {
     const body = body_clone.rewritableProcBody(store, proc) orelse return;
     // Each rewrite deletes at least one join-parameter write, so the loop
     // runs at most once per such write.
@@ -68,7 +81,7 @@ pub fn runProc(store: *LirStore, proc: LIR.LirProcSpecId, allocator: Allocator) 
         defer arena.deinit();
         var analysis = try Analysis.init(store, body, arena.allocator());
         const candidate = try analysis.findCandidate() orelse return;
-        try analysis.apply(candidate);
+        try analysis.apply(candidate, joins);
     }
 }
 
@@ -179,7 +192,7 @@ const Analysis = struct {
             pending.clearRetainingCapacity();
 
             var cursor = join.body;
-            const step: union(enum) { forward: LIR.JoinPointId, exit: LIR.JoinPointId } = while (true) {
+            const step: union(enum) { forward: LIR.JoinPointId, exit: Exit } = while (true) {
                 const stmt = self.store.getCFStmt(cursor);
                 if (stmt == .assign_ref) {
                     const assign = stmt.assign_ref;
@@ -205,6 +218,20 @@ const Analysis = struct {
                         .opaque_value);
                     try changed.put(stmt.assign_literal.target, {});
                     cursor = stmt.assign_literal.next;
+                } else if (stmt == .assign_low_level and stmt.assign_low_level.op == .bool_not) {
+                    const assign = stmt.assign_low_level;
+                    const args = self.store.getLocalSpan(assign.args);
+                    if (args.len != 1) return null;
+                    try env.put(assign.target, switch (self.resolve(&env, GuardedList.at(args, 0))) {
+                        .tag => |discriminant| switch (discriminant) {
+                            0 => .{ .tag = 1 },
+                            1 => .{ .tag = 0 },
+                            else => return null,
+                        },
+                        .discriminant, .fields, .local, .opaque_value => .opaque_value,
+                    });
+                    try changed.put(assign.target, {});
+                    cursor = assign.next;
                 } else if (stmt == .join) {
                     cursor = stmt.join.remainder;
                 } else if (stmt == .set_local) {
@@ -222,8 +249,9 @@ const Analysis = struct {
                     };
                     const arm = self.selectedArm(stmt.switch_stmt, discriminant);
                     const arm_stmt = self.store.getCFStmt(arm);
-                    if (arm_stmt != .jump) return null;
-                    break .{ .exit = arm_stmt.jump.target };
+                    if (arm_stmt == .jump) break .{ .exit = .{ .join = arm_stmt.jump.target } };
+                    if (self.shared.contains(arm)) return null;
+                    break .{ .exit = .{ .arm = .{ .switch_stmt = cursor, .arm = arm } } };
                 } else {
                     return null;
                 }
@@ -234,12 +262,20 @@ const Analysis = struct {
             }
         };
 
-        if (exit == first_target) return null;
-        const exit_stmt = self.joins.get(exit) orelse return null;
-        const exit_join = self.store.getCFStmt(exit_stmt).join;
-        if (!plainJoin(exit_join) or exit_join.params.len != 0) return null;
-        if (try self.reachableOutside(chain[0], exit_stmt)) return null;
-        if (try self.exitReads(exit_join.body, &changed)) return null;
+        switch (exit) {
+            .join => |exit_id| {
+                if (exit_id == first_target) return null;
+                const exit_stmt = self.joins.get(exit_id) orelse return null;
+                const exit_join = self.store.getCFStmt(exit_stmt).join;
+                if (!plainJoin(exit_join) or exit_join.params.len != 0) return null;
+                if (try self.reachableOutside(chain[0], exit_stmt)) return null;
+                if (try self.exitReads(exit_join.body, &changed)) return null;
+            },
+            .arm => |arm| {
+                if (try self.reachableOutside(chain[0], arm.switch_stmt)) return null;
+                if (try self.exitReads(arm.arm, &changed)) return null;
+            },
+        }
         return .{ .chain = chain, .exit = exit };
     }
 
@@ -344,7 +380,11 @@ const Analysis = struct {
     /// Replace the edge with its surviving statements followed by a jump to
     /// the exit. Parameter writes go, and so does every edge definition left
     /// unread once they have.
-    fn apply(self: *Analysis, candidate: Candidate) ResourceError!void {
+    fn apply(self: *Analysis, candidate: Candidate, joins: *body_clone.JoinParamIndex) ResourceError!void {
+        const exit = switch (candidate.exit) {
+            .join => |exit_id| exit_id,
+            .arm => |arm| try self.outlineArm(arm.switch_stmt, arm.arm, joins),
+        };
         const chain = candidate.chain;
         const removed = try self.allocator.alloc(bool, chain.len);
         @memset(removed, false);
@@ -368,7 +408,7 @@ const Analysis = struct {
         }
 
         const old_jump = chain[chain.len - 1];
-        var next = try self.store.addCFStmt(.{ .jump = .{ .target = candidate.exit } }, self.store.stmtOrigin(old_jump));
+        var next = try self.store.addCFStmt(.{ .jump = .{ .target = exit } }, self.store.stmtOrigin(old_jump));
         index = chain.len - 1;
         while (index > 0) {
             index -= 1;
@@ -377,6 +417,28 @@ const Analysis = struct {
             next = try self.store.addCFStmt(stmt, self.store.stmtOrigin(chain[index]));
         }
         try self.store.replaceCFStmt(chain[0], self.store.getCFStmt(next), self.store.stmtOrigin(next));
+    }
+
+    /// Declare a fresh parameterless join around `switch_id` whose body is
+    /// `arm`, and make the switch jump to it where it ran `arm`.
+    fn outlineArm(self: *Analysis, switch_id: CFStmtId, arm: CFStmtId, joins: *body_clone.JoinParamIndex) ResourceError!LIR.JoinPointId {
+        const exit = joins.freshJoinPoint();
+        const origin = self.store.stmtOrigin(switch_id);
+        var switch_stmt = self.store.getCFStmt(switch_id).switch_stmt;
+        const enter = try self.store.addCFStmt(.{ .jump = .{ .target = exit } }, self.store.stmtOrigin(arm));
+        const old_branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, old_branches.len);
+        for (branches, 0..) |*branch, index| {
+            branch.* = GuardedList.at(old_branches, index);
+            if (branch.body == arm) branch.body = enter;
+        }
+        switch_stmt.branches = try self.store.addCFSwitchBranches(branches);
+        if (switch_stmt.default_branch == arm) switch_stmt.default_branch = enter;
+        const remainder = try self.store.addCFStmt(.{ .switch_stmt = switch_stmt }, origin);
+        const join: @FieldType(LIR.CFStmt, "join") = .{ .id = exit, .params = .empty(), .body = arm, .remainder = remainder };
+        try self.store.replaceCFStmt(switch_id, .{ .join = join }, origin);
+        try joins.record(join);
+        return exit;
     }
 };
 
@@ -456,9 +518,17 @@ const FlagLoop = struct {
     done_arm: CFStmtId,
     exit: LIR.JoinPointId,
     merge: LIR.JoinPointId,
+    first_fresh_join: u32,
 
     fn deinit(self: *FlagLoop) void {
         self.store.deinit();
+    }
+
+    fn run(self: *FlagLoop) ResourceError!void {
+        var joins = body_clone.JoinParamIndex.init(testing.allocator);
+        defer joins.deinit();
+        joins.next_join_point = self.first_fresh_join;
+        try runProc(&self.store, self.proc, testing.allocator, &joins);
     }
 
     /// The join the `Done` arm finally jumps to, and whether it still writes
@@ -484,7 +554,7 @@ const FlagLoop = struct {
 
 /// `while !$done { match step($state) { Done => $done = True, Next(s) => { $state = s; $steps += 1 } } }`
 /// lowered with the loop exit reading either `$steps` or `$done`.
-fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_literal }) Allocator.Error!FlagLoop {
+fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_literal }, header_test: enum { discriminant, bool_not, bool_not_inline_exit }) Allocator.Error!FlagLoop {
     var store = LirStore.init(testing.allocator);
     errdefer store.deinit();
     var joins = body_clone.JoinParamIndex.init(testing.allocator);
@@ -566,18 +636,53 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
         .remainder = step,
     } }, .test_fixture);
 
-    // Header: `while !$done`.
+    // Header: `while !$done`, either testing the flag's discriminant or
+    // testing `bool_not` of the flag. With `bool_not_inline_exit` the switch
+    // runs the loop body and the exit in its arms, with no joins for either.
     const flag_copy = try local(&store, .bool);
-    const flag_discriminant = try local(&store, .u32);
-    const test_flag = try store.addCFStmt(.{ .switch_stmt = .{
-        .cond = flag_discriminant,
-        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = try store.addCFStmt(.{ .jump = .{ .target = exit } }, .test_fixture) }}),
-        .default_branch = try store.addCFStmt(.{ .jump = .{ .target = loop_body } }, .test_fixture),
-    } }, .test_fixture);
-    const read_discriminant = try store.addCFStmt(.{ .assign_ref = .{ .target = flag_discriminant, .op = .{ .discriminant = .{ .source = flag_copy } }, .next = test_flag } }, .test_fixture);
-    const copy_flag = try store.addCFStmt(.{ .assign_ref = .{ .target = flag_copy, .op = .{ .local = done }, .next = read_discriminant } }, .test_fixture);
-    const body_join = try store.addCFStmt(.{ .join = .{ .id = loop_body, .params = .empty(), .body = merge_join, .remainder = copy_flag } }, .test_fixture);
-    const exit_join = try store.addCFStmt(.{ .join = .{ .id = exit, .params = .empty(), .body = exit_body, .remainder = body_join } }, .test_fixture);
+    const header_entry = switch (header_test) {
+        .discriminant => blk: {
+            const flag_discriminant = try local(&store, .u32);
+            const test_flag = try store.addCFStmt(.{ .switch_stmt = .{
+                .cond = flag_discriminant,
+                .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = try store.addCFStmt(.{ .jump = .{ .target = exit } }, .test_fixture) }}),
+                .default_branch = try store.addCFStmt(.{ .jump = .{ .target = loop_body } }, .test_fixture),
+            } }, .test_fixture);
+            const read_discriminant = try store.addCFStmt(.{ .assign_ref = .{ .target = flag_discriminant, .op = .{ .discriminant = .{ .source = flag_copy } }, .next = test_flag } }, .test_fixture);
+            break :blk try store.addCFStmt(.{ .assign_ref = .{ .target = flag_copy, .op = .{ .local = done }, .next = read_discriminant } }, .test_fixture);
+        },
+        .bool_not, .bool_not_inline_exit => blk: {
+            const not_done = try local(&store, .bool);
+            const test_flag = try store.addCFStmt(.{ .switch_stmt = .{
+                .cond = not_done,
+                .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = if (header_test == .bool_not_inline_exit)
+                    merge_join
+                else
+                    try store.addCFStmt(.{ .jump = .{ .target = loop_body } }, .test_fixture) }}),
+                .default_branch = if (header_test == .bool_not_inline_exit)
+                    exit_body
+                else
+                    try store.addCFStmt(.{ .jump = .{ .target = exit } }, .test_fixture),
+            } }, .test_fixture);
+            const negate = try store.addCFStmt(.{ .assign_low_level = .{
+                .target = not_done,
+                .op = .bool_not,
+                .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+                .args = try store.addLocalSpan(&.{flag_copy}),
+                .next = test_flag,
+            } }, .test_fixture);
+            break :blk try store.addCFStmt(.{ .assign_ref = .{ .target = flag_copy, .op = .{ .local = done }, .next = negate } }, .test_fixture);
+        },
+    };
+    const exit_join = if (header_test == .bool_not_inline_exit)
+        header_entry
+    else
+        try store.addCFStmt(.{ .join = .{
+            .id = exit,
+            .params = .empty(),
+            .body = exit_body,
+            .remainder = try store.addCFStmt(.{ .join = .{ .id = loop_body, .params = .empty(), .body = merge_join, .remainder = header_entry } }, .test_fixture),
+        } }, .test_fixture);
 
     // Entry.
     const enter = try store.addCFStmt(.{ .jump = .{ .target = header } }, .test_fixture);
@@ -605,32 +710,68 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
         .body = header_join,
         .ret_layout = store.getLocal(exit_value).layout_idx,
     }, .none);
-    return .{ .store = store, .proc = proc, .done_arm = done_arm, .exit = exit, .merge = merge };
+    return .{ .store = store, .proc = proc, .done_arm = done_arm, .exit = exit, .merge = merge, .first_fresh_join = joins.next_join_point };
 }
 
 test "known tag jump sends a flag loop's exit edge straight to the exit" {
-    var fixture = try flagLoop(.steps, .tag);
+    var fixture = try flagLoop(.steps, .tag, .discriminant);
     defer fixture.deinit();
-    try runProc(&fixture.store, fixture.proc, testing.allocator);
+    try fixture.run();
     const edge = fixture.doneEdge();
     try testing.expectEqual(fixture.exit, edge.target);
     try testing.expect(!edge.writes_params);
 }
 
 test "known tag jump keeps the edge when the exit reads the flag it sets" {
-    var fixture = try flagLoop(.done, .tag);
+    var fixture = try flagLoop(.done, .tag, .discriminant);
     defer fixture.deinit();
-    try runProc(&fixture.store, fixture.proc, testing.allocator);
+    try fixture.run();
     const edge = fixture.doneEdge();
     try testing.expectEqual(fixture.merge, edge.target);
     try testing.expect(edge.writes_params);
 }
 
 test "known tag jump reads a bool literal flag as the tag it is" {
-    var fixture = try flagLoop(.steps, .bool_literal);
+    var fixture = try flagLoop(.steps, .bool_literal, .discriminant);
     defer fixture.deinit();
-    try runProc(&fixture.store, fixture.proc, testing.allocator);
+    try fixture.run();
     const edge = fixture.doneEdge();
     try testing.expectEqual(fixture.exit, edge.target);
     try testing.expect(!edge.writes_params);
+}
+
+test "known tag jump evaluates bool_not of a known flag in the loop header" {
+    var fixture = try flagLoop(.steps, .tag, .bool_not);
+    defer fixture.deinit();
+    try fixture.run();
+    const edge = fixture.doneEdge();
+    try testing.expectEqual(fixture.exit, edge.target);
+    try testing.expect(!edge.writes_params);
+}
+
+test "known tag jump keeps a bool_not header edge when the exit reads the flag it sets" {
+    var fixture = try flagLoop(.done, .tag, .bool_not);
+    defer fixture.deinit();
+    try fixture.run();
+    const edge = fixture.doneEdge();
+    try testing.expectEqual(fixture.merge, edge.target);
+    try testing.expect(edge.writes_params);
+}
+
+test "known tag jump outlines an inline exit arm into a join the edge jumps to" {
+    var fixture = try flagLoop(.steps, .tag, .bool_not_inline_exit);
+    defer fixture.deinit();
+    try fixture.run();
+    const edge = fixture.doneEdge();
+    try testing.expectEqual(@as(LIR.JoinPointId, @enumFromInt(fixture.first_fresh_join)), edge.target);
+    try testing.expect(!edge.writes_params);
+}
+
+test "known tag jump keeps an inline exit arm in place when the exit reads the flag it sets" {
+    var fixture = try flagLoop(.done, .tag, .bool_not_inline_exit);
+    defer fixture.deinit();
+    try fixture.run();
+    const edge = fixture.doneEdge();
+    try testing.expectEqual(fixture.merge, edge.target);
+    try testing.expect(edge.writes_params);
 }

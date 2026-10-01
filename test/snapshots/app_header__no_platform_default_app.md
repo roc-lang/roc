@@ -80,7 +80,7 @@ main! = |_args| {
 				(p-assign (ident "_args")))
 			(e-block
 				(s-expr
-					(e-call (constraint-fn-var 242)
+					(e-call (constraint-fn-var 246)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
 						(e-string

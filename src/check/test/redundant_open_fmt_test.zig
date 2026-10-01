@@ -244,6 +244,40 @@ test "redundant open rows - annotation-only definition outside an app" {
     , .formatter_subset);
 }
 
+test "redundant open rows - destructured top-level literals in an app" {
+    // Can attaches a top-level annotation to the def a destructured literal
+    // splits off for that name. A value keeps its `..`; the formatter keeps
+    // a function's too, since it does not decide which literal field a name
+    // binds.
+    try expectFormatterMatchesChecker(
+        \\app [main] { pf: platform "platform.roc" }
+        \\
+        \\e : [Boom, ..]
+        \\(e, n) = (Boom, 1)
+        \\
+        \\f : Str -> [A, ..]
+        \\{ f, m } = { f: |_| A, m: 2 }
+        \\
+        \\main = (e, n, f, m)
+    , .formatter_subset);
+}
+
+test "redundant open rows - destructuring that does not bind the name in an app" {
+    // The destructured literal binds neither annotated name, so both
+    // annotations are annotation-only definitions.
+    try expectFormatterMatchesChecker(
+        \\app [main] { pf: platform "platform.roc" }
+        \\
+        \\todo : Str -> [A, ..]
+        \\(x, y) = (1, 2)
+        \\
+        \\later : Str -> [B, ..]
+        \\{ a, b } = { a: 1, b: 2 }
+        \\
+        \\main = (x, y, a, b)
+    , .exact);
+}
+
 test "redundant open rows - builtin function-shaped formals force output at input uses" {
     try expectFormatterMatchesChecker(
         \\iter : Iter([E, ..]) -> Str

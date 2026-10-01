@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=? directly inside an inline expect in a function body is a compile error, because optimized builds remove inline expects
+description=? directly inside an inline expect in a function body keeps normal early-return semantics (propagates the Err out of the enclosing function)
 type=snippet
 ~~~
 # SOURCE
@@ -17,7 +17,7 @@ g = |x| {
 }
 ~~~
 # EXPECTED
-TRY OPERATOR IN EXPECT - question_in_inline_expect.md:8:9:8:14
+NIL
 # PROBLEMS
 ~~~clojure
 (reports
@@ -149,7 +149,7 @@ g = |x| {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 297)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 301)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -184,7 +184,7 @@ g = |x| {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 330)
+										(e-call (constraint-fn-var 334)
 											(e-lookup-local
 												(p-assign (ident "f")))
 											(e-lookup-local

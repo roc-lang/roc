@@ -316,6 +316,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("u8_list_get_unsafe")) |ident| {
         try low_level_map.put(ident, .list_get_unsafe);
     }
+    if (env.common.findIdent("list_prefetch")) |ident| {
+        try low_level_map.put(ident, .list_prefetch);
+    }
     if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
         try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
     }
@@ -324,6 +327,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("list_reserve")) |list_reserve_ident| {
         try low_level_map.put(list_reserve_ident, .list_reserve);
+    }
+    if (env.common.findIdent("Builtin.Bool.not")) |ident| {
+        try low_level_map.put(ident, .bool_not);
     }
     if (env.common.findIdent("bool_likely")) |ident| {
         try low_level_map.put(ident, .bool_likely);

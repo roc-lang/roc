@@ -69,7 +69,8 @@ run! = |input| {
     _ = flag_return(step, n)
     return_allocs = Host.alloc_count!() - before_return
     # Growing the list to 1024 elements takes a handful of allocations;
-    # copying it on every step takes one per element.
-    linear = flag_allocs < 64 and return_allocs < 64
+    # copying it on every step takes one per element. Negating here as well
+    # as in `flag` means `!` is not used only once in the program.
+    linear = !(flag_allocs >= 64 or return_allocs >= 64)
     "allocations: ${flag_allocs.to_str()} ${return_allocs.to_str()}, linear: ${if linear "yes" else "no"}"
 }

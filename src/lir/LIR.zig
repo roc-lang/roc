@@ -1640,6 +1640,12 @@ pub const LirProcSpec = struct {
     rc_ret_unique: bool = false,
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: U32Span = U32Span.empty(),
+    /// The inline plan inlines this proc's body at its direct calls, so it has
+    /// a procedure only where a call could not inline it or it is a value. A
+    /// program that takes a cache hit for it before inlining (a pack program
+    /// takes hits during specialization) could not inline it, so the object
+    /// cache never offers it.
+    inlined_at_calls: bool = false,
     /// Set by ARC on a solved base proc when a call to it may demand an
     /// ownership variant emitted from its body (an owned field take, outcome
     /// restitution, a same-SCC tail transfer, or, under mode specialization,
