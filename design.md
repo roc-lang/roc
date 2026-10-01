@@ -6605,15 +6605,21 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
   structs, and writes of the target join's parameters ending in its jump, and
   every statement in the run has exactly one structural predecessor;
 - each join it passes through has ordinary parameters only, and its body
-  consists of local aliases, discriminant reads, field reads, literals, join
-  declarations, and writes of the next join's parameters before its jump,
-  until one body reaches a switch whose condition is a known discriminant of
+  consists of local aliases, discriminant reads, field reads, literals,
+  `bool_not` of a known two-variant tag (which selects the other variant; `!`
+  is `Bool.not`, which is the `bool_not` low-level, so `while !$done` tests
+  this), join declarations, and writes of the next join's parameters before
+  its jump, until one body reaches a switch whose condition is a known discriminant of
   a tag built on the edge (directly or through a tag bound once), and whose
-  selected arm is a bare jump to a parameterless join. A literal with the
+  selected arm is a bare jump to a parameterless join or code that runs in
+  place (which the rewrite moves into the body of a fresh parameterless join
+  declared around that switch, so the switch and the edge both jump to it;
+  `while !$done` exits through such an arm). A literal with the
   `bool` layout is such a tag, with its value as the discriminant: lowering
   writes a payload-free two-variant union as that byte, which is how a
   compile-time-known `Bool.True` reaches the edge;
-- that exit join lexically encloses the edge, so the new jump is in scope;
+- that exit join (or, for an arm, its switch) lexically encloses the edge,
+  so the new jump is in scope;
 - nothing the exit executes, following its jumps into join bodies, reads a
   definition the threaded path skips or a parameter the edge would have
   changed. Parameters the edge passes their own current value are unchanged.
