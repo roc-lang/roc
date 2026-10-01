@@ -28945,7 +28945,20 @@ const SingleSourceCalls = struct {
         const procedure = switch (ref) {
             .top_level_proc, .promoted_top_level_proc => |procedure| procedure,
             .platform_required_proc => |required| required.procedure,
-            else => return null,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            => return null,
         };
         const binding = switch (procedure.binding) {
             .top_level => |binding| binding,
@@ -28965,7 +28978,7 @@ const SingleSourceCalls = struct {
     fn dispatchTemplate(self: SingleSourceCalls, plan: static_dispatch.StaticDispatchCallPlan) ?canonical.CheckedProcedureTemplateId {
         const direct = switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| direct,
-            else => return null,
+            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
         };
         return switch (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind) {
             .procedure => |procedure| switch (procedure.runtime_target) {
