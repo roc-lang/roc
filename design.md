@@ -5687,12 +5687,12 @@ for proven small call-through and low-level wrappers even when they have multipl
 direct uses.
 
 Under `.wrappers_and_source_single_use`, how many callers a whole program has
-plays no part. Checking publishes, per module, the procedure templates its
+plays no part. Checking outputs, per module, the procedure templates its
 source calls at exactly one site and never uses as a value, among those no
 other module can call: promoted local procedures, and source definitions that
 are neither exposed nor methods, since another module can dispatch to any
 method (`CheckedProcedureTemplateTable.single_source_call_templates`).
-Monotype stamps the fact on each function template, and a capture-free body
+Monotype stamps the flag on each function template, and a capture-free body
 without a procedure-relative return that has it is a source-single-use
 candidate. Every call to it in any program is that one site, lowered in some
 specialization of the function containing it, so lowering inlines the call
@@ -15728,10 +15728,10 @@ general specialization, a position with a uniqueness seed or a borrowed
 return lent by a borrowed position. A pack never offers a marked
 procedure, so a warm build lowers it from source and demands the same
 variants the cold build did. An entry it does offer carries its base
-procedure's uniqueness facts with the signature (`read_only_params`,
+procedure's uniqueness data with the signature (`read_only_params`,
 `ret_unique`, `ret_unique_fields`, and the conditional return rows), and the
 linking program's ARC adopts them as fixed: settlement keeps a pinned
-procedure's facts rather than inferring them, so callers of a cached
+procedure's uniqueness data rather than inferring it, so callers of a cached
 procedure prove exactly the uniqueness they would against its body.
 
 Every program must lower a procedure an entry offers to the same LIR, since
@@ -16544,14 +16544,14 @@ host-visibility seed.
 Only optimized builds (`--opt=speed` and `--opt=size`) run the analysis
 (`thread_confined_rc`). Dev builds, compile-time evaluation, and the
 interpreter emit atomic count updates for every allocation and record no
-visibility facts. Confinement is a whole-program fact about a procedure's
+visibility data. Confinement is a whole-program property of a procedure's
 callers, and object-cache entries are compiled once and linked into
 programs whose callers differ: an entry compiled with plain updates on a
 confined parameter would be unsound in a program that passes it a
 host-visible value, and its callers could not match a cold build's
 confinement either. Uncontended atomic updates cost dev programs little,
 and the analysis itself is a negligible share of ARC, so dev takes the
-always-sound answer instead of carrying confinement facts in the cache.
+always-sound answer instead of carrying confinement data in the cache.
 
 ### Uniqueness Inference
 
