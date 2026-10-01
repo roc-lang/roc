@@ -378,6 +378,8 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "completion handler returns I64 members after I64 dot", .run = completionHandlerReturnsI64MembersAfterI64Dot },
     .{ .name = "completion handler returns Json members after Json dot", .run = completionHandlerReturnsJsonMembersAfterJsonDot },
     .{ .name = "completion handler returns Iter members after Iter dot", .run = completionHandlerReturnsIterMembersAfterIterDot },
+    .{ .name = "completion handler returns qualified builtin members", .run = completionHandlerReturnsQualifiedBuiltinMembers },
+    .{ .name = "completion handler returns SIMD builtin members", .run = completionHandlerReturnsSimdBuiltinMembers },
     .{ .name = "completion handler returns List module members after List dot", .run = completionHandlerReturnsListModuleMembersAfterListDot },
     .{ .name = "completion handler returns completion list in block scope", .run = completionHandlerReturnsLocalVariablesInBlockScope },
     .{ .name = "completion handler returns completion list in lambda body", .run = completionHandlerReturnsLambdaParameters },
@@ -3057,7 +3059,9 @@ pub fn completionHandlerReturnsModuleNamesInExpressionContext() integration_spec
     var response = try responseById(allocator, responses, 2);
     defer response.deinit();
     const items = try completionItems(try response.result());
-    try expectCompletionLabels(items, &.{ "Str", "List", "Num" });
+    try expectCompletionLabels(items, &.{ "Str", "List", "Num", "Encoding", "Json", "Hasher", "Utf8Problem", "U8x16", "Stream" });
+    try std.testing.expect(!hasCompletionLabel(items, "JsonState"));
+    try std.testing.expect(!hasCompletionLabel(items, "JsonEncoding"));
 }
 
 /// Verifies completions include type names after a type annotation colon.
@@ -3147,7 +3151,8 @@ pub fn completionHandlerReturnsTypesAfterColon() integration_spec.SpecError!void
     var response = try responseById(allocator, responses, 2);
     defer response.deinit();
     const items = try completionItems(try response.result());
-    try expectCompletionLabels(items, &.{ "Str", "U64", "Bool" });
+    try expectCompletionLabels(items, &.{ "Str", "U64", "Bool", "U8x16", "Json", "Encoding", "Hasher", "Utf8Problem" });
+    try std.testing.expect(!hasCompletionLabel(items, "JsonState"));
 }
 
 /// Opens a document ending in `x = <type_name>.` and checks that completing
@@ -3256,6 +3261,17 @@ pub fn completionHandlerReturnsJsonMembersAfterJsonDot() integration_spec.SpecEr
 /// `Iter` is a top-level builtin type that was missing from the builtin type list.
 pub fn completionHandlerReturnsIterMembersAfterIterDot() integration_spec.SpecError!void {
     try expectBuiltinTypeMembersAfterDot("Iter", &.{"single"});
+}
+
+/// Qualified container paths share the short builtin name's exact owner.
+pub fn completionHandlerReturnsQualifiedBuiltinMembers() integration_spec.SpecError!void {
+    try expectBuiltinTypeMembersAfterDot("Num.I64", &.{ "to_str", "abs" });
+    try expectBuiltinTypeMembersAfterDot("Encoding.Json", &.{"parse_null"});
+}
+
+/// SIMD builtin names come from the compiler registry rather than an LSP list.
+pub fn completionHandlerReturnsSimdBuiltinMembers() integration_spec.SpecError!void {
+    try expectBuiltinTypeMembersAfterDot("U8x16", &.{"splat"});
 }
 
 /// Verifies completions include `List` module members after `List.`.

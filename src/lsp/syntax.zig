@@ -22,7 +22,6 @@ const BuildSession = @import("build_session.zig").BuildSession;
 const cir_queries = @import("cir_queries.zig");
 const module_lookup = @import("module_lookup.zig");
 const completion_context = @import("completion/context.zig");
-const completion_builtins = @import("completion/builtins.zig");
 const completion_builder = @import("completion/builder.zig");
 const BuildEnvHandle = @import("build_env_handle.zig").BuildEnvHandle;
 const doc_comments = @import("doc_comments.zig");
@@ -1367,7 +1366,7 @@ pub const SyntaxChecker = struct {
                 module_name[dot_pos + 1 ..]
             else
                 module_name;
-            if (completion_builtins.isBuiltinType(base_name)) {
+            if (CIR.isBuiltinType(base_name)) {
                 return env.builtin_modules.builtin_module.env;
             }
         }
@@ -1389,7 +1388,7 @@ pub const SyntaxChecker = struct {
             module_name;
 
         // Check builtins first
-        if (completion_builtins.isBuiltinType(base_name)) {
+        if (CIR.isBuiltinType(base_name)) {
             return env.builtin_modules.builtin_module.env;
         }
 
@@ -1709,12 +1708,12 @@ pub const SyntaxChecker = struct {
                     const suffix = region_text[dot_pos + 1 ..];
                     const dot_offset = lookup.region.start.offset + @as(u32, @intCast(dot_pos));
                     if (target_offset < dot_offset) {
-                        if (completion_builtins.isBuiltinType(prefix)) {
+                        if (CIR.isBuiltinType(prefix)) {
                             return self.findBuiltinDefinition(prefix, null, oom);
                         }
                         return self.findDefinitionInModule(build_env, doc_path, module_name, null, oom);
                     } else {
-                        if (completion_builtins.isBuiltinType(prefix)) {
+                        if (CIR.isBuiltinType(prefix)) {
                             return self.findBuiltinDefinition(prefix, suffix, oom);
                         }
                     }
@@ -1736,12 +1735,12 @@ pub const SyntaxChecker = struct {
                         const suffix = region_text[dot_pos + 1 ..];
                         const dot_offset = expr_region.start.offset + @as(u32, @intCast(dot_pos));
                         if (target_offset < dot_offset) {
-                            if (completion_builtins.isBuiltinType(prefix)) {
+                            if (CIR.isBuiltinType(prefix)) {
                                 return self.findBuiltinDefinition(prefix, null, oom);
                             }
                             return self.findDefinitionInModule(build_env, doc_path, module_name, null, oom);
                         } else {
-                            if (completion_builtins.isBuiltinType(prefix)) {
+                            if (CIR.isBuiltinType(prefix)) {
                                 return self.findBuiltinDefinition(prefix, suffix, oom);
                             }
                         }
@@ -2393,14 +2392,14 @@ pub const SyntaxChecker = struct {
             if (std.mem.find(u8, member, ".")) |dot_pos| {
                 const prefix = member[0..dot_pos];
                 const suffix = member[dot_pos + 1 ..];
-                if (!is_pkg_qualified and completion_builtins.isBuiltinType(prefix)) {
+                if (!is_pkg_qualified and CIR.isBuiltinType(prefix)) {
                     return self.findBuiltinDefinition(prefix, suffix, oom);
                 }
             }
         }
 
         // Check if this is a builtin type - use embedded Builtin.roc source
-        if (!is_pkg_qualified and completion_builtins.isBuiltinType(base_name)) {
+        if (!is_pkg_qualified and CIR.isBuiltinType(base_name)) {
             self.logDebug(.build, "[DEF] '{s}' is a builtin type", .{base_name});
             return self.findBuiltinDefinition(base_name, member_name, oom);
         }
@@ -2412,7 +2411,7 @@ pub const SyntaxChecker = struct {
                     const suffix = member[dot_pos + 1 ..];
                     return self.findBuiltinDefinition(prefix, suffix, oom);
                 }
-                if (completion_builtins.isBuiltinType(member)) {
+                if (CIR.isBuiltinType(member)) {
                     return self.findBuiltinDefinition(member, null, oom);
                 }
             }
@@ -2519,7 +2518,7 @@ pub const SyntaxChecker = struct {
                 return self.findModuleByName(build_env, doc_path, type_name, oom);
             },
             .builtin => {
-                if (completion_builtins.isBuiltinType(type_name)) {
+                if (CIR.isBuiltinType(type_name)) {
                     return self.findBuiltinDefinition(type_name, null, oom);
                 }
                 return self.findModuleByName(build_env, doc_path, type_name, oom);
@@ -3643,23 +3642,10 @@ pub const SyntaxChecker = struct {
     /// Resolve a module alias to its real module name using import statements.
     /// Returns the input name if no alias match is found.
     fn resolveModuleAlias(module_env: *ModuleEnv, name: []const u8) []const u8 {
-        if (std.mem.eql(u8, module_env.module_name, name)) return name;
-
-        const import_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-        for (import_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getSourceStatement(stmt_idx);
-            if (stmt != .s_import) continue;
-
-            const import_stmt = stmt.s_import;
-            if (import_stmt.alias_tok) |alias_tok| {
-                const alias_name = module_env.common.idents.getText(alias_tok);
-                if (std.mem.eql(u8, alias_name, name)) {
-                    return module_env.common.idents.getText(import_stmt.module_name_tok);
-                }
-            }
-        }
-
-        return name;
+        return switch (module_lookup.resolveSourceNamespaceRoot(module_env, name)) {
+            .imported => |import_name| import_name,
+            .local, .unbound => name,
+        };
     }
 
     /// Resolve a local binding's type var for chained access completion.
@@ -3688,7 +3674,7 @@ pub const SyntaxChecker = struct {
 
     /// Find the module env that should back module member resolution.
     fn findModuleEnvForCompletion(module_lookup_env: *BuildEnv, env: *BuildEnv, module_name: []const u8) ?*ModuleEnv {
-        if (completion_builtins.isBuiltinType(module_name)) {
+        if (CIR.isBuiltinType(module_name)) {
             return env.builtin_modules.builtin_module.env;
         }
 
@@ -3974,12 +3960,7 @@ pub const SyntaxChecker = struct {
         switch (context) {
             .after_module_dot => |module_name| {
                 self.logDebug(.completion, "completion: after_module_dot for '{s}'", .{module_name});
-                var resolved_module_name = module_name;
-                if (module_env_opt) |module_env| {
-                    resolved_module_name = resolveModuleAlias(module_env, module_name);
-                }
-                // Get completions from the specified module
-                try builder.addModuleMemberCompletions(module_lookup_env, resolved_module_name, module_env_opt);
+                try builder.addModuleMemberCompletions(module_lookup_env, module_name, module_env_opt);
 
                 // Always add tag completions for nominal types, not just as fallback.
                 // This handles e.g. `Record.` where Record is both a module and a nominal type.
@@ -3988,8 +3969,9 @@ pub const SyntaxChecker = struct {
                     if (added) {} else {}
                 }
             },
-            .after_value_dot => |value_dot| {
+            .after_value_dot => |value_dot| namespace_completion: {
                 self.logDebug(.completion, "completion: after_value_dot for '{s}' at offset {d}", .{ value_dot.access_chain, value_dot.receiver_segment_start });
+                if (try builder.addBuiltinNamespaceCompletions(env.builtin_modules.builtin_module.env, module_env_opt, value_dot.access_chain)) break :namespace_completion;
                 if (module_env_opt) |module_env| {
                     var chain_resolved = false;
                     var chain_oom: ?Allocator.Error = null;

@@ -132,6 +132,8 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "record field completion works for modules", .run = recordFieldCompletionWorksForModules },
     .{ .name = "record field completion in sub module", .run = recordFieldCompletionInSubModule },
     .{ .name = "record field completion works for nested nominal submodule", .run = recordFieldCompletionWorksForNestedNominalSubmodule },
+    .{ .name = "builtin namespace completion excludes unrelated nested owners", .run = builtinNamespaceCompletionExcludesUnrelatedNestedOwners },
+    .{ .name = "local namespace completion respects builtin shadowing", .run = localNamespaceCompletionRespectsBuiltinShadowing },
     .{ .name = "record field completion works", .run = recordFieldCompletionWorks },
     .{ .name = "optional record field completion inserts optional access", .run = optionalRecordFieldCompletionInsertsOptionalAccess },
     .{ .name = "tuple index completion works", .run = tupleIndexCompletionWorks },
@@ -484,6 +486,58 @@ pub fn recordFieldCompletionWorksForNestedNominalSubmodule() integration_spec.Sp
     defer h.freeCompletions(items);
 
     try TestHarness.expectHasLabels(items, &.{"ta"});
+}
+
+/// Nested user declarations with a builtin's short name must not supply its members.
+pub fn builtinNamespaceCompletionExcludesUnrelatedNestedOwners() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+    const clean = try h.formatSource(
+        \\app [main, test] {{ pf: platform "{s}" }}
+        \\
+        \\Outer := [OuterTag].{{
+        \\    I64 := [InnerTag].{{
+        \\        unrelated = 42
+        \\    }}
+        \\}}
+        \\
+        \\test = Outer.I64.unrelated
+        \\main = "ok"
+    );
+    defer h.allocator.free(clean);
+    try h.writeFile("builtin_owner_completion.roc", clean);
+    try h.check(clean);
+    const incomplete = try std.mem.replaceOwned(u8, h.allocator, clean, "Outer.I64.unrelated", "I64.");
+    defer h.allocator.free(incomplete);
+    const items = try h.getCompletions(incomplete, 8, 11);
+    defer h.freeCompletions(items);
+    try TestHarness.expectHasLabels(items, &.{ "to_str", "abs" });
+    for (items) |item| try std.testing.expect(!std.mem.eql(u8, item.label, "unrelated"));
+}
+
+/// A local namespace shadowing an auto-import retains its own member identity.
+pub fn localNamespaceCompletionRespectsBuiltinShadowing() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+    const clean = try h.formatSource(
+        \\app [main, test] {{ pf: platform "{s}" }}
+        \\
+        \\Json := [LocalJson].{{
+        \\    local_member = 42
+        \\}}
+        \\
+        \\test = Json.local_member
+        \\main = "ok"
+    );
+    defer h.allocator.free(clean);
+    try h.writeFile("local_owner_completion.roc", clean);
+    try h.check(clean);
+    const incomplete = try std.mem.replaceOwned(u8, h.allocator, clean, "Json.local_member", "Json.");
+    defer h.allocator.free(incomplete);
+    const items = try h.getCompletions(incomplete, 6, 12);
+    defer h.freeCompletions(items);
+    try TestHarness.expectHasLabels(items, &.{"local_member"});
+    for (items) |item| try std.testing.expect(!std.mem.eql(u8, item.label, "parse_null"));
 }
 
 /// Verifies record fields complete for inferred record values.

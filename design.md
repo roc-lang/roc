@@ -114,6 +114,20 @@ are two distinct identities even when their declaring modules are
 byte-identical, and no deduplication, specialization, or merging step may
 collapse two externally-bound identities into one.
 
+### Builtin source namespace ownership
+
+CIR's builtin declaration registry owns builtin qualified names, auto-import
+policy, and container aliases. Auto-import tables are derived from that registry;
+canonicalization and language-server completion consume the same table rather
+than maintaining independent lists. Primitive List and Box scope bindings retain
+their explicit primitive representation.
+
+Builtin namespace completion resolves the source root to its declared qualified
+owner before enumerating exposed members. It matches only immediate children of
+that exact namespace. A matching inner name segment in another namespace or module
+is never evidence of builtin ownership. Incomplete source may require parsing for
+cursor context, but cannot change the builtin namespace's identity.
+
 ### Dense IDs and structural keys
 
 Compiler-owned identity domains prefer dense, store-local integer IDs. The

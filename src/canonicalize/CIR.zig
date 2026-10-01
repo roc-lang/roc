@@ -297,15 +297,123 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
 };
 
 /// Nominal declarations that only group nested builtin types rather than representing builtin types.
-pub const builtin_type_container_names = [_][]const u8{
-    "Builtin",
-    "Builtin.Num",
-    "Builtin.Encoding",
-    "Builtin.Encoding.Json",
-    "Builtin.Crypto",
-    "Builtin.Crypto.SHA256",
-    "Builtin.Crypto.BLAKE3",
+pub const builtin_type_containers = [_]struct { qualified_name: []const u8, auto_import_name: ?[]const u8 = null }{
+    .{ .qualified_name = "Builtin" },
+    .{ .qualified_name = "Builtin.Num" },
+    .{ .qualified_name = "Builtin.Encoding", .auto_import_name = "Encoding" },
+    .{ .qualified_name = "Builtin.Encoding.Json", .auto_import_name = "Json" },
+    .{ .qualified_name = "Builtin.Crypto" },
+    .{ .qualified_name = "Builtin.Crypto.SHA256" },
+    .{ .qualified_name = "Builtin.Crypto.BLAKE3" },
 };
+
+/// Qualified container names for builtin generation and declaration validation.
+pub const builtin_type_container_names = blk: {
+    var names: [builtin_type_containers.len][]const u8 = undefined;
+    for (builtin_type_containers, 0..) |container, i| names[i] = container.qualified_name;
+    break :blk names;
+};
+
+/// Source-visible auto-imports. Derived from the declaration registry; consumers
+/// must not maintain their own lists or infer owners from name segments.
+pub const builtin_auto_imports = blk: {
+    var count: usize = 0;
+    for (builtin_type_specs) |spec| if (spec.auto_import) {
+        count += 1;
+    };
+    for (builtin_type_containers) |container| if (container.auto_import_name != null) {
+        count += 1;
+    };
+    var entries: [count]struct { display_name: []const u8, qualified_name: []const u8, type_field: ?[]const u8 } = undefined;
+    var i: usize = 0;
+    for (builtin_type_specs) |spec| {
+        if (!spec.auto_import) continue;
+        entries[i] = .{ .display_name = spec.display_name, .qualified_name = spec.qualified_name, .type_field = spec.type_field };
+        i += 1;
+    }
+    for (builtin_type_containers) |container| {
+        const name = container.auto_import_name orelse continue;
+        entries[i] = .{ .display_name = name, .qualified_name = container.qualified_name, .type_field = null };
+        i += 1;
+    }
+    break :blk entries;
+};
+
+/// A source namespace spelling and its exact compiler-owned declaration name.
+pub const BuiltinNamespaceRoot = struct { display_name: []const u8, qualified_name: []const u8 };
+
+/// All source-visible builtin roots, including grouping namespaces such as Num.
+/// Kept distinct from type auto-imports so consumers cannot change scope policy.
+pub const builtin_namespace_roots = blk: {
+    @setEvalBranchQuota(10_000);
+    var entries: [builtin_auto_imports.len + builtin_type_containers.len]BuiltinNamespaceRoot = undefined;
+    var count: usize = 0;
+    for (builtin_auto_imports) |entry| {
+        entries[count] = .{ .display_name = entry.display_name, .qualified_name = entry.qualified_name };
+        count += 1;
+    }
+    for (builtin_type_containers) |container| {
+        if (!std.mem.startsWith(u8, container.qualified_name, "Builtin.")) continue;
+        const name = container.qualified_name["Builtin.".len..];
+        if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
+        var registered = false;
+        for (entries[0..count]) |entry| {
+            if (std.mem.eql(u8, entry.display_name, name)) {
+                registered = true;
+                break;
+            }
+        }
+        if (registered) continue;
+        entries[count] = .{ .display_name = name, .qualified_name = container.qualified_name };
+        count += 1;
+    }
+    break :blk entries[0..count].*;
+};
+
+/// Exact builtin owner plus the source path below that owner.
+pub const BuiltinNamespace = struct {
+    qualified_root: []const u8,
+    /// Empty or a dot followed by the source namespace's remaining components.
+    suffix: []const u8,
+};
+
+/// Resolve an auto-imported root or an explicit builtin container path.
+/// The returned pieces form an exact qualified name, never a suffix search.
+pub fn resolveBuiltinNamespace(name: []const u8) ?BuiltinNamespace {
+    for (builtin_namespace_roots) |entry| {
+        if (nameIsAtOrUnder(name, entry.display_name)) return .{
+            .qualified_root = entry.qualified_name,
+            .suffix = name[entry.display_name.len..],
+        };
+    }
+    return null;
+}
+
+/// Whether an unqualified source name denotes a registered builtin root.
+pub fn isBuiltinType(name: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, name, '.') != null) return false;
+    return resolveBuiltinNamespace(name) != null;
+}
+
+test "builtin namespace resolution preserves exact owners and component boundaries" {
+    const cases = .{
+        .{ "I64", "Builtin.Num.I64", "" },
+        .{ "I64.Inner", "Builtin.Num.I64", ".Inner" },
+        .{ "Num.I64", "Builtin.Num", ".I64" },
+        .{ "Json", "Builtin.Encoding.Json", "" },
+        .{ "Encoding.Json", "Builtin.Encoding", ".Json" },
+        .{ "U8x16", "Builtin.Num.U8x16", "" },
+        .{ "Crypto.SHA256", "Builtin.Crypto", ".SHA256" },
+    };
+    inline for (cases) |case| {
+        const resolved = resolveBuiltinNamespace(case[0]).?;
+        try std.testing.expectEqualStrings(case[1], resolved.qualified_root);
+        try std.testing.expectEqualStrings(case[2], resolved.suffix);
+    }
+    for ([_][]const u8{ "Other.I64", "I64Extra", "JsonExtra", "pkg.Json", "JsonState", "SHA256", "" }) |name| {
+        try std.testing.expect(resolveBuiltinNamespace(name) == null);
+    }
+}
 
 const hash_offset: u64 = 0xcbf29ce484222325;
 const hash_prime: u64 = 0x100000001b3;
@@ -349,6 +457,10 @@ pub const BUILTIN_TYPE_REGISTRY_HASH: u64 = blk: {
         hash = if (spec.num_kind) |num_kind| hashBytes(hash, @tagName(num_kind)) else hashBytes(hash, "-");
         hash = hashBytes(hash, if (spec.auto_import) "auto" else "internal");
         hash = if (spec.internal_kind) |kind| hashBytes(hash, @tagName(kind)) else hashBytes(hash, "-");
+    }
+    for (builtin_type_containers) |container| {
+        hash = hashBytes(hash, container.qualified_name);
+        hash = hashBytes(hash, container.auto_import_name orelse "-");
     }
     break :blk hash;
 };
