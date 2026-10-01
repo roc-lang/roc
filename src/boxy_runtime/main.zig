@@ -36,7 +36,6 @@ pub const panic = std.debug.FullPanic(panicImpl);
 
 fn panicImpl(msg: []const u8, _: ?usize) noreturn {
     (startup_ops orelse builtins.in_process_host.ops()).crash(msg);
-    unreachable;
 }
 
 /// Whether this root is the evaluator Wasm flavor, which receives its host

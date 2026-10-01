@@ -1321,11 +1321,9 @@ pub fn repeatC(
 
     const count = std.math.cast(usize, count_u64) orelse {
         roc_ops.crash("Str.repeat count exceeds the platform address space");
-        unreachable;
     };
     const repeated_len = std.math.mul(usize, count, bytes_len) catch {
         roc_ops.crash("Str.repeat result length overflowed");
-        unreachable;
     };
     const bytes_ptr = string.asU8ptr();
     var ret_string = RocStr.allocate(repeated_len, roc_ops);

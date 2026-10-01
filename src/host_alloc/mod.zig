@@ -155,8 +155,7 @@ pub fn exportRuntimeSymbols(comptime getOps: fn () *RocOps, comptime options: Ex
         }
 
         fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
-            const ops = getOps();
-            ops.roc_crashed(ops, bytes, len);
+            getOps().crash(bytes[0..len]);
         }
     };
 

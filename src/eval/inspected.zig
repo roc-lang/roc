@@ -3008,7 +3008,7 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         }
 
         const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
-        const batch = runBoolRootCalls(allocator, calls, true, max_workers, null, null);
+        const batch = runBoolRootCalls(allocator, calls, max_workers, null, null);
         if (timing) |timings| timings.finish(root_execution_started_ns, .root_execution);
         return batch;
     }
@@ -3071,7 +3071,6 @@ fn callBoolRoot(
     tables: boxy_runtime.BoxyTables,
     target: BoolRootCallTarget,
     root: BoolRoot,
-    longjmp_on_crash: bool,
     call_index: usize,
     event_callback: ?BoolRootEventCallback,
     expect_passed: []u64,
@@ -3079,7 +3078,6 @@ fn callBoolRoot(
 ) Error!BoolRootEvalResult {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
-    runtime_env.setLongjmpOnCrash(longjmp_on_crash);
     var event_forwarder: RuntimeHostEventForwarder = undefined;
     if (event_callback) |callback| {
         event_forwarder = .{
@@ -3200,7 +3198,6 @@ const BoolRootCall = struct {
 const BoolRootWorkerState = struct {
     allocator: Allocator,
     calls: []const BoolRootCall,
-    longjmp_on_crash: bool,
     next_call: std.atomic.Value(usize),
     results: []?BoolRootEvalResult,
     errors: []?Error,
@@ -3238,7 +3235,6 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
             call.tables,
             call.target,
             call.root,
-            state.longjmp_on_crash,
             index,
             state.event_callback,
             state.worker_expect_passed[expect_start..expect_end],
@@ -3271,7 +3267,6 @@ fn optimizedTestWorkerCount(root_count: usize, max_workers: ?usize) usize {
 fn runBoolRootCalls(
     allocator: Allocator,
     calls: []const BoolRootCall,
-    longjmp_on_crash: bool,
     max_workers: ?usize,
     completion_callback: ?BoolRootCompletionCallback,
     event_callback: ?BoolRootEventCallback,
@@ -3312,7 +3307,6 @@ fn runBoolRootCalls(
     var state = BoolRootWorkerState{
         .allocator = allocator,
         .calls = calls,
-        .longjmp_on_crash = longjmp_on_crash,
         .next_call = std.atomic.Value(usize).init(0),
         .results = slots,
         .errors = errors,
@@ -3657,11 +3651,6 @@ fn executeLlvmBoolRootModules(
         };
     }
 
-    var longjmp_on_crash = true;
-    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
-        longjmp_on_crash = false;
-    }
-
     const calls = try allocator.alloc(BoolRootCall, total_roots);
     defer allocator.free(calls);
     var call_index: usize = 0;
@@ -3682,7 +3671,7 @@ fn executeLlvmBoolRootModules(
         expect_site_base += module.expect_site_count;
     }
 
-    return runBoolRootCalls(allocator, calls, longjmp_on_crash, max_workers, completion_callback, event_callback);
+    return runBoolRootCalls(allocator, calls, max_workers, completion_callback, event_callback);
 }
 
 fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!EvalRunResult {
@@ -3800,13 +3789,8 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         ) };
     } else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.Crash, error.DivisionByZero => {
-            const message: ?[]u8 = switch (runtime_env.crashState()) {
-                .crashed => |msg| try allocator.dupe(u8, msg),
-                .did_not_crash => null,
-            };
-            outcome = .{ .aborted = .{ .kind = .crash, .message = message } };
-        },
+        error.Crash => outcome = .{ .aborted = .{ .kind = .crash, .message = try allocator.dupe(u8, interp.getCrashMessage()) } },
+        error.DivisionByZero => outcome = .{ .aborted = .{ .kind = .crash, .message = null } },
         error.RuntimeError => outcome = .{ .aborted = .{ .kind = .runtime_error, .message = null } },
         error.ComptimeExhaustiveness => outcome = .{ .aborted = .{ .kind = .comptime_exhaustiveness, .message = null } },
         error.ExpectErr => {

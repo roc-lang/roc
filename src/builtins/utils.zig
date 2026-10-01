@@ -256,7 +256,7 @@ pub const TestEnv = struct {
     fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
         const message = bytes[0..len];
         debugPrint("Roc crashed: {s}\n", .{message});
-        unreachable;
+        @trap();
     }
 };
 
@@ -348,11 +348,9 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                 DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
             }
             roc_ops.crash("Use-after-free: incref on already-freed memory");
-            return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
             roc_ops.crash("Invalid incref: incrementing non-positive refcount");
-            return;
         }
     }
 
@@ -372,7 +370,6 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                             DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
                         }
                         roc_ops.crash("Use-after-free: incref on already-freed memory");
-                        return;
                     }
                     unreachable;
                 }
@@ -509,7 +506,6 @@ pub fn decrefDataPtr(
     if (comptime builtin.mode == .Debug) {
         if (unmasked_ptr % @alignOf(isize) != 0) {
             roc_ops.crash("decrefDataPtr: unmasked pointer is not aligned");
-            return;
         }
     }
 
@@ -566,7 +562,6 @@ pub fn increfDataPtr(
     if (comptime builtin.mode == .Debug) {
         if (rc_addr % @alignOf(isize) != 0) {
             roc_ops.crash("increfDataPtr: refcount pointer is not aligned");
-            return;
         }
     }
 
@@ -708,14 +703,12 @@ inline fn decref_ptr_to_refcount(
                 DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
             }
             roc_ops.crash("Use-after-free: decref on already-freed memory");
-            return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
             if (builtin.os.tag != .freestanding) {
                 DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
             }
             roc_ops.crash("Refcount underflow: decrementing non-positive refcount");
-            return;
         }
     }
 
@@ -807,11 +800,9 @@ pub inline fn assertValidRefcount(data_ptr: ?[*]u8, roc_ops: *RocOps) void {
         const rc = rc_ptr[0];
         if (rc == POISON_VALUE) {
             roc_ops.crash("assertValidRefcount: Use-after-free detected");
-            return;
         }
         if (rc <= 0 and !rcConstant(rc)) {
             roc_ops.crash("assertValidRefcount: Invalid refcount (underflow or corruption)");
-            return;
         }
     }
 }

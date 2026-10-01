@@ -2370,6 +2370,8 @@ generate_runtime_symbol_externs =
 	\\pub extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque;
 	\\pub extern fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void;
 	\\pub extern fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void;
+	\\/// Must never return: end the process, or longjmp out of the Roc code that called
+	\\/// it. Roc code traps right after this call, so returning terminates the process.
 	\\pub extern fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void;
 	\\
 

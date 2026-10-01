@@ -1690,14 +1690,10 @@ pub const MonoLlvmCodeGen = struct {
         try self.addGeneratedFunctionStackProbeAttrs(&attrs);
         try attrs.addFnAttr(.cold, builder);
         try attrs.addFnAttr(.@"noinline", builder);
-        // Linux AArch64 eval tests return from crash callbacks to avoid
-        // longjmping through LLVM-generated frames. Every other target lowers
-        // `emitCrashBytes` to `unreachable`, so tell LLVM this cold helper does
-        // not return; otherwise the hot caller must conservatively preserve
-        // state for a control-flow edge that cannot happen.
-        if (!(self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux)) {
-            try attrs.addFnAttr(.noreturn, builder);
-        }
+        // The helper ends in `emitCrashTerminator`, so it never returns; saying
+        // so keeps the hot caller from preserving state for an edge that
+        // cannot happen.
+        try attrs.addFnAttr(.noreturn, builder);
         func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
 
         self.runtime_error_func = func;
@@ -8421,24 +8417,14 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = ok_block };
     }
 
-    /// Linux AArch64 evaluation reports crashes to the host and returns instead
-    /// of longjmping through LLVM frames. The host discards the failed result,
-    /// but the return must still satisfy the active function's ABI, including
-    /// fastcc scalar and aggregate results. Helpers may have a different return
-    /// type from the enclosing Roc procedure, so consume the function signature.
+    /// End the block after a call that hands a crash to the host. The host
+    /// never returns from `roc_crashed`; the trap makes a host that returns
+    /// anyway terminate the process here, since `unreachable` alone emits no
+    /// instruction and execution would run into whatever code follows.
     fn emitCrashTerminator(self: *MonoLlvmCodeGen) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
-            const ret_ty = wip.function.typeOf(builder).functionReturn(builder);
-            if (ret_ty == .void) {
-                _ = wip.retVoid() catch return error.OutOfMemory;
-            } else {
-                _ = wip.ret(builder.zeroInitValue(ret_ty) catch return error.OutOfMemory) catch return error.OutOfMemory;
-            }
-        } else {
-            _ = wip.@"unreachable"() catch return error.OutOfMemory;
-        }
+        _ = wip.callIntrinsic(.normal, .none, .trap, &.{}, &.{}, "") catch return error.OutOfMemory;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
     }
 
     fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
@@ -13781,7 +13767,7 @@ test "LLVM erased callable explicit arguments exclude capture and reuse" {
     try std.testing.expectError(error.CompilationFailed, MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 1));
 }
 
-test "LLVM crash exits respect fastcc result types" {
+test "LLVM crash exits trap on every target and result type" {
     const allocator = std.testing.allocator;
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
@@ -13789,7 +13775,7 @@ test "LLVM crash exits respect fastcc result types" {
         const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
         var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
         defer codegen.deinit();
-        var builder = try codegen.createBuilder("crash_returns");
+        var builder = try codegen.createBuilder("crash_exits");
         defer builder.deinit();
         codegen.builder = &builder;
         defer codegen.builder = null;
@@ -13826,18 +13812,16 @@ test "LLVM crash exits respect fastcc result types" {
                 }
                 const instructions = entry.ptrConst(&wip).instructions.items;
                 const terminal = wip.instructions.get(@intFromEnum(instructions[instructions.len - 1]));
-                if (arch != .aarch64) {
-                    try std.testing.expectEqual(.@"unreachable", terminal.tag);
-                } else if (ret_ty == .void) {
-                    try std.testing.expectEqual(.@"ret void", terminal.tag);
-                } else {
-                    try std.testing.expectEqual(.ret, terminal.tag);
-                    const value: LlvmBuilder.Value = @enumFromInt(terminal.data);
-                    try std.testing.expectEqual(ret_ty, value.typeOfWip(&wip));
-                }
+                try std.testing.expectEqual(.@"unreachable", terminal.tag);
                 try codegen.finishCurrentWipFunction();
             }
         }
+        // A host that returns from `roc_crashed` must hit a trap rather than
+        // run into whatever code follows: every crash exit calls it.
+        var ir: std.Io.Writer.Allocating = .init(allocator);
+        defer ir.deinit();
+        try builder.print(&ir.writer);
+        try std.testing.expectEqual(result_types.len * 2, std.mem.count(u8, ir.written(), "call void @llvm.trap()"));
     }
 }
 

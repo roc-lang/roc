@@ -21,7 +21,6 @@ roc_ops: ?RocOps = null,
 /// host's allocation callbacks never return null, so the interpreter that
 /// calls them must be bound before it evaluates anything.
 out_of_memory: ?interpreter.OutOfMemoryUnwind = null,
-crash_message: ?[]u8 = null,
 expect_message: ?[]u8 = null,
 
 pub fn init(allocator: std.mem.Allocator) CompilerHost {
@@ -36,7 +35,6 @@ pub fn deinit(self: *CompilerHost) void {
     self.clearDebugMessages();
     self.debug_messages.deinit(self.allocator);
     self.allocations.deinit();
-    if (self.crash_message) |msg| self.allocator.free(msg);
     if (self.expect_message) |msg| self.allocator.free(msg);
     self.* = CompilerHost.init(self.allocator);
 }
@@ -138,10 +136,10 @@ fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c
     self.expect_message = self.allocator.dupe(u8, bytes[0..len]) catch null;
 }
 
-fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
-    if (self.crash_message) |msg| self.allocator.free(msg);
-    self.crash_message = self.allocator.dupe(u8, bytes[0..len]) catch null;
+/// The interpreter reports a Roc crash as `error.Crash` and never calls the
+/// host's `roc_crashed`, so reaching this is a compiler bug.
+fn rocCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    std.debug.panic("compiler host invariant violated: roc_crashed called during compiler-owned evaluation: {s}", .{bytes[0..len]});
 }
 
 /// Returns null on allocation failure (OOM).

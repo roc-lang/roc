@@ -69,6 +69,7 @@ fn shimExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) voi
 
 fn shimCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     extern_host.roc_crashed(bytes, len);
+    @trap();
 }
 
 var shim_ops: RocOps = undefined;

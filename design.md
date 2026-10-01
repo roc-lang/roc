@@ -17959,11 +17959,6 @@ result into the target slot; the packed function is an adapter that unpacks
 the argument bytes and calls the fast one. Erased callables keep the public
 erased ABI, and hosted procedures keep the C ABI of the host.
 
-On Linux AArch64, evaluation crash exits return to the host after reporting
-the error. Their ignored result is zero-initialized in the active LLVM
-function's declared return type; only void functions emit `ret void`. This
-also applies to fast functions returning scalars or aggregate carriers.
-
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned
@@ -19209,6 +19204,19 @@ marks their declarations' return values `nonnull` in the linked module.
 Compiler-internal hosts follow the same contract: the compile-time evaluator's
 host turns allocation failure into a Roc crash by unwinding the interpreter it
 serves, rather than signaling it with null.
+
+`roc_crashed` never returns to Roc. A platform host ends the process; a host
+that keeps running, like the compiler's own hosts, longjmps to a crash
+boundary it set before calling Roc code. The symbol's type stays `void`
+because C cannot spell `noreturn` on a function pointer, so the contract is
+enforced on the Roc side instead: every backend follows each call that hands a
+crash to the host with a trap (LLVM `llvm.trap`, dev `ud2`/`brk`, wasm
+`unreachable`), and `RocOps.crash` in the builtins is `noreturn` and traps
+after the host call. A host that returns anyway stops the program at the crash
+rather than running on past the failed operation. The interpreter is not Roc
+code calling its host: it never calls the host's `roc_crashed` mid-evaluation,
+since it has to unwind its own state first. It records the crash and returns
+`error.Crash`, and whoever embeds it delivers the crash to its host.
 
 The host symbol ABI is identical for `.lss` and `.boxy`. Host-facing signatures
 are derived from checked platform/provided/hosted declarations and the shared

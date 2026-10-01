@@ -13014,7 +13014,9 @@ fn customGlueZigBoxHelperTest(
         \\
         \\fn rocDbg(_: *abi.RocHost, _: [*]const u8, _: usize) callconv(.c) void {}
         \\fn rocExpectFailed(_: *abi.RocHost, _: [*]const u8, _: usize) callconv(.c) void {}
-        \\fn rocCrashed(_: *abi.RocHost, _: [*]const u8, _: usize) callconv(.c) void {}
+        \\fn rocCrashed(_: *abi.RocHost, _: [*]const u8, _: usize) callconv(.c) void {
+        \\    @trap();
+        \\}
         \\
         \\fn makeHost(env_ref: *Env) abi.RocHost {
         \\    return .{

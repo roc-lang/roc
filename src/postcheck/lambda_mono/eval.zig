@@ -3225,7 +3225,7 @@ pub const Evaluator = struct {
                 .roc_realloc = rocReallocFn,
                 .roc_dbg = rocNoopBytesFn,
                 .roc_expect_failed = rocNoopBytesFn,
-                .roc_crashed = rocNoopBytesFn,
+                .roc_crashed = rocCrashedFn,
                 .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
             };
         }
@@ -3265,6 +3265,13 @@ pub const Evaluator = struct {
     }
 
     fn rocNoopBytesFn(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+
+    /// The builtins this evaluator calls only format and decode values; none
+    /// of them crashes, and `roc_crashed` never returns, so reaching this is a
+    /// bug in the evaluator.
+    fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        std.debug.panic("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
+    }
 };
 
 // free helpers

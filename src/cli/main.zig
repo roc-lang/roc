@@ -6891,13 +6891,13 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) void {
+fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) noreturn {
     const message = switch (err) {
         error.OutOfMemory => "Roc interpreter ran out of memory",
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
-        error.Crash => return,
+        error.Crash => interpreter.getCrashMessage(),
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
         error.ExpectErr => unreachable,
@@ -6945,10 +6945,7 @@ fn evaluateLirImageEntrypoint(
         error.ExpectErr,
         error.UnsupportedHostedFunction,
         error.InvalidHostedFunctionSignature,
-        => {
-            reportCliInterpreterError(ops, &interpreter, @errorCast(err));
-            return;
-        },
+        => reportCliInterpreterError(ops, &interpreter, @errorCast(err)),
     };
 }
 
@@ -13182,7 +13179,7 @@ fn interpreterTestFailureMessage(
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
-        error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
+        error.Crash => interpreter.getCrashMessage(),
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",
         error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
@@ -13346,7 +13343,6 @@ const CliInterpreterTestHostEnv = struct {
     fn installCallbacks(_: *CliInterpreterTestHostEnv, roc_ops: *echo_platform.host_abi.RocOps) void {
         roc_ops.roc_dbg = &rocDbg;
         roc_ops.roc_expect_failed = &rocExpectFailed;
-        roc_ops.roc_crashed = &rocCrashed;
     }
 
     fn fromOps(ops: *echo_platform.host_abi.RocOps) *CliInterpreterTestHostEnv {
@@ -13381,10 +13377,6 @@ const CliInterpreterTestHostEnv = struct {
         const self = fromOps(ops);
         self.echo_env.inline_expect_failed = true;
         self.appendEvent(.stderr, .expect_failed, bytes[0..len]);
-    }
-
-    fn rocCrashed(ops: *echo_platform.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        fromOps(ops).appendEvent(.stderr, .crashed, bytes[0..len]);
     }
 };
 
@@ -13492,6 +13484,10 @@ fn runInterpreterTestRoots(
             errdefer if (message_owned) ctx.gpa.free(message);
             const failure_detail: ?[]const u8 = switch (err) {
                 error.Crash => blk: {
+                    // The interpreter reports a Roc crash as `error.Crash`
+                    // rather than through the host's `roc_crashed`, which
+                    // never returns.
+                    transcript = try appendCliTestTranscriptEvent(ctx.gpa, transcript, .stderr, .crashed, interpreter.getCrashMessage());
                     transcript = try appendCliTestTranscriptEvent(ctx.gpa, transcript, .stderr, .crash_diagnostic, message);
                     ctx.gpa.free(message);
                     message_owned = false;
