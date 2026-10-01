@@ -6592,25 +6592,68 @@ const Builder = struct {
             .structural => |derivation| derivation,
             .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => return null,
         };
-        const kind: GeneratedCodecKind = switch (derivation.kind()) {
-            .parser => .parser_constructor,
-            .encoder => .encoder_constructor,
+        const derivation_kind = derivation.kind();
+        switch (derivation_kind) {
+            .parser, .encoder => {},
             .equality, .hash, .map, .map_effectful => return null,
-        };
+        }
         const derivation_id = dispatch.generated_codec_derivation orelse
             boxyPlanInvariant("structural codec dispatch had no checked derivation reference");
-        if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
-            boxyPlanInvariant("structural codec dispatch referenced a missing checked derivation");
-        }
-        const contract = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
         return .{
-            .source = .{ .generated_codec = .{
-                .kind = kind,
-                .shape = typeRef(view, contract.source_shape_ty),
-                .contract_derivation = derivation_id,
-            } },
-            .worker_type = typeRef(view, contract.source_constructor_ty),
+            .source = structuralCodecWorkerSource(view, derivation_kind, derivation_id, dispatch.dispatcher_ty, dispatch.callable_ty),
+            .worker_type = structuralCodecWorkerType(view, derivation_id),
         };
+    }
+
+    /// The one worker source of a checked structural codec derivation. A
+    /// direct structural call and structural callable-dictionary evidence
+    /// both key the derivation's generated constructor here, by the
+    /// derivation's own source shape, so one derivation reaches one worker
+    /// (`stepEnsureWorker` dedupes on the exact source and type). The use's
+    /// dispatcher and callable must agree with the derivation they name.
+    fn structuralCodecWorkerSource(
+        view: ModuleView,
+        derivation_kind: static_dispatch.StructuralKind,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+        dispatcher_ty: checked.CheckedTypeId,
+        callable_ty: checked.CheckedTypeId,
+    ) WorkerSource {
+        const kind: GeneratedCodecKind, const contract_kind: static_dispatch.GeneratedCodecDerivationKind = switch (derivation_kind) {
+            .parser => .{ .parser_constructor, .parser },
+            .encoder => .{ .encoder_constructor, .encoder },
+            .equality, .hash, .map, .map_effectful => boxyPlanInvariant("a non-codec structural derivation reached codec worker keying"),
+        };
+        const contract = structuralCodecContract(view, derivation_id);
+        if (contract.kind != contract_kind or
+            !std.meta.eql(view.checked_types.rootKey(contract.source_constructor_ty), view.checked_types.rootKey(callable_ty)) or
+            !std.meta.eql(view.checked_types.structuralRootKey(contract.source_shape_ty), view.checked_types.structuralRootKey(dispatcher_ty)))
+        {
+            boxyPlanInvariant("structural codec use disagreed with its checked derivation");
+        }
+        return .{ .generated_codec = .{
+            .kind = kind,
+            .shape = typeRef(view, contract.source_shape_ty),
+            .contract_derivation = derivation_id,
+        } };
+    }
+
+    /// The checked type of a structural codec derivation's one worker
+    /// (`structuralCodecWorkerSource`).
+    fn structuralCodecWorkerType(
+        view: ModuleView,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+    ) CheckedTypeIdentity {
+        return typeRef(view, structuralCodecContract(view, derivation_id).source_constructor_ty);
+    }
+
+    fn structuralCodecContract(
+        view: ModuleView,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+    ) static_dispatch.GeneratedCodecDerivation {
+        if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
+            boxyPlanInvariant("structural codec use referenced a missing checked derivation");
+        }
+        return view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
     }
 
     fn stepIteratorFor(self: *Builder, actions: *std.ArrayList(PlanAction), view: ModuleView, maybe_plan: ?static_dispatch.IteratorForPlanId) Allocator.Error!void {
@@ -15834,16 +15877,9 @@ const Builder = struct {
                         .parser, .encoder => blk_worker: {
                             const derivation_id = structural.generated_codec_derivation orelse
                                 boxyPlanInvariant("structural codec evidence had no checked derivation reference");
-                            if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
-                                boxyPlanInvariant("structural codec evidence referenced a missing checked derivation");
-                            }
                             break :blk_worker .{ .worker = try self.ensureWorker(
-                                .{ .generated_codec = .{
-                                    .kind = if (structural_kind == .parser) .parser_constructor else .encoder_constructor,
-                                    .shape = typeRef(view, structural.dispatcher_ty),
-                                    .contract_derivation = derivation_id,
-                                } },
-                                callable_type,
+                                structuralCodecWorkerSource(view, structural_kind, derivation_id, structural.dispatcher_ty, structural.callable_ty),
+                                structuralCodecWorkerType(view, derivation_id),
                                 null,
                             ) };
                         },

@@ -25054,7 +25054,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("unresolved value dispatch reached boxy lowering without dictionary support for that method"),
             .parser_for,
             .encoder_for,
-            => boxyLowerInvariant("unresolved parser or encoder dispatch reached boxy lowering before structural parser/encoder support"),
+            => boxyLowerInvariant("evidence-dependent parser or encoder dispatch reached boxy lowering without a planned dictionary"),
             .map,
             .map_effectful,
             => boxyLowerInvariant("derived map dispatch reached Boxy lowering without an explicit checked implementation"),
