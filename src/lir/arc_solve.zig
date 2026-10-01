@@ -620,12 +620,17 @@ const UniqueCallFact = struct {
     stmt: LIR.CFStmtId,
 };
 
+const OwnershipFlow = struct { target: LIR.LocalId, source: LIR.LocalId };
+
 const BindingFact = union(enum) {
     fresh: LIR.LocalId,
     multi: LIR.LocalId,
     borrow: struct { target: LIR.LocalId, source: LIR.LocalId },
-    alias: struct { target: LIR.LocalId, source: LIR.LocalId },
+    alias: OwnershipFlow,
     demand: LIR.LocalId,
+    /// An owned result selects the consuming primitive, so its input must
+    /// supply a unit. This is ownership flow, not same-value aliasing.
+    consuming_result: OwnershipFlow,
 };
 
 const VisibilityFact = union(enum) {
@@ -693,8 +698,9 @@ const Solver = struct {
     /// Call-graph SCC id per proc, for the tail-call rule.
     scc: []u32,
     defs: []DefKind,
-    /// Ownership demands per local. Returns never demand: a returned borrow
-    /// pays one retain at the return when the signature's return is owned.
+    /// Ownership demands per local. Ordinary returned borrows pay a retain
+    /// when the return signature is owned; allocation-transferring primitive
+    /// results instead demand their input units so unique capacity survives.
     demand: []bool,
     /// Source local of each pure same-value alias (`.local`,
     /// `.list_reinterpret`, `.nominal`), or `no_local`. A demand on an alias
@@ -2276,10 +2282,11 @@ fn collectAll(solver: *Solver) SolveError!void {
         .borrow => |borrow| noteBorrowDef(solver, borrow.target, borrow.source),
         .alias => |alias| noteAlias(solver, alias.target, alias.source),
         .demand => |local| noteDemand(solver, local),
+        .consuming_result => {},
     };
 
-    // Direct-call demands are the only binding facts that depend on the
-    // current optimistic parameter signatures. Tailness never changes the
+    // Direct-call demands depend on the current optimistic parameter
+    // signatures and compose with primitive ownership-flow demands. Tailness never changes the
     // ownership relation: same-SCC tail arguments get a separate exact
     // lifetime fact after borrowed-return lenders settle.
     for (solver.direct_calls.items) |call| {
@@ -2299,14 +2306,23 @@ fn collectAll(solver: *Solver) SolveError!void {
             noteDemand(solver, arg);
         }
     }
+}
 
-    propagateAliasDemands(solver);
+fn bindingOwnershipFlow(solver: *const Solver, fact: BindingFact) ?OwnershipFlow {
+    return switch (fact) {
+        .alias => |edge| if (solver.domain.indexOf(edge.target)) |target|
+            if (solver.defs[target] != .multi) edge else null
+        else
+            null,
+        .consuming_result => |edge| edge,
+        .fresh, .multi, .borrow, .demand => null,
+    };
 }
 
 /// Settles the borrowed-parameter lattice from the facts collected above.
-/// A work item is one exact `(callee, parameter position)` bit that just
-/// became owned. Its adjacency list contains only the caller argument locals
-/// whose demand depends on that bit.
+/// A work item is one newly demanded local. Ownership-flow adjacency supplies
+/// its source demands; a parameter that flips owned supplies the exact caller
+/// arguments that depend on that signature bit.
 fn solveParameterModes(solver: *Solver) SolveError!void {
     // Compact the collected edge facts into dense offsets. This preserves
     // exact dependency lookup without one allocation-capable list object for
@@ -2327,18 +2343,76 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
         fill[use.key] += 1;
     }
 
-    var work = std.ArrayList(u32).empty;
-    defer work.deinit(solver.allocator);
-
-    // Static demands, alias-propagated demands, and multi-definition params
-    // seed the worklist.
-    for (0..solver.demand.len) |local_index| {
-        try flipParamIfRequired(solver, @intCast(local_index), &work);
+    // Ownership-flow edges are separate from value aliases: a slice can
+    // transfer its input's unit while changing the list descriptor.
+    const local_count = solver.demand.len;
+    const flow_offsets = try solver.allocator.alloc(u32, local_count + 1);
+    defer solver.allocator.free(flow_offsets);
+    @memset(flow_offsets, 0);
+    var consuming_results = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, local_count);
+    defer consuming_results.deinit(solver.allocator);
+    for (solver.binding_facts.items) |fact| {
+        const flow = bindingOwnershipFlow(solver, fact) orelse continue;
+        const target = solver.domain.indexOf(flow.target) orelse continue;
+        if (solver.domain.indexOf(flow.source) == null) continue;
+        flow_offsets[target + 1] += 1;
+        if (fact == .consuming_result) consuming_results.set(target);
+    }
+    for (1..flow_offsets.len) |index| flow_offsets[index] += flow_offsets[index - 1];
+    const flow_sources = try solver.allocator.alloc(u32, flow_offsets[local_count]);
+    defer solver.allocator.free(flow_sources);
+    const flow_fill = try solver.allocator.dupe(u32, flow_offsets[0..local_count]);
+    defer solver.allocator.free(flow_fill);
+    for (solver.binding_facts.items) |fact| {
+        const flow = bindingOwnershipFlow(solver, fact) orelse continue;
+        const target = solver.domain.indexOf(flow.target) orelse continue;
+        const source = solver.domain.indexOf(flow.source) orelse continue;
+        flow_sources[flow_fill[target]] = source;
+        flow_fill[target] += 1;
     }
 
-    while (work.pop()) |key| {
-        for (edges[offsets[key]..offsets[key + 1]]) |arg| {
-            try demandAliasChain(solver, arg, &work);
+    // A returned truncation must transfer ownership too: lending its input
+    // and retaining at the return would discard a unique buffer's capacity.
+    // Ordinary payload reads and same-value returns retain their borrow rules.
+    var returned_aliases = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, local_count);
+    defer returned_aliases.deinit(solver.allocator);
+    for (solver.proc_returns) |returns| for (returns.items) |local| {
+        var cursor = solver.domain.indexOf(@enumFromInt(local)) orelse continue;
+        while (!returned_aliases.isSet(cursor)) {
+            returned_aliases.set(cursor);
+            if (consuming_results.isSet(cursor)) {
+                solver.demand[cursor] = true;
+                break;
+            }
+            if (solver.defs[cursor] == .multi or solver.alias_source[cursor] == no_local) break;
+            cursor = solver.alias_source[cursor];
+        }
+    };
+
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(solver.allocator);
+    for (0..local_count) |local_index| {
+        if (solver.demand[local_index] or solver.defs[local_index] == .multi) {
+            solver.demand[local_index] = true;
+            try work.append(solver.allocator, @intCast(local_index));
+        }
+    }
+    var changed_params = std.ArrayList(u32).empty;
+    defer changed_params.deinit(solver.allocator);
+    while (work.pop()) |local| {
+        changed_params.clearRetainingCapacity();
+        try flipParamIfRequired(solver, local, &changed_params);
+        for (changed_params.items) |key| {
+            for (edges[offsets[key]..offsets[key + 1]]) |arg| {
+                if (solver.demand[arg]) continue;
+                solver.demand[arg] = true;
+                try work.append(solver.allocator, arg);
+            }
+        }
+        for (flow_sources[flow_offsets[local]..flow_offsets[local + 1]]) |source| {
+            if (solver.demand[source]) continue;
+            solver.demand[source] = true;
+            try work.append(solver.allocator, source);
         }
     }
 }
@@ -2354,21 +2428,6 @@ fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u
     if (!required) return;
     sig.borrowed_params &= ~arc_sig.paramBit(position).?;
     try work.append(solver.allocator, proc_index * arc_sig.tracked_param_count + position);
-}
-
-/// Adds one ownership demand and propagates it through the exact pure-alias
-/// chain. Every newly demanded parameter bit is queued immediately.
-fn demandAliasChain(solver: *Solver, start: u32, work: *std.ArrayList(u32)) SolveError!void {
-    var cursor = start;
-    while (true) {
-        if (solver.demand[cursor]) return;
-        solver.demand[cursor] = true;
-        try flipParamIfRequired(solver, cursor, work);
-        if (solver.defs[cursor] == .multi) return;
-        const source = solver.alias_source[cursor];
-        if (source == no_local) return;
-        cursor = source;
-    }
 }
 
 /// Changes only the definition facts whose kind depends on solved return
@@ -2516,26 +2575,6 @@ fn noteAlias(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
         source_index
     else
         no_local;
-}
-
-/// Demands on aliases are demands on their sources, transitively: the chain
-/// shares one value whose single unit should move through the chain to the
-/// consuming occurrence rather than the alias paying a retain while the
-/// source's unit is separately released.
-fn propagateAliasDemands(solver: *Solver) void {
-    for (0..solver.demand.len) |start| {
-        if (!solver.demand[start]) continue;
-        var cursor: u32 = @intCast(start);
-        while (true) {
-            // A multi-bound alias names different values over time; its
-            // recorded edge is not a same-value link.
-            if (solver.defs[cursor] == .multi) break;
-            const source = solver.alias_source[cursor];
-            if (source == no_local or solver.demand[source]) break;
-            solver.demand[source] = true;
-            cursor = source;
-        }
-    }
 }
 
 fn noteDef(solver: *Solver, local: LIR.LocalId, kind: DefKind) void {
@@ -2901,6 +2940,16 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .assign_low_level => |assign| {
             const rc_effect = inferenceRcEffect(solver, assign.op, assign.rc_effect);
             const args = store.getLocalSpan(assign.args);
+            if (assign.op.arcBorrowedResultVariant() != null and assign.op != .box_unbox) {
+                const consumed = assign.rc_effect.consume_args;
+                for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
+                    if ((consumed & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                    try solver.binding_facts.append(allocator, .{ .consuming_result = .{
+                        .target = assign.target,
+                        .source = GuardedList.at(args, position),
+                    } });
+                }
+            }
             const borrow_source = lowLevelBorrowSource(solver.domain, rc_effect, args);
             if (rc_effect.retain_result and borrow_source != no_local) {
                 const source: LIR.LocalId = @enumFromInt(solver.domain.localAt(borrow_source));
