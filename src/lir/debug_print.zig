@@ -793,7 +793,7 @@ fn canonicalReference(
         return end;
     }
     if (std.mem.eql(u8, word, "concrete") and word_end < source.len and source[word_end] == '(') {
-        const comma = std.mem.indexOfScalarPos(u8, source, word_end, ',') orelse return null;
+        const comma = std.mem.findScalarPos(u8, source, word_end, ',') orelse return null;
         const end = digitsEnd(source, comma + 1);
         if (end == comma + 1) return null;
         const value = std.fmt.parseInt(u64, source[comma + 1 .. end], 10) catch return null;
@@ -831,7 +831,7 @@ test "proc fingerprint ignores program numbering but not content" {
     defer layouts.deinit();
 
     const Program = struct {
-        fn build(store: *LirStore, padding: usize, callee_identity: u8) !LIR.LirProcSpecId {
+        fn build(store: *LirStore, padding: usize, callee_identity: u8) std.mem.Allocator.Error!LIR.LirProcSpecId {
             // Unrelated locals and procs first shift every program-wide number.
             for (0..padding) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
             for (0..padding) |index| {
