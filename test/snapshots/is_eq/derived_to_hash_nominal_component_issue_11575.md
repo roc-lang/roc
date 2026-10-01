@@ -221,7 +221,7 @@ y = Dict.empty().insert(k, 99)
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "frob") (constraint-fn-var 341)
+								(e-dispatch-call (method "frob") (constraint-fn-var 345)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "v"))))

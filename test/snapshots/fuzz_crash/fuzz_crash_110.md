@@ -110,7 +110,7 @@ R000ee(k) := [No0e(R000ee(o))].{
 		(e-block
 			(e-lambda
 				(args)
-				(e-call (constraint-fn-var 252)
+				(e-call (constraint-fn-var 256)
 					(e-block
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(s-nominal-decl

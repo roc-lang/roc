@@ -256,7 +256,7 @@ keeps = Keeps.{}
 		(e-lambda
 			(args
 				(p-assign (ident "g")))
-			(e-call (constraint-fn-var 299)
+			(e-call (constraint-fn-var 303)
 				(e-lookup-local
 					(p-assign (ident "g")))
 				(e-empty_record))))

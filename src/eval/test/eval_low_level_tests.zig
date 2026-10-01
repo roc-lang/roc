@@ -2,6 +2,54 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+const wide_utf_le_test_prefix =
+    \\{
+    \\utf16_bytes : List(U16) -> List(U8)
+    \\utf16_bytes = |units| {
+    \\    var $bytes = List.with_capacity(List.len(units) * 2)
+    \\    for unit in units {
+    \\        $bytes = $bytes.append(unit.to_u8_wrap())
+    \\        $bytes = $bytes.append(unit.shr_wrap(8).to_u8_wrap())
+    \\    }
+    \\    $bytes
+    \\}
+    \\utf32_bytes : List(U32) -> List(U8)
+    \\utf32_bytes = |units| {
+    \\    var $bytes = List.with_capacity(List.len(units) * 4)
+    \\    for unit in units {
+    \\        $bytes = $bytes.append(unit.to_u8_wrap())
+    \\        $bytes = $bytes.append(unit.shr_wrap(8).to_u8_wrap())
+    \\        $bytes = $bytes.append(unit.shr_wrap(16).to_u8_wrap())
+    \\        $bytes = $bytes.append(unit.shr_wrap(24).to_u8_wrap())
+    \\    }
+    \\    $bytes
+    \\}
+;
+
+const wide_utf_be_test_prefix =
+    \\{
+    \\utf16_bytes : List(U16) -> List(U8)
+    \\utf16_bytes = |units| {
+    \\    var $bytes = List.with_capacity(List.len(units) * 2)
+    \\    for unit in units {
+    \\        $bytes = $bytes.append(unit.shr_wrap(8).to_u8_wrap())
+    \\        $bytes = $bytes.append(unit.to_u8_wrap())
+    \\    }
+    \\    $bytes
+    \\}
+    \\utf32_bytes : List(U32) -> List(U8)
+    \\utf32_bytes = |units| {
+    \\    var $bytes = List.with_capacity(List.len(units) * 4)
+    \\    for unit in units {
+    \\        $bytes = $bytes.append(unit.shr_wrap(24).to_u8_wrap())
+    \\        $bytes = $bytes.append(unit.shr_wrap(16).to_u8_wrap())
+    \\        $bytes = $bytes.append(unit.shr_wrap(8).to_u8_wrap())
+    \\        $bytes = $bytes.append(unit.to_u8_wrap())
+    \\    }
+    \\    $bytes
+    \\}
+;
+
 const erased_callable_same_capture_reuse_source =
     \\{
     \\    make_boxed : Box(I64) -> Box(({} -> ({} -> I64)))
@@ -4363,6 +4411,921 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict valid LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le(utf16_bytes([82, 111, 99, 0xD83D, 0xDC26])) == Ok("Roc🐦")
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 lossy valid LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le_lossy(utf16_bytes([82, 111, 99, 0xD83D, 0xDC26])) == "Roc🐦"
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 empty LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le(utf16_bytes([])) == Ok("") and Str.from_utf16_le_lossy(utf16_bytes([])) == ""
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 0 LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le(utf16_bytes([65, 0xD800, 66])) == Err(BadUtf16({ index: (1) * 2, problem: UnpairedHighSurrogate }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 1 LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le(utf16_bytes([0xD83D, 0xDC26, 0xDFFF])) == Err(BadUtf16({ index: (2) * 2, problem: UnpairedLowSurrogate }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 2 LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le(utf16_bytes([65, 0xDBFF])) == Err(BadUtf16({ index: (1) * 2, problem: UnpairedHighSurrogate }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 shared input and heap result LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\{
+            \\    units = List.repeat(65.U16, 64)
+            \\    strict = Str.from_utf16_le(utf16_bytes(units))
+            \\    lossy = Str.from_utf16_le_lossy(utf16_bytes(units))
+            \\    strict == Ok(Str.repeat("A", 64)) and lossy == Str.repeat("A", 64) and units == List.repeat(65.U16, 64)
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 sliced input LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le(utf16_bytes(List.drop_first([99.U16, 65, 66, 67], 1))) == Ok("ABC")
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict valid LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf32_le(utf32_bytes([82, 111, 99, 0x1F426])) == Ok("Roc🐦")
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 lossy valid LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf32_le_lossy(utf32_bytes([82, 111, 99, 0x1F426])) == "Roc🐦"
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 empty LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf32_le(utf32_bytes([])) == Ok("") and Str.from_utf32_le_lossy(utf32_bytes([])) == ""
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 0 LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf32_le(utf32_bytes([65, 0xD800])) == Err(BadUtf32({ index: (1) * 4, problem: SurrogateCodePoint }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 1 LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf32_le(utf32_bytes([65, 0x110000])) == Err(BadUtf32({ index: (1) * 4, problem: CodePointTooLarge }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 2 LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf32_le(utf32_bytes([0xFFFFFFFF])) == Err(BadUtf32({ index: (0) * 4, problem: CodePointTooLarge }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 shared input and heap result LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\{
+            \\    units = List.repeat(65.U32, 64)
+            \\    strict = Str.from_utf32_le(utf32_bytes(units))
+            \\    lossy = Str.from_utf32_le_lossy(utf32_bytes(units))
+            \\    strict == Ok(Str.repeat("A", 64)) and lossy == Str.repeat("A", 64) and units == List.repeat(65.U32, 64)
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 sliced input LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf32_le(utf32_bytes(List.drop_first([99.U32, 65, 66, 67], 1))) == Ok("ABC")
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 lossy resynchronization LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le_lossy(utf16_bytes([0xD800, 0xD83D, 0xDC26, 0xDC00, 65, 0xDBFF])) == "�🐦�A�"
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 lossy invalid units LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf32_le_lossy(utf32_bytes([0xD83D, 0xDC26, 65, 0x110000, 0xFFFFFFFF])) == "��A��"
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 all scalar boundaries LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\Str.from_utf16_le(utf16_bytes([0, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFEFF, 0xFFFF, 0xD800, 0xDC00, 0xDBFF, 0xDFFF])).ok_or("").to_utf8() == [0, 127, 194, 128, 223, 191, 224, 160, 128, 237, 159, 191, 238, 128, 128, 239, 187, 191, 239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191] and Str.from_utf32_le(utf32_bytes([0, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFEFF, 0xFFFF, 0x10000, 0x10FFFF])).ok_or("").to_utf8() == [0, 127, 194, 128, 223, 191, 224, 160, 128, 237, 159, 191, 238, 128, 128, 239, 187, 191, 239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191]
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 SIMD lengths and lanes LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $len = 0.U64
+            \\while $len <= 65 {
+            \\    units = List.repeat(65.U16, $len)
+            \\    expected = Str.repeat("A", $len)
+            \\    $ok = $ok and Str.from_utf16_le(utf16_bytes(units)) == Ok(expected) and Str.from_utf16_le_lossy(utf16_bytes(units)) == expected
+            \\    $len = $len + 1
+            \\}
+            \\var $lane = 0.U64
+            \\while $lane < 32 {
+            \\    units = List.repeat(65.U16, $lane).concat([0x100]).concat(List.repeat(66.U16, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("Ā").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf16_le(utf16_bytes(units)) == Ok(expected) and Str.from_utf16_le_lossy(utf16_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\$ok
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 SIMD invalid lanes and shared slices LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $lane = 0.U64
+            \\while $lane < 32 {
+            \\    units = List.repeat(65.U16, $lane).concat([0xD800]).concat(List.repeat(66.U16, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf16_le(utf16_bytes(units)) == Err(BadUtf16({ index: ($lane) * 2, problem: UnpairedHighSurrogate })) and Str.from_utf16_le_lossy(utf16_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\shared = [99.U16].concat(List.repeat(65.U16, 65)).concat([100])
+            \\slice = shared.drop_first(1).drop_last(1)
+            \\$ok and Str.from_utf16_le(utf16_bytes(slice)) == Ok(Str.repeat("A", 65)) and List.len(shared) == 67
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 SIMD lengths and lanes LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $len = 0.U64
+            \\while $len <= 65 {
+            \\    units = List.repeat(65.U32, $len)
+            \\    expected = Str.repeat("A", $len)
+            \\    $ok = $ok and Str.from_utf32_le(utf32_bytes(units)) == Ok(expected) and Str.from_utf32_le_lossy(utf32_bytes(units)) == expected
+            \\    $len = $len + 1
+            \\}
+            \\var $lane = 0.U64
+            \\while $lane < 32 {
+            \\    units = List.repeat(65.U32, $lane).concat([0x100]).concat(List.repeat(66.U32, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("Ā").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf32_le(utf32_bytes(units)) == Ok(expected) and Str.from_utf32_le_lossy(utf32_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\$ok
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 SIMD invalid lanes and shared slices LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $lane = 0.U64
+            \\while $lane < 32 {
+            \\    units = List.repeat(65.U32, $lane).concat([0xD800]).concat(List.repeat(66.U32, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf32_le(utf32_bytes(units)) == Err(BadUtf32({ index: ($lane) * 4, problem: SurrogateCodePoint })) and Str.from_utf32_le_lossy(utf32_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\shared = [99.U32].concat(List.repeat(65.U32, 65)).concat([100])
+            \\slice = shared.drop_first(1).drop_last(1)
+            \\$ok and Str.from_utf32_le(utf32_bytes(slice)) == Ok(Str.repeat("A", 65)) and List.len(shared) == 67
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 surrogate pair across SIMD chunks LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $prefix = 0.U64
+            \\while $prefix < 33 {
+            \\    units = List.repeat(65.U16, $prefix).concat([0xD83D, 0xDC26]).concat(List.repeat(66.U16, 33))
+            \\    expected = Str.repeat("A", $prefix).concat("🐦").concat(Str.repeat("B", 33))
+            \\    $ok = $ok and Str.from_utf16_le(utf16_bytes(units)) == Ok(expected) and Str.from_utf16_le_lossy(utf16_bytes(units)) == expected
+            \\    $prefix = $prefix + 1
+            \\}
+            \\$ok
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 high-bit SIMD lanes LE",
+        .source = wide_utf_le_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $lane = 0.U64
+            \\while $lane < 16 {
+            \\    units = List.repeat(65.U32, $lane).concat([0x80000000]).concat(List.repeat(66.U32, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf32_le(utf32_bytes(units)) == Err(BadUtf32({ index: ($lane) * 4, problem: CodePointTooLarge })) and Str.from_utf32_le_lossy(utf32_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\$ok
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict valid BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be(utf16_bytes([82, 111, 99, 0xD83D, 0xDC26])) == Ok("Roc🐦")
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 lossy valid BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be_lossy(utf16_bytes([82, 111, 99, 0xD83D, 0xDC26])) == "Roc🐦"
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 empty BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be(utf16_bytes([])) == Ok("") and Str.from_utf16_be_lossy(utf16_bytes([])) == ""
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 0 BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be(utf16_bytes([65, 0xD800, 66])) == Err(BadUtf16({ index: (1) * 2, problem: UnpairedHighSurrogate }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 1 BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be(utf16_bytes([0xD83D, 0xDC26, 0xDFFF])) == Err(BadUtf16({ index: (2) * 2, problem: UnpairedLowSurrogate }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 strict error 2 BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be(utf16_bytes([65, 0xDBFF])) == Err(BadUtf16({ index: (1) * 2, problem: UnpairedHighSurrogate }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 shared input and heap result BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\{
+            \\    units = List.repeat(65.U16, 64)
+            \\    strict = Str.from_utf16_be(utf16_bytes(units))
+            \\    lossy = Str.from_utf16_be_lossy(utf16_bytes(units))
+            \\    strict == Ok(Str.repeat("A", 64)) and lossy == Str.repeat("A", 64) and units == List.repeat(65.U16, 64)
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 sliced input BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be(utf16_bytes(List.drop_first([99.U16, 65, 66, 67], 1))) == Ok("ABC")
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict valid BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf32_be(utf32_bytes([82, 111, 99, 0x1F426])) == Ok("Roc🐦")
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 lossy valid BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf32_be_lossy(utf32_bytes([82, 111, 99, 0x1F426])) == "Roc🐦"
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 empty BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf32_be(utf32_bytes([])) == Ok("") and Str.from_utf32_be_lossy(utf32_bytes([])) == ""
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 0 BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf32_be(utf32_bytes([65, 0xD800])) == Err(BadUtf32({ index: (1) * 4, problem: SurrogateCodePoint }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 1 BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf32_be(utf32_bytes([65, 0x110000])) == Err(BadUtf32({ index: (1) * 4, problem: CodePointTooLarge }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 strict error 2 BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf32_be(utf32_bytes([0xFFFFFFFF])) == Err(BadUtf32({ index: (0) * 4, problem: CodePointTooLarge }))
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 shared input and heap result BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\{
+            \\    units = List.repeat(65.U32, 64)
+            \\    strict = Str.from_utf32_be(utf32_bytes(units))
+            \\    lossy = Str.from_utf32_be_lossy(utf32_bytes(units))
+            \\    strict == Ok(Str.repeat("A", 64)) and lossy == Str.repeat("A", 64) and units == List.repeat(65.U32, 64)
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 sliced input BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf32_be(utf32_bytes(List.drop_first([99.U32, 65, 66, 67], 1))) == Ok("ABC")
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 lossy resynchronization BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be_lossy(utf16_bytes([0xD800, 0xD83D, 0xDC26, 0xDC00, 65, 0xDBFF])) == "�🐦�A�"
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 lossy invalid units BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf32_be_lossy(utf32_bytes([0xD83D, 0xDC26, 65, 0x110000, 0xFFFFFFFF])) == "��A��"
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 all scalar boundaries BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\Str.from_utf16_be(utf16_bytes([0, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFEFF, 0xFFFF, 0xD800, 0xDC00, 0xDBFF, 0xDFFF])).ok_or("").to_utf8() == [0, 127, 194, 128, 223, 191, 224, 160, 128, 237, 159, 191, 238, 128, 128, 239, 187, 191, 239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191] and Str.from_utf32_be(utf32_bytes([0, 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFEFF, 0xFFFF, 0x10000, 0x10FFFF])).ok_or("").to_utf8() == [0, 127, 194, 128, 223, 191, 224, 160, 128, 237, 159, 191, 238, 128, 128, 239, 187, 191, 239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191]
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 SIMD lengths and lanes BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $len = 0.U64
+            \\while $len <= 65 {
+            \\    units = List.repeat(65.U16, $len)
+            \\    expected = Str.repeat("A", $len)
+            \\    $ok = $ok and Str.from_utf16_be(utf16_bytes(units)) == Ok(expected) and Str.from_utf16_be_lossy(utf16_bytes(units)) == expected
+            \\    $len = $len + 1
+            \\}
+            \\var $lane = 0.U64
+            \\while $lane < 32 {
+            \\    units = List.repeat(65.U16, $lane).concat([0x100]).concat(List.repeat(66.U16, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("Ā").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf16_be(utf16_bytes(units)) == Ok(expected) and Str.from_utf16_be_lossy(utf16_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\$ok
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 SIMD invalid lanes and shared slices BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $lane = 0.U64
+            \\while $lane < 32 {
+            \\    units = List.repeat(65.U16, $lane).concat([0xD800]).concat(List.repeat(66.U16, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf16_be(utf16_bytes(units)) == Err(BadUtf16({ index: ($lane) * 2, problem: UnpairedHighSurrogate })) and Str.from_utf16_be_lossy(utf16_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\shared = [99.U16].concat(List.repeat(65.U16, 65)).concat([100])
+            \\slice = shared.drop_first(1).drop_last(1)
+            \\$ok and Str.from_utf16_be(utf16_bytes(slice)) == Ok(Str.repeat("A", 65)) and List.len(shared) == 67
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 SIMD lengths and lanes BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $len = 0.U64
+            \\while $len <= 65 {
+            \\    units = List.repeat(65.U32, $len)
+            \\    expected = Str.repeat("A", $len)
+            \\    $ok = $ok and Str.from_utf32_be(utf32_bytes(units)) == Ok(expected) and Str.from_utf32_be_lossy(utf32_bytes(units)) == expected
+            \\    $len = $len + 1
+            \\}
+            \\var $lane = 0.U64
+            \\while $lane < 32 {
+            \\    units = List.repeat(65.U32, $lane).concat([0x100]).concat(List.repeat(66.U32, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("Ā").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf32_be(utf32_bytes(units)) == Ok(expected) and Str.from_utf32_be_lossy(utf32_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\$ok
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 SIMD invalid lanes and shared slices BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $lane = 0.U64
+            \\while $lane < 32 {
+            \\    units = List.repeat(65.U32, $lane).concat([0xD800]).concat(List.repeat(66.U32, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf32_be(utf32_bytes(units)) == Err(BadUtf32({ index: ($lane) * 4, problem: SurrogateCodePoint })) and Str.from_utf32_be_lossy(utf32_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\shared = [99.U32].concat(List.repeat(65.U32, 65)).concat([100])
+            \\slice = shared.drop_first(1).drop_last(1)
+            \\$ok and Str.from_utf32_be(utf32_bytes(slice)) == Ok(Str.repeat("A", 65)) and List.len(shared) == 67
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-16 surrogate pair across SIMD chunks BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $prefix = 0.U64
+            \\while $prefix < 33 {
+            \\    units = List.repeat(65.U16, $prefix).concat([0xD83D, 0xDC26]).concat(List.repeat(66.U16, 33))
+            \\    expected = Str.repeat("A", $prefix).concat("🐦").concat(Str.repeat("B", 33))
+            \\    $ok = $ok and Str.from_utf16_be(utf16_bytes(units)) == Ok(expected) and Str.from_utf16_be_lossy(utf16_bytes(units)) == expected
+            \\    $prefix = $prefix + 1
+            \\}
+            \\$ok
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF decoding - UTF-32 high-bit SIMD lanes BE",
+        .source = wide_utf_be_test_prefix ++ "\n" ++
+            \\{
+            \\var $ok = True
+            \\var $lane = 0.U64
+            \\while $lane < 16 {
+            \\    units = List.repeat(65.U32, $lane).concat([0x80000000]).concat(List.repeat(66.U32, 32 - $lane))
+            \\    expected = Str.repeat("A", $lane).concat("�").concat(Str.repeat("B", 32 - $lane))
+            \\    $ok = $ok and Str.from_utf32_be(utf32_bytes(units)) == Err(BadUtf32({ index: ($lane) * 4, problem: CodePointTooLarge })) and Str.from_utf32_be_lossy(utf32_bytes(units)) == expected
+            \\    $lane = $lane + 1
+            \\}
+            \\$ok
+            \\}
+        ++ "\n}",
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 le BOM and explicit order",
+        .source =
+        \\Str.from_utf16_le([255, 254]) == Ok("\u(FEFF)") and Str.from_utf16_le_lossy([255, 254]) == "\u(FEFF)" and Str.from_utf16_bom([255, 254]) == Ok("") and Str.from_utf16_bom_lossy([255, 254]) == Ok("") and Str.from_utf16_bom([255, 254, 65, 0, 61, 216, 38, 220, 255, 254]) == Ok("A🐦\u(FEFF)") and Str.from_utf16_bom_lossy([255, 254, 65, 0, 61, 216, 38, 220, 255, 254]) == Ok("A🐦\u(FEFF)") and Str.from_utf16_bom([255, 254, 255, 254]) == Ok("\u(FEFF)")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 le trailing 1 bytes",
+        .source =
+        \\Str.from_utf16_le([65]) == Err(BadUtf16({ index: 0, problem: UnexpectedEndOfSequence })) and Str.from_utf16_le_lossy([65]) == "�" and Str.from_utf16_le([65, 0, 65]) == Err(BadUtf16({ index: 2, problem: UnexpectedEndOfSequence })) and Str.from_utf16_le([0, 216, 65]) == Err(BadUtf16({ index: 0, problem: UnpairedHighSurrogate })) and Str.from_utf16_le_lossy([0, 216, 65]) == "��" and Str.from_utf16_bom([255, 254, 65]) == Err(BadUtf16({ index: 2, problem: UnexpectedEndOfSequence })) and Str.from_utf16_bom_lossy([255, 254, 65]) == Ok("�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 le BOM error offset",
+        .source =
+        \\Str.from_utf16_bom([255, 254, 65, 0, 0, 216]) == Err(BadUtf16({ index: 4, problem: UnpairedHighSurrogate })) and Str.from_utf16_bom_lossy([255, 254, 65, 0, 0, 216]) == Ok("A�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 le unaligned shared bytes",
+        .source =
+        \\{
+        \\    shared = [99.U8].concat([65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0]).concat([100])
+        \\    slice = shared.drop_first(1).drop_last(1)
+        \\    small_shared = [99.U8].concat([172, 32]).concat([100])
+        \\    small_slice = small_shared.drop_first(1).drop_last(1)
+        \\    strict = Str.from_utf16_le(slice)
+        \\    lossy = Str.from_utf16_le_lossy(slice)
+        \\    strict == Ok(Str.repeat("A", 40)) and lossy == Str.repeat("A", 40) and Str.from_utf16_le(small_slice) == Ok("€") and shared == [99.U8].concat([65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0]).concat([100]) and small_shared == [99.U8].concat([172, 32]).concat([100])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 be BOM and explicit order",
+        .source =
+        \\Str.from_utf16_be([254, 255]) == Ok("\u(FEFF)") and Str.from_utf16_be_lossy([254, 255]) == "\u(FEFF)" and Str.from_utf16_bom([254, 255]) == Ok("") and Str.from_utf16_bom_lossy([254, 255]) == Ok("") and Str.from_utf16_bom([254, 255, 0, 65, 216, 61, 220, 38, 254, 255]) == Ok("A🐦\u(FEFF)") and Str.from_utf16_bom_lossy([254, 255, 0, 65, 216, 61, 220, 38, 254, 255]) == Ok("A🐦\u(FEFF)") and Str.from_utf16_bom([254, 255, 254, 255]) == Ok("\u(FEFF)")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 be trailing 1 bytes",
+        .source =
+        \\Str.from_utf16_be([65]) == Err(BadUtf16({ index: 0, problem: UnexpectedEndOfSequence })) and Str.from_utf16_be_lossy([65]) == "�" and Str.from_utf16_be([0, 65, 65]) == Err(BadUtf16({ index: 2, problem: UnexpectedEndOfSequence })) and Str.from_utf16_be([216, 0, 65]) == Err(BadUtf16({ index: 0, problem: UnpairedHighSurrogate })) and Str.from_utf16_be_lossy([216, 0, 65]) == "��" and Str.from_utf16_bom([254, 255, 65]) == Err(BadUtf16({ index: 2, problem: UnexpectedEndOfSequence })) and Str.from_utf16_bom_lossy([254, 255, 65]) == Ok("�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 be BOM error offset",
+        .source =
+        \\Str.from_utf16_bom([254, 255, 0, 65, 216, 0]) == Err(BadUtf16({ index: 4, problem: UnpairedHighSurrogate })) and Str.from_utf16_bom_lossy([254, 255, 0, 65, 216, 0]) == Ok("A�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 be unaligned shared bytes",
+        .source =
+        \\{
+        \\    shared = [99.U8].concat([0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65]).concat([100])
+        \\    slice = shared.drop_first(1).drop_last(1)
+        \\    small_shared = [99.U8].concat([32, 172]).concat([100])
+        \\    small_slice = small_shared.drop_first(1).drop_last(1)
+        \\    strict = Str.from_utf16_be(slice)
+        \\    lossy = Str.from_utf16_be_lossy(slice)
+        \\    strict == Ok(Str.repeat("A", 40)) and lossy == Str.repeat("A", 40) and Str.from_utf16_be(small_slice) == Ok("€") and shared == [99.U8].concat([0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65, 0, 65]).concat([100]) and small_shared == [99.U8].concat([32, 172]).concat([100])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-16 missing BOM",
+        .source =
+        \\Str.from_utf16_bom([]) == Err(MissingByteOrderMark) and Str.from_utf16_bom_lossy([]) == Err(MissingByteOrderMark) and Str.from_utf16_bom([255]) == Err(MissingByteOrderMark) and Str.from_utf16_bom_lossy([255]) == Err(MissingByteOrderMark) and Str.from_utf16_bom([254]) == Err(MissingByteOrderMark) and Str.from_utf16_bom_lossy([254]) == Err(MissingByteOrderMark) and Str.from_utf16_bom([0, 0]) == Err(MissingByteOrderMark) and Str.from_utf16_bom_lossy([0, 0]) == Err(MissingByteOrderMark) and Str.from_utf16_bom([239, 187, 191]) == Err(MissingByteOrderMark) and Str.from_utf16_bom_lossy([239, 187, 191]) == Err(MissingByteOrderMark)
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 le BOM and explicit order",
+        .source =
+        \\Str.from_utf32_le([255, 254, 0, 0]) == Ok("\u(FEFF)") and Str.from_utf32_le_lossy([255, 254, 0, 0]) == "\u(FEFF)" and Str.from_utf32_bom([255, 254, 0, 0]) == Ok("") and Str.from_utf32_bom_lossy([255, 254, 0, 0]) == Ok("") and Str.from_utf32_bom([255, 254, 0, 0, 65, 0, 0, 0, 38, 244, 1, 0, 255, 254, 0, 0]) == Ok("A🐦\u(FEFF)") and Str.from_utf32_bom_lossy([255, 254, 0, 0, 65, 0, 0, 0, 38, 244, 1, 0, 255, 254, 0, 0]) == Ok("A🐦\u(FEFF)") and Str.from_utf32_bom([255, 254, 0, 0, 255, 254, 0, 0]) == Ok("\u(FEFF)")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 le trailing 1 bytes",
+        .source =
+        \\Str.from_utf32_le([65]) == Err(BadUtf32({ index: 0, problem: UnexpectedEndOfSequence })) and Str.from_utf32_le_lossy([65]) == "�" and Str.from_utf32_le([65, 0, 0, 0, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_le([0, 216, 0, 0, 65]) == Err(BadUtf32({ index: 0, problem: SurrogateCodePoint })) and Str.from_utf32_le_lossy([0, 216, 0, 0, 65]) == "��" and Str.from_utf32_bom([255, 254, 0, 0, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_bom_lossy([255, 254, 0, 0, 65]) == Ok("�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 le trailing 2 bytes",
+        .source =
+        \\Str.from_utf32_le([65, 65]) == Err(BadUtf32({ index: 0, problem: UnexpectedEndOfSequence })) and Str.from_utf32_le_lossy([65, 65]) == "�" and Str.from_utf32_le([65, 0, 0, 0, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_le([0, 216, 0, 0, 65, 65]) == Err(BadUtf32({ index: 0, problem: SurrogateCodePoint })) and Str.from_utf32_le_lossy([0, 216, 0, 0, 65, 65]) == "��" and Str.from_utf32_bom([255, 254, 0, 0, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_bom_lossy([255, 254, 0, 0, 65, 65]) == Ok("�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 le trailing 3 bytes",
+        .source =
+        \\Str.from_utf32_le([65, 65, 65]) == Err(BadUtf32({ index: 0, problem: UnexpectedEndOfSequence })) and Str.from_utf32_le_lossy([65, 65, 65]) == "�" and Str.from_utf32_le([65, 0, 0, 0, 65, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_le([0, 216, 0, 0, 65, 65, 65]) == Err(BadUtf32({ index: 0, problem: SurrogateCodePoint })) and Str.from_utf32_le_lossy([0, 216, 0, 0, 65, 65, 65]) == "��" and Str.from_utf32_bom([255, 254, 0, 0, 65, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_bom_lossy([255, 254, 0, 0, 65, 65, 65]) == Ok("�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 le BOM error offset",
+        .source =
+        \\Str.from_utf32_bom([255, 254, 0, 0, 65, 0, 0, 0, 0, 216, 0, 0]) == Err(BadUtf32({ index: 8, problem: SurrogateCodePoint })) and Str.from_utf32_bom_lossy([255, 254, 0, 0, 65, 0, 0, 0, 0, 216, 0, 0]) == Ok("A�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 le unaligned shared bytes",
+        .source =
+        \\{
+        \\    shared = [99.U8].concat([65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0]).concat([100])
+        \\    slice = shared.drop_first(1).drop_last(1)
+        \\    small_shared = [99.U8].concat([172, 32, 0, 0]).concat([100])
+        \\    small_slice = small_shared.drop_first(1).drop_last(1)
+        \\    strict = Str.from_utf32_le(slice)
+        \\    lossy = Str.from_utf32_le_lossy(slice)
+        \\    strict == Ok(Str.repeat("A", 40)) and lossy == Str.repeat("A", 40) and Str.from_utf32_le(small_slice) == Ok("€") and shared == [99.U8].concat([65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0]).concat([100]) and small_shared == [99.U8].concat([172, 32, 0, 0]).concat([100])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 be BOM and explicit order",
+        .source =
+        \\Str.from_utf32_be([0, 0, 254, 255]) == Ok("\u(FEFF)") and Str.from_utf32_be_lossy([0, 0, 254, 255]) == "\u(FEFF)" and Str.from_utf32_bom([0, 0, 254, 255]) == Ok("") and Str.from_utf32_bom_lossy([0, 0, 254, 255]) == Ok("") and Str.from_utf32_bom([0, 0, 254, 255, 0, 0, 0, 65, 0, 1, 244, 38, 0, 0, 254, 255]) == Ok("A🐦\u(FEFF)") and Str.from_utf32_bom_lossy([0, 0, 254, 255, 0, 0, 0, 65, 0, 1, 244, 38, 0, 0, 254, 255]) == Ok("A🐦\u(FEFF)") and Str.from_utf32_bom([0, 0, 254, 255, 0, 0, 254, 255]) == Ok("\u(FEFF)")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 be trailing 1 bytes",
+        .source =
+        \\Str.from_utf32_be([65]) == Err(BadUtf32({ index: 0, problem: UnexpectedEndOfSequence })) and Str.from_utf32_be_lossy([65]) == "�" and Str.from_utf32_be([0, 0, 0, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_be([0, 0, 216, 0, 65]) == Err(BadUtf32({ index: 0, problem: SurrogateCodePoint })) and Str.from_utf32_be_lossy([0, 0, 216, 0, 65]) == "��" and Str.from_utf32_bom([0, 0, 254, 255, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_bom_lossy([0, 0, 254, 255, 65]) == Ok("�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 be trailing 2 bytes",
+        .source =
+        \\Str.from_utf32_be([65, 65]) == Err(BadUtf32({ index: 0, problem: UnexpectedEndOfSequence })) and Str.from_utf32_be_lossy([65, 65]) == "�" and Str.from_utf32_be([0, 0, 0, 65, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_be([0, 0, 216, 0, 65, 65]) == Err(BadUtf32({ index: 0, problem: SurrogateCodePoint })) and Str.from_utf32_be_lossy([0, 0, 216, 0, 65, 65]) == "��" and Str.from_utf32_bom([0, 0, 254, 255, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_bom_lossy([0, 0, 254, 255, 65, 65]) == Ok("�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 be trailing 3 bytes",
+        .source =
+        \\Str.from_utf32_be([65, 65, 65]) == Err(BadUtf32({ index: 0, problem: UnexpectedEndOfSequence })) and Str.from_utf32_be_lossy([65, 65, 65]) == "�" and Str.from_utf32_be([0, 0, 0, 65, 65, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_be([0, 0, 216, 0, 65, 65, 65]) == Err(BadUtf32({ index: 0, problem: SurrogateCodePoint })) and Str.from_utf32_be_lossy([0, 0, 216, 0, 65, 65, 65]) == "��" and Str.from_utf32_bom([0, 0, 254, 255, 65, 65, 65]) == Err(BadUtf32({ index: 4, problem: UnexpectedEndOfSequence })) and Str.from_utf32_bom_lossy([0, 0, 254, 255, 65, 65, 65]) == Ok("�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 be BOM error offset",
+        .source =
+        \\Str.from_utf32_bom([0, 0, 254, 255, 0, 0, 0, 65, 0, 0, 216, 0]) == Err(BadUtf32({ index: 8, problem: SurrogateCodePoint })) and Str.from_utf32_bom_lossy([0, 0, 254, 255, 0, 0, 0, 65, 0, 0, 216, 0]) == Ok("A�")
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 be unaligned shared bytes",
+        .source =
+        \\{
+        \\    shared = [99.U8].concat([0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65]).concat([100])
+        \\    slice = shared.drop_first(1).drop_last(1)
+        \\    small_shared = [99.U8].concat([0, 0, 32, 172]).concat([100])
+        \\    small_slice = small_shared.drop_first(1).drop_last(1)
+        \\    strict = Str.from_utf32_be(slice)
+        \\    lossy = Str.from_utf32_be_lossy(slice)
+        \\    strict == Ok(Str.repeat("A", 40)) and lossy == Str.repeat("A", 40) and Str.from_utf32_be(small_slice) == Ok("€") and shared == [99.U8].concat([0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65, 0, 0, 0, 65]).concat([100]) and small_shared == [99.U8].concat([0, 0, 32, 172]).concat([100])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF bytes - UTF-32 missing BOM",
+        .source =
+        \\Str.from_utf32_bom([]) == Err(MissingByteOrderMark) and Str.from_utf32_bom_lossy([]) == Err(MissingByteOrderMark) and Str.from_utf32_bom([255]) == Err(MissingByteOrderMark) and Str.from_utf32_bom_lossy([255]) == Err(MissingByteOrderMark) and Str.from_utf32_bom([0, 0, 0, 0]) == Err(MissingByteOrderMark) and Str.from_utf32_bom_lossy([0, 0, 0, 0]) == Err(MissingByteOrderMark) and Str.from_utf32_bom([239, 187, 191]) == Err(MissingByteOrderMark) and Str.from_utf32_bom_lossy([239, 187, 191]) == Err(MissingByteOrderMark) and Str.from_utf32_bom([255, 254, 0]) == Err(MissingByteOrderMark) and Str.from_utf32_bom_lossy([255, 254, 0]) == Err(MissingByteOrderMark)
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "wide UTF allocations - input construction canary",
+        .source =
+        \\if List.len(List.repeat(0.U8, 128)) == 128 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 le strict failure",
+        .source =
+        \\if Str.from_utf16_le(List.repeat(0xD8.U8, 128)).is_err() { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 le output 7",
+        .source =
+        \\if Str.from_utf16_le(List.repeat(0.U8, 14)).ok_or("bad").count_utf8_bytes() == 7 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 le output 8",
+        .source =
+        \\if Str.from_utf16_le(List.repeat(0.U8, 16)).ok_or("bad").count_utf8_bytes() == 8 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 le output 23",
+        .source =
+        \\if Str.from_utf16_le(List.repeat(0.U8, 46)).ok_or("bad").count_utf8_bytes() == 23 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 le output 24",
+        .source =
+        \\if Str.from_utf16_le(List.repeat(0.U8, 48)).ok_or("bad").count_utf8_bytes() == 24 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 le output 65",
+        .source =
+        \\if Str.from_utf16_le(List.repeat(0.U8, 130)).ok_or("bad").count_utf8_bytes() == 65 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 le lossy heap",
+        .source =
+        \\if Str.from_utf16_le_lossy(List.repeat(0xD8.U8, 64)).count_utf8_bytes() == 96 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 be strict failure",
+        .source =
+        \\if Str.from_utf16_be(List.repeat(0xD8.U8, 128)).is_err() { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 be output 7",
+        .source =
+        \\if Str.from_utf16_be(List.repeat(0.U8, 14)).ok_or("bad").count_utf8_bytes() == 7 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 be output 8",
+        .source =
+        \\if Str.from_utf16_be(List.repeat(0.U8, 16)).ok_or("bad").count_utf8_bytes() == 8 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 be output 23",
+        .source =
+        \\if Str.from_utf16_be(List.repeat(0.U8, 46)).ok_or("bad").count_utf8_bytes() == 23 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 be output 24",
+        .source =
+        \\if Str.from_utf16_be(List.repeat(0.U8, 48)).ok_or("bad").count_utf8_bytes() == 24 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 be output 65",
+        .source =
+        \\if Str.from_utf16_be(List.repeat(0.U8, 130)).ok_or("bad").count_utf8_bytes() == 65 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-16 be lossy heap",
+        .source =
+        \\if Str.from_utf16_be_lossy(List.repeat(0xD8.U8, 64)).count_utf8_bytes() == 96 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 le strict failure",
+        .source =
+        \\if Str.from_utf32_le(List.repeat(0xD8.U8, 128)).is_err() { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 le output 7",
+        .source =
+        \\if Str.from_utf32_le(List.repeat(0.U8, 28)).ok_or("bad").count_utf8_bytes() == 7 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 le output 8",
+        .source =
+        \\if Str.from_utf32_le(List.repeat(0.U8, 32)).ok_or("bad").count_utf8_bytes() == 8 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 le output 23",
+        .source =
+        \\if Str.from_utf32_le(List.repeat(0.U8, 92)).ok_or("bad").count_utf8_bytes() == 23 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 le output 24",
+        .source =
+        \\if Str.from_utf32_le(List.repeat(0.U8, 96)).ok_or("bad").count_utf8_bytes() == 24 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 le output 65",
+        .source =
+        \\if Str.from_utf32_le(List.repeat(0.U8, 260)).ok_or("bad").count_utf8_bytes() == 65 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 le lossy heap",
+        .source =
+        \\if Str.from_utf32_le_lossy(List.repeat(0xD8.U8, 128)).count_utf8_bytes() == 96 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 be strict failure",
+        .source =
+        \\if Str.from_utf32_be(List.repeat(0xD8.U8, 128)).is_err() { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 be output 7",
+        .source =
+        \\if Str.from_utf32_be(List.repeat(0.U8, 28)).ok_or("bad").count_utf8_bytes() == 7 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 be output 8",
+        .source =
+        \\if Str.from_utf32_be(List.repeat(0.U8, 32)).ok_or("bad").count_utf8_bytes() == 8 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 1 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 be output 23",
+        .source =
+        \\if Str.from_utf32_be(List.repeat(0.U8, 92)).ok_or("bad").count_utf8_bytes() == 23 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 be output 24",
+        .source =
+        \\if Str.from_utf32_be(List.repeat(0.U8, 96)).ok_or("bad").count_utf8_bytes() == 24 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 be output 65",
+        .source =
+        \\if Str.from_utf32_be(List.repeat(0.U8, 260)).ok_or("bad").count_utf8_bytes() == 65 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
+    },
+    .{
+        .name = "wide UTF allocations - UTF-32 be lossy heap",
+        .source =
+        \\if Str.from_utf32_be_lossy(List.repeat(0xD8.U8, 128)).count_utf8_bytes() == 96 { "ok" } else { "bad" }
+        ,
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 2 } },
     },
     .{
         .name = "low_level - Str.from_utf8_lossy roundtrip ASCII",

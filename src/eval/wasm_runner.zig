@@ -429,6 +429,11 @@ pub fn runWasmOutcomeWithStats(
         }) |entry| {
             env_imports.addHostFunction(entry[0], &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, entry[1], &run_state) catch return error.WasmExecFailed;
         }
+        env_imports.addHostFunction("roc_str_from_utf8_validated", &.{ .I32, .I32 }, &.{}, hostStrFromUtf8Validated, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_str_from_utf16_le_short", &.{ .I32, .I32 }, &.{}, hostStrFromUtf16LeShort, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_str_from_utf16_be_short", &.{ .I32, .I32 }, &.{}, hostStrFromUtf16BeShort, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_str_from_utf32_le_short", &.{ .I32, .I32 }, &.{}, hostStrFromUtf32LeShort, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_str_from_utf32_be_short", &.{ .I32, .I32 }, &.{}, hostStrFromUtf32BeShort, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction(
             "roc_str_from_utf8",
             &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32, .I32 },
@@ -2678,6 +2683,46 @@ fn hostListSwap(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
     writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(len));
+}
+
+fn hostStrFromUtf8Validated(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    const buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const result_ptr: usize = @intCast(params[1].I32);
+    const len = readIntLittle(u32, buffer, list_ptr + 4);
+    writeWasmStrViewFromList(state, module, buffer, result_ptr, list_ptr, len);
+}
+
+fn hostStrFromWideUtfShort(comptime decode: anytype, ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val) void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    const buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const result_ptr: usize = @intCast(params[1].I32);
+    const data_ptr = readIntLittle(u32, buffer, list_ptr);
+    const len = readIntLittle(u32, buffer, list_ptr + 4);
+    const input = buffer[data_ptr..][0..len];
+    var env = builtins.utils.TestEnv.init(std.heap.page_allocator);
+    defer env.deinit();
+    const list = builtins.list.RocList{ .bytes = input.ptr, .length = input.len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(input.len) };
+    const string = decode(list, env.getOps());
+    defer string.decref(env.getOps());
+    const bytes = string.asSlice();
+    writeWasmStr(state, module, result_ptr, bytes.ptr, bytes.len);
+}
+
+fn hostStrFromUtf16LeShort(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostStrFromWideUtfShort(builtins.str.fromUtf16LeShort, ctx, module, params);
+}
+fn hostStrFromUtf16BeShort(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostStrFromWideUtfShort(builtins.str.fromUtf16BeShort, ctx, module, params);
+}
+
+fn hostStrFromUtf32LeShort(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostStrFromWideUtfShort(builtins.str.fromUtf32LeShort, ctx, module, params);
+}
+fn hostStrFromUtf32BeShort(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostStrFromWideUtfShort(builtins.str.fromUtf32BeShort, ctx, module, params);
 }
 
 fn hostStrFromUtf8(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {

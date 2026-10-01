@@ -66,7 +66,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call
-	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17615") (target-def "17615"))
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18027") (target-def "18027"))
 	(e-tag (name "C")
 		(args
 			(e-num (value "2")))))
