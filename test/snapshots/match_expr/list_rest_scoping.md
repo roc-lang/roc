@@ -149,7 +149,7 @@ match items {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 243)
+					(e-dispatch-call (method "plus") (constraint-fn-var 240)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "first"))))
@@ -164,7 +164,7 @@ match items {
 							(rest-at (index 0)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 252)
+					(e-dispatch-call (method "plus") (constraint-fn-var 249)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "last"))))
@@ -180,7 +180,7 @@ match items {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 254)
+					(e-dispatch-call (method "plus") (constraint-fn-var 251)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

@@ -53,7 +53,7 @@ NO CHANGE
 			(args
 				(p-record-destructure
 					(destructs)))
-			(e-call (constraint-fn-var 227)
+			(e-call (constraint-fn-var 224)
 				(e-lookup-local
 					(p-assign (ident "selfCapturing")))
 				(e-empty_record)))
