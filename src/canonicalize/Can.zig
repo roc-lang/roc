@@ -3649,6 +3649,7 @@ fn prepareAssociatedDeclBody(
     type_qualified_ident: ?Ident.Idx,
     assoc_key: ?AST.DeclIndex.AssocValue,
     type_anno_idx: ?CIR.TypeAnno.Idx,
+    annotation_name_region: ?Region,
     mb_where_clauses: ?CIR.WhereClause.Span,
     type_var_scope: ?TypeVarScopeIdx,
 ) std.mem.Allocator.Error!AssociatedDeclBodyWork {
@@ -3665,6 +3666,7 @@ fn prepareAssociatedDeclBody(
         try self.env.addAnnotation(CIR.Annotation{
             .anno = anno_idx,
             .where = mb_where_clauses,
+            .name_region = annotation_name_region,
         }, pattern_region)
     else
         null;
@@ -4181,6 +4183,7 @@ fn canonicalizeAssociatedItems(
                                         type_qualified_idx,
                                         assoc_key,
                                         type_anno_idx,
+                                        self.parse_ir.tokens.resolve(ta.name),
                                         where_clauses,
                                         type_var_scope,
                                     ) };
@@ -4319,6 +4322,7 @@ fn canonicalizeAssociatedItems(
                             decl_ident,
                             type_qualified_decl_idx,
                             assoc_key,
+                            null,
                             null,
                             null,
                             null,
@@ -5222,6 +5226,7 @@ fn createAnnotationDef(
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
         .where = where_clauses,
+        .name_region = source_binding_region,
     };
     const annotation_idx = try self.env.addAnnotation(annotation, region);
 
@@ -5285,6 +5290,7 @@ fn createAnnotationDefWithPattern(
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
         .where = where_clauses,
+        .name_region = source_binding_region,
     };
     const annotation_idx = try self.env.addAnnotation(annotation, region);
 

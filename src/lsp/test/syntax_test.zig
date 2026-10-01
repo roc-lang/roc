@@ -122,6 +122,7 @@ const TestHarness = struct {
 
 /// Syntax integration specs exported to the LSP harness.
 pub const specs = [_]integration_spec.Spec{
+    .{ .name = "builtin Hasher definition resolves its exact auto-imported owner", .run = builtinHasherDefinitionResolvesExactOwner },
     .{ .name = "issue 11775: diagnostics focus on match keywords, patterns, and function headers", .run = focusedExpressionDiagnostics },
     .{ .name = "syntax checker skips rebuild when content unchanged", .run = syntaxCheckerSkipsRebuildWhenContentUnchanged },
     .{ .name = "syntax checker rebuilds when content changes", .run = syntaxCheckerRebuildsWhenContentChanges },
@@ -1235,4 +1236,21 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
         }
         try std.testing.expect(found);
     }
+}
+
+/// Bare Hasher must navigate to Builtin.Hasher rather than a nested crypto Hasher.
+pub fn builtinHasherDefinitionResolvesExactOwner() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+    const source = "module [identity]\n\nidentity : Hasher -> Hasher\nidentity = |value| value\n";
+    try h.writeFile("hasher_definition.roc", source);
+    const result = (try h.checker.getDefinitionAtPosition(h.uri.?, source, 2, 12)) orelse return error.TestUnexpectedResult;
+    defer result.deinit(h.allocator);
+    try std.testing.expect(std.mem.endsWith(u8, result.uri, "/Builtin.roc"));
+    const builtin_source = @import("compiled_builtins").builtin_source;
+    const declaration = std.mem.indexOf(u8, builtin_source, "Hasher :: { state : U64 }.{") orelse return error.TestUnexpectedResult;
+    const line: u32 = @intCast(std.mem.count(u8, builtin_source[0..declaration], "\n"));
+    const line_start = (std.mem.lastIndexOfScalar(u8, builtin_source[0..declaration], '\n') orelse return error.TestUnexpectedResult) + 1;
+    try std.testing.expectEqual(line, result.range.start_line);
+    try std.testing.expectEqual(@as(u32, @intCast(declaration - line_start)), result.range.start_col);
 }

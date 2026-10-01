@@ -2292,73 +2292,47 @@ pub const SyntaxChecker = struct {
 
         const benv = builtin_module.env;
 
-        // Find the type declaration region from the generated builtin CIR.
-        var type_decl_range: ?LspRange = null;
-        var type_decl_start: ?u32 = null;
-        var type_decl_end: u32 = std.math.maxInt(u32);
-
-        const builtin_indices = compiled_builtins.builtinIndices(CIR);
-        inline for (CIR.builtin_type_specs) |spec| {
-            if (std.mem.eql(u8, spec.display_name, base_name) or std.mem.eql(u8, spec.qualified_name, base_name)) {
-                const stmt_idx = @field(builtin_indices, spec.type_field);
-                const decl_region = benv.store.getStatementRegion(stmt_idx);
-                type_decl_range = cir_queries.regionToRange(benv, decl_region);
-                type_decl_start = decl_region.start.offset;
-            }
-        }
-
-        if (type_decl_start) |start| {
-            inline for (CIR.builtin_type_specs) |spec| {
-                if (spec.lookup == .top_level) {
-                    const stmt_idx = @field(builtin_indices, spec.type_field);
-                    const decl_region = benv.store.getStatementRegion(stmt_idx);
-                    if (decl_region.start.offset > start and decl_region.start.offset < type_decl_end) {
-                        type_decl_end = decl_region.start.offset;
-                    }
-                }
-            }
-        }
-
-        // If a member is requested (e.g., "is_empty" in "Str.is_empty"), find that member in the builtin module
-        if (member_name) |member| {
-            const lines = std.mem.splitScalar(u8, compiled_builtins.builtin_source, '\n');
-            var line_it = lines;
-            var offset: usize = 0;
-            while (line_it.next()) |line| : (offset += line.len + 1) {
-                if (std.mem.find(u8, line, base_name) != null and std.mem.find(u8, line, member) != null) {
-                    var col: usize = 0;
-                    while (col < line.len and (line[col] == ' ' or line[col] == '\t')) : (col += 1) {}
-                    const rest = line[col..];
-                    if (std.mem.startsWith(u8, rest, member) and rest.len > member.len and
-                        (rest[member.len] == ' ' or rest[member.len] == '\t' or rest[member.len] == ':' or rest[member.len] == '='))
-                    {
-                        const region = Region{
-                            .start = .{ .offset = @intCast(offset + col) },
-                            .end = .{ .offset = @intCast(offset + col + member.len) },
-                        };
-                        if (cir_queries.regionToRange(benv, region)) |range| {
-                            return DefinitionResult{ .uri = module_uri, .range = range };
-                        }
-                    }
-                }
-            }
-            if (findMemberRangeInModuleEnv(benv, base_name, member)) |range| {
-                return DefinitionResult{
-                    .uri = module_uri,
-                    .range = range,
-                };
-            }
-            self.allocator.free(module_uri);
-            return null;
-        }
-
-        if (type_decl_range) |r| {
-            return DefinitionResult{
-                .uri = module_uri,
-                .range = r,
+        // Resolve source spellings to their exact owner before accessing exposure data.
+        const owner = (if (std.mem.startsWith(u8, base_name, "Builtin."))
+            self.allocator.dupe(u8, base_name)
+        else blk: {
+            const namespace = CIR.resolveBuiltinNamespace(base_name) orelse {
+                self.allocator.free(module_uri);
+                return null;
             };
-        }
+            break :blk std.mem.concat(self.allocator, u8, &.{ namespace.qualified_root, namespace.suffix });
+        }) catch |err| {
+            self.allocator.free(module_uri);
+            oom.* = err;
+            return null;
+        };
+        defer self.allocator.free(owner);
 
+        const qualified_name = if (member_name) |member|
+            std.mem.concat(self.allocator, u8, &.{ owner, ".", member }) catch |err| {
+                self.allocator.free(module_uri);
+                oom.* = err;
+                return null;
+            }
+        else
+            owner;
+        defer if (member_name != null) self.allocator.free(qualified_name);
+
+        if (benv.common.findIdent(qualified_name)) |ident| {
+            if (benv.getExposedTypeNodeIndexById(ident)) |node_idx| {
+                const region = benv.store.getStatementRegion(@enumFromInt(node_idx));
+                if (cir_queries.regionToRange(benv, region)) |range| return .{ .uri = module_uri, .range = range };
+            }
+            if (benv.getExposedValueNodeIndexById(ident)) |node_idx| {
+                const def = benv.store.getDef(@enumFromInt(node_idx));
+                const annotation_name = if (def.annotation) |annotation|
+                    benv.store.getAnnotation(annotation).name_region
+                else
+                    null;
+                const region = annotation_name orelse benv.store.getPatternRegion(def.pattern);
+                if (cir_queries.regionToRange(benv, region)) |range| return .{ .uri = module_uri, .range = range };
+            }
+        }
         self.allocator.free(module_uri);
         return null;
     }
