@@ -12472,7 +12472,12 @@ searches a registry by method name, and never intersects constraints to guess
 a target.
 
 A direct call expression instantiates its callee's checked function type once
-per lowered body. Every result-type read of that expression (a
+per checked-type instantiation scope. The scope owns the direct-call request
+table together with its checked-type cells: checked expression IDs are local
+to one module, and separate materializations of a default in the same module
+may require different specializations. Entering a fresh instantiation scope
+therefore starts a fresh request table, and leaving it restores the caller's
+requests unchanged. Every result-type read of that expression (a
 structural-equality operand sealed before its operands lower, argument evidence
 for an enclosing call, argument preparation) and the expression's own lowering
 share that one request interface, one argument preparation, and one callee

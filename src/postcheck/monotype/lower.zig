@@ -14777,7 +14777,8 @@ const CompletedDirectCallee = struct {
     fn_node: NodeId,
 };
 
-/// The graph request one direct call expression instantiated. A body asks
+/// The graph request one direct call expression instantiated in one scope.
+/// A body asks
 /// for a direct call's result type from several places (structural-equality
 /// operand sealing, argument evidence for an enclosing call, argument
 /// preparation) before it lowers the call itself, and every one of those
@@ -19581,6 +19582,10 @@ const TypeInstantiationContext = struct {
     module_bytes: [32]u8,
     node_map: InstantiatingNodeMap,
     field_kind_map: collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind),
+    /// A direct call's request belongs to the same instantiation as its checked
+    /// argument cells. Default materializations must not reuse a caller's or
+    /// another materialization's request, even for the same checked expression.
+    direct_call_requests: collections.DenseMap(checked.CheckedExprId, DirectCallRequest),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*InstantiatingNodeMap) = .empty,
@@ -19597,6 +19602,7 @@ const TypeInstantiationContext = struct {
             .module_bytes = module_bytes,
             .node_map = InstantiatingNodeMap.init(allocator),
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
+            .direct_call_requests = collections.DenseMap(checked.CheckedExprId, DirectCallRequest).init(allocator),
         };
     }
 
@@ -19605,6 +19611,7 @@ const TypeInstantiationContext = struct {
         self.field_kind_decl_scopes.deinit(self.allocator);
         self.node_map.deinit();
         self.field_kind_map.deinit();
+        self.direct_call_requests.deinit();
     }
 };
 
@@ -19675,9 +19682,6 @@ const BodyContext = struct {
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
     propagate_constructor_value_evidence: bool = false,
-    /// One shared request interface per direct call expression of this body;
-    /// see `DirectCallRequest`.
-    direct_call_requests: std.AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
     /// Result-type reads of dispatch expressions carrying no expected cell,
     /// shared by every later such read of the same expression (see
     /// `sharedDispatchTypeRead`).
@@ -20737,7 +20741,6 @@ const BodyContext = struct {
         self.deinitSpareInstFrames();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
-        self.direct_call_requests.deinit(self.allocator);
         self.dispatch_type_reads.deinit(self.allocator);
         self.related_constructors.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
@@ -27804,7 +27807,7 @@ const BodyContext = struct {
             1 => return .{ .ret = input.? },
             else => {
                 const fn_node = input.?.nodeValue();
-                try self.direct_call_requests.put(self.allocator, task.expr, .{ .fn_node = fn_node });
+                try self.instantiation.direct_call_requests.put(task.expr, .{ .fn_node = fn_node });
                 return .{ .ret = .{ .node = fn_node } };
             },
         }
@@ -27820,7 +27823,7 @@ const BodyContext = struct {
             frame.cursor = 1;
             return evidenceCall(self, type_task);
         }
-        if (self.direct_call_requests.get(task.expr)) |request| {
+        if (self.instantiation.direct_call_requests.get(task.expr)) |request| {
             self.builder.countBodyDiagnostic("direct_call_request_reuses");
             if (task.expected_ret_node) |expected| {
                 const fn_nodes = try self.graph.functionNodes(request.fn_node);
@@ -28158,7 +28161,7 @@ const BodyContext = struct {
         const call = task.call;
         const fn_node = task.fn_node;
         if (frame.cursor == 0) {
-            if (self.direct_call_requests.get(checked_expr)) |request| {
+            if (self.instantiation.direct_call_requests.get(checked_expr)) |request| {
                 if (request.fn_node == fn_node) {
                     if (request.completed) |completed| return .{ .ret = .{ .node = (try self.graph.functionNodes(completed.fn_node)).ret } };
                 }
@@ -28199,7 +28202,7 @@ const BodyContext = struct {
     fn stepPrepareArgs(self: *BodyContext, frame: *EvidenceFrame, task: *PrepareArgsTask, direct_call: bool) Allocator.Error!EvidenceStep {
         if (frame.cursor == 0) {
             if (direct_call) {
-                if (self.direct_call_requests.get(task.expr)) |request| {
+                if (self.instantiation.direct_call_requests.get(task.expr)) |request| {
                     if (request.fn_node == task.fn_node and request.args_prepared) return .{ .ret = .none };
                 }
             }
@@ -28225,7 +28228,7 @@ const BodyContext = struct {
             if (self.isNestedCallableExpr(expr)) return .{ .draft_nested = .{ .ctx = self, .expr = expr, .request_fn_node = request_fn_node } };
         }
         if (direct_call) {
-            if (self.direct_call_requests.getPtr(task.expr)) |request| {
+            if (self.instantiation.direct_call_requests.getPtr(task.expr)) |request| {
                 if (request.fn_node == task.fn_node) {
                     request.args_related = true;
                     request.args_prepared = true;
@@ -28236,7 +28239,7 @@ const BodyContext = struct {
     }
 
     fn directCallArgsRelated(self: *const BodyContext, checked_expr: checked.CheckedExprId, fn_node: NodeId) bool {
-        const request = self.direct_call_requests.get(checked_expr) orelse return false;
+        const request = self.instantiation.direct_call_requests.get(checked_expr) orelse return false;
         return request.fn_node == fn_node and request.args_related;
     }
 
@@ -28449,7 +28452,7 @@ const BodyContext = struct {
             return evidenceCall(self, .{ .relate = .{ .expr = call.args[task.index], .expected_node = task.child_nodes[task.index] } });
         }
         if (frame.cursor == 4) {
-            if (self.direct_call_requests.getPtr(task.expr)) |request| {
+            if (self.instantiation.direct_call_requests.getPtr(task.expr)) |request| {
                 if (request.fn_node == task.fn_node) request.args_related = true;
             }
         }
@@ -41852,7 +41855,7 @@ const BodyContext = struct {
     }
 
     /// The request interface of a direct call expression, instantiated once
-    /// per body and shared by every later read of the same expression (see
+    /// per instantiation scope and shared by later reads of that expression (see
     /// `DirectCallRequest`). A later read that carries an expected result
     /// cell relates it to the shared request exactly as a fresh
     /// instantiation would. Requests whose interface depends on the read
@@ -41895,7 +41898,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         fn_node: NodeId,
     ) Allocator.Error!CompletedDirectCallee {
-        if (self.direct_call_requests.get(checked_expr)) |request| {
+        if (self.instantiation.direct_call_requests.get(checked_expr)) |request| {
             if (request.fn_node == fn_node) {
                 if (request.completed) |completed| return completed;
             }
@@ -41910,7 +41913,7 @@ const BodyContext = struct {
             .callee = callee,
             .fn_node = try self.draftFnSlotTypeNode(callee, fn_node),
         };
-        if (self.direct_call_requests.getPtr(checked_expr)) |request| {
+        if (self.instantiation.direct_call_requests.getPtr(checked_expr)) |request| {
             if (request.fn_node == fn_node) request.completed = completed;
         }
         return completed;
