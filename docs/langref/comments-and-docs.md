@@ -116,3 +116,12 @@ roc docs --serve main.roc
 
 This generates the documentation as usual and then starts a local HTTP server
 (at `http://localhost:8080`) that serves the generated files until you stop it with Ctrl+C.
+
+## Bidirectional controls
+
+Comments and documentation comments cannot contain literal Unicode
+bidirectional controls. These invisible characters can make source code appear
+different from what Roc executes (CVE-2021-42574). Remove them from comments;
+when documenting a control, write its code point, such as `U+202E`, visibly.
+Ordinary Arabic and Hebrew text is allowed. See [strings](strings) for using
+explicit Unicode escapes when the character is needed as runtime data.

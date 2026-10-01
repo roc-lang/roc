@@ -347,7 +347,7 @@ fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query
 /// instructions in the target CPU's feature set, so without the feature such
 /// a build has no hardware rounds at all and computes every digest with the
 /// portable rounds (see `dispatches_at_runtime` in
-/// src/base/sha256_rounds.zig). The floor keeps Debug builds and test suites
+/// src/base/sha256.zig). The floor keeps Debug builds and test suites
 /// on hardware rounds where the CPU allows it; a machine without the
 /// extension gets the portable rounds, and every LLVM build stays at the
 /// architecture baseline and dispatches at runtime, like a released binary.
@@ -365,12 +365,33 @@ fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.
     return b.resolveTargetQuery(query);
 }
 
+/// `target` without the SHA-256 instructions `withSha256Floor` adds, for the
+/// native builtins objects. Those objects are linked into programs for Roc
+/// targets whose CPU contract may lack the instructions (`BuiltinsObjects.forTarget`
+/// in src/cli/main.zig hands a `v1` target its default twin's object), and the
+/// `Crypto` builtins compress with the SHA-256 instructions exactly when their
+/// object is compiled with them (see `Rounds` in src/builtins/sha256.zig). A
+/// `-Dcpu` choice stands, as it does for `withSha256Floor`.
+fn withoutSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
+    var query = target.query;
+    switch (query.cpu_model) {
+        .determined_by_arch_os, .baseline => {},
+        .native, .explicit => return target,
+    }
+    switch (roc_target.classifyCpuArch(target.result.cpu.arch)) {
+        .x86_64 => query.cpu_features_add.removeFeature(@intFromEnum(std.Target.x86.Feature.sha)),
+        .aarch64 => query.cpu_features_add.removeFeature(@intFromEnum(std.Target.aarch64.Feature.sha2)),
+        .aarch64_be, .arm, .wasm32, .other => return target,
+    }
+    return b.resolveTargetQuery(query);
+}
+
 /// Whether `target` is this machine's own x86_64 architecture and OS and this
 /// machine's CPU has the SHA extension and SSSE3. `builtin.cpu` here is the
 /// CPU the build runner was compiled for, which Zig detects from the machine.
 /// x86_64 macOS never takes the floor: it computes digests with the portable
 /// rounds unless `-Dcpu` names its CPU (see `uses_software_rounds` in
-/// src/base/sha256_rounds.zig).
+/// src/base/sha256.zig).
 fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
     if (builtin.target.cpu.arch != .x86_64) return false;
     if (target.result.cpu.arch != .x86_64 or target.result.os.tag != builtin.target.os.tag) return false;
@@ -394,7 +415,7 @@ fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
 /// still a common Linux and Windows machine, so the binary stays at the
 /// architecture baseline and the rounds are chosen for the CPU it runs on: at
 /// runtime by CPUID on every x86_64 target except macOS (see
-/// `dispatches_at_runtime` in src/base/sha256_rounds.zig), and always the
+/// `dispatches_at_runtime` in src/base/sha256.zig), and always the
 /// portable rounds on x86_64 macOS (see `uses_software_rounds` there). Debug
 /// builds for this machine are the one exception, in `withSha256Floor`.
 fn addSha256Floor(query: *std.Target.Query) void {
@@ -3081,6 +3102,7 @@ pub fn build(b: *std.Build) void {
     const build_check_tools_step = b.step("build-check-tools", "Build host check tools used by CI");
     const run_check_zig_format_step = b.step("run-check-zig-format", "Check formatting of all zig code");
     const run_check_zig_lints_step = b.step("run-check-zig-lints", "Run Zig lints");
+    const run_check_source_bidi_step = b.step("run-check-source-bidi", "Reject bidirectional controls in tracked source and paths");
     const run_check_tidy_step = b.step("run-check-tidy", "Run code tidiness checks");
     const run_check_git_lints_step = b.step("run-check-git-lints", "Run Git-backed code checks");
     const run_check_test_asset_coverage_step = b.step("run-check-test-asset-coverage", "Check that every app .roc file in spec-driven test asset dirs has a spec entry");
@@ -3484,6 +3506,26 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         }),
     });
+    const source_bidi_module = b.createModule(.{
+        .root_source_file = b.path("src/base/bidi.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const source_bidi_root = b.createModule(.{
+        .root_source_file = b.path("ci/check_source_bidi.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    source_bidi_root.addImport("bidi", source_bidi_module);
+    const source_bidi_exe = b.addExecutable(.{ .name = "check-source-bidi", .root_module = source_bidi_root });
+    const install_source_bidi = b.addInstallArtifact(source_bidi_exe, .{});
+    build_check_tools_step.dependOn(&install_source_bidi.step);
+    const run_source_bidi = b.addRunArtifact(source_bidi_exe);
+    run_source_bidi.step.dependOn(&install_source_bidi.step);
+    const source_bidi_tests = b.addTest(.{ .name = "source-bidi-tests", .root_module = source_bidi_root });
+    run_check_source_bidi_step.dependOn(&b.addRunArtifact(source_bidi_tests).step);
+    run_check_source_bidi_step.dependOn(&run_source_bidi.step);
+
     const minici_exe = b.addExecutable(.{
         .name = "minici",
         .root_module = b.createModule(.{
@@ -3977,6 +4019,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
+                    .{ .name = "base", .module = roc_modules.base },
                     .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                     .{ .name = "collections", .module = roc_modules.collections },
                     .{ .name = "backend", .module = roc_modules.backend },
@@ -4264,6 +4307,23 @@ pub fn build(b: *std.Build) void {
     _ = builtins32_core_extern_bc_obj.getEmittedBin();
     const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
 
+    // The 64-bit builtins bitcode references its SHA-256 compression by name
+    // (see `Sha256` in src/builtins/crypto.zig), and the LLVM backend links the
+    // definition for the rounds the target's CPU features select. Each of
+    // these payloads is compiled for exactly the features its rounds need.
+    const sha256_portable_bc_file = addSha256RoundsBitcode(b, "portable", .{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
+    const sha256_x86_sha_bc_file = addSha256RoundsBitcode(b, "x86_sha", x86_sha: {
+        var query: std.Target.Query = .{ .cpu_arch = .x86_64, .os_tag = .freestanding, .abi = .none, .cpu_model = .baseline };
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
+        break :x86_sha query;
+    });
+    const sha256_aarch64_sha2_bc_file = addSha256RoundsBitcode(b, "aarch64_sha2", aarch64_sha2: {
+        var query: std.Target.Query = .{ .cpu_arch = .aarch64, .os_tag = .freestanding, .abi = .none, .cpu_model = .baseline };
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2));
+        break :aarch64_sha2 query;
+    });
+
     const llvm_embedded_files = b.addWriteFiles();
     _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_bc_file, "builtins64.bc");
@@ -4273,6 +4333,9 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(builtins64_extern_bc_file, "builtins64_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_bc_file, "builtins32_core_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_core_extern_bc_file, "builtins64_core_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(sha256_portable_bc_file, "sha256_portable.bc");
+    _ = llvm_embedded_files.addCopyFile(sha256_x86_sha_bc_file, "sha256_x86_sha.bc");
+    _ = llvm_embedded_files.addCopyFile(sha256_aarch64_sha2_bc_file, "sha256_aarch64_sha2.bc");
 
     const llvm_embedded_source: []const u8 =
         \\pub const builtins32_bc = @embedFile("builtins32.bc");
@@ -4283,6 +4346,9 @@ pub fn build(b: *std.Build) void {
         \\pub const builtins64_extern_bc = @embedFile("builtins64_extern.bc");
         \\pub const builtins32_core_extern_bc = @embedFile("builtins32_core_extern.bc");
         \\pub const builtins64_core_extern_bc = @embedFile("builtins64_core_extern.bc");
+        \\pub const sha256_portable_bc = @embedFile("sha256_portable.bc");
+        \\pub const sha256_x86_sha_bc = @embedFile("sha256_x86_sha.bc");
+        \\pub const sha256_aarch64_sha2_bc = @embedFile("sha256_aarch64_sha2.bc");
         \\pub const builtins_bc = builtins64_bc;
         \\
     ;
@@ -5994,6 +6060,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
             .imports = &.{
+                .{ .name = "base", .module = roc_modules.base },
                 .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                 .{ .name = "collections", .module = roc_modules.collections },
                 .{ .name = "backend", .module = roc_modules.backend },
@@ -7059,6 +7126,7 @@ pub fn build(b: *std.Build) void {
         "canonicalize",
         "typecheck",
         "build",
+        "build-errors",
     };
     for (names) |name| {
         add_fuzz_target(
@@ -7578,6 +7646,28 @@ const MainExeResult = struct {
     machine_code_shim_archive_test: ?*Step.Compile,
     archive_member_names_test: ?*Step.Compile,
 };
+/// LLVM bitcode for `src/builtins/sha256_rounds_lib.zig` compiled for `query`,
+/// whose CPU features select the SHA-256 rounds the payload defines.
+fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query: std.Target.Query) std.Build.LazyPath {
+    const obj = b.addObject(.{
+        .name = "roc_sha256_" ++ rounds_name ++ "_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/sha256_rounds_lib.zig"),
+            .target = b.resolveTargetQuery(query),
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    obj.root_module.omit_frame_pointer = true;
+    obj.root_module.stack_check = false;
+    obj.use_llvm = true;
+    obj.bundle_compiler_rt = false;
+    _ = obj.getEmittedBin();
+    return obj.getEmittedLlvmBc();
+}
+
 fn addMainExe(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -7670,11 +7760,12 @@ fn addMainExe(
     // This is a plain .o (not a .a archive) since we don't bundle compiler_rt here
     // (compiler_rt is bundled in the shim instead). Using .o avoids ar archive format
     // issues and is simpler since we pass it directly to the linker.
+    const builtins_target = withoutSha256Floor(b, target);
     const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = target,
+            .target = builtins_target,
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
@@ -7703,7 +7794,7 @@ fn addMainExe(
         .name = "roc_builtins_extern",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = target,
+            .target = builtins_target,
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,

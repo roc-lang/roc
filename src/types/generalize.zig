@@ -450,7 +450,7 @@ pub const Generalizer = struct {
                 // `outermost` on its own, so it can't raise the rank). Traversing the
                 // backing var would therefore be redundant—the rank is just the max
                 // over the args.
-                return try self.pushOverArgs(fill, self.store.sliceAliasArgs(alias));
+                return try self.pushOverArgs(fill, self.store.sliceAliasAllArgs(alias));
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_record, .empty_tag_union => {

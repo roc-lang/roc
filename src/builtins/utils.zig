@@ -816,47 +816,9 @@ pub inline fn assertValidRefcount(data_ptr: ?[*]u8, roc_ops: *RocOps) void {
     }
 }
 
-// We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
-// Here is [their growth strategy](https://github.com/facebook/folly/blob/3e0525988fd444201b19b76b390a5927c15cb697/folly/FBVector.h#L1128) for push_back:
-//
-// (1) initial size
-//     Instead of growing to size 1 from empty, fbvector allocates at least
-//     64 bytes. You may still use reserve to reserve a lesser amount of
-//     memory.
-// (2) 1.5x
-//     For medium-sized vectors, the growth strategy is 1.5x. See the docs
-//     for details.
-//     This does not apply to very small or very large fbvectors. This is a
-//     heuristic.
-//
-// In our case, we exposed allocate and reallocate, which will use a smart growth strategy.
-// We also expose allocateExact and reallocateExact for case where a specific number of elements is requested.
-
-/// Calculates the new capacity for a growing list, based on the old capacity, requested length, and element width.
-///
-/// Should only be called when growing a collection.
-///
-/// `requested_length` should always be greater than old_capacity.
-pub inline fn calculateCapacity(
-    old_capacity: usize,
-    requested_length: usize,
-    element_width: usize,
-) usize {
-    // TODO: Deal with the fact we allocate an extra u64 for refcount.
-    // This may lead to allocating page size + 8 bytes.
-    // That could mean allocating an entire page for 8 bytes of data which isn't great.
-
-    if (requested_length != old_capacity + 1) {
-        // The user is explicitly requesting n elements.
-        // Trust the user and just reserve that amount.
-        return requested_length;
-    }
-
-    if (element_width == 0) {
-        return requested_length;
-    }
-    return @max(geometricGrowth(old_capacity, element_width), requested_length);
-}
+// Growth roughly follows [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md):
+// an empty collection grows to at least 64 bytes, medium-sized ones grow by
+// 1.5x, and very small or very large ones double.
 
 /// The next capacity step in the geometric growth progression. Appends that
 /// outgrow the current capacity reserve at least this much so a run of them
@@ -1364,23 +1326,6 @@ test "TestEnv allocation tracking" {
     // Test deallocation
     ops.roc_dealloc(ops, allocated.?, 8);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-}
-
-test "calculateCapacity with various inputs" {
-    // Test zero capacity
-    try std.testing.expectEqual(@as(usize, 0), calculateCapacity(0, 0, 1));
-
-    // Test basic growth
-    try std.testing.expectEqual(@as(usize, 6), calculateCapacity(4, 6, 1));
-
-    // Test with larger element sizes
-    try std.testing.expectEqual(@as(usize, 20), calculateCapacity(16, 20, 1));
-
-    // Test that it rounds up appropriately
-    try std.testing.expectEqual(@as(usize, 10), calculateCapacity(8, 10, 1));
-
-    // Test growth logic when requesting exactly old_capacity + 1
-    try std.testing.expectEqual(@as(usize, 8), calculateCapacity(4, 5, 1));
 }
 
 test "allocateWithRefcount basic functionality" {

@@ -1529,7 +1529,7 @@ pub const Interpreter = struct {
         },
         struct_field: struct {
             sorted_index: usize,
-            semantic_index: u16,
+            semantic_index: u32,
             field_layout: layout_mod.Idx,
         },
         tag_payload: struct {
@@ -4108,7 +4108,7 @@ pub const Interpreter = struct {
                 const disc_value = try self.alloc(target_layout);
                 switch (self.helper.sizeOf(target_layout)) {
                     1 => disc_value.write(u8, @intCast(disc)),
-                    2 => disc_value.write(u16, disc),
+                    2 => disc_value.write(u16, @intCast(disc)),
                     4 => disc_value.write(u32, disc),
                     8 => disc_value.write(u64, disc),
                     else => self.invariantFailed(
@@ -5053,8 +5053,8 @@ pub const Interpreter = struct {
     fn evalTagLiteral(
         self: *LirInterpreter,
         frame: *const Frame,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload_local: ?LocalId,
         union_layout: layout_mod.Idx,
     ) Error!Value {
@@ -5530,7 +5530,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn performRawRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
+    fn performRawRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u32) void {
         trace.log("performRawRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
         const helper = self.rcHelperForLayout(op, layout_idx);
         self.performRcHelperIfNeeded(helper, val, count, .atomic);
@@ -5543,7 +5543,7 @@ pub const Interpreter = struct {
         helper: LIR.RcHelper,
         val: Value,
         value_layout: layout_mod.Idx,
-        count: u16,
+        count: u32,
         atomicity: LIR.RcAtomicity,
     ) Error!void {
         switch (helper) {
@@ -5559,7 +5559,7 @@ pub const Interpreter = struct {
         desc_ref: LIR.BoxyDescRef,
         val: Value,
         value_layout: layout_mod.Idx,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         const desc = try self.resolveBoxyDescRef(frame, desc_ref);
@@ -5595,7 +5595,7 @@ pub const Interpreter = struct {
         frame: *const Frame,
         desc: *const LirProgram.BoxyTypeDesc,
         data_ptr: [*]u8,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         try self.boxy_runtime.performBoxyPayloadDrop(self.boxyFrameHooks(frame), desc, data_ptr, count, atomicity);
@@ -5608,7 +5608,7 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         desc: ?*const LirProgram.BoxyTypeDesc,
         op: RcOp,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         try self.boxy_runtime.performBoxyLayoutDrop(self.boxyFrameHooks(frame), val, layout_idx, desc, op, count, atomicity);
@@ -5644,12 +5644,12 @@ pub const Interpreter = struct {
         op: RcOp,
         val: Value,
         layout_idx: layout_mod.Idx,
-        count: u16,
+        count: u32,
     ) void {
         self.performRawRc(op, val, layout_idx, count);
     }
 
-    fn performInterpreterApiRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
+    fn performInterpreterApiRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u32) void {
         self.performRawRc(op, val, layout_idx, count);
     }
 
@@ -5661,11 +5661,11 @@ pub const Interpreter = struct {
         return self.boxy_runtime.rcHelperForLayout(op, layout_idx);
     }
 
-    fn performRcHelperIfNeeded(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
+    fn performRcHelperIfNeeded(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u32, atomicity: RcAtomicity) void {
         self.boxy_runtime.performRcHelperIfNeeded(self.boxyFrameHooks(null), helper, val, count, atomicity);
     }
 
-    fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
+    fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u32, atomicity: RcAtomicity) void {
         const plan = self.layout_store.rcHelperPlan(helper);
         if (plan == .noop) {
             self.invariantFailed(
@@ -5788,7 +5788,8 @@ pub const Interpreter = struct {
                     0 => 0,
                     1 => val.offset(disc_offset).read(u8),
                     2 => val.offset(disc_offset).read(u16),
-                    else => return,
+                    4 => val.offset(disc_offset).read(u32),
+                    else => unreachable, // a u32 variant count needs at most 4 bytes
                 };
                 if (disc >= variant_count) return;
                 const child_key = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, disc) orelse return;
@@ -5852,7 +5853,7 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         data_ptr: ?[*]u8,
         op: layout_mod.RcOp,
-        count: u16,
+        count: u32,
     ) void {
         self.boxy_runtime.performErasedCallableFinalDropIfUnique(data_ptr, op, count);
     }
@@ -5861,7 +5862,7 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         data_ptr: ?[*]u8,
         op: layout_mod.RcOp,
-        count: u16,
+        count: u32,
     ) void {
         self.boxy_runtime.performErasedCallableFinalDrop(data_ptr, op, count);
     }
@@ -6032,7 +6033,7 @@ pub const Interpreter = struct {
     fn findBadUtf8Variant(
         self: *LirInterpreter,
         inner_tu: *const layout_mod.TagUnionData,
-    ) ?struct { disc: u16, struct_idx: layout_mod.StructIdx } {
+    ) ?struct { disc: u32, struct_idx: layout_mod.StructIdx } {
         const inner_v = self.layout_store.getTagUnionVariants(inner_tu);
         for (0..inner_v.len) |i| {
             const inner_payload = inner_v.get(@intCast(i)).payload_layout;
@@ -6151,6 +6152,36 @@ pub const Interpreter = struct {
     /// Like `updateModeForArg0`, for the op's second checked argument.
     fn updateModeForArg1(unique_args: u64) UpdateMode {
         return if ((unique_args & 2) != 0) .InPlace else .Immutable;
+    }
+
+    /// Evaluate `list_reserve` or `list_reserve_for_append` through `reserve`,
+    /// the builtin that picks the grown capacity.
+    fn evalListReserve(self: *LirInterpreter, ll: LowLevelEvalInput, arg_layout: layout_mod.Idx, comptime reserve: anytype) Error!Value {
+        const info = self.listElemInfo(arg_layout);
+        const elems_rc = self.builtinListElemRc(arg_layout);
+        const list_val = self.valueToRocListForLayout(ll.args[0], arg_layout);
+        if (info.width == 0) {
+            return self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+        }
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
+        if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+        const result = reserve(
+            list_val,
+            info.alignment,
+            ll.args[1].read(u64),
+            info.width,
+            elems_rc,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+            updateModeForArg0(ll.unique_args),
+            &self.roc_ops,
+        );
+        return self.rocListToValue(result, ll.ret_layout);
     }
 
     fn evalLowLevel(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
@@ -6380,11 +6411,11 @@ pub const Interpreter = struct {
                 const variants = self.layout_store.getTagUnionVariants(tu_data);
 
                 // Discover Ok (Str payload) and Err variant indices from the layout.
-                var ok_disc: ?u16 = null;
-                var err_disc: ?u16 = null;
+                var ok_disc: ?u32 = null;
+                var err_disc: ?u32 = null;
                 var err_record_idx: ?layout_mod.StructIdx = null;
                 var inner_tu_data_opt: ?*const layout_mod.TagUnionData = null;
-                var inner_bad_utf8_disc: u16 = 0;
+                var inner_bad_utf8_disc: u32 = 0;
                 for (0..variants.len) |i| {
                     const v_payload = variants.get(@intCast(i)).payload_layout;
                     const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
@@ -7098,26 +7129,27 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
-            .list_reserve => blk: {
+            .list_reserve => try self.evalListReserve(ll, arg_layout, builtins.list.listReserve),
+            .list_reserve_for_append => try self.evalListReserve(ll, arg_layout, builtins.list.listReserveForAppend),
+            .list_clear => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const source_list = self.valueToRocListForLayout(args[0], arg_layout);
                 if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+                    break :blk self.rocListToValue(canonicalZstList(0), ll.ret_layout);
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
                 var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
-                const result = builtins.list.listReserve(
-                    list_val,
+                const result = builtins.list.listSublist(
+                    source_list,
                     info.alignment,
-                    args[1].read(u64),
                     info.width,
                     elems_rc,
-                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    0,
+                    0,
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     updateModeForArg0(ll.unique_args),
@@ -7291,6 +7323,11 @@ pub const Interpreter = struct {
             .bool_not => blk: {
                 const val = try self.alloc(.bool);
                 val.write(u8, if (args[0].read(u8) == 0) 1 else 0);
+                break :blk val;
+            },
+            .bool_likely => blk: {
+                const val = try self.alloc(.bool);
+                val.write(u8, args[0].read(u8));
                 break :blk val;
             },
 
@@ -8013,7 +8050,7 @@ pub const Interpreter = struct {
 
     fn evalSimdAppend(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
         var list = self.valueToRocListForLayout(ll.args[1], try self.lowLevelArgLayout(ll, 1));
-        list = builtins.list.listReserve(
+        list = builtins.list.listReserveForAppend(
             list,
             1,
             16,
@@ -9644,7 +9681,7 @@ pub const Interpreter = struct {
     fn requireBoxyTagVariantByDiscriminant(
         self: *const LirInterpreter,
         desc: *const LirProgram.BoxyTypeDesc,
-        discriminant: u16,
+        discriminant: u32,
     ) LirProgram.BoxyTagVariant {
         return self.boxy_runtime.requireBoxyTagVariantByDiscriminant(desc, discriminant);
     }
@@ -9652,12 +9689,12 @@ pub const Interpreter = struct {
     fn findBoxyTagVariantByDiscriminant(
         self: *const LirInterpreter,
         desc: *const LirProgram.BoxyTypeDesc,
-        discriminant: u16,
+        discriminant: u32,
     ) ?LirProgram.BoxyTagVariant {
         return self.boxy_runtime.findBoxyTagVariantByDiscriminant(desc, discriminant);
     }
 
-    fn boxyTagExtDiscriminant(self: *const LirInterpreter, desc: *const LirProgram.BoxyTypeDesc) ?u16 {
+    fn boxyTagExtDiscriminant(self: *const LirInterpreter, desc: *const LirProgram.BoxyTypeDesc) ?u32 {
         return self.boxy_runtime.boxyTagExtDiscriminant(desc);
     }
 
@@ -9672,7 +9709,7 @@ pub const Interpreter = struct {
     fn requireBoxyTagPayloadLayout(
         self: *const LirInterpreter,
         union_layout: layout_mod.Idx,
-        discriminant: u16,
+        discriminant: u32,
     ) layout_mod.Idx {
         return self.boxy_runtime.requireBoxyTagPayloadLayout(union_layout, discriminant);
     }
@@ -9816,7 +9853,7 @@ pub const Interpreter = struct {
     }
 
     /// Get the payload layout for a given tag discriminant.
-    fn tagPayloadLayout(self: *LirInterpreter, union_layout: layout_mod.Idx, discriminant: u16) layout_mod.Idx {
+    fn tagPayloadLayout(self: *LirInterpreter, union_layout: layout_mod.Idx, discriminant: u32) layout_mod.Idx {
         return self.boxy_runtime.tagPayloadLayout(union_layout, discriminant);
     }
 

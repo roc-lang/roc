@@ -255,10 +255,16 @@ const Policy = struct {
     }
     pub fn appendEntry(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!Id {
         assertSupportsInserts(self.supports_inserts);
-        const id: u32 = @intCast(self.ranges.items.items.len);
-        const start: u32 = @intCast(self.bytes.items.items.len);
+        // Ids, byte offsets, and lengths are 32-bit, and index cells store
+        // `id + 1`; an interner past that range has exhausted the
+        // representable memory.
+        const id = std.math.cast(u32, self.ranges.items.items.len) orelse return error.OutOfMemory;
+        if (id == std.math.maxInt(u32)) return error.OutOfMemory;
+        const start = std.math.cast(u32, self.bytes.items.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
+        _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
         _ = try self.bytes.appendSlice(gpa, string);
-        _ = try self.ranges.append(gpa, .{ .start = start, .len = @intCast(string.len) });
+        _ = try self.ranges.append(gpa, .{ .start = start, .len = len });
         return id;
     }
     pub fn hash(string: []const u8) u64 {

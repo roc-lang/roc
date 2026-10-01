@@ -131,12 +131,12 @@ c = 0
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-num (value "0"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "b"))
-		(e-tag (name "G"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let

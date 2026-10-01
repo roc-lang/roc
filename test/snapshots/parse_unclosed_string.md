@@ -31,10 +31,6 @@ EndOfFile,
 (e-string
 	(e-string-part (raw "hello")))
 ~~~
-# FORMATTED
-~~~roc
-"hello"
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-string

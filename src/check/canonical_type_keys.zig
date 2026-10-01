@@ -305,6 +305,23 @@ pub const TypeWriter = struct {
     }
 
     /// Anchor identities only for this checker-local digest.
+    /// Keep anchored-identity keys' classes across requests until
+    /// `releaseAnchoredKeys`, for a caller whose anchors stay fixed. The caller
+    /// calls `invalidateAnchoredKeys` whenever the store changes meanwhile.
+    pub fn retainAnchoredKeys(self: *TypeWriter) void {
+        self.mode_digester.retain = true;
+        self.mode_digester.engine.reset();
+    }
+
+    pub fn invalidateAnchoredKeys(self: *TypeWriter) void {
+        self.mode_digester.engine.reset();
+    }
+
+    pub fn releaseAnchoredKeys(self: *TypeWriter) void {
+        self.mode_digester.retain = false;
+        self.mode_digester.engine.reset();
+    }
+
     pub fn fromVarWithAnchoredIdentities(self: *TypeWriter, var_: Var, anchors: *const std.AutoHashMap(Var, void)) Allocator.Error!canonical.CanonicalTypeKey {
         self.mode_digester.adapter.identity_anchors = anchors;
         self.mode_digester.adapter.write_identity_names = false;

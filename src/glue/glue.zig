@@ -845,6 +845,9 @@ fn glueLlvmCompileOptions(opt: GlueOpt) llvm_compile.CompileOptions {
         },
         .debug = opt == .dev,
         .target_ptr_width_bits = targetPtrWidthBits(base.target.TargetUsize.native),
+        // The target machine names no CPU features, so LLVM assumes only its
+        // default CPU for the triple, which has no SHA-256 instructions.
+        .sha256_rounds = .portable,
     };
 }
 
@@ -3801,7 +3804,7 @@ const GlueRocValueWriter = struct {
         };
     }
 
-    fn tagIndex(self: *const GlueRocValueWriter, tag_union_type_name: []const u8, tag_name: []const u8) u16 {
+    fn tagIndex(self: *const GlueRocValueWriter, tag_union_type_name: []const u8, tag_name: []const u8) u32 {
         return self.schemas.tagUnion(tag_union_type_name).tagDiscriminant(tag_name) orelse
             glueInvariant("glue schema tag union '{s}' missing tag '{s}'", .{ tag_union_type_name, tag_name });
     }
@@ -3898,7 +3901,7 @@ const GlueRocValueWriter = struct {
         self.writeValue(slot.ptr, T, value);
     }
 
-    fn variantPayloadLayout(self: *const GlueRocValueWriter, tag_union_layout_idx: layout.Idx, tag_index: u16) layout.Idx {
+    fn variantPayloadLayout(self: *const GlueRocValueWriter, tag_union_layout_idx: layout.Idx, tag_index: u32) layout.Idx {
         const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
@@ -3910,7 +3913,7 @@ const GlueRocValueWriter = struct {
         return info.variants.get(tag_index).payload_layout;
     }
 
-    fn writeTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]u8, tag_union_layout_idx: layout.Idx, tag_index: u16) void {
+    fn writeTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]u8, tag_union_layout_idx: layout.Idx, tag_index: u32) void {
         const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});

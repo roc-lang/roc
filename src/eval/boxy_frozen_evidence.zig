@@ -9,13 +9,50 @@ const Runtime = @import("boxy_runtime.zig").BoxyRuntime;
 pub const Matcher = struct {
     const Pair = struct { left: usize, right: usize, dictionary: bool };
 
+    /// A pair of descriptors or dictionaries still to compare.
+    const Pending = union(enum) {
+        descriptor: [2]*const Program.BoxyTypeDesc,
+        dictionary: [2]*const Program.BoxyDict,
+    };
+
     allocator: std.mem.Allocator,
     runtime: *const Runtime,
     program: *const Program.Result,
     seen: std.AutoHashMapUnmanaged(Pair, void) = .empty,
+    pending: std.ArrayListUnmanaged(Pending) = .empty,
 
     pub fn deinit(self: *Matcher) void {
         self.seen.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+    }
+
+    pub fn descriptor(self: *Matcher, a: *const Program.BoxyTypeDesc, b: *const Program.BoxyTypeDesc) std.mem.Allocator.Error!bool {
+        return try self.run(.{ .descriptor = .{ a, b } });
+    }
+
+    pub fn dictionary(self: *Matcher, a: *const Program.BoxyDict, b: *const Program.BoxyDict) std.mem.Allocator.Error!bool {
+        return try self.run(.{ .dictionary = .{ a, b } });
+    }
+
+    /// Compare `root` and every pair it reaches from an explicit work list.
+    fn run(self: *Matcher, root: Pending) std.mem.Allocator.Error!bool {
+        self.pending.clearRetainingCapacity();
+        try self.pending.append(self.allocator, root);
+        while (self.pending.pop()) |item| {
+            const matches = switch (item) {
+                .descriptor => |pair| try self.descriptorFields(pair[0], pair[1]),
+                .dictionary => |pair| try self.dictionaryFields(pair[0], pair[1]),
+            };
+            if (!matches) {
+                self.pending.clearRetainingCapacity();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn pushDescriptor(self: *Matcher, a: Program.BoxyDescRef, b: Program.BoxyDescRef) std.mem.Allocator.Error!void {
+        try self.pending.append(self.allocator, .{ .descriptor = .{ self.desc(a), self.desc(b) } });
     }
 
     fn desc(self: *Matcher, ref: Program.BoxyDescRef) *const Program.BoxyTypeDesc {
@@ -34,10 +71,12 @@ pub const Matcher = struct {
         };
     }
 
+    /// Queue each descriptor pair of two spans; false when their lengths
+    /// differ.
     fn descriptors(self: *Matcher, a: Program.BoxySpan, b: Program.BoxySpan) std.mem.Allocator.Error!bool {
         if (a.len != b.len) return false;
         for (self.runtime.requireBoxyDescRefs(a), self.runtime.requireBoxyDescRefs(b)) |left, right| {
-            if (!try self.descriptor(self.desc(left), self.desc(right))) return false;
+            try self.pushDescriptor(left, right);
         }
         return true;
     }
@@ -45,13 +84,17 @@ pub const Matcher = struct {
     fn dictionaries(self: *Matcher, a: Program.BoxySpan, b: Program.BoxySpan) std.mem.Allocator.Error!bool {
         if (a.len != b.len) return false;
         for (self.runtime.requireBoxyDictRefs(a), self.runtime.requireBoxyDictRefs(b)) |left, right| {
-            if (!try self.dictionary(self.dict(left), self.dict(right))) return false;
+            try self.pending.append(self.allocator, .{ .dictionary = .{ self.dict(left), self.dict(right) } });
         }
         return true;
     }
 
     fn optionalDescriptor(self: *Matcher, a: ?Program.BoxyDescRef, b: ?Program.BoxyDescRef) std.mem.Allocator.Error!bool {
-        if (a) |left| return if (b) |right| try self.descriptor(self.desc(left), self.desc(right)) else false;
+        if (a) |left| {
+            const right = b orelse return false;
+            try self.pushDescriptor(left, right);
+            return true;
+        }
         return b == null;
     }
 
@@ -64,14 +107,17 @@ pub const Matcher = struct {
                     return false;
                 },
                 .dynamic => |step| {
-                    if (step.op != right.dynamic.op or !try self.descriptor(self.desc(step.desc), self.desc(right.dynamic.desc))) return false;
+                    if (step.op != right.dynamic.op) return false;
+                    try self.pushDescriptor(step.desc, right.dynamic.desc);
                 },
             }
         }
         return true;
     }
 
-    pub fn descriptor(self: *Matcher, a: *const Program.BoxyTypeDesc, b: *const Program.BoxyTypeDesc) std.mem.Allocator.Error!bool {
+    /// Compare two descriptors' own fields, queueing the descriptors they
+    /// reference.
+    fn descriptorFields(self: *Matcher, a: *const Program.BoxyTypeDesc, b: *const Program.BoxyTypeDesc) std.mem.Allocator.Error!bool {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = false };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
@@ -94,13 +140,16 @@ pub const Matcher = struct {
             }
             if (left.payload_descs.len != right.payload_descs.len) return false;
             for (self.runtime.requireBoxyTagPayloadDescs(left.payload_descs), self.runtime.requireBoxyTagPayloadDescs(right.payload_descs)) |lp, rp| {
-                if (lp.payload_index != rp.payload_index or !try self.descriptor(self.desc(lp.desc), self.desc(rp.desc))) return false;
+                if (lp.payload_index != rp.payload_index) return false;
+                try self.pushDescriptor(lp.desc, rp.desc);
             }
         }
         return true;
     }
 
-    pub fn dictionary(self: *Matcher, a: *const Program.BoxyDict, b: *const Program.BoxyDict) std.mem.Allocator.Error!bool {
+    /// Compare two dictionaries' own fields, queueing the descriptors and
+    /// dictionaries they reference.
+    fn dictionaryFields(self: *Matcher, a: *const Program.BoxyDict, b: *const Program.BoxyDict) std.mem.Allocator.Error!bool {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = true };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
