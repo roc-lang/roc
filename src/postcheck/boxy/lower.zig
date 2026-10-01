@@ -36928,6 +36928,13 @@ const ProcBodyBuilder = struct {
         const target_env = self.localDescriptorEnvironmentForLocal(target) orelse return next;
         const source_env = self.localDescriptorEnvironmentForLocal(source) orelse return next;
         var continuation = next;
+        // One descriptor local can serve several bindings (a nominal and its
+        // backing share their descriptor), so each target local is written
+        // once, from the source binding of any representation it serves.
+        var written = std.ArrayList(LIR.LocalId).empty;
+        defer written.deinit(self.parent.allocator);
+        var unmatched = std.ArrayList(LIR.LocalId).empty;
+        defer unmatched.deinit(self.parent.allocator);
         for (target_env.bindings) |target_binding| {
             var source_local: ?LIR.LocalId = null;
             for (source_env.bindings) |source_binding| {
@@ -36941,8 +36948,12 @@ const ProcBodyBuilder = struct {
                 }
                 source_local = source_binding.local;
             }
-            const value = source_local orelse
-                boxyLowerInvariant("boxy local descriptor transfer source was missing a target binding");
+            const value = source_local orelse {
+                try unmatched.append(self.parent.allocator, target_binding.local);
+                continue;
+            };
+            if (std.mem.findScalar(LIR.LocalId, written.items, target_binding.local) != null) continue;
+            try written.append(self.parent.allocator, target_binding.local);
             if (value == target_binding.local) continue;
             if (self.localIsReadOnlyDescriptorInput(target_binding.local)) {
                 boxyLowerInvariant("boxy local descriptor transfer targeted a read-only descriptor input");
@@ -36953,6 +36964,11 @@ const ProcBodyBuilder = struct {
                 .mode = mode,
                 .next = continuation,
             } }, self.glueOrigin());
+        }
+        for (unmatched.items) |local| {
+            if (std.mem.findScalar(LIR.LocalId, written.items, local) == null) {
+                boxyLowerInvariant("boxy local descriptor transfer source was missing a target binding");
+            }
         }
         return continuation;
     }
