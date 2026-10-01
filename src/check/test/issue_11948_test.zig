@@ -5,7 +5,7 @@
 //! than silently checking as an erroneous type that crashes at runtime.
 const TestEnv = @import("TestEnv.zig");
 
-fn expectMissingFromNumeral(comptime source: []const u8) !void {
+fn expectMissingFromNumeral(comptime source: []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("Missing Method");
