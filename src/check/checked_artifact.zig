@@ -28978,7 +28978,7 @@ const SingleSourceCalls = struct {
     fn dispatchTemplate(self: SingleSourceCalls, plan: static_dispatch.StaticDispatchCallPlan) ?canonical.CheckedProcedureTemplateId {
         const direct = switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| direct,
-            .direct_pending, .evidence_dependent, .structural, .@"unreachable", .checked_error => return null,
+            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
         };
         return switch (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind) {
             .procedure => |procedure| switch (procedure.runtime_target) {
