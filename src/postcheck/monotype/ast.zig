@@ -1953,6 +1953,10 @@ pub const ProgramBuilder = struct {
         return self.nested_defs.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
+    pub fn setNestedDefSource(self: *ProgramBuilder, id: NestedDefId, source: FnTemplate) void {
+        self.nested_defs.getPtrImmediate(@intFromEnum(id)).fn_def = source;
+    }
+
     pub fn nestedDefsView(self: *const ProgramBuilder) []const NestedDef {
         return self.nested_defs.unsafeRawItemsForView();
     }

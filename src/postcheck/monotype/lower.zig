@@ -9342,7 +9342,7 @@ const Builder = struct {
         };
     }
 
-    /// Stamp every function and definition from a checked template with
+    /// Stamp every function, definition, and nested definition from a checked template with
     /// whether its module's source calls it at exactly one site, wherever it
     /// was created: a fresh specialization or a restored function value. The
     /// two records of one function carry the same template.
@@ -9363,6 +9363,13 @@ const Builder = struct {
             fn_def.single_source_call = true;
             def.fn_def = fn_def;
             self.program.setDef(id, def);
+        }
+        for (0..self.program.nestedDefCount()) |raw| {
+            const id: Ast.NestedDefId = @enumFromInt(@as(u32, @intCast(raw)));
+            var source = self.program.getNestedDef(id).fn_def;
+            if (!self.singleSourceCall(source)) continue;
+            source.single_source_call = true;
+            self.program.setNestedDefSource(id, source);
         }
     }
 
