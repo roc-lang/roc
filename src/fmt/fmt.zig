@@ -6824,6 +6824,76 @@ test "block boundary spacing preserves interior comments and blank lines" {
     }
 }
 
+test "issue 11928: invalid string escapes never overwrite source or emit partial output" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const sources = [_][]const u8{
+        \\welcome = |user_name| "Hi ${user_name}, press \F1 for help."
+        ,
+        \\welcome = "press \F1 for help."
+        ,
+        \\welcome = "before \u(ZZ) after"
+        ,
+        \\welcome = "before \u() after"
+        ,
+    };
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    for (sources) |source| {
+        const file = try tmp.dir.createFile(io, "invalid.roc", .{});
+        try file.writeStreamingAll(io, source);
+        file.close(io);
+
+        var stderr = std.Io.Writer.Allocating.init(gpa);
+        defer stderr.deinit();
+        var unformatted = std.array_list.Managed([]const u8).init(gpa);
+        defer {
+            for (unformatted.items) |path| gpa.free(path);
+            unformatted.deinit();
+        }
+        // Both normal formatting and --check must reject the source, rather
+        // than classifying the lossy recovery tree as a formatting change.
+        for ([_]?*std.array_list.Managed([]const u8){ null, &unformatted }) |check| {
+            try std.testing.expectError(error.ParsingFailed, formatFilePath(gpa, tmp.dir, "invalid.roc", check, .{}, io, &stderr.writer));
+            const after = try tmp.dir.readFileAlloc(io, "invalid.roc", gpa, .limited(1024));
+            defer gpa.free(after);
+            try std.testing.expectEqualStrings(source, after);
+        }
+        try std.testing.expectEqual(@as(usize, 0), unformatted.items.len);
+        try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "escape sequence") != null);
+
+        const stdin = try tmp.dir.openFile(io, "invalid.roc", .{});
+        defer stdin.close(io);
+        const stdout = try tmp.dir.createFile(io, "stdout", .{});
+        defer stdout.close(io);
+        try std.testing.expectError(error.ParsingFailed, formatStdin(gpa, .{}, io, stdin, stdout, &stderr.writer));
+        const output = try tmp.dir.readFileAlloc(io, "stdout", gpa, .limited(1024));
+        defer gpa.free(output);
+        try std.testing.expectEqualStrings("", output);
+
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+        const ast = try parse.file(gpa, &env.common);
+        defer ast.deinit();
+        const formatters = [_]*const fn (AST, *std.Io.Writer) FormatAstError!void{ formatAst, formatHeader, formatExpr, formatStatement };
+        for (formatters) |format| {
+            var formatted = std.Io.Writer.Allocating.init(gpa);
+            defer formatted.deinit();
+            try std.testing.expectError(error.ParsingFailed, format(ast.*, &formatted.writer));
+            try std.testing.expectEqualStrings("", formatted.written());
+        }
+    }
+}
+
+test "issue 11928: escaped backslash preserves interpolated string content" {
+    const source =
+        \\welcome = |user_name| "Hi ${user_name}, press \\F1 for help."
+    ;
+    const formatted = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(formatted);
+    try std.testing.expectEqualStrings(source ++ "\n", formatted);
+}
+
 test "bidi tokenizer errors prevent every AST formatting entrypoint from writing" {
     const gpa = std.testing.allocator;
     const formatters = [_]*const fn (AST, *std.Io.Writer) FormatAstError!void{ formatAst, formatHeader, formatExpr, formatStatement };
@@ -6850,9 +6920,9 @@ test "carriage return migration survives diagnostic overflow without hiding othe
     defer gpa.free(migrated);
     try std.testing.expectEqualStrings("value = 42\n", migrated);
 
-    // The uppercase-base error follows the full diagnostic buffer. It must
-    // still block formatting even though the displayed diagnostics are CRs.
-    for ([_][]const u8{ "0X42\n", "42 # \u{202e}\n" }) |suffix| {
+    // These errors follow the full diagnostic buffer. They must still block
+    // formatting even though the displayed diagnostics are CRs.
+    for ([_][]const u8{ "0X42\n", "42 # \u{202e}\n", "\"press \\F1 for help.\"\n" }) |suffix| {
         const source = try std.mem.concat(gpa, u8, &.{ prefix, suffix });
         defer gpa.free(source);
         var env = try ModuleEnv.init(gpa, source);
