@@ -12939,9 +12939,19 @@ const Builder = struct {
         try self.plan.direct_call_hidden_desc_args.appendSlice(self.allocator, pending.items);
         const sources_start: u32 = @intCast(self.plan.dictionary_method_desc_sources.items.len);
         for (pending.items, 0..) |source, source_index| {
+            // An argument source is that argument's own descriptor. A position
+            // inside an argument is read from the evidence callable instead.
+            const argument_source: ?u32 = if (source.source_arg_index) |arg_index|
+                if (self.repQuery().descriptorArgumentIdentityRep(requirement_args[arg_index].rep) ==
+                    self.repQuery().descriptorArgumentIdentityRep(source.worker_rep))
+                    arg_index
+                else
+                    null
+            else
+                null;
             try self.plan.dictionary_method_desc_sources.append(self.allocator, .{
                 .rep = source.rep,
-                .source = if (source.source_arg_index) |arg_index|
+                .source = if (argument_source) |arg_index|
                     .{ .argument = arg_index }
                 else if (try self.repQuery().repSubtreeHasDescriptor(source.rep))
                     .{ .call = @intCast(source_index) }

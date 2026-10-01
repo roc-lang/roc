@@ -7906,7 +7906,11 @@ commit-probe: success commits the unification and any method evidence; failure
 rolls the whole attempt back and reports the interpolation-part type mismatch.
 
 Builtin quote and interpolation literal constraints are discharged directly by
-`Str`. A numeral literal constraint is rejected because builtin `Str` does not
+`Str`. Discharging an interpolation constraint also makes its generated item
+type `Str`, because `Str.from_interpolation` receives `Iter((Str, Str))`: a
+generic body that keeps the dispatch calls that method through dictionary
+evidence whose callable type names the item. A numeral literal constraint is
+rejected because builtin `Str` does not
 materialize numerals, and every non-literal constraint uses the ordinary static
 dispatch method-acceptance rule. Rejecting a constrained part retires its copied
 static-dispatch constraints together with the erroneous interpolation so no
@@ -13892,6 +13896,13 @@ operand through the frame. The requirement descriptors come from the checked
 substitution of the call that passes the dictionary, which a method call reads
 from the evidence node its plan selected, exactly as an ordinary call reads it
 from its instantiated lookup.
+
+A dictionary method's requirement descriptor whose source is an argument is
+that argument's own descriptor. A requirement position nested inside an
+argument (an interpolation iterator's item, say) is described by the evidence
+callable's type at that position or supplied by the invocation, never by the
+argument's descriptor: a nominal argument's descriptor describes its backing,
+which need not expose the position at all.
 
 A static dictionary method selected from the dictionary's own type, with no
 checked evidence edge, is called at an explicit instantiation: the selected
