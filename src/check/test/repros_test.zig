@@ -4,6 +4,45 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
+// https://github.com/roc-lang/roc/issues/11938
+test "check - repro - issue 11938 - undeclared local annotation becomes a runtime error" {
+    const src =
+        \\main! = |_| {
+        \\    users : ThisTypeDoesNotExist
+        \\    users = ["ada", "grace"]
+        \\
+        \\    Ok({})
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer std.testing.allocator.free(diagnostics);
+    var undeclared_types: usize = 0;
+    for (diagnostics) |diagnostic| {
+        if (diagnostic == .undeclared_type) {
+            try std.testing.expectEqualStrings("ThisTypeDoesNotExist", test_env.module_env.getIdent(diagnostic.undeclared_type.name));
+            undeclared_types += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), undeclared_types);
+
+    var found_users = false;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.module_env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (test_env.module_env.store.nodes.get(node_idx).tag != .statement_decl) continue;
+        const stmt = test_env.module_env.store.getStatement(@enumFromInt(raw_node_idx)).s_decl;
+        const pattern = test_env.module_env.store.getPattern(stmt.pattern);
+        if (pattern != .assign or !std.mem.eql(u8, test_env.module_env.getIdent(pattern.assign.ident), "users")) continue;
+        found_users = true;
+        try std.testing.expectEqual(std.meta.Tag(CIR.Expr).e_runtime_error, std.meta.activeTag(test_env.module_env.store.getExpr(stmt.expr)));
+    }
+    try std.testing.expect(found_users);
+}
+
 test "check - mismatched reassignment becomes a runtime error statement" {
     const src =
         \\main! = |_| {
