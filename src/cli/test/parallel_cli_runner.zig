@@ -469,6 +469,7 @@ const CustomCase = enum {
     build_issue_9435_hosted_nominal_return,
     bundle_complex_package,
     bundle_entrypoint_subdirectory,
+    bundle_file_imports,
     bundle_issue_11608_output_dir_cross_device,
     install_run_roundtrip,
     install_hash_mismatch,
@@ -2559,6 +2560,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc docs Builtin.roc succeeds", .body = .{ .command = .{ .args = &.{ "docs", "--no-cache" }, .roc_file = "src/build/roc/Builtin.roc", .contains = &.{.{ .stream = .stdout, .text = "Generated docs for" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test complex_package --verbose passes all tests", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--verbose" }, .roc_file = "test/complex_package/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "tests passed" }, .{ .stream = .stdout, .text = "PASS" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle complex_package includes all transitively imported modules", .body = .{ .custom = .bundle_complex_package } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11907 includes file imports and rejects missing files", .body = .{ .custom = .bundle_file_imports } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 10845 entry point in a subdirectory bundles relative to it", .body = .{ .custom = .bundle_entrypoint_subdirectory } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11608 succeeds when --output-dir is on a different filesystem", .body = .{ .custom = .bundle_issue_11608_output_dir_cross_device } },
     .{ .id = 0, .suite = .subcommands, .name = "a destructure whose pattern rejects its value crashes at runtime instead of panicking the compiler", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/destructure_pattern_mismatch.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stdout, .text = "before" }, .{ .stream = .stderr, .text = "crashed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
@@ -3628,6 +3630,7 @@ fn runCustomCase(
         .docs_main_platform_url_package => customDocsMainPlatformUrlPackage(io, allocator, &env, &timer, timeout_ms),
         .build_issue_9435_hosted_nominal_return => customBuildIssue9435(io, allocator, &env, &timer, timeout_ms),
         .bundle_complex_package => customBundleComplexPackage(io, allocator, &env, &timer, timeout_ms),
+        .bundle_file_imports => customBundleFileImports(io, allocator, &env, &timer, timeout_ms),
         .bundle_entrypoint_subdirectory => customBundleEntrypointSubdirectory(io, allocator, &env, &timer, timeout_ms),
         .bundle_issue_11608_output_dir_cross_device => customBundleIssue11608OutputDirCrossDevice(io, allocator, &env, &timer, timeout_ms),
         .install_run_roundtrip => customInstallRunRoundtrip(io, allocator, &env, &timer, timeout_ms),
@@ -9704,6 +9707,150 @@ fn customBundleEntrypointSubdirectory(io: std.Io, allocator: Allocator, env: *co
     }
     if (std.mem.find(u8, outside_result.stderr, "outside the entry point directory") == null) {
         return failureFromRun(allocator, timer, outside_result, "roc bundle did not explain the outside-root file error");
+    }
+
+    return null;
+}
+
+/// Repro for https://github.com/roc-lang/roc/issues/11907
+fn customBundleFileImports(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const package_dir = createWorkSubdir(io, allocator, env, "bundle-files") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create package dir: {}", .{err});
+    const src_dir = std.fs.path.join(allocator, &.{ package_dir, "src" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate src dir: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, src_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create src dir: {}", .{err});
+
+    const nested_dir = std.fs.path.join(allocator, &.{ src_dir, "Nested" }) catch |err|
+        return customInfraFailure(allocator, timer, "nested path: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, nested_dir) catch |err|
+        return customInfraFailure(allocator, timer, "create nested dir: {}", .{err});
+    const files = [_]struct { path: []const u8, contents: []const u8 }{
+        .{ .path = "main.roc", .contents = "package [Helper] { nested: \"Nested/main.roc\" }\n" },
+        .{ .path = "Helper.roc", .contents = "import nested.Data\nimport \"bytes.bin\" as bytes : List(U8)\nHelper :: [].{\n    size : {} -> U64\n    size = |_| bytes.len() + Data.size({})\n}\n" },
+        .{ .path = "Nested/main.roc", .contents = "package [Data] {}\n" },
+        .{ .path = "Nested/Data.roc", .contents = "import \"../bytes.bin\" as bytes : List(U8)\nimport \"text.txt\" as text : Str\nData :: [].{\n    size : {} -> U64\n    size = |_| bytes.len() + text.count_utf8_bytes()\n}\n" },
+        .{ .path = "bytes.bin", .contents = "\x00\xff\x80\x01" },
+        .{ .path = "Nested/text.txt", .contents = "bundled text\n" },
+    };
+    for (files) |file| {
+        const path = std.fs.path.join(allocator, &.{ src_dir, file.path }) catch |err|
+            return customInfraFailure(allocator, timer, "fixture path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = file.contents }) catch |err|
+            return customInfraFailure(allocator, timer, "write fixture: {}", .{err});
+    }
+
+    const out_dir = createWorkSubdir(io, allocator, env, "bundle-files-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create bundle output dir: {}", .{err});
+    const extract_dir = createWorkSubdir(io, allocator, env, "bundle-files-extract") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create extract dir: {}", .{err});
+
+    const roc_abs = if (std.fs.path.isAbsolute(roc_binary_path))
+        roc_binary_path
+    else
+        std.fs.path.join(allocator, &.{ project_root_path, roc_binary_path }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc path: {}", .{err});
+
+    const bundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before bundling");
+    const bundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "src/main.roc" }, package_dir, null, bundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "bundle spawn error: {}", .{err});
+    if (exitCode(bundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle failed");
+    }
+    const created_prefix = "Created: ";
+    const created_idx = std.mem.find(u8, bundle_result.stdout, created_prefix) orelse
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
+    const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
+    const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
+    const bundle_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    const bundle_filename = std.fs.path.basename(bundle_path);
+    if (!std.mem.endsWith(u8, bundle_filename, ".tar.zst")) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not create a .tar.zst archive");
+    }
+    const extracted_name = bundle_filename[0 .. bundle_filename.len - ".tar.zst".len];
+
+    const checked_entries = countCheckedModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
+        return customInfraFailure(allocator, timer, "count checked cache entries: {}", .{err});
+    if (checked_entries == 0) {
+        return customFailure(allocator, timer, "bundle did not populate the checked-module cache", .{});
+    }
+
+    // A second build uses the checked cache; both bundles must have the
+    // same content hash, including dependencies shared by two modules.
+    const warm_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "timeout before warm bundle");
+    const warm_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "src/main.roc", "src/Helper.roc", "src/bytes.bin" }, package_dir, null, warm_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "warm bundle: {}", .{err});
+    if (exitCode(warm_result.term) != 0 or std.mem.find(u8, warm_result.stdout, bundle_filename) == null) {
+        return failureFromRun(allocator, timer, warm_result, "warm bundle with explicit duplicate changed the archive");
+    }
+
+    const unbundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before unbundling");
+    const unbundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "unbundle", bundle_path }, extract_dir, null, unbundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "unbundle spawn error: {}", .{err});
+    if (exitCode(unbundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, unbundle_result, "roc unbundle failed");
+    }
+
+    const extracted_root = std.fs.path.join(allocator, &.{ extract_dir, extracted_name }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate extracted root path: {}", .{err});
+
+    for (files) |file| {
+        const path = std.fs.path.join(allocator, &.{ extracted_root, file.path }) catch |err|
+            return customInfraFailure(allocator, timer, "extracted path: {}", .{err});
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4096)) catch |err|
+            return customFailure(allocator, timer, "missing extracted {s}: {}", .{ file.path, err });
+        if (!std.mem.eql(u8, contents, file.contents)) {
+            return customFailure(allocator, timer, "extracted {s} contents differ", .{file.path});
+        }
+    }
+    const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "timeout before extracted package check");
+    const check_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "check", "--no-cache", "main.roc" }, extracted_root, null, check_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "check extracted package: {}", .{err});
+    if (exitCode(check_result.term) != 0) {
+        return failureFromRun(allocator, timer, check_result, "extracted package failed to check");
+    }
+
+    const bytes_path = std.fs.path.join(allocator, &.{ src_dir, "bytes.bin" }) catch |err|
+        return customInfraFailure(allocator, timer, "bytes path: {}", .{err});
+    std.Io.Dir.cwd().deleteFile(io, bytes_path) catch |err|
+        return customInfraFailure(allocator, timer, "remove imported file: {}", .{err});
+    const missing_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "timeout before missing file check");
+    const missing_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "src/main.roc" }, package_dir, null, missing_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "missing file bundle: {}", .{err});
+    if (exitCode(missing_result.term) == 0 or
+        std.mem.find(u8, missing_result.stderr, "bytes.bin") == null or
+        std.mem.find(u8, missing_result.stdout, "Created: ") != null)
+    {
+        return failureFromRun(allocator, timer, missing_result, "missing imported file must fail bundling with a diagnostic");
+    }
+
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = bytes_path, .data = "\x00\xff\x80\x01" }) catch |err|
+        return customInfraFailure(allocator, timer, "restore imported file: {}", .{err});
+
+    // An imported file outside the entry directory cannot retain its relative
+    // path in a portable archive. Reject it rather than silently omitting it.
+    const helper_path = std.fs.path.join(allocator, &.{ src_dir, "Helper.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "helper path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = helper_path, .data = "import \"../outside.txt\" as text : Str\nHelper :: [].{\n    size : {} -> U64\n    size = |_| text.count_utf8_bytes()\n}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "write outside import: {}", .{err});
+    const outside_path = std.fs.path.join(allocator, &.{ package_dir, "outside.txt" }) catch |err|
+        return customInfraFailure(allocator, timer, "outside path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = outside_path, .data = "outside" }) catch |err|
+        return customInfraFailure(allocator, timer, "write outside file: {}", .{err});
+    const outside_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "timeout before outside import check");
+    const outside_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "src/main.roc" }, package_dir, null, outside_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "outside import bundle: {}", .{err});
+    if (exitCode(outside_result.term) == 0 or
+        std.mem.find(u8, outside_result.stderr, "outside the entry point directory") == null or
+        std.mem.find(u8, outside_result.stdout, "Created: ") != null)
+    {
+        return failureFromRun(allocator, timer, outside_result, "outside import must fail bundling with a diagnostic");
     }
 
     return null;
