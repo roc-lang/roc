@@ -766,9 +766,14 @@ pub const Instantiator = struct {
                 .flex, .field_presence, .err => {},
             }
         }
-        for (binders.items) |binder| {
-            const resolved = self.store.resolveVar(binder);
-            if (resolved.desc.content == .rigid and resolved.desc.content.rigid.name.eql(marker_ident)) std.debug.assert(choices.contains(resolved.var_));
+        // Checked only in safe builds: in an unchecked build the assertion
+        // would let the optimizer assume the lookup succeeds and read the
+        // map's storage even when no choice was ever recorded.
+        if (std.debug.runtime_safety) {
+            for (binders.items) |binder| {
+                const resolved = self.store.resolveVar(binder);
+                if (resolved.desc.content == .rigid and resolved.desc.content.rigid.name.eql(marker_ident)) std.debug.assert(choices.contains(resolved.var_));
+            }
         }
         return true;
     }
