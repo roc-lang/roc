@@ -4250,6 +4250,20 @@ Builtin :: [].{
 			Try.Err(OutOfBounds)
 		}
 
+		## Hints that the item at the given index is about to be read or
+		## written, so the processor can start bringing its memory into the
+		## cache. It never changes what a program computes: it reads nothing,
+		## and an index past the end of the list is fine.
+		##
+		## This only pays off when the index is unpredictable and the list is
+		## much larger than the cache, as with a hash table whose next bucket
+		## is known a few steps before it is used.
+		## ```roc
+		## List.prefetch(table, next_bucket)
+		## ```
+		prefetch : List(item), U64 -> {}
+		prefetch = |list, index| list_prefetch(list, index)
+
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
 		## Returns an item from a list at the given index.
 		##
@@ -24609,6 +24623,10 @@ append_utf8_code_point = |out, code_point|
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler: a hint that the item at this index is about to
+# be used. It reads nothing, and an index outside the list is harmless.
+list_prefetch : List(item), U64 -> {}
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)

@@ -14695,6 +14695,23 @@ scalarization. Rewrites invalidate this per-round inventory before the next
 collection. Neither propagation nor root lookup repeatedly walks the same long
 chain.
 
+### List.prefetch
+
+`List.prefetch : List(item), U64 -> {}` is a hint that the item at an index is
+about to be read or written. Its low-level, `list_prefetch`, reads nothing and
+writes nothing, so it has no bounds test and an index outside the list is
+valid. No optimization may assume the index is in range because of it.
+
+The operation exists only to reach the processor. The LLVM backend emits the
+prefetch intrinsic on the item's address, computed without an in-bounds claim.
+The interpreter, the dev backends, and the WebAssembly backend emit no code
+for it, and compile-time evaluation gives it the empty record.
+
+ARC treats the list operand like `list_len`'s: it is read from its by-value
+descriptor only, so a prefetch neither retains the list nor extends the
+lifetime of its allocation. An address computed from a descriptor whose
+allocation has been released is harmless to prefetch.
+
 ## Integer Arithmetic Operations
 
 Integer addition, subtraction, and multiplication each exist as a family of
