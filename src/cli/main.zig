@@ -433,6 +433,7 @@ const CliMainError =
         NoCacheDir,
         NoPlatformSource,
         NotAnAppHeader,
+        SourceTokenizationFailed,
         PathAlreadyExists,
         PlatformNotSupported,
         ProcessCreationFailed,
@@ -6070,7 +6071,7 @@ fn renderSummaryHeaderLine(
     if (sanitised_path.len > 0) {
         try writer.writeByte(' ');
         try writer.writeAll(palette.primary);
-        try writer.writeAll(sanitised_path);
+        try base.bidi.writeVisible(writer, sanitised_path);
     }
     try writer.writeAll(palette.reset);
     try writer.writeAll("\n\n");
@@ -7234,7 +7235,21 @@ pub fn resolvePlatformPaths(ctx: *CliCtx, roc_file_path: []const u8) (CliError |
 }
 
 fn parseCliAppHeader(ctx: *CliCtx, app_file_path: []const u8) (Allocator.Error || error{CliError})!compile.app_header.AppHeaderInfo {
-    return compile.app_header.parseAppHeader(ctx.coreCtx(), ctx.gpa, ctx.arena, app_file_path) catch |err| switch (err) {
+    var source_reports = std.ArrayList(reporting.Report).empty;
+    defer {
+        for (source_reports.items) |*report| report.deinit();
+        source_reports.deinit(ctx.gpa);
+    }
+    return compile.app_header.parseAppHeaderReporting(ctx.coreCtx(), ctx.gpa, ctx.arena, app_file_path, &source_reports) catch |err| switch (err) {
+        error.SourceTokenizationFailed => blk: {
+            for (source_reports.items) |*report| {
+                reporting.renderReportWithConfig(report, ctx.io.stderr(), ctx.reportConfig(.stderr)) catch |render_err| switch (render_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => return error.CliError,
+                };
+            }
+            break :blk error.CliError;
+        },
         error.OutOfMemory => error.OutOfMemory,
         error.NotAnAppHeader => ctx.fail(.{ .expected_app_header = .{
             .path = app_file_path,
@@ -8029,10 +8044,10 @@ fn discoverAndAddBundleModules(
             for (mod.reports) |report| {
                 switch (report.severity) {
                     .runtime_error, .fatal => {
-                        try stderr.print("{s}: error in module\n", .{mod.abs_path});
+                        try stderr.print("{f}: error in module\n", .{base.bidi.Display{ .bytes = mod.abs_path }});
                     },
                     .warning => {
-                        try stderr.print("{s}: warning in module\n", .{mod.abs_path});
+                        try stderr.print("{f}: warning in module\n", .{base.bidi.Display{ .bytes = mod.abs_path }});
                     },
                 }
             }
@@ -16466,7 +16481,7 @@ fn renderCliTestResultEntry(
             const region_info = source_env.calcRegionInfo(entry.result.region);
             const green = if (report_config.shouldUseColors()) ansi_term.green else "";
             const reset = if (report_config.shouldUseColors()) ansi_term.reset else "";
-            try stdout_body.print("{s}PASS{s}: {s}:{}\n", .{ green, reset, source_path, region_info.start_line_idx + 1 });
+            try stdout_body.print("{s}PASS{s}: {f}:{}\n", .{ green, reset, base.bidi.Display{ .bytes = source_path }, region_info.start_line_idx + 1 });
         },
         .failed => {
             const region_info = source_env.calcRegionInfo(entry.result.region);
@@ -16942,11 +16957,11 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         if (unformatted_files.items.len > 0) {
             try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.print("    {s}\n", .{file_name});
+                try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = file_name }});
             }
             try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
             had_errors = true;
-        } else {
+        } else if (failure_count == 0) {
             try stdout.print("All formatting valid.\n", .{});
         }
         if (failure_count > 0) {
@@ -17833,7 +17848,7 @@ fn printBuildSuccess(
         error_color, error_count, reset, errors_word, warning_color, warning_count, reset, warnings_word,
     });
     try progress.writeDuration(stdout, elapsed_ns);
-    try stdout.print(" while successfully building:\n\n    {s}\n", .{final_output_path});
+    try stdout.print(" while successfully building:\n\n    {f}\n", .{base.bidi.Display{ .bytes = final_output_path }});
 
     if (verbose) {
         try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
@@ -17891,7 +17906,7 @@ const ProcessFileError = ReturnErrorSet(@TypeOf(rocCheckDefaultAppPreserved)) ||
     ReturnErrorSet(@TypeOf(checkFileWithBuildEnv));
 
 fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const u8) ProcessFileError!void {
-    stderr.print("Failed to check {s}: ", .{path}) catch {};
+    stderr.print("Failed to check {f}: ", .{base.bidi.Display{ .bytes = path }}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
         error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
@@ -18613,7 +18628,7 @@ fn finishRocCheck(
         writeNoErrors(stdout, ctx.usesColor(.stdout)) catch {};
         stdout.writeAll(" found in ") catch {};
         formatElapsedTimeMs(stdout, elapsed) catch {};
-        stdout.print(" for {s}\n", .{args.path}) catch {};
+        stdout.print(" for {f}\n", .{base.bidi.Display{ .bytes = args.path }}) catch {};
 
         if (args.verbose) {
             printVerboseStats(stdout, check_result);
@@ -20452,4 +20467,15 @@ test "bundle archive paths are relative to the entry point directory" {
     try testing.expectEqualStrings("internal/Helper.roc", nested_archive_path);
 
     try testing.expectError(error.InvalidPath, bundleArchivePath(allocator, root, outside));
+}
+
+test "bidi controls in diagnostic summary paths remain visible" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    for (base.bidi.controls) |control| {
+        try renderSummaryHeaderLine(&output.writer, 1, 0, control.utf8, reporting.ReportingConfig.initForTesting());
+        try std.testing.expect(std.mem.find(u8, output.written(), control.visible) != null);
+    }
+    var iter = base.bidi.Iterator{ .bytes = output.written() };
+    try std.testing.expect(iter.next() == null);
 }

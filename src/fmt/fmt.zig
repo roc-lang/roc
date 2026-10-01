@@ -22,7 +22,7 @@ pub const BuiltinFacts = @import("open_rows.zig").BuiltinFacts;
 const StatementScope = @import("open_rows.zig").StatementScope;
 
 /// Errors that can occur while formatting an already-parsed AST.
-pub const FormatAstError = Allocator.Error || std.Io.Writer.Error;
+pub const FormatAstError = Allocator.Error || std.Io.Writer.Error || error{ParsingFailed};
 /// Errors that can occur while formatting a Roc source file.
 pub const FormatFileError = Allocator.Error || std.Io.File.OpenError || std.Io.File.ReadPositionalError || FormatAstError || error{ NotRocFile, FileSizeChangedDuringRead, ReadFailed, ParsingFailed };
 /// Errors that can occur while walking and formatting a path.
@@ -70,6 +70,12 @@ pub const FormattingResult = struct {
         }
     }
 };
+
+/// Carriage-return normalization is an existing explicit formatter migration.
+/// The tokenizer records other errors even when their diagnostics are omitted.
+fn tokenizationPermitsFormatting(ast: AST) bool {
+    return !ast.source_rejected and !ast.tokenize_has_non_carriage_return_errors;
+}
 
 /// Parse diagnostics whose recovery AST is an explicit source migration that
 /// the formatter owns. Every other parse diagnostic still blocks formatting so
@@ -149,7 +155,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                     error.WouldBlock,
                     error.WriteFailed,
                     => {
-                        try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
+                        try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = entry.path }, err });
                         failed_count += 1;
                     },
                 }
@@ -195,7 +201,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             error.WouldBlock,
             error.WriteFailed,
             => {
-                try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
+                try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = path }, err });
                 failed_count += 1;
             },
         }
@@ -299,8 +305,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
 
     // Explicit formatter migrations may consume their parser recovery AST.
     // Every other parsing problem is reported and leaves the file untouched.
-    if (!parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
-        try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
+    if (!tokenizationPermitsFormatting(parse_ast.*) or !parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
@@ -324,7 +329,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         var output_writer = output_file.writer(io, &output_buffer);
         try formatAstWithOptions(parse_ast.*, &output_writer.interface, options);
         if (migrates_optional_field_syntax) {
-            try stderr.print("Migrated legacy optional field syntax `:?` to `?:` in {s}.\n", .{path});
+            try stderr.print("Migrated legacy optional field syntax `:?` to `?:` in {f}.\n", .{base.bidi.Display{ .bytes = path }});
         }
     }
 }
@@ -356,8 +361,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: 
 
     // Keep stdin behavior identical to file formatting: only explicit source
     // migrations may proceed through a parser recovery AST.
-    if (!parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
-        try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
+    if (!tokenizationPermitsFormatting(parse_ast.*) or !parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
@@ -396,6 +400,11 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
         }
     }
 
+    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+        var report = try parse_ast.tokenizeDiagnosticToReport(diagnostic, gpa, null);
+        defer report.deinit();
+        try @import("reporting").renderReportToPlain(&report, stderr, @import("reporting").ReportingConfig.initForTesting());
+    }
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
@@ -419,7 +428,7 @@ fn formatIRNode(ast: AST, writer: *std.Io.Writer, options: Options, formatter: *
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
-/// Only returns an error if the underlying writer returns an error.
+/// Rejects tokenizer errors before emitting source.
 pub fn formatAst(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
     return formatAstWithOptions(ast, writer, .{});
 }
@@ -453,7 +462,7 @@ pub fn redundantOpenExtensions(gpa: std.mem.Allocator, ast: AST) FormatAstError!
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
-/// Only returns an error if the underlying writer returns an error.
+/// Rejects tokenizer errors before emitting source.
 pub fn formatHeader(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
     return formatIRNode(ast, writer, .{}, formatHeaderInner);
 }
@@ -463,7 +472,7 @@ fn formatHeaderInner(fmt: *Formatter) FormatAstError!void {
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
-/// Only returns an error if the underlying writer returns an error.
+/// Rejects tokenizer errors before emitting source.
 pub fn formatStatement(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
     return formatIRNode(ast, writer, .{}, formatStatementInner);
 }
@@ -473,7 +482,7 @@ fn formatStatementInner(fmt: *Formatter) FormatAstError!void {
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
-/// Only returns an error if the underlying writer returns an error.
+/// Rejects tokenizer errors before emitting source.
 pub fn formatExpr(ast: AST, writer: *std.Io.Writer) FormatAstError!void {
     return formatIRNode(ast, writer, .{}, formatExprNode);
 }
@@ -516,7 +525,8 @@ const Formatter = struct {
     pending_spaces: usize = 0,
 
     /// Creates a new Formatter for the given parse IR.
-    fn init(ast: AST, writer: *std.Io.Writer, options: Options) Allocator.Error!Formatter {
+    fn init(ast: AST, writer: *std.Io.Writer, options: Options) FormatAstError!Formatter {
+        if (!tokenizationPermitsFormatting(ast)) return error.ParsingFailed;
         const type_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
         @memset(type_layouts, .unknown);
 
@@ -6379,7 +6389,7 @@ test "issue 9940: comments in platform header sections are preserved" {
 
 test "multiline platform symbol map remains multiline after comments are discarded" {
     const result = try moduleFmtsStable(std.testing.allocator,
-        \\platform"
+        \\platform""
         \\requires{[R:r]for a:R->R}exposes[]packages{a:""}provides{"":#
         \\h,"":r}
     , false);
@@ -6811,6 +6821,49 @@ test "block boundary spacing preserves interior comments and blank lines" {
         const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
         defer std.testing.allocator.free(result);
         try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "bidi tokenizer errors prevent every AST formatting entrypoint from writing" {
+    const gpa = std.testing.allocator;
+    const formatters = [_]*const fn (AST, *std.Io.Writer) FormatAstError!void{ formatAst, formatHeader, formatExpr, formatStatement };
+    for (base.bidi.controls) |control| {
+        const source = try std.mem.concat(gpa, u8, &.{ "value = 1 # ", control.utf8 });
+        defer gpa.free(source);
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+        const ast = try parse.file(gpa, &env.common);
+        defer ast.deinit();
+        for (formatters) |format| {
+            var output = std.Io.Writer.Allocating.init(gpa);
+            defer output.deinit();
+            try std.testing.expectError(error.ParsingFailed, format(ast.*, &output.writer));
+            try std.testing.expectEqual(@as(usize, 0), output.written().len);
+        }
+    }
+}
+
+test "carriage return migration survives diagnostic overflow without hiding other errors" {
+    const gpa = std.testing.allocator;
+    const prefix = "value = " ++ "\r" ** 140;
+    const migrated = try moduleFmtsStable(gpa, prefix ++ "42\n", false);
+    defer gpa.free(migrated);
+    try std.testing.expectEqualStrings("value = 42\n", migrated);
+
+    // The uppercase-base error follows the full diagnostic buffer. It must
+    // still block formatting even though the displayed diagnostics are CRs.
+    for ([_][]const u8{ "0X42\n", "42 # \u{202e}\n" }) |suffix| {
+        const source = try std.mem.concat(gpa, u8, &.{ prefix, suffix });
+        defer gpa.free(source);
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+        const ast = try parse.file(gpa, &env.common);
+        defer ast.deinit();
+        try std.testing.expectEqual(@as(usize, 129), ast.tokenize_diagnostics.items.len);
+        var output = std.Io.Writer.Allocating.init(gpa);
+        defer output.deinit();
+        try std.testing.expectError(error.ParsingFailed, formatAst(ast.*, &output.writer));
+        try std.testing.expectEqual(@as(usize, 0), output.written().len);
     }
 }
 

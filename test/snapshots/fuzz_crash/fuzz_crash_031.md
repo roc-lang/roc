@@ -174,13 +174,6 @@ EndOfFile,
 			(p-ident (raw "t"))
 			(e-malformed (reason "expr_unexpected_token")))))
 ~~~
-# FORMATTED
-~~~roc
-
-
-# el
-t =
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir

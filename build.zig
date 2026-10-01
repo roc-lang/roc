@@ -3102,6 +3102,7 @@ pub fn build(b: *std.Build) void {
     const build_check_tools_step = b.step("build-check-tools", "Build host check tools used by CI");
     const run_check_zig_format_step = b.step("run-check-zig-format", "Check formatting of all zig code");
     const run_check_zig_lints_step = b.step("run-check-zig-lints", "Run Zig lints");
+    const run_check_source_bidi_step = b.step("run-check-source-bidi", "Reject bidirectional controls in tracked source and paths");
     const run_check_tidy_step = b.step("run-check-tidy", "Run code tidiness checks");
     const run_check_git_lints_step = b.step("run-check-git-lints", "Run Git-backed code checks");
     const run_check_test_asset_coverage_step = b.step("run-check-test-asset-coverage", "Check that every app .roc file in spec-driven test asset dirs has a spec entry");
@@ -3505,6 +3506,26 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         }),
     });
+    const source_bidi_module = b.createModule(.{
+        .root_source_file = b.path("src/base/bidi.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const source_bidi_root = b.createModule(.{
+        .root_source_file = b.path("ci/check_source_bidi.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    source_bidi_root.addImport("bidi", source_bidi_module);
+    const source_bidi_exe = b.addExecutable(.{ .name = "check-source-bidi", .root_module = source_bidi_root });
+    const install_source_bidi = b.addInstallArtifact(source_bidi_exe, .{});
+    build_check_tools_step.dependOn(&install_source_bidi.step);
+    const run_source_bidi = b.addRunArtifact(source_bidi_exe);
+    run_source_bidi.step.dependOn(&install_source_bidi.step);
+    const source_bidi_tests = b.addTest(.{ .name = "source-bidi-tests", .root_module = source_bidi_root });
+    run_check_source_bidi_step.dependOn(&b.addRunArtifact(source_bidi_tests).step);
+    run_check_source_bidi_step.dependOn(&run_source_bidi.step);
+
     const minici_exe = b.addExecutable(.{
         .name = "minici",
         .root_module = b.createModule(.{
@@ -3998,6 +4019,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
+                    .{ .name = "base", .module = roc_modules.base },
                     .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                     .{ .name = "collections", .module = roc_modules.collections },
                     .{ .name = "backend", .module = roc_modules.backend },
@@ -6038,6 +6060,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
             .imports = &.{
+                .{ .name = "base", .module = roc_modules.base },
                 .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                 .{ .name = "collections", .module = roc_modules.collections },
                 .{ .name = "backend", .module = roc_modules.backend },
