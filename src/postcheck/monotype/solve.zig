@@ -926,14 +926,14 @@ pub const InterfaceConstraints = struct {
             var stack: std.ArrayList(CaptureFrame) = self.scratch.spare_capture_stacks.pop() orelse .empty;
             const frames = &stack;
             defer {
-                while (frames.pop()) |popped| {
-                    var frame = popped;
-                    self.releaseCaptureItems(&frame.items);
+                while (frames.items.len > 0) {
+                    self.releaseCaptureItems(&frames.items[frames.items.len - 1].items);
+                    frames.items.len -= 1;
                 }
                 self.scratch.spare_capture_stacks.append(allocator, stack) catch stack.deinit(allocator);
             }
-            if (try self.beginNode(raw)) |frame| {
-                try frames.append(allocator, frame);
+            if (try self.beginNode(raw)) |open| {
+                try self.pushCaptureFrame(frames, open);
             } else return self.node_ids.get(self.graph.find(raw)).?;
             while (frames.items.len != 0) {
                 const top = &frames.items[frames.items.len - 1];
@@ -949,14 +949,14 @@ pub const InterfaceConstraints = struct {
                         }
                     }
                     try self.finishNode(top);
-                    var finished = frames.pop().?;
-                    self.releaseCaptureItems(&finished.items);
+                    self.releaseCaptureItems(&top.items);
+                    frames.items.len -= 1;
                     continue;
                 }
                 const item = top.items.items[top.next];
                 top.next += 1;
                 switch (item) {
-                    .node => |child| if (try self.beginNode(child)) |frame| try frames.append(allocator, frame),
+                    .node => |child| if (try self.beginNode(child)) |open| try self.pushCaptureFrame(frames, open),
                     .kind => |raw_kind| {
                         const root_kind = self.graph.findFieldKind(raw_kind);
                         if (self.kind_ids.contains(root_kind)) continue;
@@ -976,7 +976,7 @@ pub const InterfaceConstraints = struct {
                         var lookup = CaptureLookup{ .capture = self, .allocator = self.allocator };
                         self.kinds.items[@intFromEnum(finish.id)] = try mapValue(&lookup, Kind, .{ .resolved = source.resolved, .cells = source.cells });
                     },
-                    .source => |source| if (try self.beginNode(source)) |frame| try frames.append(allocator, frame),
+                    .source => |source| if (try self.beginNode(source)) |open| try self.pushCaptureFrame(frames, open),
                 }
             }
             return self.node_ids.get(self.graph.find(raw)).?;
@@ -1006,7 +1006,7 @@ pub const InterfaceConstraints = struct {
 
         /// Give `raw`'s class an id, or find its existing one; the frame that
         /// captures its content when it is a new open node.
-        fn beginNode(self: *Capture, raw: NodeId) Allocator.Error!?CaptureFrame {
+        fn beginNode(self: *Capture, raw: NodeId) Allocator.Error!?OpenStart {
             const root = self.graph.find(raw);
             if (self.node_ids.contains(root)) return null;
             const id: NodeId = @enumFromInt(self.nodes.items.len);
@@ -1044,10 +1044,19 @@ pub const InterfaceConstraints = struct {
             const open_index: u32 = @intCast(self.open_nodes.items.len);
             self.nodes.items[@intFromEnum(id)] = .{ .open = open_index };
             try self.open_nodes.append(self.graph.allocator, undefined);
-            var frame = CaptureFrame{ .raw = raw, .root = root, .open_index = open_index, .items = self.acquireCaptureItems() };
-            errdefer self.releaseCaptureItems(&frame.items);
-            try collectCaptureRefs(self.graph.allocator, InstNode, self.graph.content(root), &frame.items);
-            return frame;
+            return .{ .raw = raw, .root = root, .open_index = open_index };
+        }
+
+        /// A new open node whose content is still to be captured.
+        const OpenStart = struct { raw: NodeId, root: NodeId, open_index: u32 };
+
+        /// Push the frame that captures `open`'s content, written in place:
+        /// a frame carries the node's whole capture, so it is never copied.
+        /// The stack owns the frame's item list before anything can fail.
+        fn pushCaptureFrame(self: *Capture, frames: *std.ArrayList(CaptureFrame), open: OpenStart) Allocator.Error!void {
+            const frame = try frames.addOne(self.graph.allocator);
+            frame.* = .{ .raw = open.raw, .root = open.root, .open_index = open.open_index, .items = self.acquireCaptureItems() };
+            try collectCaptureRefs(self.graph.allocator, InstNode, self.graph.content(open.root), &frame.items);
         }
 
         /// An empty item list, reusing a released list's capacity.

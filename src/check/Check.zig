@@ -242,8 +242,8 @@ alias_row_frames: std.ArrayListUnmanaged(AliasRowFrame),
 /// Row field/tag names collected by the row frames in flight, one contiguous
 /// run per frame.
 alias_row_names: std.ArrayListUnmanaged(AliasRowName),
-/// The entries of `alias_row_names`, so a row's duplicate-name check is one
-/// lookup rather than a scan of its run.
+/// The entries of `alias_row_names` that belong to long runs, so a long
+/// row's duplicate-name check is one lookup rather than a scan of its run.
 alias_row_name_set: std.AutoHashMapUnmanaged(AliasRowName, void),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
@@ -20709,11 +20709,30 @@ fn pushAliasRowVarsReversed(self: *Self, vars: []const Var) Allocator.Error!void
 fn aliasRowNameIsDuplicate(self: *Self, names_base: u32, name: Ident.Idx) Allocator.Error!bool {
     const entry: AliasRowName = .{ .names_base = names_base, .name = name };
     try self.alias_row_names.ensureUnusedCapacity(self.gpa, 1);
+    const run = self.alias_row_names.items[names_base..];
+    if (run.len < alias_row_set_threshold) {
+        // Nearly every row is short, and scanning a short run is cheaper
+        // than hashing into the set.
+        for (run) |existing| {
+            if (@as(u32, @bitCast(existing.name)) == @as(u32, @bitCast(name))) return true;
+        }
+        self.alias_row_names.appendAssumeCapacity(entry);
+        if (run.len + 1 == alias_row_set_threshold) {
+            for (self.alias_row_names.items[names_base..]) |listed| {
+                try self.alias_row_name_set.put(self.gpa, listed, {});
+            }
+        }
+        return false;
+    }
     const gop = try self.alias_row_name_set.getOrPut(self.gpa, entry);
     if (gop.found_existing) return true;
     self.alias_row_names.appendAssumeCapacity(entry);
     return false;
 }
+
+/// A row's names enter `alias_row_name_set` once its run reaches this many;
+/// a shorter run is scanned instead.
+const alias_row_set_threshold = 32;
 
 /// A name collected by the row frame whose run starts at `names_base`.
 const AliasRowName = struct {
@@ -20723,8 +20742,15 @@ const AliasRowName = struct {
 
 /// Drop the collected names from `len` on, along with their set entries.
 fn truncateAliasRowNames(self: *Self, len: usize) void {
-    for (self.alias_row_names.items[len..]) |entry| {
-        _ = self.alias_row_name_set.remove(entry);
+    // Only runs that reached the threshold have entries in the set.
+    if (self.alias_row_name_set.count() != 0) {
+        if (len == 0) {
+            // Clearing leaves no tombstones behind, so the set's probes
+            // stay short however many rows the walk has visited.
+            self.alias_row_name_set.clearRetainingCapacity();
+        } else for (self.alias_row_names.items[len..]) |entry| {
+            _ = self.alias_row_name_set.remove(entry);
+        }
     }
     self.alias_row_names.items.len = len;
 }
