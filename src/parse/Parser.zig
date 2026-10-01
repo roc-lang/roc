@@ -3724,6 +3724,11 @@ fn runExprStatementKernel(
                             // nested group, for a `name =` statement.
                             var lookahead_pos = self.pos + 2;
                             const tags = self.tok_buf.tokens.items(.tag);
+                            // A comma separates record fields unless an arrow
+                            // follows it at this level: a record field's value
+                            // has none, but a function type's argument list
+                            // does, so that comma belongs to a type annotation.
+                            var record_comma = false;
                             while (lookahead_pos < tags.len) {
                                 const lookahead_tag = tags[lookahead_pos];
                                 if (lookahead_tag == .OpenRound or lookahead_tag == .NoSpaceOpenRound or lookahead_tag == .OpenSquare or lookahead_tag == .OpenCurly) {
@@ -3734,10 +3739,12 @@ fn runExprStatementKernel(
                                 } else if (lookahead_tag == .CloseRound or lookahead_tag == .CloseSquare or lookahead_tag == .CloseCurly) {
                                     break;
                                 } else if (lookahead_tag == .Comma) {
-                                    break;
+                                    record_comma = true;
+                                } else if (lookahead_tag == .OpArrow or lookahead_tag == .OpFatArrow) {
+                                    record_comma = false;
                                 } else if (lookahead_tag == .LowerIdent) {
                                     if (lookahead_pos + 1 < tags.len and tags[lookahead_pos + 1] == .OpAssign) {
-                                        is_block = true;
+                                        is_block = !record_comma;
                                         break;
                                     }
                                 } else if (lookahead_tag == .EndOfFile) {

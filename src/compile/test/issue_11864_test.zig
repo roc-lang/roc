@@ -9,7 +9,7 @@ test "issue 11864: app importing a self-importing module finishes checking with 
             .data =
             \\app [main!] { pf: platform "./.roc_test_platform/main.roc" }
             \\
-            \\import A exposing [A]
+            \\import A
             \\
             \\main! = |_args| {
             \\    _ = A.foo(A.{ x: 1 })
@@ -20,7 +20,7 @@ test "issue 11864: app importing a self-importing module finishes checking with 
         .{
             .sub_path = "A.roc",
             .data =
-            \\import A exposing [A]
+            \\import A
             \\
             \\A := { x : U64 }
             \\

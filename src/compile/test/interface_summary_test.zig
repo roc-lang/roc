@@ -170,7 +170,7 @@ test "interface summaries stay verified for mutually recursive methods of an imp
     });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "app.roc", .data =
         \\app [main!] { pf: platform "./platform.roc" }
-        \\import Index exposing [Index]
+        \\import Index
         \\Action(a) := [Done, Update(a), Batch(List(Action(a)))]
         \\Route(a) : { id : U64, fire : a -> Action(a) }
         \\register! : List(Route(a)), Index(Route(a)) => Index(Route(a))
