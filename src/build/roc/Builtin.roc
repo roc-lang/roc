@@ -746,7 +746,7 @@ Builtin :: [].{
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len)
+				var $out = u8_list_reserve_for_append(out, len)
 				var $index = 0
 
 				while $index < len {
@@ -760,7 +760,7 @@ Builtin :: [].{
 			append_json_quoted_string : List(U8), Str -> List(U8)
 			append_json_quoted_string = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len + 2)
+				var $out = u8_list_reserve_for_append(out, len + 2)
 				var $index = 0
 
 				$out = u8_append($out, 34)
@@ -3272,12 +3272,15 @@ Builtin :: [].{
 			)
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
-		fold = |iterator, acc, step|
-			match Iter.next(iterator) {
-				Done => acc
-				Skip({ rest }) => Iter.fold(rest, acc, step)
-				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
+		fold = |iterator, init, step| {
+			var $state = init
+
+			for item in iterator {
+				$state = step($state, item)
 			}
+
+			$state
+		}
 
 		## Sum the items of an iterator, without collecting them into a list first.
 		## Works for any type that implements `plus` and `default` methods, such as the
@@ -3483,15 +3486,15 @@ Builtin :: [].{
 		## Carries the source's length forward so [Stream.collect!] can pre-size.
 		from_iter : Iter(item) -> Stream(item)
 		from_iter = |iterator|
-			{
-				len_if_known: Iter.size_hint(iterator),
-				step!: ||
+			stream_from_step(
+				Iter.size_hint(iterator),
+				||
 					match Iter.next(iterator) {
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
 					},
-			}
+			)
 
 		## Build a lazy, effectful stream from a seed; the effectful counterpart of [Iter.custom].
 		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
@@ -3505,9 +3508,9 @@ Builtin :: [].{
 		## resource is released rather than retained by the rest of the stream.
 		custom : state, [Known(U64), Unknown], (state => Try((item, state), [NoMore])) -> Stream(item)
 		custom = |seed, len_if_known, advance!|
-			{
+			stream_from_step(
 				len_if_known,
-				step!: ||
+				||
 					match advance!(seed) {
 						Ok((item, next_seed)) =>
 							One({
@@ -3526,7 +3529,7 @@ Builtin :: [].{
 							})
 						Err(NoMore) => Done
 					},
-			}
+			)
 
 		## Transform each item of this stream. The transform may run effects; because
 		## the stream's steps are already effectful, building the mapped stream stays
@@ -3534,16 +3537,21 @@ Builtin :: [].{
 		map : Stream(a), (a => b) -> Stream(b)
 		map = |source, transform!|
 			match source {
-				{ len_if_known, step! } => {
-					len_if_known,
-					step!: ||
-						match step!() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
-							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
-						},
-				}
+				{ len_if_known, .. } =>
+					stream_from_step(
+						len_if_known,
+						||
+							match Stream.next!(source) {
+								Done => Done
+								Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
+								One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
+							},
+					)
 			}
+
+		## Transform each item of this stream with an effectful function.
+		map! : Stream(a), (a => b) => Stream(b)
+		map! = |stream, transform!| Stream.map(stream, transform!)
 
 		## Returns a stream that pairs each item with its position among the items
 		## this stream yields. The first yielded item gets index `0`, and the index
@@ -3555,9 +3563,9 @@ Builtin :: [].{
 		## The predicate may run effects; it runs once per item as the stream is driven.
 		keep_if : Stream(a), (a => Bool) -> Stream(a)
 		keep_if = |source, predicate!|
-			{
-				len_if_known: Unknown,
-				step!: ||
+			stream_from_step(
+				Unknown,
+				||
 					match Stream.next!(source) {
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.keep_if(rest, predicate!) })
@@ -3568,15 +3576,15 @@ Builtin :: [].{
 								Skip({ rest: Stream.keep_if(rest, predicate!) })
 							}
 					},
-			}
+			)
 
 		## Returns a stream without the items for which `predicate!` returns `Bool.True`.
 		## The predicate may run effects; it runs once per item as the stream is driven.
 		drop_if : Stream(a), (a => Bool) -> Stream(a)
 		drop_if = |source, predicate!|
-			{
-				len_if_known: Unknown,
-				step!: ||
+			stream_from_step(
+				Unknown,
+				||
 					match Stream.next!(source) {
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.drop_if(rest, predicate!) })
@@ -3587,15 +3595,15 @@ Builtin :: [].{
 								One({ item, rest: Stream.drop_if(rest, predicate!) })
 							}
 					},
-			}
+			)
 
 		## Returns a stream that yields at most the first `n` items of this stream.
 		## Once `n` items have been yielded, the source is not pulled again.
 		take_first : Stream(item), U64 -> Stream(item)
 		take_first = |source, n|
 			match source {
-				{ len_if_known, .. } => {
-					len_if_known: match len_if_known {
+				{ len_if_known, .. } => stream_from_step(
+					match len_if_known {
 						Known(len) => Known(
 							if len < n {
 								len
@@ -3609,7 +3617,7 @@ Builtin :: [].{
 							Unknown
 						}
 					},
-					step!: ||
+					||
 						if n == 0 {
 							Done
 						} else {
@@ -3619,7 +3627,7 @@ Builtin :: [].{
 								One({ item, rest }) => One({ item, rest: Stream.take_first(rest, n - 1) })
 							}
 						},
-				}
+				)
 			}
 
 		## Returns a stream that skips the first `n` items of this stream. The skipped
@@ -3627,8 +3635,8 @@ Builtin :: [].{
 		drop_first : Stream(item), U64 -> Stream(item)
 		drop_first = |source, n|
 			match source {
-				{ len_if_known, .. } => {
-					len_if_known: match len_if_known {
+				{ len_if_known, .. } => stream_from_step(
+					match len_if_known {
 						Known(len) => Known(
 							if len < n {
 								0
@@ -3638,7 +3646,7 @@ Builtin :: [].{
 						)
 						Unknown => Unknown
 					},
-					step!: ||
+					||
 						match Stream.next!(source) {
 							Done => Done
 							Skip({ rest }) => Skip({ rest: Stream.drop_first(rest, n) })
@@ -3649,7 +3657,7 @@ Builtin :: [].{
 									Skip({ rest: Stream.drop_first(rest, n - 1) })
 								}
 						},
-				}
+				)
 			}
 
 		## Returns this stream unchanged. A `for!` loop calls `stream` on the value it
@@ -3965,13 +3973,10 @@ Builtin :: [].{
 		## }
 		## ```
 		##
-		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
-		## trusts the request rather than rounding it up. If the list is not shared and
-		## already has room for `spare` more items, it does nothing. Otherwise it asks
-		## the allocator to grow the list to that size. The one exception is reserving
-		## a single item beyond the current capacity: that is indistinguishable from an
-		## ordinary [List.append] outgrowing the list, so the capacity grows
-		## geometrically instead of by one.
+		## `reserve(spare)` aims for a capacity of exactly `List.len(list) + spare`
+		## items; it trusts the request rather than rounding it up. If the list is not
+		## shared and already has room for `spare` more items, it does nothing.
+		## Otherwise it asks the allocator to grow the list to that size.
 		##
 		## Note that the reserve above sits before the loop. Because [List.reserve] aims
 		## for the exact size requested, it is a poor fit for use inside one: a reserve
@@ -4103,7 +4108,7 @@ Builtin :: [].{
 		## ```
 		append : List(a), a -> List(a)
 		append = |list, item| {
-			reserved = List.reserve(list, 1)
+			reserved = list_reserve_for_append(list, 1)
 			list_append_unsafe(reserved, item)
 		}
 
@@ -4209,6 +4214,17 @@ Builtin :: [].{
 		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
 
 		## Add a single item to the beginning of a list.
+		##
+		## This is usually O(n), because every existing item has to move over by
+		## one to make room at the front. To build up a list one item at a time,
+		## `append` is much faster; if you need the items in the opposite order,
+		## `reverse` the list once at the end.
+		##
+		## The one exception is a list that is unique (nothing else refers to it)
+		## and has had items removed from its front, for example by `drop_first`.
+		## Removing items from the front leaves free space there, so prepending
+		## onto such a list is O(1). This makes a pop-then-push pattern like
+		## `list.drop_first(1).prepend(item)` fast.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
 		##
@@ -4236,11 +4252,25 @@ Builtin :: [].{
 		## expect [100, 200, 300].get(5) == Err(OutOfBounds)
 		## ```
 		get : List(item), U64 -> Try(item, [OutOfBounds])
-		get = |list, index| if index < List.len(list) {
+		get = |list, index| if bool_likely(index < List.len(list)) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
 			Try.Err(OutOfBounds)
 		}
+
+		## Hints that the item at the given index is about to be read or
+		## written, so the processor can start bringing its memory into the
+		## cache. It never changes what a program computes: it reads nothing,
+		## and an index past the end of the list is fine.
+		##
+		## This only pays off when the index is unpredictable and the list is
+		## much larger than the cache, as with a hash table whose next bucket
+		## is known a few steps before it is used.
+		## ```roc
+		## List.prefetch(table, next_bucket)
+		## ```
+		prefetch : List(item), U64 -> {}
+		prefetch = |list, index| list_prefetch(list, index)
 
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
 		## Returns an item from a list at the given index.
@@ -4281,7 +4311,7 @@ Builtin :: [].{
 		## ```
 		set : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		set = |list, index, value|
-			if index < List.len(list) {
+			if bool_likely(index < List.len(list)) {
 				Ok(list_set_unsafe(list, index, value))
 			} else {
 				Err(OutOfBounds)
@@ -5014,9 +5044,7 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3].clear() == []
 		## ```
 		clear : List(a) -> List(a)
-		clear = |list| {
-			List.take_first(list, 0)
-		}
+		clear = |list| list_clear(list)
 
 		## Returns the given number of items from the end of the list.
 		## ```roc
@@ -5368,10 +5396,6 @@ Builtin :: [].{
 		## expect !Bool.False == Bool.True
 		## ```
 		not : Bool -> Bool
-		not = |bool| match bool {
-			Bool.True => Bool.False
-			Bool.False => Bool.True
-		}
 
 		## Returns `Bool.True` if the two booleans are the same, and `Bool.False` if they are different.
 		is_eq : Bool, Bool -> Bool
@@ -23229,12 +23253,12 @@ u8_repeat = |byte, count| {
 }
 
 u8_append : List(U8), U8 -> List(U8)
-u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve(list, 1), byte)
+u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve_for_append(list, 1), byte)
 
 u8_concat : List(U8), List(U8) -> List(U8)
 u8_concat = |left, right| {
 	len = u8_list_len(right)
-	var $out = u8_list_reserve(left, len)
+	var $out = u8_list_reserve_for_append(left, len)
 	var $index = 0
 
 	while $index < len {
@@ -23387,6 +23411,8 @@ i128_from_le_bytes_unchecked : List(U8), U64 -> I128
 u8_list_append_unsafe : List(U8), U8 -> List(U8)
 
 u8_list_reserve : List(U8), U64 -> List(U8)
+
+u8_list_reserve_for_append : List(U8), U64 -> List(U8)
 
 dec_sqrt_unsafe : Dec -> Dec
 
@@ -24257,6 +24283,15 @@ iter_from_step = |len_if_known, step| {
 	step,
 }
 
+# The `Stream` counterpart of `iter_from_step`: every `Stream` source and
+# adapter builds its value through this one registered constructor, so Monotype
+# can give the result its exact minted representation.
+stream_from_step : [Known(U64), Unknown], (() => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]) -> Stream(item)
+stream_from_step = |len_if_known, step!| {
+	len_if_known,
+	step!,
+}
+
 range_done : () -> Iter(item)
 range_done = || iter_from_step(
 	Known(0),
@@ -24283,15 +24318,15 @@ iter_with_index = |src, index|
 # the arity-1 wrapper that seeds the counter.
 stream_with_index : Stream(a), U64 -> Stream((U64, a))
 stream_with_index = |src, index|
-	{
-		len_if_known: Stream.size_hint(src),
-		step!: ||
+	stream_from_step(
+		Stream.size_hint(src),
+		||
 			match Stream.next!(src) {
 				Done => Done
 				Skip({ rest }) => Skip({ rest: stream_with_index(rest, index) })
 				One({ item, rest }) => One({ item: (index, item), rest: stream_with_index(rest, index + 1) })
 			},
-	}
+	)
 
 # The recursive worker behind `Iter.step_by`, carrying `(stride, pending)`: how
 # far apart yielded items are, and how many yielded items are still to be
@@ -24593,6 +24628,14 @@ append_utf8_code_point = |out, code_point|
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
 
+# Implemented by the compiler: the same Bool, marking the branch it decides as
+# the one taken in the common case, so the other branch is laid out cold.
+bool_likely : Bool -> Bool
+
+# Implemented by the compiler: a hint that the item at this index is about to
+# be used. It reads nothing, and an index outside the list is harmless.
+list_prefetch : List(item), U64 -> {}
+
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)
 
@@ -24666,6 +24709,11 @@ list_map_write_unsafe : List(output), U64, output -> List(output)
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
 
+# Implemented by the compiler, ensures at least spare additional items of
+# capacity ahead of appending them. Unlike list_reserve, growth takes at least
+# the next geometric capacity step, so a run of appends stays amortized-linear.
+list_reserve_for_append : List(item), U64 -> List(item)
+
 # Implemented by the compiler. Appends count items copied from the list
 # itself beginning at start, reading through freshly appended items. The
 # caller has already verified start is in bounds and count is nonzero.
@@ -24686,6 +24734,10 @@ list_append_le_bytes : List(U8), U64, U64 -> List(U8)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
+
+# Implemented by the compiler: removes every item, keeping the allocation and
+# its capacity when the list is uniquely owned
+list_clear : List(item) -> List(item)
 
 # Implemented by the compiler. Consumes the list and sorts it stably using the
 # boxed comparator. The comparator allocation is borrowed for the whole call.

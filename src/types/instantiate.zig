@@ -8,6 +8,7 @@ const std = @import("std");
 const base = @import("base");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
+const DenseMap = @import("collections").DenseMap;
 
 const TypesStore = types_store.Store;
 const Var = types_mod.Var;
@@ -29,12 +30,6 @@ const Rank = types_mod.Rank;
 const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
-/// Type-argument index of `Builtin.Try`'s error row. The Monotype widening
-/// relation (`lower.zig`'s `try_error_type_arg_index`) opens the same cell, and
-/// `Check.annoApplyIsBuiltinTry`'s caller passes the adapter's reach to the
-/// same index for a `Try` written inline.
-const try_error_type_arg_index: u32 = 1;
-
 /// Where a position sits relative to the result row the Monotype result-row
 /// widening adapter can re-tag (design.md "Result-Row Widening Adapter"). The
 /// checker's annotation walk makes this decision for rows written inline in a
@@ -42,6 +37,8 @@ const try_error_type_arg_index: u32 = 1;
 /// declaration contributes, so the set of positions a use may WIDEN stays equal
 /// to the set lowering can ADAPT no matter how the row was spelled.
 pub const AdapterReachPosition = enum {
+    /// The entire method signature, whose function return is reachable.
+    signature,
     /// The instantiation root's own row: the position the referencing
     /// annotation put this declaration in, when that is the signature's direct
     /// result.
@@ -127,11 +124,14 @@ pub const Scratch = struct {
     /// Buffers for the scheme pre-walk that decides which monomorphic nodes a
     /// scheme instantiation copies. `reach_state` maps every visited root to
     /// whether a generalized variable is reachable from it; `reach_heads`
-    /// maps a child root to its first incoming edge in `reach_edges`.
+    /// maps a child root to its first incoming edge in `reach_edges`. Both are
+    /// direct-indexed so that clearing and scanning them costs what the last
+    /// walk visited, not the largest scheme any walk has visited. They are
+    /// created with the store's allocator on first use.
     reach_edges: std.ArrayListUnmanaged(ReachEdge) = .empty,
-    reach_heads: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+    reach_heads: ?DenseMap(Var, u32) = null,
     reach_stack: std.ArrayListUnmanaged(Var) = .empty,
-    reach_state: std.AutoHashMapUnmanaged(Var, bool) = .empty,
+    reach_state: ?DenseMap(Var, bool) = null,
 
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
         self.frames.deinit(gpa);
@@ -141,9 +141,19 @@ pub const Scratch = struct {
         self.pending_constraints.deinit(gpa);
         self.pending_parts.deinit(gpa);
         self.reach_edges.deinit(gpa);
-        self.reach_heads.deinit(gpa);
+        if (self.reach_heads) |*heads| heads.deinit();
         self.reach_stack.deinit(gpa);
-        self.reach_state.deinit(gpa);
+        if (self.reach_state) |*state| state.deinit();
+    }
+
+    fn reachHeads(self: *Scratch, gpa: std.mem.Allocator) *DenseMap(Var, u32) {
+        if (self.reach_heads == null) self.reach_heads = .init(gpa);
+        return &self.reach_heads.?;
+    }
+
+    fn reachState(self: *Scratch, gpa: std.mem.Allocator) *DenseMap(Var, bool) {
+        if (self.reach_state == null) self.reach_state = .init(gpa);
+        return &self.reach_state.?;
     }
 };
 
@@ -228,6 +238,7 @@ const TupleFrame = struct {
 };
 
 const NominalFrame = struct {
+    saved_polarity: Polarity,
     common: FillCommon,
     nominal: NominalType,
     args_start: u32,
@@ -246,10 +257,9 @@ const FuncFrame = struct {
     func: Func,
     kind: enum { pure, effectful, unbound },
     vars_base: u32,
-    /// The polarity surrounding this function. Argument positions negate it;
-    /// the return (and effect-dep) positions restore it. Re-asserted before
-    /// every child request so suspension cannot leave a stale value.
+    /// The polarity surrounding this function, restored when it completes.
     saved_polarity: Polarity,
+    saved_reach: AdapterReachPosition,
 };
 
 /// Source runs are held as whole ranges, never as an unpacked start index:
@@ -325,6 +335,12 @@ pub const Instantiator = struct {
     /// variables—every use constrains the same var the body's annotation
     /// regeneration constrains—instead of an independent unconstrained copy.
     share_vars: []const Var = &.{},
+    /// Source subtrees this instantiation reads from an earlier copy: each
+    /// source var maps to that copy in `var_map` before the walk starts, so
+    /// the walk shares the copy instead of copying the subtree again. Only
+    /// sound for a subtree whose copy is a ground type identical to what a
+    /// fresh copy would produce (see `Check.instantiateVarPolarized`).
+    shared_subtrees: []const SharedSubtree = &.{},
     /// Share every leaf (flex, rigid, field presence, error) whatever its
     /// rank, copying only structure and resolving polarity markers. This is
     /// the shape of a where-method signature's per-use instantiation: the
@@ -354,10 +370,27 @@ pub const Instantiator = struct {
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
+    /// Hidden parameters copied while constructing an enclosing alias.
+    preserved_marker_exts: ?*std.ArrayListUnmanaged(Var) = null,
+    /// Exact declaration positions supplied by the checker for nominal actuals.
+    /// Null explicitly reports a rejected declaration; no position is chosen.
+    nominal_argument_position: ?struct {
+        context: *anyopaque,
+        resolve: *const fn (*anyopaque, NominalType, u32, Polarity) std.mem.Allocator.Error!?Polarity,
+    } = null,
+    /// Null explicitly reports a rejected declaration, never a phantom formal.
+    alias_argument_unused: ?struct {
+        context: *anyopaque,
+        resolve: *const fn (*anyopaque, Alias, u32) std.mem.Allocator.Error!?bool,
+    } = null,
+    /// Each marker's open/closed choice for the copy in progress. Set by
+    /// `instantiateVarHelp` for the whole copy, so it is null only between
+    /// instantiations.
+    marker_choices: ?*std.AutoHashMapUnmanaged(Var, bool) = null,
     /// The polarity of the position currently being instantiated. Starts at
     /// the polarity of the instantiation root (callers using
-    /// `.resolve_by_polarity` set it) and is negated for function argument
-    /// positions as the walk descends—each func frame saves the
+    /// `.resolve_by_polarity` set it). Each function resets arguments to
+    /// negative and its return to positive; each func frame saves the
     /// surrounding polarity and re-asserts the stage-appropriate value
     /// before every child it requests.
     current_polarity: Polarity = .pos,
@@ -380,6 +413,11 @@ pub const Instantiator = struct {
     pub const TryNominalIdent = struct {
         short: Ident.Idx,
         qualified: Ident.Idx,
+    };
+
+    pub const SharedSubtree = struct {
+        source: Var,
+        copy: Var,
     };
 
     /// Re-exported so callers name one enum: `Instantiator.AdapterReach`.
@@ -435,13 +473,14 @@ pub const Instantiator = struct {
         /// template (eg an orphan scheme copy), where the use-site polarity is
         /// still unknown.
         preserve,
+        /// Alias construction: retain output rows, close fixed input rows.
+        preserve_output,
         /// Resolve each polarity var by the polarity of the position it
         /// occupies: open (a fresh unnamed flex, exactly what an implicitly
         /// opened output-position union gets) in positive/output positions,
         /// closed (`[]`) in negative/input positions. The walk starts at
-        /// `current_polarity` and negates through function argument
-        /// positions, so polarity composes correctly through functions
-        /// embedded in alias bodies.
+        /// `current_polarity`; embedded functions establish their own input
+        /// arguments and output returns independently of that position.
         resolve_by_polarity,
         /// Like `resolve_by_polarity` for negative positions (closed), but a
         /// marker in a positive position that the result-row widening adapter
@@ -531,13 +570,15 @@ pub const Instantiator = struct {
     /// sharing or recursion in the graph.
     fn computeGeneralizedReachability(self: *Self, root: Var) std.mem.Allocator.Error!void {
         const machine = self.scratch();
+        const reach_heads = machine.reachHeads(self.store.gpa);
+        const reach_state = machine.reachState(self.store.gpa);
         machine.reach_edges.clearRetainingCapacity();
-        machine.reach_heads.clearRetainingCapacity();
+        reach_heads.clearRetainingCapacity();
         machine.reach_stack.clearRetainingCapacity();
-        machine.reach_state.clearRetainingCapacity();
+        reach_state.clearRetainingCapacity();
 
         const root_resolved = self.store.resolveVar(root);
-        try machine.reach_state.put(self.store.gpa, root_resolved.var_, root_resolved.desc.rank == .generalized);
+        try reach_state.put(root_resolved.var_, root_resolved.desc.rank == .generalized);
         try machine.reach_stack.append(self.store.gpa, root_resolved.var_);
 
         while (machine.reach_stack.pop()) |parent| {
@@ -586,15 +627,15 @@ pub const Instantiator = struct {
             }
         }
 
-        var seeds = machine.reach_state.iterator();
+        var seeds = reach_state.iterator();
         while (seeds.next()) |entry| {
             if (entry.value_ptr.*) try machine.reach_stack.append(self.store.gpa, entry.key_ptr.*);
         }
         while (machine.reach_stack.pop()) |child| {
-            var edge_idx = machine.reach_heads.get(child) orelse continue;
+            var edge_idx = reach_heads.get(child) orelse continue;
             while (edge_idx != ReachEdge.none) {
                 const edge = machine.reach_edges.items[edge_idx];
-                const parent_state = machine.reach_state.getPtr(edge.parent).?;
+                const parent_state = reach_state.getPtr(edge.parent).?;
                 if (!parent_state.*) {
                     parent_state.* = true;
                     try machine.reach_stack.append(self.store.gpa, edge.parent);
@@ -643,16 +684,131 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         const resolved = self.store.resolveVar(child);
         const edge_idx: u32 = @intCast(machine.reach_edges.items.len);
-        const head = try machine.reach_heads.getOrPut(self.store.gpa, resolved.var_);
+        const head = try machine.reach_heads.?.getOrPut(resolved.var_);
         try machine.reach_edges.append(self.store.gpa, .{
             .parent = parent,
             .next = if (head.found_existing) head.value_ptr.* else ReachEdge.none,
         });
         head.value_ptr.* = edge_idx;
-        const entry = try machine.reach_state.getOrPut(self.store.gpa, resolved.var_);
+        const entry = try machine.reach_state.?.getOrPut(resolved.var_);
         if (entry.found_existing) return;
         entry.value_ptr.* = resolved.desc.rank == .generalized;
         try machine.reach_stack.append(self.store.gpa, resolved.var_);
+    }
+
+    /// Resolve shared declaration binders before copying. Every semantic
+    /// occurrence contributes; argument storage is not another occurrence.
+    fn collectMarkerChoices(self: *Self, root: Var, choices: *std.AutoHashMapUnmanaged(Var, bool)) std.mem.Allocator.Error!bool {
+        const marker_ident = self.polarity_var_ident orelse return true;
+        const Item = struct { var_: Var, polarity: Polarity, reach: AdapterReachPosition };
+        const allocator = self.store.gpa;
+        var pending: std.ArrayList(Item) = .empty;
+        defer pending.deinit(allocator);
+        var visited: std.AutoHashMapUnmanaged(Item, void) = .empty;
+        defer visited.deinit(allocator);
+        var binders: std.ArrayList(Var) = .empty;
+        defer binders.deinit(allocator);
+        try pending.append(allocator, .{ .var_ = root, .polarity = self.current_polarity, .reach = self.current_reach });
+        while (pending.pop()) |item| {
+            const resolved = self.store.resolveVar(item.var_);
+            const visit = try visited.getOrPut(allocator, .{ .var_ = resolved.var_, .polarity = item.polarity, .reach = item.reach });
+            if (visit.found_existing) continue;
+            switch (resolved.desc.content) {
+                .rigid => |rigid| if (rigid.name.eql(marker_ident)) {
+                    const allows_open = item.polarity == .pos and (self.polarity_var_behavior != .defer_open or item.reach != .nested);
+                    const entry = try choices.getOrPut(allocator, resolved.var_);
+                    entry.value_ptr.* = allows_open and (!entry.found_existing or entry.value_ptr.*);
+                } else {
+                    try self.pushConstraintChoiceItems(Item, &pending, rigid.constraints, item.polarity);
+                },
+                // The copy walk descends into static-dispatch constraints
+                // (`stepFlexLike`), so the markers of their signatures are
+                // occurrences too.
+                .flex => |flex| try self.pushConstraintChoiceItems(Item, &pending, flex.constraints, item.polarity),
+                .alias => |alias| {
+                    try binders.appendSlice(allocator, self.store.sliceAliasHiddenArgs(alias));
+                    try pending.append(allocator, .{ .var_ = self.store.getAliasBackingVar(alias), .polarity = item.polarity, .reach = item.reach });
+                    for (self.store.sliceAliasArgs(alias), 0..) |arg, index| {
+                        // A phantom actual is retained in source argument
+                        // storage, with inherited polarity and no adapter reach.
+                        const unused = if (self.alias_argument_unused) |provider| (try provider.resolve(provider.context, alias, @intCast(index))) orelse return false else blk: {
+                            // Raw compiler aliases without a source declaration
+                            // retain their arguments as abstract bookkeeping.
+                            std.debug.assert(alias.source_decl.toOptional() == null);
+                            break :blk true;
+                        };
+                        if (unused) try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
+                    }
+                },
+                .structure => |flat| switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        for (self.store.sliceVars(func.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = .neg, .reach = .nested });
+                        try pending.append(allocator, .{ .var_ = func.ret, .polarity = .pos, .reach = base.annotation_positions.functionReturnReach(item.reach) });
+                        for (self.store.sliceVars(func.effect_deps)) |dep| try pending.append(allocator, .{ .var_ = dep, .polarity = item.polarity, .reach = .nested });
+                    },
+                    .nominal_type => |nominal| for (self.store.sliceNominalArgs(nominal), 0..) |arg, index| {
+                        const polarity = if (self.nominal_argument_position) |provider| (try provider.resolve(provider.context, nominal, @intCast(index), item.polarity)) orelse return false else blk: {
+                            // A source declaration requires the checker's exact
+                            // placement provider; primitives have no body.
+                            std.debug.assert(nominal.sourceDeclOptional() == null);
+                            break :blk item.polarity;
+                        };
+                        const reach: AdapterReachPosition = base.annotation_positions.nominalArgumentReach(item.reach, self.nominalIsBuiltinTry(nominal), index);
+                        try pending.append(allocator, .{ .var_ = arg, .polarity = polarity, .reach = reach });
+                    },
+                    .tuple => |tuple| for (self.store.sliceVars(tuple.elems)) |arg| {
+                        try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
+                    },
+                    .record => |record| {
+                        for (0..record.fields.count) |index| {
+                            const presence = self.store.getRecordFieldAt(record.fields, @intCast(index)).presence;
+                            try pending.append(allocator, .{ .var_ = presence.typeVar(), .polarity = item.polarity, .reach = .nested });
+                            if (presence.presenceVar()) |presence_var| try pending.append(allocator, .{ .var_ = presence_var, .polarity = item.polarity, .reach = .nested });
+                        }
+                        try pending.append(allocator, .{ .var_ = record.ext, .polarity = item.polarity, .reach = .nested });
+                    },
+                    .tag_union => |union_| {
+                        for (0..union_.tags.count) |index| {
+                            const tag = self.store.getTagAt(union_.tags, @intCast(index));
+                            for (self.store.sliceVars(tag.args)) |arg| try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
+                        }
+                        try pending.append(allocator, .{ .var_ = union_.ext, .polarity = item.polarity, .reach = item.reach });
+                    },
+                    .empty_record, .empty_tag_union => {},
+                },
+                .field_presence, .err => {},
+            }
+        }
+        // Checked only in safe builds: in an unchecked build the assertion
+        // would let the optimizer assume the lookup succeeds and read the
+        // map's storage even when no choice was ever recorded.
+        if (std.debug.runtime_safety) {
+            for (binders.items) |binder| {
+                const resolved = self.store.resolveVar(binder);
+                if (resolved.desc.content == .rigid and resolved.desc.content.rigid.name.eql(marker_ident)) std.debug.assert(choices.contains(resolved.var_));
+            }
+        }
+        return true;
+    }
+
+    /// Schedule the vars of static-dispatch constraints for
+    /// `collectMarkerChoices`, at the polarity and reach `stepFlexLike` copies
+    /// them with.
+    fn pushConstraintChoiceItems(self: *Self, comptime Item: type, pending: *std.ArrayList(Item), constraints: StaticDispatchConstraint.SafeList.Range, polarity: Polarity) std.mem.Allocator.Error!void {
+        const allocator = self.store.gpa;
+        var i: u32 = 0;
+        while (i < constraints.len()) : (i += 1) {
+            const constraint = self.store.static_dispatch_constraints.items.items[@intFromEnum(constraints.start) + i];
+            try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = polarity, .reach = .nested });
+            if (constraint.interpolation.isPresent()) {
+                const metadata = constraint.interpolation;
+                var part_idx: u32 = 0;
+                while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
+                    try pending.append(allocator, .{ .var_ = self.store.getInterpolationPartAt(metadata.interpolated_parts, part_idx).var_, .polarity = polarity, .reach = .nested });
+                }
+                try pending.append(allocator, .{ .var_ = metadata.item_var, .polarity = polarity, .reach = .nested });
+            }
+        }
     }
 
     fn instantiateVarHelp(
@@ -660,6 +816,21 @@ pub const Instantiator = struct {
         initial_var: Var,
         force_root_copy: bool,
     ) std.mem.Allocator.Error!Var {
+        var marker_choices: std.AutoHashMapUnmanaged(Var, bool) = .empty;
+        defer marker_choices.deinit(self.store.gpa);
+        const previous_choices = self.marker_choices;
+        self.marker_choices = &marker_choices;
+        defer self.marker_choices = previous_choices;
+        switch (self.polarity_var_behavior) {
+            .resolve_by_polarity, .preserve_output, .defer_open => {
+                if (!try self.collectMarkerChoices(initial_var, &marker_choices)) {
+                    const rejected = try self.store.freshFromContentWithRank(.err, self.current_rank);
+                    try self.var_map.put(self.store.resolveVar(initial_var).var_, rejected);
+                    return rejected;
+                }
+            },
+            .close, .preserve => {},
+        }
         const machine = self.scratch();
         const frames_base = machine.frames.items.len;
         const values_base = machine.value_stack.items.len;
@@ -709,8 +880,8 @@ pub const Instantiator = struct {
         return machine.value_stack.pop().?;
     }
 
-    /// Copy the head of one var: resolve it, share it when rank says so,
-    /// reuse an existing mapping, and otherwise mint + register the
+    /// Copy the head of one var: resolve it, reuse an existing substitution,
+    /// share it when rank says so, and otherwise mint + register the
     /// placeholder and either fill it immediately (contents with no children)
     /// or push the frame that will fill it. Returns true when the result var
     /// is already on the value stack; false when a frame was pushed.
@@ -722,6 +893,15 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
+
+        // The root and its explicit scheme requirements use one substitution.
+        // An established copy takes precedence over ordinary rank-based sharing.
+        if (self.var_map.count() > 0) {
+            if (self.var_map.get(resolved_var)) |fresh_var| {
+                try machine.value_stack.append(self.store.gpa, fresh_var);
+                return true;
+            }
+        }
 
         // Ordinary instantiation shares every non-generalized var. A binding
         // explicitly classified as a scheme instead copies the non-generalized
@@ -744,19 +924,11 @@ pub const Instantiator = struct {
         }
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
-                .alias, .structure => machine.reach_state.get(resolved_var) orelse false,
+                .alias, .structure => machine.reach_state.?.get(resolved_var) orelse false,
                 .flex, .rigid, .field_presence, .err => false,
             };
             if (!copy_structure and !is_polarity_marker) {
                 try machine.value_stack.append(self.store.gpa, resolved_var);
-                return true;
-            }
-        }
-
-        // Check if we've already instantiated this variable
-        if (self.var_map.count() > 0) {
-            if (self.var_map.get(resolved_var)) |fresh_var| {
-                try machine.value_stack.append(self.store.gpa, fresh_var);
                 return true;
             }
         }
@@ -774,23 +946,34 @@ pub const Instantiator = struct {
                 // caller's rigid policy.
                 if (self.polarity_var_ident) |polarity_ident| {
                     if (rigid.name.eql(polarity_ident)) {
-                        const opened = self.polarity_var_behavior == .resolve_by_polarity and self.current_polarity == .pos;
+                        // Only the behaviors that decide per occurrence read a
+                        // choice; `instantiateVarHelp` made one, via
+                        // `collectMarkerChoices`, for every marker the copy
+                        // can reach. `.close` and `.preserve` decide
+                        // independently of position.
+                        const positive = switch (self.polarity_var_behavior) {
+                            .close, .preserve => false,
+                            .resolve_by_polarity, .preserve_output, .defer_open => self.marker_choices.?.get(resolved_var) orelse
+                                std.debug.panic("compiler invariant violated: polarity marker reached by instantiation has no marker choice", .{}),
+                        };
+                        const opened = self.polarity_var_behavior == .resolve_by_polarity and positive;
                         const marker_content: Content = switch (self.polarity_var_behavior) {
                             .close => .{ .structure = .empty_tag_union },
                             .preserve => .{ .rigid = Rigid.init(rigid.name) },
-                            .resolve_by_polarity => switch (self.current_polarity) {
-                                .pos => .{ .flex = Flex.init() },
-                                .neg => .{ .structure = .empty_tag_union },
-                            },
-                            .defer_open => switch (self.current_polarity) {
-                                .pos => switch (self.current_reach) {
-                                    .result, .try_row => Content{ .rigid = Rigid.init(rigid.name) },
-                                    .nested => Content{ .structure = .empty_tag_union },
-                                },
-                                .neg => .{ .structure = .empty_tag_union },
-                            },
+                            .preserve_output => if (positive)
+                                .{ .rigid = Rigid.init(rigid.name) }
+                            else
+                                .{ .structure = .empty_tag_union },
+                            .resolve_by_polarity => if (positive) .{ .flex = Flex.init() } else .{ .structure = .empty_tag_union },
+                            .defer_open => if (positive and self.current_reach != .nested)
+                                .{ .rigid = Rigid.init(rigid.name) }
+                            else
+                                .{ .structure = .empty_tag_union },
                         };
                         const marker_var = try self.store.freshFromContentWithRank(marker_content, self.current_rank);
+                        if (marker_content == .rigid) {
+                            if (self.preserved_marker_exts) |sink| try sink.append(self.store.gpa, marker_var);
+                        }
                         if (opened) {
                             if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{ .ext = marker_var });
                         }
@@ -982,6 +1165,7 @@ pub const Instantiator = struct {
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_reach = self.current_reach,
                             .is_try = self.nominalIsBuiltinTry(nominal),
+                            .saved_polarity = self.current_polarity,
                         } });
                         return false;
                     },
@@ -995,6 +1179,7 @@ pub const Instantiator = struct {
                             .kind = .pure,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_polarity = self.current_polarity,
+                            .saved_reach = self.current_reach,
                         } });
                         return false;
                     },
@@ -1008,6 +1193,7 @@ pub const Instantiator = struct {
                             .kind = .effectful,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_polarity = self.current_polarity,
+                            .saved_reach = self.current_reach,
                         } });
                         return false;
                     },
@@ -1021,6 +1207,7 @@ pub const Instantiator = struct {
                             .kind = .unbound,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_polarity = self.current_polarity,
+                            .saved_reach = self.current_reach,
                         } });
                         return false;
                     },
@@ -1183,27 +1370,27 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
-            if (arrived < frame.args_count) {
-                const arg_var = self.store.vars.items.items[frame.args_start + arrived];
+            if (arrived == 0) {
+                // Semantic structure chooses row polarity and adapter reach.
+                // Argument entries subsequently reuse these exact copies.
+                self.current_reach = frame.saved_reach;
+                if (!try self.requestVar(self.store.getAliasBackingVar(frame.alias), false)) return false;
+                continue;
+            }
+            if (arrived <= frame.args_count) {
+                const arg_var = self.store.vars.items.items[frame.args_start + arrived - 1];
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
-            if (arrived == frame.args_count) {
-                const backing_var = self.store.getAliasBackingVar(frame.alias);
-                // An alias is transparent: its backing occupies the same
-                // position the alias reference does.
-                self.current_reach = frame.saved_reach;
-                if (!try self.requestVar(backing_var, false)) return false;
-                continue;
-            }
             const values = machine.value_stack.items;
-            const fresh_backing_var = values[frame.vars_base + frame.args_count];
-            const fresh_args = values[frame.vars_base..][0..frame.args_count];
+            const fresh_backing_var = values[frame.vars_base];
+            const fresh_args = values[frame.vars_base + 1 ..][0..frame.args_count];
             const fresh_content = try self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
                 frame.alias.ident,
                 fresh_backing_var,
                 fresh_args,
+                frame.alias.source_arg_count,
                 frame.alias.origin_module,
                 frame.alias.source_decl.toOptional(),
                 frame.alias.source_decl.originIsBuiltin(),
@@ -1239,28 +1426,24 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived];
+                self.current_polarity = if (self.nominal_argument_position) |provider|
+                    (try provider.resolve(provider.context, frame.nominal, arrived, frame.saved_polarity)) orelse {
+                        machine.value_stack.items.len = frame.vars_base;
+                        self.current_polarity = frame.saved_polarity;
+                        self.current_reach = frame.saved_reach;
+                        try self.finishFrame(frame.common, .err);
+                        return true;
+                    }
+                else
+                    frame.saved_polarity;
                 // A `Try` written as the direct result passes the adapter's
                 // reach to its ERROR row. The ok row is deliberately NOT
                 // reachable: the adapter asserts the ok type is unchanged.
-                const try_error_row_reachable = frame.is_try and
-                    arrived == try_error_type_arg_index and
-                    switch (frame.saved_reach) {
-                        // The signature's direct result: the adapter re-tags
-                        // this `Try`'s error row.
-                        .result => true,
-                        // A `Try` standing IN another `Try`'s error row. The
-                        // relation re-tags that row and relates everything
-                        // below it EXACTLY (`resultRowWideningOrNull`,
-                        // src/postcheck/monotype/lower.zig:1806-1812), so a
-                        // second descent would open a row lowering will not
-                        // adapt.
-                        .try_row => false,
-                        .nested => false,
-                    };
-                self.current_reach = if (try_error_row_reachable) .try_row else .nested;
+                self.current_reach = base.annotation_positions.nominalArgumentReach(frame.saved_reach, frame.is_try, arrived);
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
+            self.current_polarity = frame.saved_polarity;
             const fresh_content = try self.store.mkNominalWithSourceDeclAndBuiltinOrigin(
                 frame.nominal.ident,
                 machine.value_stack.items[frame.vars_base..][0..frame.args_count],
@@ -1283,19 +1466,19 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@intFromEnum(frame.func.args.start) + arrived];
-                // Argument positions negate the surrounding polarity. No
+                // Each function establishes its own input position. No
                 // position inside a function is adapter-reachable: the adapter
                 // re-tags the result it is generated for, never a row inside a
                 // function that result contains.
-                self.current_polarity = frame.saved_polarity.flip();
+                self.current_polarity = .neg;
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             if (arrived == args_count) {
-                // The return position preserves the surrounding polarity.
-                self.current_polarity = frame.saved_polarity;
-                self.current_reach = .nested;
+                // Each function establishes its own output position.
+                self.current_polarity = .pos;
+                self.current_reach = base.annotation_positions.functionReturnReach(frame.saved_reach);
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;
             }
@@ -1323,6 +1506,8 @@ pub const Instantiator = struct {
                 .effectful => FlatType{ .fn_effectful = fresh_func },
                 .unbound => FlatType{ .fn_unbound = fresh_func },
             } };
+            self.current_polarity = frame.saved_polarity;
+            self.current_reach = frame.saved_reach;
             try self.finishFrame(frame.common, fresh_content);
             return true;
         }

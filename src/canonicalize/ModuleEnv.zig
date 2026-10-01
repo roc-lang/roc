@@ -129,6 +129,7 @@ pub const CommonIdents = extern struct {
     str: Ident.Idx,
     list: Ident.Idx,
     iter: Ident.Idx,
+    stream: Ident.Idx,
     box: Ident.Idx,
     dict: Ident.Idx,
     set: Ident.Idx,
@@ -271,6 +272,7 @@ pub const CommonIdents = extern struct {
             .str = try common.insertIdent(gpa, Ident.for_text("Str")),
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .iter = try common.insertIdent(gpa, Ident.for_text("Iter")),
+            .stream = try common.insertIdent(gpa, Ident.for_text("Stream")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
             .dict = try common.insertIdent(gpa, Ident.for_text("Dict")),
             .set = try common.insertIdent(gpa, Ident.for_text("Set")),
@@ -408,6 +410,7 @@ pub const CommonIdents = extern struct {
             .str = common.findIdent("Str") orelse unreachable,
             .list = common.findIdent("List") orelse unreachable,
             .iter = common.findIdent("Iter") orelse unreachable,
+            .stream = common.findIdent("Stream") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
             .dict = common.findIdent("Dict") orelse unreachable,
             .set = common.findIdent("Set") orelse unreachable,
@@ -845,6 +848,27 @@ pub const RejectedStaticDispatch = extern struct {
     }
 };
 
+/// The use inspection makes of a `to_inspect` method: an instance of its type
+/// whose result is `Str`, recorded by checking for each such method its module
+/// declares (design.md "Inspect Overrides"). A method with no such instance
+/// has no entry.
+pub const InspectOverrideInstance = extern struct {
+    def_idx: u32,
+    /// Unified with the instance's callable type, and the raw identity of the
+    /// use's dispatch-target scheme-use record.
+    callable_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub fn def(self: InspectOverrideInstance) CIR.Def.Idx {
+        return @enumFromInt(self.def_idx);
+    }
+
+    pub fn callableVar(self: InspectOverrideInstance) TypeVar {
+        return @enumFromInt(self.callable_var);
+    }
+};
+
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
@@ -1116,6 +1140,8 @@ generated_codec_calls: GeneratedCodecCall.SafeList,
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
 /// Exact default identities selected at record-literal omission sites.
 record_omitted_defaults: RecordOmittedDefault.SafeList,
+/// Checked `to_inspect` instances at result `Str`, one per method that has one.
+inspect_override_instances: InspectOverrideInstance.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1454,6 +1480,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
+    self.inspect_override_instances.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1560,6 +1587,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
+        .inspect_override_instances = try InspectOverrideInstance.SafeList.initCapacity(gpa, 0),
     };
 }
 
@@ -1594,6 +1622,7 @@ pub fn deinit(self: *Self) void {
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.inspect_override_instances.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1698,6 +1727,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.inspect_override_instances.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -2583,6 +2613,45 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
+
+            break :blk report;
+        },
+        .duplicate_pattern_binder => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+
+            var report = try Report.init(allocator, "Duplicate Name In Pattern", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addReflowingText("The name ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is bound more than once in this pattern.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                duplicate_region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("It was first bound here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Each name in a pattern must be different. To check whether two values are equal, give them different names and compare them in a guard:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock("(a, b) if a == b => ...");
 
             break :blk report;
         },
@@ -4118,6 +4187,108 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .control_flow_in_expect => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = switch (data.kind) {
+                .try_suffix => r: {
+                    var r = try Report.init(allocator, "Try Operator In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("?", .inline_code);
+                    try r.headline.addReflowingText(" operator cannot be used directly inside an inline ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+                .return_keyword => r: {
+                    var r = try Report.init(allocator, "Return In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("return", .inline_code);
+                    try r.headline.addReflowingText(" keyword cannot be used directly inside an ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+                .break_keyword => r: {
+                    var r = try Report.init(allocator, "Break In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("break", .inline_code);
+                    try r.headline.addReflowingText(" statement cannot exit a loop from inside an ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+            };
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Optimized builds remove inline ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText("s, so an ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" must not move control flow outside of itself, or the program would behave differently in optimized builds.");
+            if (data.kind == .try_suffix) {
+                try report.document.addReflowingText(" Handle the ");
+                try report.document.addAnnotated("Err", .inline_code);
+                try report.document.addReflowingText(" case explicitly instead, for example with a ");
+                try report.document.addAnnotated("match", .inline_code);
+                try report.document.addReflowingText(".");
+            }
+
+            break :blk report;
+        },
+        .var_reassigned_in_expect => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const declaration_region_info = self.calcRegionInfo(data.declaration_region);
+
+            var report = try Report.init(allocator, "Var Reassigned In Expect", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            const owned_filename = try report.addOwnedString(filename);
+            try report.headline.addReflowingText("This ");
+            try report.headline.addAnnotated("expect", .inline_code);
+            try report.headline.addReflowingText(" reassigns ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(", which was declared outside of it:");
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" was declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                declaration_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Optimized builds remove inline ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText("s, so an ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" must not change variables declared outside of it, or the program would behave differently in optimized builds. Variables declared inside the ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" can be reassigned freely.");
+
+            break :blk report;
+        },
         .mutually_recursive_type_aliases => |data| blk: {
             const type_name = self.getIdent(data.name);
             const other_type_name = self.getIdent(data.other_name);
@@ -4349,6 +4520,7 @@ pub const Serialized = extern struct {
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
+    inspect_override_instances: InspectOverrideInstance.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -4467,6 +4639,7 @@ pub const Serialized = extern struct {
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
+        try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -4540,6 +4713,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4615,6 +4789,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4693,6 +4868,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -4783,6 +4959,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -5232,6 +5409,23 @@ pub fn recordRejectedStaticDispatch(self: *Self, constraint_fn_var: TypeVar) std
 /// Checker-rejected static-dispatch obligations in production order.
 pub fn rejectedStaticDispatches(self: *const Self) []const RejectedStaticDispatch {
     return self.rejected_static_dispatches.items.items;
+}
+
+/// Persist the use inspection makes of one `to_inspect` method.
+pub fn recordInspectOverrideInstance(self: *Self, def_idx: CIR.Def.Idx, callable_var: TypeVar) std.mem.Allocator.Error!void {
+    _ = try self.inspect_override_instances.append(self.gpa, .{
+        .def_idx = @intFromEnum(def_idx),
+        .callable_var = @intFromEnum(callable_var),
+    });
+}
+
+/// The use inspection makes of the `to_inspect` method `def_idx`, or null
+/// when its type has no instance whose result is `Str`.
+pub fn inspectOverrideInstance(self: *const Self, def_idx: CIR.Def.Idx) ?TypeVar {
+    for (self.inspect_override_instances.items.items) |instance| {
+        if (instance.def() == def_idx) return instance.callableVar();
+    }
+    return null;
 }
 
 /// Return the checked `from_quote` function for a string literal node.

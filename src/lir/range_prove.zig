@@ -185,6 +185,74 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
     }
 }
 
+test "range prove retargets jumps inside unreached join bodies when threading a Bool join" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const bool_join = fixture_join_ids.freshJoinPoint();
+    const unreached_join = fixture_join_ids.freshJoinPoint();
+
+    // join 0(flag) = switch flag { 1 => ret, _ => ret }
+    const ret_true = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const ret_false = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const bool_body = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = flag,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_true }}),
+        .default_branch = ret_false,
+    } }, .test_fixture);
+    // join 1() has no jump to it, so the prescan never scans its body.
+    const unreached_jump = try store.addCFStmt(.{ .jump = .{ .target = bool_join } }, .test_fixture);
+    const reached_jump = try store.addCFStmt(.{ .jump = .{ .target = bool_join } }, .test_fixture);
+    const unreached = try store.addCFStmt(.{ .join = .{
+        .id = unreached_join,
+        .params = try store.addLocalSpan(&.{}),
+        .body = unreached_jump,
+        .remainder = reached_jump,
+    } }, .test_fixture);
+    const set_result = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = unreached,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = bool_join,
+        .params = try store.addLocalSpan(&.{flag}),
+        .body = bool_body,
+        .remainder = set_result,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(0),
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{flag}),
+        .body = body,
+        .ret_layout = .u64,
+    }, .none);
+
+    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    defer scratch.deinit();
+    try runProc(&store, &layouts, proc, scratch.allocator());
+
+    var join_ids = collections.DenseMap(LIR.JoinPointId, void).init(testing.allocator);
+    defer join_ids.deinit();
+    var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
+    defer jump_targets.deinit(testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt| {
+        const cf = store.getCFStmt(stmt);
+        if (cf == .join) try join_ids.put(cf.join.id, {});
+        if (cf == .jump) try jump_targets.append(testing.allocator, cf.jump.target);
+    }
+    try testing.expect(!join_ids.contains(bool_join));
+    for (jump_targets.items) |target| try testing.expect(join_ids.contains(target));
+}
+
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
 /// root: control reaching the defining statement guarantees
@@ -486,7 +554,7 @@ const EnvMeet = struct {
     /// When set, the entry describes this field of the struct the local
     /// holds rather than the local itself, keyed by the struct's root in
     /// `field_values`.
-    field: ?u16 = null,
+    field: ?u32 = null,
     root: NodeId,
     off_lo: i128,
     off_hi: i128,
@@ -511,7 +579,7 @@ const EnvMeet = struct {
 /// Bound on locals carried through one merge's environment meet.
 const merge_env_cap: usize = 128;
 /// Struct fields considered when a struct local's fields meet.
-const max_struct_meet_fields: u16 = 16;
+const max_struct_meet_fields: u32 = 16;
 
 /// Accumulated meet state of one merge head: the facts present on every
 /// captured incoming edge, and the per-local value meet of the path
@@ -646,7 +714,7 @@ const Pass = struct {
     /// The `field_values` keys whose field holds a tracked integer: only
     /// those meet as scalars at a merge. A list field keeps its value's
     /// length term and must not be replaced by a met scalar.
-    int_fields: collections.DenseMap(u64, void),
+    int_fields: std.AutoHashMap(u64, void),
     /// The node each loop parameter was bound to when its body was seeded
     /// this round. A back edge carrying that very value brings the
     /// parameter back unchanged, so the entry edges' bounds hold on it too.
@@ -696,6 +764,8 @@ const Pass = struct {
     progress_epoch: u32,
     max_join_id: u32,
     scratch: std.ArrayList(CFStmtId),
+    /// Reachable statements and predecessors for the loop-cycle scans.
+    loop_scan: LoopScan,
     query_best: collections.DenseMap(NodeId, QueryBest),
     /// Scratch for `dedupeFacts`.
     fact_seen: std.AutoHashMap(FactKey, void),
@@ -746,7 +816,7 @@ const Pass = struct {
             .global_facts = .empty,
             .field_values = std.AutoHashMap(u64, NodeId).init(allocator),
             .struct_roots = collections.DenseMap(NodeId, void).init(allocator),
-            .int_fields = collections.DenseMap(u64, void).init(allocator),
+            .int_fields = std.AutoHashMap(u64, void).init(allocator),
             .seeded_param_roots = collections.DenseMap(LocalId, NodeId).init(allocator),
             .seeded_param_root_set = collections.DenseMap(NodeId, void).init(allocator),
             .sum_roots = std.AutoHashMap(u64, NodeId).init(allocator),
@@ -764,6 +834,7 @@ const Pass = struct {
             .progress_epoch = 0,
             .max_join_id = 0,
             .scratch = .empty,
+            .loop_scan = LoopScan.init(allocator),
             .query_best = collections.DenseMap(NodeId, QueryBest).init(allocator),
             .fact_seen = std.AutoHashMap(FactKey, void).init(allocator),
             .rewrites = 0,
@@ -818,6 +889,7 @@ const Pass = struct {
         self.enclosing_join.deinit();
         self.join_parent.deinit();
         self.scratch.deinit(self.allocator);
+        self.loop_scan.deinit(self.allocator);
         self.query_best.deinit();
         self.fact_seen.deinit();
         self.proof_records.deinit(self.allocator);
@@ -1308,7 +1380,7 @@ const Pass = struct {
             const field_local = GuardedList.at(field_locals, i);
             if (trackedIntMax(self.localLayout(field_local)) == null) continue;
             const field_node = (try self.valueOf(field_local)) orelse continue;
-            const key = (@as(u64, node) << 16) | @as(u64, @intCast(i));
+            const key = (@as(u64, node) << 32) | @as(u64, @intCast(i));
             try self.field_values.put(key, field_node);
             try self.int_fields.put(key, {});
             try self.struct_roots.put(node, {});
@@ -1318,9 +1390,9 @@ const Pass = struct {
 
     /// Bind a field-read target, unifying with earlier reads of the same
     /// field of the same struct value so facts reach every read site.
-    fn bindFieldRead(self: *Pass, target: LocalId, source: LocalId, field_idx: u16) ResourceError!void {
+    fn bindFieldRead(self: *Pass, target: LocalId, source: LocalId, field_idx: u32) ResourceError!void {
         const src_node = (try self.valueOf(source)) orelse return self.bindFresh(target);
-        const key = (@as(u64, self.rootOf(src_node)) << 16) | field_idx;
+        const key = (@as(u64, self.rootOf(src_node)) << 32) | field_idx;
         if (self.field_values.get(key)) |node| {
             try self.bind(target, .{ .node = node });
             return;
@@ -1529,6 +1601,7 @@ const Pass = struct {
             }
         }
         try self.scanJoinNesting(proc.body.?);
+        if (self.body_joins.count() != 0) try self.buildLoopScan(proc.body.?);
         var loop_it = self.body_joins.iterator();
         while (loop_it.next()) |kv| try self.scanLoopAssigned(kv.value_ptr.*, kv.key_ptr.*);
     }
@@ -1677,36 +1750,89 @@ const Pass = struct {
         }
     }
 
-    /// Record the locals assigned on the cycle of loop `join_id`: statements
-    /// reachable from its body from which a jump back to it is reachable.
-    /// A local written only after the loop exits, even lexically inside the
-    /// join's body, keeps its entry value for every iteration.
-    fn scanLoopAssigned(self: *Pass, join_id: JoinPointId, body: CFStmtId) ResourceError!void {
-        var members = std.ArrayList(CFStmtId).empty;
-        defer members.deinit(self.allocator);
-        var index_of = collections.DenseMap(CFStmtId, u32).init(self.allocator);
-        defer index_of.deinit();
-        var successors = std.ArrayList(CFStmtId).empty;
-        defer successors.deinit(self.allocator);
+    /// Every reachable statement of a procedure, numbered, with its
+    /// predecessors on the successor relation the loop scans follow, the
+    /// reachable jumps to each join, and the join-nesting tree numbered so
+    /// that whether a join's body encloses another join is an interval test.
+    /// Built once per procedure; each loop's scan reuses it.
+    const LoopScan = struct {
+        stmts: std.ArrayList(CFStmtId) = .empty,
+        index_of: collections.DenseMap(CFStmtId, u32),
+        successors: std.ArrayList(CFStmtId) = .empty,
+        edges: std.ArrayList(LoopEdge) = .empty,
+        pred_start: std.ArrayList(u32) = .empty,
+        preds: std.ArrayList(u32) = .empty,
+        jumps_to: collections.DenseMap(JoinPointId, std.ArrayList(u32)),
+        join_order: collections.DenseMap(JoinPointId, JoinOrder),
+        /// `mark[i] == generation` when node `i` is on the current loop's cycle.
+        mark: std.ArrayList(u32) = .empty,
+        generation: u32 = 0,
+        pending: std.ArrayList(u32) = .empty,
+        cycle: std.ArrayList(u32) = .empty,
 
-        // The join statement is the loop header: a path around the loop
-        // closes at a jump to the join, never by passing through the header
-        // again, so traversal stops there.
-        const header = self.join_stmts.get(join_id);
-        try members.append(self.allocator, body);
-        try index_of.put(body, 0);
-        var cursor: usize = 0;
-        while (cursor < members.items.len) : (cursor += 1) {
-            const stmt = members.items[cursor];
-            if (header != null and stmt == header.?) continue;
+        const LoopEdge = struct { from: u32, to: u32 };
+        const JoinOrder = struct { pre: u32, post: u32 };
+
+        fn init(allocator: Allocator) LoopScan {
+            return .{
+                .index_of = collections.DenseMap(CFStmtId, u32).init(allocator),
+                .jumps_to = collections.DenseMap(JoinPointId, std.ArrayList(u32)).init(allocator),
+                .join_order = collections.DenseMap(JoinPointId, JoinOrder).init(allocator),
+            };
+        }
+
+        fn deinit(self: *LoopScan, allocator: Allocator) void {
+            self.stmts.deinit(allocator);
+            self.index_of.deinit();
+            self.successors.deinit(allocator);
+            self.edges.deinit(allocator);
+            self.pred_start.deinit(allocator);
+            self.preds.deinit(allocator);
+            var jumps = self.jumps_to.iterator();
+            while (jumps.next()) |entry| entry.value_ptr.deinit(allocator);
+            self.jumps_to.deinit();
+            self.join_order.deinit();
+            self.mark.deinit(allocator);
+            self.pending.deinit(allocator);
+            self.cycle.deinit(allocator);
+        }
+
+        fn node(self: *LoopScan, allocator: Allocator, stmt: CFStmtId) ResourceError!u32 {
+            const entry = try self.index_of.getOrPut(stmt);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(self.stmts.items.len);
+                try self.stmts.append(allocator, stmt);
+            }
+            return entry.value_ptr.*;
+        }
+
+        /// Whether `outer`'s body encloses `inner`'s.
+        fn encloses(self: *const LoopScan, outer: JoinPointId, inner: JoinPointId) bool {
+            const o = self.join_order.get(outer) orelse return false;
+            const i = self.join_order.get(inner) orelse return false;
+            return o.pre <= i.pre and i.post <= o.post;
+        }
+    };
+
+    /// Build `loop_scan` for a procedure whose join nesting is recorded.
+    fn buildLoopScan(self: *Pass, body: CFStmtId) ResourceError!void {
+        const scan = &self.loop_scan;
+        const gpa = self.allocator;
+        const successors = &scan.successors;
+        _ = try scan.node(gpa, body);
+        var cursor: u32 = 0;
+        while (cursor < scan.stmts.items.len) : (cursor += 1) {
+            const stmt = scan.stmts.items[cursor];
             successors.clearRetainingCapacity();
             switch (self.store.getCFStmt(stmt)) {
                 .jump => |j| {
-                    if (j.target == join_id) continue;
                     const target_stmt = self.join_stmts.get(j.target) orelse continue;
-                    try successors.append(self.allocator, self.store.getCFStmt(target_stmt).join.body);
+                    const entry = try scan.jumps_to.getOrPut(j.target);
+                    if (!entry.found_existing) entry.value_ptr.* = .empty;
+                    try entry.value_ptr.append(gpa, cursor);
+                    try successors.append(gpa, self.store.getCFStmt(target_stmt).join.body);
                 },
-                .join => |j| try successors.append(self.allocator, j.remainder),
+                .join => |j| try successors.append(gpa, j.remainder),
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -1749,94 +1875,118 @@ const Pass = struct {
                 .loop_break,
                 .ret,
                 .crash,
-                => try BodyClone.appendSuccessorsWithAllocator(self.store, &successors, stmt, self.allocator),
+                => try BodyClone.appendSuccessorsWithAllocator(self.store, successors, stmt, gpa),
             }
             for (successors.items) |next| {
-                if (index_of.contains(next)) continue;
-                try index_of.put(next, @intCast(members.items.len));
-                try members.append(self.allocator, next);
+                try scan.edges.append(gpa, .{ .from = cursor, .to = try scan.node(gpa, next) });
             }
         }
 
-        // A member is on the cycle when a jump back to the join is reachable
-        // from it; jumps to other joins continue through those joins' bodies.
-        const on_cycle = try self.allocator.alloc(bool, members.items.len);
-        defer self.allocator.free(on_cycle);
-        @memset(on_cycle, false);
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (members.items, 0..) |stmt, i| {
-                if (on_cycle[i]) continue;
-                if (header != null and stmt == header.?) continue;
-                var reaches = false;
-                successors.clearRetainingCapacity();
-                switch (self.store.getCFStmt(stmt)) {
-                    .jump => |j| {
-                        if (j.target == join_id) {
-                            reaches = true;
-                        } else if (self.join_stmts.get(j.target)) |target_stmt| {
-                            try successors.append(self.allocator, self.store.getCFStmt(target_stmt).join.body);
-                        }
-                    },
-                    .join => |j| try successors.append(self.allocator, j.remainder),
-                    .init_uninitialized,
-                    .assign_ref,
-                    .assign_literal,
-                    .assign_call,
-                    .assign_call_erased,
-                    .assign_packed_erased_fn,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_reuse_box,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .assign_call_dict,
-                    .assign_low_level,
-                    .assign_list,
-                    .assign_struct,
-                    .assign_tag,
-                    .store_struct,
-                    .store_tag,
-                    .set_local,
-                    .debug,
-                    .expect,
-                    .expect_err,
-                    .runtime_error,
-                    .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
-                    .incref,
-                    .decref,
-                    .decref_if_initialized,
-                    .free,
-                    .switch_stmt,
-                    .switch_initialized_payload,
-                    .str_match,
-                    .str_match_set,
-                    .boxy_tag_match,
-                    .loop_continue,
-                    .loop_break,
-                    .ret,
-                    .crash,
-                    => try BodyClone.appendSuccessorsWithAllocator(self.store, &successors, stmt, self.allocator),
-                }
-                for (successors.items) |next| {
-                    const ni = index_of.get(next) orelse continue;
-                    if (on_cycle[ni]) reaches = true;
-                }
-                if (reaches) {
-                    on_cycle[i] = true;
-                    changed = true;
+        const count = scan.stmts.items.len;
+        try scan.pred_start.resize(gpa, count + 1);
+        const pred_start = scan.pred_start.items;
+        @memset(pred_start, 0);
+        for (scan.edges.items) |edge| pred_start[edge.to + 1] += 1;
+        for (1..pred_start.len) |i| pred_start[i] += pred_start[i - 1];
+        try scan.preds.resize(gpa, scan.edges.items.len);
+        try scan.pending.resize(gpa, count);
+        const fill = scan.pending.items;
+        @memcpy(fill, pred_start[0..count]);
+        for (scan.edges.items) |edge| {
+            scan.preds.items[fill[edge.to]] = edge.from;
+            fill[edge.to] += 1;
+        }
+        scan.pending.clearRetainingCapacity();
+        try scan.mark.resize(gpa, count);
+        @memset(scan.mark.items, 0);
+
+        // Number the join-nesting tree in depth-first order: a join's body
+        // encloses exactly the joins numbered within its interval.
+        var children = collections.DenseMap(JoinPointId, std.ArrayList(JoinPointId)).init(gpa);
+        defer {
+            var it = children.iterator();
+            while (it.next()) |entry| entry.value_ptr.deinit(gpa);
+            children.deinit();
+        }
+        var roots = std.ArrayList(JoinPointId).empty;
+        defer roots.deinit(gpa);
+        var joins = self.join_stmts.iterator();
+        while (joins.next()) |entry| {
+            const id = entry.key_ptr.*;
+            if (self.join_parent.get(id)) |parent| {
+                const kids = try children.getOrPut(parent);
+                if (!kids.found_existing) kids.value_ptr.* = .empty;
+                try kids.value_ptr.append(gpa, id);
+            } else {
+                try roots.append(gpa, id);
+            }
+        }
+        const NestingFrame = struct { id: JoinPointId, next: u32 };
+        var stack = std.ArrayList(NestingFrame).empty;
+        defer stack.deinit(gpa);
+        var clock: u32 = 0;
+        for (roots.items) |root| {
+            try scan.join_order.put(root, .{ .pre = clock, .post = clock });
+            clock += 1;
+            try stack.append(gpa, .{ .id = root, .next = 0 });
+            while (stack.items.len != 0) {
+                const top = &stack.items[stack.items.len - 1];
+                const kids: []const JoinPointId = if (children.getPtr(top.id)) |list| list.items else &.{};
+                if (top.next < kids.len) {
+                    const child = kids[top.next];
+                    top.next += 1;
+                    try scan.join_order.put(child, .{ .pre = clock, .post = clock });
+                    clock += 1;
+                    try stack.append(gpa, .{ .id = child, .next = 0 });
+                } else {
+                    scan.join_order.getPtr(top.id).?.post = clock;
+                    _ = stack.pop();
                 }
             }
         }
+    }
+
+    /// Record the locals assigned on the cycle of loop `join_id`: statements
+    /// reachable from its body from which a jump back to it is reachable.
+    /// A local written only after the loop exits, even lexically inside the
+    /// join's body, keeps its entry value for every iteration.
+    ///
+    /// The cycle is found backward from the jumps to the join that its body
+    /// encloses. The body is entered only by jumps to the join, so the walk
+    /// stops at the body's first statement and never passes the join
+    /// statement itself; every statement it reaches lies within the body, and
+    /// a statement within the body is reachable from the procedure exactly
+    /// when it is reachable from the body.
+    fn scanLoopAssigned(self: *Pass, join_id: JoinPointId, body: CFStmtId) ResourceError!void {
+        const scan = &self.loop_scan;
+        scan.generation += 1;
+        const generation = scan.generation;
+        scan.pending.clearRetainingCapacity();
+        scan.cycle.clearRetainingCapacity();
+        const header = self.join_stmts.get(join_id);
+        const body_node = scan.index_of.get(body);
+        if (scan.jumps_to.getPtr(join_id)) |jumps| {
+            for (jumps.items) |jump| {
+                const owner = self.enclosing_join.get(scan.stmts.items[jump]) orelse continue;
+                if (owner != join_id and !scan.encloses(join_id, owner)) continue;
+                if (scan.mark.items[jump] == generation) continue;
+                scan.mark.items[jump] = generation;
+                try scan.pending.append(self.allocator, jump);
+            }
+        }
+        while (scan.pending.pop()) |current| {
+            try scan.cycle.append(self.allocator, current);
+            if (body_node != null and current == body_node.?) continue;
+            for (scan.preds.items[scan.pred_start.items[current]..scan.pred_start.items[current + 1]]) |pred| {
+                if (scan.mark.items[pred] == generation) continue;
+                if (header != null and scan.stmts.items[pred] == header.?) continue;
+                scan.mark.items[pred] = generation;
+                try scan.pending.append(self.allocator, pred);
+            }
+        }
         var back: u32 = 0;
-        for (members.items, 0..) |stmt, i| {
-            if (!on_cycle[i]) continue;
+        for (scan.cycle.items) |node| {
+            const stmt = scan.stmts.items[node];
             switch (self.store.getCFStmt(stmt)) {
                 .jump => |j| {
                     if (j.target == join_id) back += 1;
@@ -2065,9 +2215,9 @@ const Pass = struct {
                 // A struct's integer fields meet like locals of their own, so
                 // a loop exit that carries its state out through one record
                 // keeps each carried value's bounds.
-                var field_idx: u16 = 0;
+                var field_idx: u32 = 0;
                 while (field_idx < max_struct_meet_fields) : (field_idx += 1) {
-                    const field_key = (@as(u64, node.root) << 16) | field_idx;
+                    const field_key = (@as(u64, node.root) << 32) | field_idx;
                     if (!self.int_fields.contains(field_key)) continue;
                     const field_node = self.field_values.get(field_key) orelse continue;
                     // A field with nothing known about it would only take
@@ -2116,7 +2266,7 @@ const Pass = struct {
                 if (!meet.valid and meet.bounds.len == 0 and meet.lower.len == 0 and meet.lower_any.len == 0 and meet.len_bounds.len == 0 and meet.len_bounds_any.len == 0) continue;
                 const binding = self.path_env.get(meet.local);
                 const node_id: ?NodeId = if (binding) |b|
-                    (if (meet.field) |field_idx| self.field_values.get((@as(u64, self.rootOf(b.node)) << 16) | field_idx) else b.node)
+                    (if (meet.field) |field_idx| self.field_values.get((@as(u64, self.rootOf(b.node)) << 32) | field_idx) else b.node)
                 else
                     null;
                 if (node_id) |nid| {
@@ -2355,7 +2505,7 @@ const Pass = struct {
                 // is bound (or freshly made) by the time a field seeds.
                 const node = (try self.metScalarNode(meet)) orelse continue;
                 const parent = (try self.valueOf(meet.local)) orelse continue;
-                const field_key = (@as(u64, self.rootOf(parent)) << 16) | field_idx;
+                const field_key = (@as(u64, self.rootOf(parent)) << 32) | field_idx;
                 try self.field_values.put(field_key, node);
                 try self.int_fields.put(field_key, {});
                 try self.struct_roots.put(self.rootOf(parent), {});
@@ -3286,8 +3436,16 @@ const Pass = struct {
     /// two fresh parameterless joins that wrap the original arms, so each
     /// site's own knowledge of the parameter reaches the arms directly.
     /// Returns the number of joins threaded.
-    fn threadBoolJoins(self: *Pass) ResourceError!u32 {
+    fn threadBoolJoins(self: *Pass, body: CFStmtId) ResourceError!u32 {
         var threaded: u32 = 0;
+        // Jump records cover only code the prescan reached, and it never scans
+        // a join body without a reachable jump. Retargeting must still cover
+        // every structural jump, or an unscanned one would keep the join id
+        // this rewrite retires. Most procedures thread nothing, so the walk
+        // waits for the first join that qualifies.
+        var structural_jumps = std.ArrayList(JumpRecord).empty;
+        defer structural_jumps.deinit(self.allocator);
+        var structural_jumps_ready = false;
         for (self.joins_in_order.items) |join_stmt| {
             const join = switch (self.store.getCFStmt(join_stmt)) {
                 .join => |j| j,
@@ -3406,6 +3564,16 @@ const Pass = struct {
             }
             if (!shape_ok) continue;
 
+            if (!structural_jumps_ready) {
+                var walk = try BodyClone.ReachableStmts.initWithAllocator(self.store, body, self.allocator);
+                defer walk.deinit();
+                while (try walk.next()) |stmt| {
+                    const cf = self.store.getCFStmt(stmt);
+                    if (cf == .jump) try structural_jumps.append(self.allocator, .{ .target = cf.jump.target, .stmt = stmt });
+                }
+                structural_jumps_ready = true;
+            }
+
             const true_id: JoinPointId = @enumFromInt(self.max_join_id);
             const false_id: JoinPointId = @enumFromInt(self.max_join_id + 1);
             self.max_join_id += 2;
@@ -3429,7 +3597,7 @@ const Pass = struct {
                 .remainder = false_join,
             } }, join_origin);
 
-            for (self.jump_records.items) |record| {
+            for (structural_jumps.items) |record| {
                 if (record.target != join.id) continue;
                 // A site already rewritten for an earlier join no longer
                 // holds a jump; skip anything that changed shape.
@@ -3588,7 +3756,7 @@ const Pass = struct {
             // Threading restructures control flow, so a round that threads
             // stops there and the next round re-derives the graph facts.
             self.new_loop_bounds = false;
-            if (try self.threadBoolJoins() == 0) {
+            if (try self.threadBoolJoins(proc.body.?) == 0) {
                 try self.walkRegions(proc.body.?);
                 try self.certifyRound(proc.body.?);
                 try self.persistLoopBounds();
@@ -4147,9 +4315,22 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
+            // A hint with no result to describe.
+            .list_prefetch => try self.bindFresh(s.target),
             .list_capacity => {
                 // A list's capacity is a non-negative count with no tighter
                 // statically known bound.
+                try self.bindFresh(s.target);
+            },
+            .list_clear => {
+                // The cleared list has no items: its length term is zero.
+                if (try self.unknownFor(self.localLayout(s.target))) |out_node| {
+                    if (try self.constNode(0)) |zero| {
+                        try self.len_terms.put(out_node, zero);
+                        try self.bind(s.target, .{ .node = out_node });
+                        return;
+                    }
+                }
                 try self.bindFresh(s.target);
             },
             .list_append_unsafe => {
@@ -4181,7 +4362,7 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
-            .list_reserve => {
+            .list_reserve, .list_reserve_for_append => {
                 // Reserving capacity keeps every item, so the result shares
                 // the input's length term.
                 if (arg_count == 2) {
@@ -4296,6 +4477,26 @@ const Pass = struct {
             },
             .num_is_eq, .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte => {
                 try self.modelCompare(stmt, s, args, arg_count);
+            },
+            .bool_likely => {
+                // The expected outcome of a branch, not a different value:
+                // the result is the operand, with the comparison that
+                // defined it, so a switch on it still asserts that
+                // comparison along its arms.
+                if (arg_count == 1) {
+                    const operand = GuardedList.at(args, 0);
+                    if (try self.valueOf(operand)) |node| {
+                        const source = self.lookup(operand);
+                        try self.bind(s.target, .{
+                            .node = node,
+                            .pred = if (source) |b| b.pred else null,
+                            .overflow_pred = if (source) |b| b.overflow_pred else null,
+                            .arithmetic_chain = if (source) |b| b.arithmetic_chain else null,
+                        });
+                        return;
+                    }
+                }
+                try self.bindFresh(s.target);
             },
             .num_int_add_wrap,
             .num_int_add_crash_on_overflow,

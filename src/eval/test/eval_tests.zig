@@ -6,6 +6,7 @@ const trmc_tests = @import("eval_trmc_tests.zig");
 const closure_recursion_tests = @import("eval_closure_recursion_tests.zig");
 const comptime_finalization_tests = @import("eval_comptime_finalization_tests.zig");
 const crypto_tests = @import("eval_crypto_tests.zig");
+const deep_nesting_tests = @import("eval_deep_nesting_tests.zig");
 const highest_lowest_tests = @import("eval_highest_lowest_tests.zig");
 const issue_tests = @import("eval_issue_tests.zig");
 const interpreter_style_tests = @import("eval_interpreter_style_tests.zig");
@@ -5692,6 +5693,201 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "12" },
     },
+    // A method bound to an exact procedure alias of a where-constrained
+    // generic procedure: the dispatch edge instantiates the alias's scheme, and
+    // the target's own evidence follows from its instantiated callable.
+    .{
+        .name = "where-clause dispatch through a method alias of a constrained generic procedure",
+        .source_kind = .module,
+        .source =
+        \\gen_range : num, num -> Iter(num)
+        \\    where [num.is_lt : num, num -> Bool, num.succ : num -> num]
+        \\gen_range = |lo, hi| Iter.custom(lo, Unknown, |c| if c < hi Ok((c, c.succ())) else Err(NoMore))
+        \\
+        \\Step :: { v : U64 }.{
+        \\    is_lt : Step, Step -> Bool
+        \\    is_lt = |a, b| a.v < b.v
+        \\    succ : Step -> Step
+        \\    succ = |a| Step.{ v: a.v + 1 }
+        \\    value : Step -> U64
+        \\    value = |a| a.v
+        \\    upto : Step, Step -> Iter(Step)
+        \\    upto = gen_range
+        \\}
+        \\
+        \\count : a, a -> U64
+        \\    where [a.upto : a, a -> Iter(a), a.value : a -> U64]
+        \\count = |lo, hi| {
+        \\    var $sum = 0
+        \\    for x in lo.upto(hi) {
+        \\        $sum = $sum + x.value()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = count(Step.{ v: 1 }, Step.{ v: 5 })
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "generic method alias with its own requirements dispatches at each instance",
+        .source_kind = .module,
+        .source =
+        \\Pair(a) :: { x : a, y : a }.{
+        \\    describe : Pair(a) -> Str
+        \\        where [a.to_str : a -> Str]
+        \\    describe = describe_pair
+        \\    first : Pair(a) -> a
+        \\    first = |Pair.{ x, y: _ }| x
+        \\    second : Pair(a) -> a
+        \\    second = |Pair.{ x: _, y }| y
+        \\}
+        \\
+        \\describe_pair : Pair(a) -> Str
+        \\    where [a.to_str : a -> Str]
+        \\describe_pair = |p| Str.concat(p.first().to_str(), p.second().to_str())
+        \\
+        \\show : t -> Str where [t.describe : t -> Str]
+        \\show = |v| v.describe()
+        \\
+        \\main = (show(Pair.{ x: 2.U64, y: 3 }), show(Pair.{ x: "a", y: "b" }), Pair.{ x: 4.U64, y: 5 }.describe())
+        ,
+        .expected = .{ .inspect_str = "(\"23\", \"ab\", \"45\")" },
+    },
+    // Calls through exact procedure aliases forward to the aliased procedure;
+    // an alias of a function-valued constant is still a call of that value.
+    .{
+        .name = "calls through local and top-level procedure aliases",
+        .source_kind = .module,
+        .source =
+        \\add_one : U64 -> U64
+        \\add_one = |x| x + 1
+        \\
+        \\inc : U64 -> U64
+        \\inc = add_one
+        \\
+        \\inc_again : U64 -> U64
+        \\inc_again = inc
+        \\
+        \\make_adder : U64 -> (U64 -> U64)
+        \\make_adder = |k| |x| x + k
+        \\
+        \\add_ten : U64 -> U64
+        \\add_ten = make_adder(10)
+        \\
+        \\plus_ten : U64 -> U64
+        \\plus_ten = add_ten
+        \\
+        \\gen_add : num, num -> num where [num.plus : num, num -> num]
+        \\gen_add = |a, b| a.plus(b)
+        \\
+        \\add_u64 : U64, U64 -> U64
+        \\add_u64 = gen_add
+        \\
+        \\run : U64 -> (U64, U64, U64, U64, U64, U64)
+        \\run = |n| {
+        \\    local_inc = add_one
+        \\    local_plus = plus_ten
+        \\    (inc(n), inc_again(n), local_inc(n), plus_ten(n), local_plus(n), add_u64(n, 5))
+        \\}
+        \\
+        \\main = run(1)
+        ,
+        .expected = .{ .inspect_str = "(2, 2, 2, 11, 11, 6)" },
+    },
+    // The completed callee's result representation is its own: joining the
+    // call's result with a list iterator in the caller must not rewrite the
+    // callee's specialization, which other callers share.
+    .{
+        .name = "nominal method delegating to a numeric range producer joins a list producer",
+        .source_kind = .module,
+        .source =
+        \\Span(num) :: { lower : num, upper : num, step : num }.{
+        \\    make : Span(num) -> Iter(num)
+        \\        where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)]
+        \\    make = |span| span.lower.range_iter(span.upper, span.step, Exclusive, To, Unknown)
+        \\}
+        \\
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| if flag { xs.iter() } else { Span.{ lower: 0, upper: n, step: 1 }.make() }
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    // Each loop is a fusion candidate whose continuation holds every later
+    // loop. Fusion copies only what a candidate rewrites, so the procedure
+    // grows linearly in the number of loops rather than doubling per loop.
+    .{
+        .name = "many sequential range loops in one procedure lower in linear size",
+        .source_kind = .module,
+        .source =
+        \\total : U64 -> U64
+        \\total = |n| {
+        \\    var $a = 0
+        \\    for item in (1.U64..=n) {
+        \\        $a = $a + item
+        \\    }
+        \\    var $b = 0
+        \\    for item in (1.U64..=n) {
+        \\        $b = $b + item
+        \\    }
+        \\    var $c = 0
+        \\    for item in (1.U64..=n) {
+        \\        $c = $c + item
+        \\    }
+        \\    var $d = 0
+        \\    for item in (1.U64..=n) {
+        \\        $d = $d + item
+        \\    }
+        \\    var $e = 0
+        \\    for item in (1.U64..=n) {
+        \\        $e = $e + item
+        \\    }
+        \\    var $f = 0
+        \\    for item in (1.U64..=n) {
+        \\        $f = $f + item
+        \\    }
+        \\    var $g = 0
+        \\    for item in (1.U64..=n) {
+        \\        $g = $g + item
+        \\    }
+        \\    var $h = 0
+        \\    for item in (1.U64..=n) {
+        \\        $h = $h + item
+        \\    }
+        \\    var $i = 0
+        \\    for item in (1.U64..=n) {
+        \\        $i = $i + item
+        \\    }
+        \\    var $j = 0
+        \\    for item in (1.U64..=n) {
+        \\        $j = $j + item
+        \\    }
+        \\    var $k = 0
+        \\    for item in (1.U64..=n) {
+        \\        $k = $k + item
+        \\    }
+        \\    var $l = 0
+        \\    for item in (1.U64..=n) {
+        \\        $l = $l + item
+        \\    }
+        \\    $a + $b + $c + $d + $e + $f + $g + $h + $i + $j + $k + $l
+        \\}
+        \\
+        \\main = total(3)
+        ,
+        .expected = .{ .inspect_str = "72" },
+    },
     .{
         .name = "for loop over a procedure joining two producer representations",
         .source_kind = .module,
@@ -7868,4 +8064,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = @import("eval_set_tests.zig").tests ++ core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests ++ simd_tests.tests;
+pub const tests = @import("eval_set_tests.zig").tests ++ core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ deep_nesting_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests ++ simd_tests.tests;

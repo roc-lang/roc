@@ -39,6 +39,73 @@ scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 expr_kernel_scratch: ParserKernelScratch,
+bracket_matches: BracketMatches,
+
+const no_bracket_match = std.math.maxInt(u32);
+
+/// For each opening bracket token, the token that closes it, found in one pass
+/// over the tokens. Lookaheads that skip a bracketed group jump to its close
+/// instead of walking it, so nested groups cost linear time in total. Each
+/// table follows the depth counting of the lookaheads that read it.
+const BracketMatches = struct {
+    /// Every bracket kind counts toward one depth.
+    any: []u32,
+    /// Only curly braces count.
+    curly: []u32,
+    /// Only round parentheses count.
+    round: []u32,
+
+    fn init(gpa: std.mem.Allocator, tags: []const Token.Tag) std.mem.Allocator.Error!BracketMatches {
+        const any = try gpa.alloc(u32, tags.len);
+        errdefer gpa.free(any);
+        const curly = try gpa.alloc(u32, tags.len);
+        errdefer gpa.free(curly);
+        const round = try gpa.alloc(u32, tags.len);
+        errdefer gpa.free(round);
+        @memset(any, no_bracket_match);
+        @memset(curly, no_bracket_match);
+        @memset(round, no_bracket_match);
+        var any_open: std.ArrayList(u32) = .empty;
+        defer any_open.deinit(gpa);
+        var curly_open: std.ArrayList(u32) = .empty;
+        defer curly_open.deinit(gpa);
+        var round_open: std.ArrayList(u32) = .empty;
+        defer round_open.deinit(gpa);
+        for (tags, 0..) |tag, raw_index| {
+            const index: u32 = @intCast(raw_index);
+            switch (tag) {
+                .OpenRound, .NoSpaceOpenRound => {
+                    try any_open.append(gpa, index);
+                    try round_open.append(gpa, index);
+                },
+                .OpenSquare => try any_open.append(gpa, index),
+                .OpenCurly => {
+                    try any_open.append(gpa, index);
+                    try curly_open.append(gpa, index);
+                },
+                .CloseRound => {
+                    if (any_open.pop()) |open| any[open] = index;
+                    if (round_open.pop()) |open| round[open] = index;
+                },
+                .CloseSquare => {
+                    if (any_open.pop()) |open| any[open] = index;
+                },
+                .CloseCurly => {
+                    if (any_open.pop()) |open| any[open] = index;
+                    if (curly_open.pop()) |open| curly[open] = index;
+                },
+                .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotInt, .NoSpaceDotInt, .DotLowerIdent, .NoSpaceDotLowerIdent, .DotQuestionLowerIdent, .NoSpaceDotQuestionLowerIdent, .DotUpperIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedDotQuestionUnicodeIdent, .MalformedNoSpaceDotQuestionUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenStringInterpolation, .CloseStringInterpolation, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpDoubleDotLessThan, .OpDoubleDotEquals, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwForBang, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {},
+            }
+        }
+        return .{ .any = any, .curly = curly, .round = round };
+    }
+
+    fn deinit(self: *BracketMatches, gpa: std.mem.Allocator) void {
+        gpa.free(self.any);
+        gpa.free(self.curly);
+        gpa.free(self.round);
+    }
+};
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
@@ -48,6 +115,9 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
 
     var scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa);
     errdefer scratch_idents.deinit();
+
+    var bracket_matches = try BracketMatches.init(gpa, tokens.tokens.items(.tag));
+    errdefer bracket_matches.deinit(gpa);
 
     return Parser{
         .gpa = gpa,
@@ -64,6 +134,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .diagnostics = .empty,
         .cached_malformed_node = null,
         .expr_kernel_scratch = .{},
+        .bracket_matches = bracket_matches,
     };
 }
 
@@ -74,6 +145,7 @@ pub fn deinit(parser: *Parser) void {
     parser.scope_pending_annos.deinit(parser.gpa);
     parser.type_path_stack.deinit(parser.gpa);
     parser.expr_kernel_scratch.deinit(parser.gpa);
+    parser.bracket_matches.deinit(parser.gpa);
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
@@ -162,18 +234,10 @@ fn looksLikeTypeDecl(self: *Parser) bool {
 
     // Check for parenthesized type params: Name(a, b) :
     if (next_tok == .OpenRound or next_tok == .NoSpaceOpenRound) {
-        // Skip to matching close paren, counting nesting
-        lookahead += 1;
-        var depth: u32 = 1;
-        while (depth > 0) {
-            const tok = self.peekN(lookahead);
-            if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
-                depth += 1;
-            } else if (tok == .CloseRound) {
-                depth -= 1;
-            } else if (tok == .EndOfFile) return false;
-            lookahead += 1;
-        }
+        // Skip to the matching close paren.
+        const close = self.bracket_matches.round[self.pos + lookahead];
+        if (close == no_bracket_match) return false;
+        lookahead = close - self.pos + 1;
     }
     // Note: We do NOT support the old `Name a b :` syntax with space-separated type params.
     // Only `Name(a, b) :` with parenthesized type params is supported.
@@ -220,18 +284,10 @@ fn looksLikeTagOrNominalDestructure(self: *Parser) bool {
         return false;
     }
 
-    var depth: u32 = 1;
-    var closing_tok = Token.Tag.EndOfFile;
-    while (depth > 0) {
-        const tok = self.peekN(lookahead);
-        if (tok == .OpenRound or tok == .NoSpaceOpenRound or tok == .OpenSquare or tok == .OpenCurly) {
-            depth += 1;
-        } else if (tok == .CloseRound or tok == .CloseSquare or tok == .CloseCurly) {
-            closing_tok = tok;
-            depth -= 1;
-        } else if (tok == .EndOfFile) return false;
-        lookahead += 1;
-    }
+    const close = self.bracket_matches.any[self.pos + lookahead - 1];
+    if (close == no_bracket_match) return false;
+    const closing_tok = self.tok_buf.tokens.items(.tag)[close];
+    lookahead = close - self.pos + 1;
 
     if (closing_tok != expected_close) {
         return false;
@@ -1904,7 +1960,30 @@ fn parseTargetFileList(self: *Parser) (std.mem.Allocator.Error || error{Expected
     return try self.store.targetFileSpanFrom(files_top);
 }
 
+/// A list value whose elements are still being parsed.
+const OpenTargetConfigList = struct {
+    start: Token.Idx,
+    values_top: u32,
+};
+
 fn parseTargetConfigValueTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+    // Nested lists keep their open brackets on an explicit stack; each
+    // finished value becomes the next element of the innermost open list.
+    var open: std.ArrayList(OpenTargetConfigList) = .empty;
+    defer open.deinit(self.gpa);
+    while (true) {
+        var value = try self.parseTargetConfigLeafOrOpen(&open) orelse continue;
+        while (open.items.len > 0) {
+            try self.store.addScratchTargetConfigValue(value);
+            if (self.consumeComma() and self.peek() != .CloseSquare and self.peek() != .EndOfFile) break;
+            value = try self.closeTargetConfigList(open.pop().?);
+        } else return value;
+    }
+}
+
+/// Parses a value that is not a list, or opens a list: an empty list closes
+/// at once, and a nonempty list is pushed so its elements parse next (null).
+fn parseTargetConfigLeafOrOpen(self: *Parser, open: *std.ArrayList(OpenTargetConfigList)) std.mem.Allocator.Error!?AST.TargetConfigValue.Idx {
     const start = self.pos;
     const tag = self.peek();
     if (tag == .Int) {
@@ -1937,29 +2016,29 @@ fn parseTargetConfigValueTokens(self: *Parser) std.mem.Allocator.Error!AST.Targe
         return try self.store.addTargetConfigValue(.{ .ident = start });
     } else if (tag == .OpenSquare) {
         self.advance();
-        const values_top = self.store.scratchTargetConfigValueTop();
-        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-            try self.store.addScratchTargetConfigValue(try self.parseTargetConfigValueTokens());
-            if (!self.consumeComma()) {
-                break;
-            }
-        }
-        if (self.peek() != .CloseSquare) {
-            self.store.clearScratchTargetConfigValuesFrom(values_top);
-            return try self.store.addTargetConfigValue(.{ .malformed = .{
-                .reason = .expected_target_files_close_square,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        self.advance();
-        const values_span = try self.store.targetConfigValueSpanFrom(values_top);
-        return try self.store.addTargetConfigValue(.{ .list = values_span });
+        const list: OpenTargetConfigList = .{ .start = start, .values_top = self.store.scratchTargetConfigValueTop() };
+        if (self.peek() == .CloseSquare or self.peek() == .EndOfFile) return try self.closeTargetConfigList(list);
+        try open.append(self.gpa, list);
+        return null;
     } else {
         return try self.store.addTargetConfigValue(.{ .malformed = .{
             .reason = .expected_target_file,
             .region = .{ .start = start, .end = self.pos },
         } });
     }
+}
+
+fn closeTargetConfigList(self: *Parser, list: OpenTargetConfigList) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+    if (self.peek() != .CloseSquare) {
+        self.store.clearScratchTargetConfigValuesFrom(list.values_top);
+        return try self.store.addTargetConfigValue(.{ .malformed = .{
+            .reason = .expected_target_files_close_square,
+            .region = .{ .start = list.start, .end = self.pos },
+        } });
+    }
+    self.advance();
+    const values_span = try self.store.targetConfigValueSpanFrom(list.values_top);
+    return try self.store.addTargetConfigValue(.{ .list = values_span });
 }
 
 fn parseTargetConfigEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigEntry.Idx {
@@ -3611,17 +3690,21 @@ fn runExprStatementKernel(
                         // the same unambiguous nesting as `{ { field } }`.
                         var is_block = false;
                         if (self.peekNext() == .OpColon) {
+                            // Scan this brace's own level, jumping over each
+                            // nested group, for a `name =` statement.
                             var lookahead_pos = self.pos + 2;
-                            var depth: u32 = 0;
-                            while (lookahead_pos < self.tok_buf.tokens.len) {
-                                const lookahead_tag = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                            const tags = self.tok_buf.tokens.items(.tag);
+                            while (lookahead_pos < tags.len) {
+                                const lookahead_tag = tags[lookahead_pos];
                                 if (lookahead_tag == .OpenRound or lookahead_tag == .NoSpaceOpenRound or lookahead_tag == .OpenSquare or lookahead_tag == .OpenCurly) {
-                                    depth += 1;
+                                    const close = self.bracket_matches.any[lookahead_pos];
+                                    if (close == no_bracket_match) break;
+                                    lookahead_pos = close + 1;
+                                    continue;
                                 } else if (lookahead_tag == .CloseRound or lookahead_tag == .CloseSquare or lookahead_tag == .CloseCurly) {
-                                    if (depth == 0) break;
-                                    depth -= 1;
+                                    break;
                                 } else if (lookahead_tag == .LowerIdent) {
-                                    if (depth == 0 and lookahead_pos + 1 < self.tok_buf.tokens.len and self.tok_buf.tokens.items(.tag)[lookahead_pos + 1] == .OpAssign) {
+                                    if (lookahead_pos + 1 < tags.len and tags[lookahead_pos + 1] == .OpAssign) {
                                         is_block = true;
                                         break;
                                     }
@@ -6156,21 +6239,9 @@ fn runExprStatementKernel(
                 const isCurly = self.peek() == .OpenCurly;
                 const start = self.pos;
                 var is_destructure = false;
-                var lookahead_pos = self.pos + 1;
-                var depth: u32 = 0;
-                while (lookahead_pos < self.tok_buf.tokens.len) {
-                    const lookahead_tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                    if ((isCurly and lookahead_tok == .OpenCurly) or (!isCurly and (lookahead_tok == .OpenRound or lookahead_tok == .NoSpaceOpenRound))) {
-                        depth += 1;
-                    } else if ((isCurly and lookahead_tok == .CloseCurly) or (!isCurly and lookahead_tok == .CloseRound)) {
-                        if (depth == 0) {
-                            const token_after_close = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
-                            if (token_after_close == .OpAssign) is_destructure = true;
-                            break;
-                        }
-                        depth -= 1;
-                    } else if (lookahead_tok == .EndOfFile) break;
-                    lookahead_pos += 1;
+                const close = if (isCurly) self.bracket_matches.curly[self.pos] else self.bracket_matches.round[self.pos];
+                if (close != no_bracket_match) {
+                    is_destructure = self.tok_buf.tokens.items(.tag)[close + 1] == .OpAssign;
                 }
                 if (is_destructure) {
                     try open_syntax.pushPattern(open_allocator, .statement_destructure_pattern, Token.Idx, start);

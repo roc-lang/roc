@@ -247,11 +247,30 @@ pub const Constants = struct {
     ///      function over composed children shares its source key.
     /// 112: `for` nodes carry their `ForKind`, `ForLoopDispatchPlan` records its
     ///      dispatched method names, and common idents include `Builtin.Stream`.
+    /// 113: `Stream` is a checked builtin nominal, so every module interns its
+    ///      unqualified and fully qualified type names as common identifiers.
     /// 114: Combined with the Stream loop format, derived-method markers record
     ///      their owner type declaration, and a type-rooted dispatch call can
     ///      dispatch on an explicit type var. Version 113 is reserved for the
     ///      separate Stream builtin change.
-    pub const CACHE_VERSION = 114;
+    /// 115: Combine derived-method and Stream dispatch metadata with 32-bit
+    ///      representation counts, offsets, and discriminants.
+    /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
+    /// 117: A type variable's rank is a full word, since valid source can nest
+    ///      generalization scopes past any narrower bound.
+    /// 118: Combine full-word type variable ranks with 32-bit representation
+    ///      counts, offsets, and discriminants.
+    /// 119: Checked type keys are computed by the shared key engine: equal
+    ///      recursive types share one key however they are unrolled, type
+    ///      variables are written as relative references, and a child is
+    ///      referred to by its key plus the variables it shares.
+    /// 120: Checking records each `to_inspect` method's use at result `Str`,
+    ///      and a method registry entry carries that use's instance type and
+    ///      evidence.
+    /// 121: Raw alias types record the source argument boundary before their
+    ///      hidden polarity parameters.
+    /// 122: Builtin indices include the Encoding and Json declarations.
+    pub const CACHE_VERSION = 122;
 };
 
 /// Configuration for the Roc cache system.

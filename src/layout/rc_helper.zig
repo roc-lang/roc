@@ -99,9 +99,7 @@ pub const Atomicity = enum {
 /// program-local layout index, so objects compiled separately name and share
 /// the same helper.
 pub fn symbolName(allocator: std.mem.Allocator, store: *const Store, key: HelperKey, atomicity: Atomicity) std.mem.Allocator.Error![]u8 {
-    var digests = try digest_mod.Digests.init(allocator, store);
-    defer digests.deinit();
-    return symbolNameForDigest(allocator, key.op, try digests.get(key.layout_idx), atomicity);
+    return symbolNameForDigest(allocator, key.op, try store.contentDigest(key.layout_idx), atomicity);
 }
 
 /// `symbolName` for a layout whose digest is already known.
@@ -271,7 +269,7 @@ pub const Resolver = struct {
     }
 
     /// Return the byte offset of the discriminant for a tag-union helper.
-    pub fn tagUnionDiscriminantOffset(self: *const Resolver, tag_plan: TagUnionPlan) u16 {
+    pub fn tagUnionDiscriminantOffset(self: *const Resolver, tag_plan: TagUnionPlan) u32 {
         return self.store.getTagUnionDiscriminantOffset(tag_plan.tag_union_idx);
     }
 

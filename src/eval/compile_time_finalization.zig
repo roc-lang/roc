@@ -1404,7 +1404,7 @@ fn finalize(
 
         for (requests, 0..) |request, request_index| {
             const root_id = state.rootIdForRequestIndex(request_index);
-            if (!state.dependenciesComplete(request)) {
+            if (!try state.dependenciesComplete(request)) {
                 if (batch_requests.items.len == 0) {
                     finalizationInvariant("compile-time root request order placed a root before another root it depends on");
                 }
@@ -1423,7 +1423,7 @@ fn finalize(
                 batch_requests.clearRetainingCapacity();
                 batch_root_ids.clearRetainingCapacity();
 
-                if (!state.dependenciesComplete(request)) {
+                if (!try state.dependenciesComplete(request)) {
                     finalizationInvariant("compile-time root request order referenced a later or cyclic dependency");
                 }
             }
@@ -1475,6 +1475,8 @@ const RootCompletionState = struct {
     request_index_by_root: []u32,
     visited_templates: []u32,
     visit: u32,
+    /// Procedure templates whose dependencies are still to be checked.
+    pending_templates: std.ArrayList(canonical.ProcedureTemplateRef) = .empty,
     current_root_id: ?checked.ComptimeRootId = null,
 
     fn init(
@@ -1542,6 +1544,7 @@ const RootCompletionState = struct {
 
     fn deinit(self: *RootCompletionState) void {
         const allocator = self.allocator;
+        self.pending_templates.deinit(allocator);
         allocator.free(self.visited_templates);
         allocator.free(self.request_index_by_root);
         allocator.free(self.request_root_ids);
@@ -1568,7 +1571,7 @@ const RootCompletionState = struct {
     fn dependenciesComplete(
         self: *RootCompletionState,
         request: checked.RootRequest,
-    ) bool {
+    ) Allocator.Error!bool {
         const request_root_id = compileTimeRootForRequest(self.module, request);
         const saved_current_root_id = self.current_root_id;
         defer self.current_root_id = saved_current_root_id;
@@ -1581,13 +1584,23 @@ const RootCompletionState = struct {
         }
         const template_ref = request.procedure_template orelse
             finalizationInvariant("compile-time root had no checked wrapper template");
-        return self.templateDependenciesComplete(template_ref);
+
+        // Every template reachable through the checked references must be
+        // complete, so templates are checked from a worklist in any order.
+        self.pending_templates.clearRetainingCapacity();
+        try self.pending_templates.append(self.allocator, template_ref);
+        while (self.pending_templates.pop()) |next| {
+            if (!try self.templateDependenciesComplete(next)) return false;
+        }
+        return true;
     }
 
+    /// Whether the template's own references are complete, queueing the
+    /// local templates they reach.
     fn templateDependenciesComplete(
         self: *RootCompletionState,
         template_ref: canonical.ProcedureTemplateRef,
-    ) bool {
+    ) Allocator.Error!bool {
         if (!artifactMatches(template_ref.artifact, self.module.key)) return true;
         const index = @intFromEnum(template_ref.template);
         if (index >= self.visited_templates.len) {
@@ -1597,13 +1610,7 @@ const RootCompletionState = struct {
         self.visited_templates[index] = self.visit;
 
         const template = self.module.checked_procedure_templates.get(template_ref.template);
-        return self.resolvedRefsDependenciesComplete(template.resolved_value_refs);
-    }
-
-    fn resolvedRefsDependenciesComplete(
-        self: *RootCompletionState,
-        refs: checked.ResolvedValueRefTableRef,
-    ) bool {
+        const refs = template.resolved_value_refs;
         const start = refs.start;
         const end = refs.start + refs.len;
         if (end > self.module.resolved_value_refs.template_refs.len) {
@@ -1614,25 +1621,33 @@ const RootCompletionState = struct {
             if (raw >= self.module.resolved_value_refs.records.len) {
                 finalizationInvariant("compile-time dependency ref id was outside the checked table");
             }
-            if (!self.resolvedRefDependenciesComplete(self.module.resolved_value_refs.records[raw].ref)) {
-                return false;
+            switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[raw].ref)) {
+                .complete => |complete| if (!complete) return false,
+                .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
             }
         }
         return true;
     }
 
-    fn resolvedRefDependenciesComplete(
+    /// What a reference depends on: an answer known at once, or a checked
+    /// procedure template whose own references decide it.
+    const Dependency = union(enum) {
+        complete: bool,
+        template: canonical.ProcedureTemplateRef,
+    };
+
+    fn resolvedRefDependency(
         self: *RootCompletionState,
         ref: checked.ResolvedValueRef,
-    ) bool {
+    ) Dependency {
         return switch (ref) {
-            .top_level_const => |const_use| self.constUseComplete(const_use),
-            .selected_hoisted_const => |selected| self.constUseComplete(selected.const_use),
+            .top_level_const => |const_use| .{ .complete = self.constUseComplete(const_use) },
+            .selected_hoisted_const => |selected| .{ .complete = self.constUseComplete(selected.const_use) },
             .top_level_proc,
             .promoted_top_level_proc,
-            => |proc_use| self.procedureUseDependenciesComplete(proc_use),
-            .platform_required_const => |required| self.constUseComplete(required.const_use),
-            .platform_required_proc => |required| self.procedureUseDependenciesComplete(required.procedure),
+            => |proc_use| self.procedureUseDependency(proc_use),
+            .platform_required_const => |required| .{ .complete = self.constUseComplete(required.const_use) },
+            .platform_required_proc => |required| self.procedureUseDependency(required.procedure),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -1643,7 +1658,7 @@ const RootCompletionState = struct {
             .hosted_proc,
             .platform_required_declaration,
             .platform_required_checked_error,
-            => true,
+            => .{ .complete = true },
         };
     }
 
@@ -1709,60 +1724,35 @@ const RootCompletionState = struct {
         };
     }
 
-    fn procedureUseDependenciesComplete(
+    fn procedureUseDependency(
         self: *RootCompletionState,
         proc_use: checked.ProcedureUseTemplate,
-    ) bool {
-        return switch (proc_use.binding) {
-            .top_level => |top_level| self.topLevelProcedureDependenciesComplete(top_level),
-            .imported, .hosted => true,
-            .platform_required => |required| self.platformRequiredProcedureDependenciesComplete(required),
-        };
-    }
-
-    fn topLevelProcedureDependenciesComplete(
-        self: *RootCompletionState,
-        top_level: checked.ArtifactTopLevelProcedureBindingRef,
-    ) bool {
-        if (!artifactMatches(top_level.artifact, self.module.key)) return true;
-        const binding = self.module.top_level_procedure_bindings.get(top_level.binding);
-        return self.procedureBindingDependenciesComplete(binding.body);
-    }
-
-    fn procedureBindingDependenciesComplete(
-        self: *RootCompletionState,
-        body: checked.ProcedureBindingBody,
-    ) bool {
-        return switch (body) {
-            .direct_template => |direct| self.callableTemplateDependenciesComplete(direct.template),
-            .checked_error => true,
-            .callable_eval_template => |template_id| blk: {
-                const template = self.module.callable_eval_templates.get(template_id);
-                break :blk self.rootDependencyComplete(template.root);
+    ) Dependency {
+        var binding = proc_use.binding;
+        while (true) switch (binding) {
+            .top_level => |top_level| {
+                if (!artifactMatches(top_level.artifact, self.module.key)) return .{ .complete = true };
+                return switch (self.module.top_level_procedure_bindings.get(top_level.binding).body) {
+                    .direct_template => |direct| switch (direct.template) {
+                        .checked => |checked_template| .{ .template = checked_template },
+                        .lifted, .synthetic => finalizationInvariant("checked procedure dependency referenced a post-check template"),
+                    },
+                    .checked_error => .{ .complete = true },
+                    .callable_eval_template => |template_id| .{
+                        .complete = self.rootDependencyComplete(self.module.callable_eval_templates.get(template_id).root),
+                    },
+                };
             },
-        };
-    }
-
-    fn callableTemplateDependenciesComplete(
-        self: *RootCompletionState,
-        template: canonical.CallableProcedureTemplateRef,
-    ) bool {
-        return switch (template) {
-            .checked => |checked_template| self.templateDependenciesComplete(checked_template),
-            .lifted, .synthetic => finalizationInvariant("checked procedure dependency referenced a post-check template"),
-        };
-    }
-
-    fn platformRequiredProcedureDependenciesComplete(
-        self: *RootCompletionState,
-        required: checked.RequiredAppProcedureRef,
-    ) bool {
-        if (!artifactMatches(required.artifact, self.module.key)) return true;
-        const binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
-            finalizationInvariant("platform-required procedure dependency referenced a missing binding");
-        return switch (binding.value_use) {
-            .procedure_value => |procedure_use| self.procedureUseDependenciesComplete(procedure_use.procedure),
-            .const_value => |const_use| self.constUseComplete(const_use.const_use),
+            .imported, .hosted => return .{ .complete = true },
+            .platform_required => |required| {
+                if (!artifactMatches(required.artifact, self.module.key)) return .{ .complete = true };
+                const required_binding = self.module.platform_required_bindings.lookupByBindingId(@intFromEnum(required.procedure_binding)) orelse
+                    finalizationInvariant("platform-required procedure dependency referenced a missing binding");
+                switch (required_binding.value_use) {
+                    .procedure_value => |procedure_use| binding = procedure_use.procedure.binding,
+                    .const_value => |const_use| return .{ .complete = self.constUseComplete(const_use.const_use) },
+                }
+            },
         };
     }
 };
@@ -1891,16 +1881,16 @@ fn evalInterpreterProgramRoots(
                         error.RuntimeError, error.DivisionByZero => {
                             const message = interpreter.getRuntimeErrorMessage() orelse host.crash_message orelse "compile-time evaluation failed";
                             failed_message = message;
-                            break :blk .{ .const_node = try appendCrashConst(module, message) };
+                            break :blk try unreportedFailedRootPayload(module, compile_time_root, message);
                         },
                         error.ComptimeExhaustiveness => {
                             failed_message = "compile-time exhaustiveness failure";
-                            break :blk .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
+                            break :blk try unreportedFailedRootPayload(module, compile_time_root, "compile-time exhaustiveness failure");
                         },
                         error.Crash => {
                             const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                             failed_message = message;
-                            break :blk .{ .const_node = try appendCrashConst(module, message) };
+                            break :blk try unreportedFailedRootPayload(module, compile_time_root, message);
                         },
                         error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
                         error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
@@ -2155,16 +2145,36 @@ fn testLiteralRootFailureOwnership(allocator: Allocator) (Allocator.Error || err
     try std.testing.expectEqual(@as(?lir.LIR.LiteralRootId, null), failures.source(root_ids[5]));
 }
 
+const GuardProducerSlot = struct {
+    module: checked.ModuleId,
+    root: lir.LIR.ComptimeProducer,
+};
+
 /// The producer whose value guard `failed_stmt` is the failure path of.
-fn guardProducer(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?lir.LIR.ComptimeProducer {
+fn guardProducerSlot(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?GuardProducerSlot {
     const stmt = failed_stmt orelse return null;
     for (lir_result.comptime_value_guards.items) |guard| {
         if (guard.crash != stmt) continue;
         const root = lir_result.static_data_values.items[@intFromEnum(guard.value_slot)].compile_time_root orelse
             finalizationInvariant("value guard slot lost its compile-time producer");
-        return root.root;
+        return .{ .module = root.module, .root = root.root };
     }
     return null;
+}
+
+/// Whether a checked root's failure was reported by that root. A guarded
+/// hoisted root reports none: its failure leaves the original expression to
+/// runtime, so a root that reads its failed value reports the crash itself.
+fn checkedProducerReportedFailure(
+    owners: *const ModuleOwners,
+    module: checked.ModuleId,
+    root_id: checked.ComptimeRootId,
+) bool {
+    for (owners.modules) |owner| {
+        if (!artifactMatches(module, owner.module.key)) continue;
+        return !owner.module.compile_time_roots.root(root_id).guarded;
+    }
+    finalizationInvariant("value guard producer belonged to a module this finalization does not complete");
 }
 
 /// What a checked root's failure reports in its own module.
@@ -2195,8 +2205,11 @@ fn reportEmbeddedFailure(
     failed_loc: ?base.SourceLoc,
 ) FinalizeError!EmbeddedReport {
     const Embedded = struct { kind: ?lir.LIR.LiteralRejectionKind, message: []const u8, region: ?base.Region, loc: ?base.SourceLoc };
-    const embedded: Embedded = if (guardProducer(lir_result, failed_stmt)) |producer| switch (producer) {
-        .checked => return .reported_elsewhere,
+    const embedded: Embedded = if (guardProducerSlot(lir_result, failed_stmt)) |producer| switch (producer.root) {
+        .checked => |producer_root| {
+            if (checkedProducerReportedFailure(owners, producer.module, producer_root)) return .reported_elsewhere;
+            return .none;
+        },
         .literal => |read| blk: {
             const failures = owners.literal_failures orelse
                 finalizationInvariant("a literal root guard was read in a program without literal roots");
@@ -2385,9 +2398,9 @@ fn recordLiteralRootFailure(
 ) Allocator.Error!void {
     const failures = owners.literal_failures orelse
         finalizationInvariant("a literal root failed in a finalization that records no literal root failures");
-    const cause: LiteralRootFailures.Cause = if (guardProducer(&lowered.lir_result, failure.stmt)) |producer| switch (producer) {
+    const cause: LiteralRootFailures.Cause = if (guardProducerSlot(&lowered.lir_result, failure.stmt)) |producer| switch (producer.root) {
         .literal => |read| .{ .literal = read },
-        .checked => .checked,
+        .checked => |producer_root| if (checkedProducerReportedFailure(owners, producer.module, producer_root)) .checked else .crash,
     } else if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site|
         .{ .rejection = site.kind }
     else
@@ -3968,7 +3981,7 @@ fn devComptimeExhaustivenessRootPayload(
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
     if (request.kind == .compile_time_constant and problem_store == null) {
-        return .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
+        return try unreportedFailedRootPayload(module, root, "compile-time exhaustiveness failure");
     }
 
     _ = problem_store orelse {
@@ -3997,13 +4010,14 @@ fn devCrashedRootPayload(
     switch (try reportEmbeddedFailure(allocator, problem_store, module, devRootSourceRegion(module, root), owners, lir_result, failed_stmt, message, failed_region, failed_loc)) {
         .reported => {
             had_problem.* = true;
-            return try failedRootPayload(module, root, message);
+            return try crashedRootPayload(problem_store, module, root, message);
         },
-        .reported_elsewhere => return try failedRootPayload(module, root, message),
+        .reported_elsewhere => return try crashedRootPayload(problem_store, module, root, message),
         .none => {},
     }
+    if (root.guarded) return try crashedRootPayload(problem_store, module, root, message);
     if (request.kind == .compile_time_constant and problem_store == null) {
-        return .{ .const_node = try appendCrashConst(module, message) };
+        return try unreportedFailedRootPayload(module, root, message);
     }
     const store = problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
@@ -4022,7 +4036,7 @@ fn devCrashedRootPayload(
         .origin = try comptimeFailureOrigin(store, site),
     } });
     had_problem.* = true;
-    return try failedRootPayload(module, root, message);
+    return try crashedRootPayload(problem_store, module, root, message);
 }
 
 fn reportDevHostEvents(
@@ -4138,6 +4152,16 @@ fn literalRejectionReported(store: *const check.problem.Store, kind: lir.LIR.Lit
         if (regionsEqual(reported_region, region)) return true;
     }
     return false;
+}
+
+/// The payload of a failed root in an evaluation that collects no diagnostics.
+fn unreportedFailedRootPayload(
+    module: *checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    message: []const u8,
+) Allocator.Error!checked.CompileTimeRootPayload {
+    if (root.guarded) return .runtime;
+    return .{ .const_node = try appendCrashConst(module, message) };
 }
 
 fn appendCrashConst(
@@ -4451,9 +4475,10 @@ fn reportCompileTimeCrash(
         interpreter.getFailedCheckedRegion(),
         interpreter.getFailedSourceLoc(),
     )) {
-        .reported, .reported_elsewhere => return try failedRootPayload(module, root, message),
+        .reported, .reported_elsewhere => return try crashedRootPayload(maybe_problem_store, module, root, message),
         .none => {},
     }
+    if (root.guarded) return try crashedRootPayload(maybe_problem_store, module, root, message);
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
@@ -4464,6 +4489,28 @@ fn reportCompileTimeCrash(
         .region = site.region,
         .origin = try comptimeFailureOrigin(problem_store, site),
     } });
+    return try crashedRootPayload(problem_store, module, root, message);
+}
+
+/// A crashed guarded root leaves its original expression and declaration to
+/// runtime, so the exhaustiveness sites it was selected to validate are decided
+/// statically, exactly as if the root had not been selected.
+fn crashedRootPayload(
+    maybe_problem_store: ?*check.problem.Store,
+    module: *checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    message: []const u8,
+) Allocator.Error!checked.CompileTimeRootPayload {
+    if (root.guarded) {
+        if (maybe_problem_store) |store| {
+            for (module.exhaustiveness_sites.sites) |site| {
+                switch (site.policy) {
+                    .compile_time_replaced_by_root => |owner| if (owner == root.id) store.markPendingStaticExhaustivenessStatic(site.id),
+                    .compile_time_only, .runtime_reachable, .not_pending => {},
+                }
+            }
+        }
+    }
     return try failedRootPayload(module, root, message);
 }
 
@@ -4472,6 +4519,7 @@ fn failedRootPayload(
     root: checked.CompileTimeRoot,
     message: []const u8,
 ) Allocator.Error!checked.CompileTimeRootPayload {
+    if (root.guarded) return .runtime;
     return switch (root.kind) {
         .expect => .expect,
         .hoisted_validation => .discarded,
@@ -4673,6 +4721,9 @@ fn finishConstRoot(
     if (root.kind != .constant and root.kind != .hoisted_constant) return;
     const node = switch (payload) {
         .const_node => |id| id,
+        // Runtime lowering evaluates the original expression; no stored
+        // constant exists for it.
+        .runtime => return,
         .pending,
         .fn_value,
         .discarded,

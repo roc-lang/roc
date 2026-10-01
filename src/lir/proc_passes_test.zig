@@ -50,11 +50,20 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
             .next = internal_jump,
         } }, .test_fixture);
+        // Tag fusion copies only arm statements that depend on the matched
+        // union. Releasing it makes each fused variant copy the nested join;
+        // neither variant has a payload, so the copies drop the release.
+        const arm_start = if (phase == .tag_fusion) try store.addCFStmt(.{ .decref = .{
+            .value = outer,
+            .rc = core.LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .bool }),
+            .atomicity = .single_thread,
+            .next = initialize,
+        } }, .test_fixture) else initialize;
         const arm = try store.addCFStmt(.{ .join = .{
             .id = joins.nested,
             .params = try store.addLocalSpan(&.{result}),
             .body = external_jump,
-            .remainder = initialize,
+            .remainder = arm_start,
         } }, .test_fixture);
         const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }, .test_fixture);
         var consumer = arm;
@@ -748,4 +757,124 @@ test "LIR proc pass sweeps output and scratch OOM through appended join rewrites
             }
         }
     }
+}
+
+test "LIR proc pass prunes unread join parameters to a fixed point" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const outer_join = join_ids.freshJoinPoint();
+    const inner_join = join_ids.freshJoinPoint();
+
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const inner_dead = try store.addLocal(.{ .layout_idx = .u64 });
+    const outer_dead = try store.addLocal(.{ .layout_idx = .u64 });
+    const outer_live = try store.addLocal(.{ .layout_idx = .u64 });
+
+    // `outer_dead` is only written; `inner_dead` is only read by a write of
+    // `outer_dead`, so it becomes unread once that write is gone.
+    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_join } }, .test_fixture);
+    const case_live = try store.addCFStmt(.{ .set_local = .{ .target = outer_live, .value = value, .mode = .initialize_join_param, .next = jump_outer } }, .test_fixture);
+    const case_dead = try store.addCFStmt(.{ .set_local = .{ .target = outer_dead, .value = inner_dead, .mode = .initialize_join_param, .next = case_live } }, .test_fixture);
+    const jump_outer_default = try store.addCFStmt(.{ .jump = .{ .target = outer_join } }, .test_fixture);
+    const default_live = try store.addCFStmt(.{ .set_local = .{ .target = outer_live, .value = value, .mode = .initialize_join_param, .next = jump_outer_default } }, .test_fixture);
+    const default_dead = try store.addCFStmt(.{ .set_local = .{ .target = outer_dead, .value = value, .mode = .initialize_join_param, .next = default_live } }, .test_fixture);
+    const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = case_dead }});
+    const inner_body = try store.addCFStmt(.{ .switch_stmt = .{ .cond = flag, .branches = branches, .default_branch = default_dead } }, .test_fixture);
+    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_join } }, .test_fixture);
+    const inner_entry = try store.addCFStmt(.{ .set_local = .{ .target = inner_dead, .value = value, .mode = .initialize_join_param, .next = jump_inner } }, .test_fixture);
+    const inner = try store.addCFStmt(.{ .join = .{
+        .id = inner_join,
+        .params = try store.addLocalSpan(&.{inner_dead}),
+        .body = inner_body,
+        .remainder = inner_entry,
+    } }, .test_fixture);
+    const outer_body = try store.addCFStmt(.{ .ret = .{ .value = outer_live } }, .test_fixture);
+    const outer = try store.addCFStmt(.{ .join = .{
+        .id = outer_join,
+        .params = try store.addLocalSpan(&.{ outer_dead, outer_live }),
+        .body = outer_body,
+        .remainder = inner,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{ flag, value }),
+        .frame_locals = try store.addLocalSpan(&.{ flag, value, inner_dead, outer_dead, outer_live }),
+        .body = outer,
+        .ret_layout = .u64,
+    }, .none);
+
+    var metrics: passes.ParallelMetrics = .{};
+    try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
+
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    defer walk.deinit();
+    var joins: usize = 0;
+    var live_writes: usize = 0;
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .set_local) {
+            try testing.expectEqual(outer_live, stmt.set_local.target);
+            live_writes += 1;
+        }
+        if (stmt != .join) continue;
+        const join = stmt.join;
+        joins += 1;
+        const params = store.getLocalSpan(join.params);
+        if (join.id == outer_join) {
+            try testing.expectEqual(@as(usize, 1), params.len);
+            try testing.expectEqual(outer_live, collections.GuardedList.at(params, 0));
+        } else {
+            try testing.expectEqual(inner_join, join.id);
+            try testing.expectEqual(@as(usize, 0), params.len);
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), joins);
+    try testing.expectEqual(@as(usize, 2), live_writes);
+}
+
+test "LIR proc pass keeps join parameters that are read or are procedure arguments" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+
+    const arg = try store.addLocal(.{ .layout_idx = .u64 });
+    const read = try store.addLocal(.{ .layout_idx = .u64 });
+
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const write_read = try store.addCFStmt(.{ .set_local = .{ .target = read, .value = arg, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const write_arg = try store.addCFStmt(.{ .set_local = .{ .target = arg, .value = arg, .mode = .initialize_join_param, .next = write_read } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .ret = .{ .value = read } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{ arg, read }),
+        .body = body,
+        .remainder = write_arg,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{arg}),
+        .frame_locals = try store.addLocalSpan(&.{ arg, read }),
+        .body = join,
+        .ret_layout = .u64,
+    }, .none);
+
+    var metrics: passes.ParallelMetrics = .{};
+    try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
+
+    try testing.expectEqual(join, store.getProcSpec(proc).body.?);
+    try testing.expectEqual(@as(usize, 2), store.getLocalSpan(store.getCFStmt(join).join.params).len);
+    try testing.expectEqual(write_arg, store.getCFStmt(join).join.remainder);
 }

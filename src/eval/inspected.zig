@@ -1013,6 +1013,19 @@ pub fn compileInspectedProgram(
     return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, null, null);
 }
 
+/// Compile a program with inspect wrapping, lowering it with `specialization_strategy`.
+pub fn compileInspectedProgramWithStrategy(
+    allocator: Allocator,
+    io: std.Io,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    specialization_strategy: base.SpecializationStrategy,
+) Error!CompiledProgram {
+    const resources = try parseInspectedProgramImpl(allocator, source_kind, source, imports, null, null);
+    return lowerInspectedProgramWithStrategy(allocator, io, resources, specialization_strategy);
+}
+
 /// Parse, check, and publish an inspect-wrapped program without lowering it.
 pub fn parseAndCanonicalizeInspectedProgram(
     allocator: Allocator,
@@ -1100,16 +1113,30 @@ pub fn lowerInspectedProgram(
     io: std.Io,
     resources: ParsedResources,
 ) Error!CompiledProgram {
+    return lowerInspectedProgramWithStrategy(allocator, io, resources, .lss);
+}
+
+/// `lowerInspectedProgram` with an explicit specialization strategy.
+pub fn lowerInspectedProgramWithStrategy(
+    allocator: Allocator,
+    io: std.Io,
+    resources: ParsedResources,
+    specialization_strategy: base.SpecializationStrategy,
+) Error!CompiledProgram {
     var owned_resources = resources;
     errdefer cleanupParseAndCanonical(allocator, owned_resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, io, &owned_resources, .native);
+    const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &owned_resources, .native, .{
+        .specialization_strategy = specialization_strategy,
+    });
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
     }
 
-    const wasm_lowered = try lowerParsedProgramToLir(allocator, io, &owned_resources, .u32);
+    const wasm_lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &owned_resources, .u32, .{
+        .specialization_strategy = specialization_strategy,
+    });
     errdefer {
         var owned = wasm_lowered;
         owned.deinit(allocator);
@@ -1390,7 +1417,7 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
 
         var node = switch (root.payload) {
             .const_node => |const_node| const_node,
-            .pending, .fn_value, .discarded, .expect => return error.Internal,
+            .pending, .fn_value, .discarded, .expect, .runtime => return error.Internal,
         };
         while (true) {
             switch (resources.checked_artifact.const_store.get(node)) {
@@ -3016,6 +3043,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
             .use_module_target_triple = true,
             .optimization = llvm_compile.bindings.IrOptimizationLevel.Oz,
             .target_ptr_width_bits = targetPtrWidthBits(target_usize),
+            .sha256_rounds = builtins.sha256.Rounds.forCpu(resolved_target.cpu),
             .cpu = cpu,
             .features = features,
         },
@@ -3024,6 +3052,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
             .use_module_target_triple = true,
             .optimization = llvm_compile.bindings.IrOptimizationLevel.O3,
             .target_ptr_width_bits = targetPtrWidthBits(target_usize),
+            .sha256_rounds = builtins.sha256.Rounds.forCpu(resolved_target.cpu),
             .cpu = cpu,
             .features = features,
         },

@@ -45,10 +45,6 @@ EndOfFile,
 					(e-string-part (raw ""))))))
 	(statements))
 ~~~
-# FORMATTED
-~~~roc
-app [] { f: platform "", r: "" }
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir (empty true))

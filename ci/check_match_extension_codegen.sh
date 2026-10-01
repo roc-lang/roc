@@ -86,9 +86,15 @@ cd "$repo_root"
 # no adapter address is materialized and no allocator callback is loaded. The
 # compare, byte-tail, and fill loops keep their load, load, compare, advance
 # shape.
+# Emitting unchecked list append directly in LLVM exposes the List.repeat
+# stores without the builtin call boundary. With bool_likely on List.get's
+# successful bounds checks, the combined pipeline emits 94 instructions on
+# each target. Both retain the guarded eight-byte load/compare loop, the
+# guarded byte tail, and the first-difference bit count. The byte tail's
+# out-of-bounds branches leave the hot loop.
 expectations=(
-    "x64musl:97"
-    "arm64musl:100"
+    "x64musl:94"
+    "arm64musl:94"
 )
 
 failed=0

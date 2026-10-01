@@ -23,16 +23,17 @@ pub fn run(result: *LirProgram.Result) Allocator.Error!void {
     try pass.run();
 }
 
-const payload_struct_slot = std.math.maxInt(u16);
+const payload_struct_slot = std.math.maxInt(u32);
 
 const PayloadSlot = struct {
-    variant: u16,
-    payload: u16,
+    variant: u32,
+    payload: u32,
 };
 
 const TagSet = struct {
     all: bool = false,
-    values: std.ArrayList(u16) = .empty,
+    /// Known discriminants in first-seen order.
+    values: std.AutoArrayHashMapUnmanaged(u32, void) = .empty,
 
     fn deinit(self: *TagSet, allocator: Allocator) void {
         self.values.deinit(allocator);
@@ -45,40 +46,34 @@ const TagSet = struct {
         return true;
     }
 
-    fn add(self: *TagSet, allocator: Allocator, value: u16) Allocator.Error!bool {
+    fn add(self: *TagSet, allocator: Allocator, value: u32) Allocator.Error!bool {
         if (self.all) return false;
-        for (self.values.items) |existing| {
-            if (existing == value) return false;
-        }
-        try self.values.append(allocator, value);
-        return true;
+        const entry = try self.values.getOrPut(allocator, value);
+        return !entry.found_existing;
     }
 
     fn mergeFrom(self: *TagSet, allocator: Allocator, other: *const TagSet) Allocator.Error!bool {
         if (self.all) return false;
         if (other.all) return self.markAll(allocator);
         var changed = false;
-        for (other.values.items) |value| {
+        for (other.values.keys()) |value| {
             if (try self.add(allocator, value)) changed = true;
         }
         return changed;
     }
 
-    fn contains(self: *const TagSet, value: u16) bool {
+    fn contains(self: *const TagSet, value: u32) bool {
         if (self.all) return true;
-        for (self.values.items) |existing| {
-            if (existing == value) return true;
-        }
-        return false;
+        return self.values.contains(value);
     }
 
-    fn singleton(self: *const TagSet) ?u16 {
-        if (self.all or self.values.items.len != 1) return null;
-        return self.values.items[0];
+    fn singleton(self: *const TagSet) ?u32 {
+        if (self.all or self.values.count() != 1) return null;
+        return self.values.keys()[0];
     }
 
     fn hasKnownValues(self: *const TagSet) bool {
-        return !self.all and self.values.items.len != 0;
+        return !self.all and self.values.count() != 0;
     }
 };
 
@@ -350,13 +345,13 @@ const Pass = struct {
         };
     }
 
-    fn mergeFieldRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, field_index: u16) Allocator.Error!bool {
+    fn mergeFieldRead(self: *Pass, target: LIR.LocalId, source: LIR.LocalId, field_index: u32) Allocator.Error!bool {
         const source_info = self.localInfo(source);
         if (source_info.tags.all) return self.localInfoMut(target).markAll(self.allocator);
         return self.mergeFieldFromInfo(target, source_info, field_index);
     }
 
-    fn mergeFieldFromInfo(self: *Pass, target: LIR.LocalId, source: *const ValueInfo, field_index: u16) Allocator.Error!bool {
+    fn mergeFieldFromInfo(self: *Pass, target: LIR.LocalId, source: *const ValueInfo, field_index: u32) Allocator.Error!bool {
         if (source.tags.all) return self.localInfoMut(target).markAll(self.allocator);
         var changed = false;
         for (source.constructions.items) |construction| {
@@ -559,7 +554,7 @@ const Pass = struct {
             defer kept.deinit(self.allocator);
             for (0..branches.len) |index| {
                 const branch = GuardedList.at(branches, index);
-                if (branch.value > std.math.maxInt(u16)) continue;
+                if (branch.value > std.math.maxInt(u32)) continue;
                 if (tags.contains(@intCast(branch.value))) {
                     try kept.append(self.allocator, branch);
                 }
@@ -578,7 +573,7 @@ const Pass = struct {
         }
     }
 
-    fn targetForDiscriminant(self: *Pass, switch_stmt: anytype, value: u16) LIR.CFStmtId {
+    fn targetForDiscriminant(self: *Pass, switch_stmt: anytype, value: u32) LIR.CFStmtId {
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         for (0..branches.len) |index| {
             const branch = GuardedList.at(branches, index);

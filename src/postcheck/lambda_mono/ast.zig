@@ -263,8 +263,6 @@ pub const ExprData = union(enum) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
-    /// Explicit run/omit consumer input retained through lambda solving.
-    inline_expects_enabled: void,
     comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),

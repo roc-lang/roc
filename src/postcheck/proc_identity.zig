@@ -5,7 +5,9 @@
 //! depends only on what determines the procedure's compiled bytes: the lifted
 //! function's checked source identity (`Lifted.Program.fnSourceDigest`), the
 //! Lambda Mono ABI choices, and the solved argument, result, and capture types
-//! with their lambda sets.
+//! with their lambda sets. The plain procedure of a layout-keyed Builtin
+//! template is the exception: Direct LIR names it by its argument and result
+//! layouts instead (design.md "Layout-Keyed Builtin Procedures").
 //! The outer callable set describes where a function value flows, not the
 //! code of the selected procedure; its source and captures already name that
 //! selection. Nested callable sets still determine dispatch and representation.

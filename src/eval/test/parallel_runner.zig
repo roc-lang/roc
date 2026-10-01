@@ -117,6 +117,13 @@ pub const TestCase = struct {
     /// Expensive proof cases are excluded from an unfiltered run and are
     /// selected explicitly by name by their dedicated build step.
     opt_in: bool = false,
+    /// Native stack, in bytes, for the thread that compiles and evaluates this
+    /// case. Deep-nesting cases set a deliberately small budget, so a compiler
+    /// stage whose native call depth grows with source nesting or sequence
+    /// length fails deterministically instead of only past some large depth.
+    stack_bytes: ?usize = null,
+    /// How post-check lowering specializes the program.
+    specialization_strategy: base.SpecializationStrategy = .lss,
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
@@ -975,7 +982,7 @@ fn backendTimeoutBudgetMs(io: std.Io, index: usize, standard_deadline_ms: ?i64) 
 
 fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) RunnerError!TestOutcome {
     return switch (tc.expected) {
-        .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, timeout_ms),
+        .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, tc.specialization_strategy, timeout_ms),
         .allocations_at_most => |expected| runAllocationTest(io, allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
         .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => runComptimeFloatBitsTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
@@ -1012,7 +1019,7 @@ fn runComptimeFloatBitsTest(
 
     const node = switch (roots[0].payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect => {
+        .pending, .fn_value, .discarded, .expect, .runtime => {
             return .{
                 .status = .fail,
                 .message = "compile-time float root did not produce a ConstStore node",
@@ -1125,7 +1132,7 @@ fn materializedComptimeFloatBitsMatch(
     };
     const const_node = switch (compile_time_root.payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect => return false,
+        .pending, .fn_value, .discarded, .expect, .runtime => return false,
     };
     const static_request = lir.CheckedPipeline.StaticDataRequest{
         .const_locator = const_locator,
@@ -1362,9 +1369,10 @@ fn runInspectTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
     skip: TestCase.Skip,
+    specialization_strategy: base.SpecializationStrategy,
     timeout_ms: u64,
 ) RunnerError!TestOutcome {
-    var compiled = try helpers.compileInspectedProgram(allocator, io, source_kind, src, imports);
+    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1737,6 +1745,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .invalid_num_literal,
         .empty_tuple,
         .ident_already_in_scope,
+        .duplicate_pattern_binder,
         .ident_not_in_scope,
         .read_uninitialized_var,
         .self_referential_definition,
@@ -1807,6 +1816,8 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .break_outside_loop,
         .infinite_loop_never_exits,
         .return_outside_fn,
+        .control_flow_in_expect,
+        .var_reassigned_in_expect,
         .mutually_recursive_type_aliases,
         => true,
     };
@@ -1931,7 +1942,10 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 /// on --verbose) so it stays coherent across N workers; see `Pool` config below.
 fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) TestResult {
     var timer = Timer.start() catch unreachable;
-    const outcome = runSingleTest(io, allocator, tc, timeout_ms);
+    const outcome = if (tc.stack_bytes) |stack_bytes|
+        runSingleTestOnStack(io, allocator, tc, timeout_ms, stack_bytes)
+    else
+        runSingleTest(io, allocator, tc, timeout_ms);
     const duration = timer.read();
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
     if (outcome.has_backend_details) backends = outcome.backends;
@@ -1944,6 +1958,25 @@ fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeou
         .backends = backends,
         .expected_str = outcome.expected_str,
     };
+}
+
+fn runSingleTestOnStack(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64, stack_bytes: usize) TestOutcome {
+    const Run = struct {
+        fn run(outcome: *TestOutcome, run_io: std.Io, run_allocator: std.mem.Allocator, case: TestCase, run_timeout_ms: u64) void {
+            outcome.* = runSingleTest(run_io, run_allocator, case, run_timeout_ms);
+        }
+    };
+    var outcome: TestOutcome = undefined;
+    const thread = std.Thread.spawn(.{ .stack_size = stack_bytes }, Run.run, .{ &outcome, io, allocator, tc, timeout_ms }) catch |err| {
+        return .{
+            .status = .fail,
+            .message = @errorName(err),
+            .has_backend_details = false,
+            .backends = undefined,
+        };
+    };
+    thread.join();
+    return outcome;
 }
 
 fn onTestStarted(tc: TestCase) void {

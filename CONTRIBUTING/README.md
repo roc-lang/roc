@@ -112,6 +112,22 @@ zig build run-test-zig -- --test-filter "name of test"
 - It's a good idea to open a draft pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give important feedback sooner rather than later. Click the button "ready for review" when it's ready.
 - The [Glossary](../Glossary.md) file explains terms commonly used in the compiler.
 
+### Bidirectional source controls
+
+MiniCI rejects literal Unicode `Bidi_Control` characters in tracked text,
+filenames, and symlink targets to protect against CVE-2021-42574. Run the gate
+locally with `zig build run-check-source-bidi`. It scans bytes even in malformed
+UTF-8 or NUL-containing text and recognizes UTF-16/32 byte order marks. Known
+binary extensions are listed explicitly in `ci/check_source_bidi.zig`; changes
+to that list need review. The gate has no inline suppression syntax.
+
+Construct security test inputs with escaped code points, rather than placing
+invisible controls in fixtures. Roc strings can use `\u(202E)`; Zig tests can
+use `\u{202E}`. Ordinary Arabic and Hebrew text is allowed. Enable your editor's
+invisible-character warnings when reviewing Unicode changes. Remove a reported
+control from comments, or explicitly escape it in a literal when it is intended
+as runtime data; `roc fmt` refuses to rewrite affected source.
+
 ### Debugging tips
 
 If you need to do some debugging, check out [our tips](../devtools/debug_tips.md).

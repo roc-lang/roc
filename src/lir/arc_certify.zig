@@ -52,12 +52,9 @@
 //!   real in-edges disagree about, so every group is witnessed by at least one real jump
 //!   and a group-walk finding always corresponds to a real entry state. In
 //!   the worst case this degenerates to one group per distinct summary—
-//!   the pre-fixpoint exact behavior—which is exponential in the number of
-//!   relevant names, so it is capped: past `max_join_groups` a join stops
-//!   splitting on lifetime provenance and absorbs into a group whose
-//!   provenance drops to what both members prove. Provenance is proof, so
-//!   dropping it only makes later checks demand more; the cap can report a
-//!   finding exactness would not, never hide one. Nothing is skipped.
+//!   the pre-fixpoint exact behavior. Different lifetime proofs remain
+//!   separate regardless of the number of groups: discarding a borrowed
+//!   value's lender would manufacture an invalid state no edge supplied.
 //!
 //! Why one walk under the group's meet partition covers every member
 //! (soundness of the join): a member's entry state is the group state with
@@ -1203,7 +1200,7 @@ const ValueInfo = struct {
     payload_source: ValueId = no_value,
     /// Aggregate projection read from `payload_source`, encoded by
     /// `arc_dismantle.encodeProjection`.
-    payload_projection: u64 = arc_dismantle.no_projection,
+    payload_projection: arc_dismantle.Projection = .none,
     /// Complete outcome rows and exact argument-transfer receipts for a
     /// direct call result. Empty for every other value.
     call_outcomes: arc_sig.OutcomeSpan = .empty,
@@ -1249,7 +1246,7 @@ const State = struct {
     /// on its discriminant, and this is what makes that dispatch certifiable:
     /// on the path that took the variant's fields, the arms for other
     /// variants and the whole-release default are infeasible.
-    known_variants: ArcSnapshot(u16, no_variant),
+    known_variants: ArcSnapshot(u32, no_variant),
     /// Scalar discriminant locals read from a tag-union container value on
     /// this path, so a switch on one refines that container's variant.
     variant_discriminants: ArcSnapshot(ValueId, no_value),
@@ -1287,7 +1284,7 @@ const State = struct {
             .conditional = ArcSnapshot(ConditionalEntry, .{}).init(allocator, proc_local_count),
             .claims = ArcSnapshot(ClaimSet, .{}).init(allocator, proc_local_count),
             .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
-            .known_variants = ArcSnapshot(u16, no_variant).init(allocator, proc_local_count),
+            .known_variants = ArcSnapshot(u32, no_variant).init(allocator, proc_local_count),
             .variant_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
             .result_discriminant = no_dense,
             .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
@@ -1313,12 +1310,12 @@ const State = struct {
         }
     }
 
-    fn knownVariant(self: *const State, value: ValueId) ?u16 {
+    fn knownVariant(self: *const State, value: ValueId) ?u32 {
         const variant = self.known_variants.get(value);
         return if (variant == no_variant) null else variant;
     }
 
-    fn setKnownVariant(self: *State, value: ValueId, variant: u16) Allocator.Error!void {
+    fn setKnownVariant(self: *State, value: ValueId, variant: u32) Allocator.Error!void {
         try self.put(&self.known_variants, value, variant);
     }
 
@@ -1388,7 +1385,7 @@ const State = struct {
 
     fn addBalance(self: *State, value: ValueId, delta: i32) Allocator.Error!void {
         const previous = self.balanceOf(value);
-        const next = previous + delta;
+        const next = std.math.add(i32, previous, delta) catch return error.OutOfMemory;
         try self.put(&self.balance, value, next);
         if ((previous < 0) != (next < 0)) {
             const word_index = value / 64;
@@ -1456,8 +1453,8 @@ test "forked state preserves independent tag-union variant witnesses" {
     try forked.setKnownVariant(0, 2);
     try forked.put(&forked.variant_discriminants, @intFromEnum(discriminant), no_value);
 
-    try testing.expectEqual(@as(?u16, 1), source.knownVariant(0));
-    try testing.expectEqual(@as(?u16, 2), forked.knownVariant(0));
+    try testing.expectEqual(@as(?u32, 1), source.knownVariant(0));
+    try testing.expectEqual(@as(?u32, 2), forked.knownVariant(0));
     try testing.expectEqual(@as(?ValueId, 0), source.variantDiscriminant(discriminant));
     try testing.expectEqual(@as(?ValueId, null), forked.variantDiscriminant(discriminant));
 }
@@ -1577,28 +1574,8 @@ const SummaryProvenance = struct {
     holder_reprs: []const u32 = &.{},
     /// Immediate container and projection retained for a deferred field take.
     payload_source: u32 = no_dense,
-    payload_projection: u64 = arc_dismantle.no_projection,
+    payload_projection: arc_dismantle.Projection = .none,
 };
-
-/// Cap on the number of entry-state groups kept for one join.
-///
-/// Below the cap the abstraction is exact: a summary no group accepts starts
-/// its own group. That is unbounded on its own (mode vectors are finite but
-/// exponential in the number of relevant names), and a derived codec for a
-/// wide record reaches thousands of groups, which is a build that does not
-/// finish rather than one that reports something.
-///
-/// At the cap, summaries that differ only in lifetime provenance stop
-/// splitting: they are absorbed into an existing group whose provenance is
-/// weakened to what both agree on. Every provenance component is a *proof*
-/// that a value stays live (a lender conjunction, a live holder, a deferred
-/// field take), so dropping one only makes later checks demand more. Widening
-/// can therefore report a finding that exactness would not, but it can never
-/// hide one.
-///
-/// Real procedures stay far below this: the busiest join in a 117k-statement
-/// module keeps two groups.
-const max_join_groups: usize = 8;
 
 fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
     if (a == b) return true;
@@ -1606,7 +1583,7 @@ fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenan
     return std.mem.eql(u32, a.?.lender_reprs, b.?.lender_reprs) and
         std.mem.eql(u32, a.?.holder_reprs, b.?.holder_reprs) and
         a.?.payload_source == b.?.payload_source and
-        a.?.payload_projection == b.?.payload_projection;
+        a.?.payload_projection.eql(b.?.payload_projection);
 }
 
 const SummaryProvenanceContext = struct {
@@ -1627,7 +1604,7 @@ const SummaryProvenanceContext = struct {
         return std.mem.eql(u32, a.lender_reprs, b.lender_reprs) and
             std.mem.eql(u32, a.holder_reprs, b.holder_reprs) and
             a.payload_source == b.payload_source and
-            a.payload_projection == b.payload_projection;
+            a.payload_projection.eql(b.payload_projection);
     }
 };
 
@@ -1674,10 +1651,10 @@ const LocalSummary = struct {
     /// rather than walking separately. That loses nothing a residual dispatch
     /// needs, because a path that took a variant's fields carries claims, and
     /// claims already keep such paths in their own group.
-    known_variant: u16 = no_variant,
+    known_variant: u32 = no_variant,
 };
 
-const no_variant: u16 = std.math.maxInt(u16);
+const no_variant: u32 = std.math.maxInt(u32);
 
 const LocalClass = enum(u8) {
     unbound,
@@ -1958,7 +1935,7 @@ const Certifier = struct {
     erased_call_owner_checks: std.ArrayList(ErasedCallOwnerCheck) = .empty,
     /// Result discriminants independently reached while certifying the
     /// current outcome-specialized proc.
-    seen_outcomes: std.AutoHashMap(u16, void),
+    seen_outcomes: std.AutoHashMap(u32, void),
     /// Scratch bitset over dense proc-local positions, reused by
     /// join-relevance extension.
     relevant_scratch: std.bit_set.DynamicBitSetUnmanaged = .{},
@@ -2009,7 +1986,7 @@ const Certifier = struct {
             .join_components = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, std.bit_set.DynamicBitSetUnmanaged).init(allocator),
             .erased_owner_states = collections.DenseMap(LIR.LocalId, ErasedOwnerState).init(allocator),
-            .seen_outcomes = std.AutoHashMap(u16, void).init(allocator),
+            .seen_outcomes = std.AutoHashMap(u32, void).init(allocator),
             .diag = diag,
             .work_stats = work_stats,
         };
@@ -2164,25 +2141,53 @@ const Certifier = struct {
     }
 
     fn valueIsLiveSeen(self: *Certifier, state: *const State, value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged) Allocator.Error!bool {
-        if (value >= self.values.items.len) return false;
-        const value_index: usize = @intCast(value);
-        if (seen.isSet(value_index)) return false;
-        seen.set(value_index);
-        defer seen.unset(value_index);
-
-        const info = self.values.items[value];
-        if (info.always_live) return true;
-        if (state.balanceOf(value) > 0 and !try self.claimsSpendUnit(state, value)) return true;
-        const holder = state.holderOf(value);
-        if (holder != no_value and try self.valueIsLiveSeen(state, holder, seen)) {
-            return true;
-        }
-        if (info.lenders.len == 0) return false;
-        for (info.lenders) |lender| {
-            if (!try self.valueIsLiveSeen(state, lender, seen)) return false;
-        }
-        return true;
+        var liveness = LivenessWalk{ .certifier = self, .state = state, .seen = seen };
+        return LivenessWalk.Eval.run(self.allocator, &liveness, value);
     }
+
+    /// A value is live when it decides so itself, or through any of: its
+    /// holder, or all of its (nonempty) lenders. `seen` holds the values on
+    /// the current path, so a cycle is not live through itself.
+    const LivenessWalk = struct {
+        certifier: *Certifier,
+        state: *const State,
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+
+        const Eval = collections.AnyAll.Evaluation(ValueId, LivenessWalk);
+
+        pub fn enter(self: *LivenessWalk, items: Eval.Items, value: ValueId) Allocator.Error!Eval.Expansion {
+            const certifier = self.certifier;
+            if (value >= certifier.values.items.len) return .{ .value = false };
+            const value_index: usize = @intCast(value);
+            if (self.seen.isSet(value_index)) return .{ .value = false };
+            const info = certifier.values.items[value];
+            if (info.always_live) return .{ .value = true };
+            self.seen.set(value_index);
+            if (self.state.balanceOf(value) > 0 and !(certifier.claimsSpendUnit(self.state, value) catch |err| {
+                self.seen.unset(value_index);
+                return err;
+            })) {
+                self.seen.unset(value_index);
+                return .{ .value = true };
+            }
+            errdefer self.seen.unset(value_index);
+            const holder = self.state.holderOf(value);
+            if (holder == no_value and info.lenders.len == 0) {
+                self.seen.unset(value_index);
+                return .{ .value = false };
+            }
+            if (holder != no_value) try items.add(holder);
+            if (info.lenders.len != 0) {
+                try items.group(.all, info.lenders.len);
+                for (info.lenders) |lender| try items.add(lender);
+            }
+            return .{ .group = .any };
+        }
+
+        pub fn exit(self: *LivenessWalk, value: ValueId, _: ?bool) Allocator.Error!void {
+            self.seen.unset(@intCast(value));
+        }
+    };
 
     /// Records the dead value's lender/holder chain in the diagnostic for
     /// panic context.
@@ -2323,79 +2328,136 @@ const Certifier = struct {
         return try self.tryClaimSeen(state, value, seen, null);
     }
 
+    /// A container that must claim its own unit from its parent before the
+    /// field under it is claimed.
+    const PendingContainerClaim = struct {
+        container: ValueId,
+        field: u32,
+        existing: ClaimSet,
+    };
+
+    /// Claims walk up the projection chain: a container without a unit of
+    /// its own claims it from its parent first. The chain is followed in a
+    /// loop, and each container's own unit and field claim are recorded on
+    /// the way back down once its parent's claim succeeds.
     fn tryClaimSeen(
         self: *Certifier,
         state: *State,
-        value: ValueId,
+        root: ValueId,
         seen: *std.bit_set.DynamicBitSetUnmanaged,
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) Allocator.Error!bool {
-        if (value >= self.values.items.len) return false;
-        const value_index: usize = @intCast(value);
-        if (seen.isSet(value_index)) return false;
-        seen.set(value_index);
-        defer seen.unset(value_index);
-
-        const info = self.values.items[value];
-        if (info.payload_source == no_value) return false;
-        const container = info.payload_source;
-        if (info.payload_projection == arc_dismantle.no_projection) return false;
-        const container_origin = self.values.items[container].origin;
-        const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
-        const field: u16 = switch (container_layout.tag) {
-            .struct_ => blk: {
-                const field_idx: u16 = @intCast(info.payload_projection & 0xffff);
-                break :blk field_idx;
-            },
-            .tag_union => blk: {
-                if (!arc_dismantle.projectionOwnsAllRc(
-                    self.store,
-                    self.layouts,
-                    container_origin,
-                    info.origin,
-                    info.payload_projection,
-                )) return false;
-                break :blk 0;
-            },
-            .scalar,
-            .box,
-            .box_of_zst,
-            .erased_box,
-            .list,
-            .list_of_zst,
-            .closure,
-            .erased_callable,
-            .zst,
-            .ptr,
-            => return false,
-        };
-        const required = try self.requiredClaims(container) orelse return false;
-        if (!required.contains(field)) return false;
-        const existing = state.claimsOf(container);
-        if (existing.contains(field)) {
-            // Only a complete projection can spend another whole unit;
-            // repeating a partial field claim would lose its other fields.
-            if (!required.isSingleton(field)) return false;
-            // A second stamped take of the same projection spends that field
-            // from an intact surplus aggregate unit. The first unit remains
-            // represented by the existing claim set.
-            if (try self.hasIntactSurplusUnit(state, container)) {
-                const before = state.balanceOf(container);
-                try state.addBalance(container, -1);
-                if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
-                    .value = container,
-                    .before = before,
-                    .after = before - 1,
-                } });
-                return true;
-            }
-            // A complete projected container can hold another unit in its
-            // parent even when its only explicit balance is the unit already
-            // described by `existing`. Claim that exact parent unit for the
-            // duplicate projection.
-            return try self.tryClaimSeen(state, container, seen, mutations);
+        var marked = std.ArrayList(ValueId).empty;
+        defer {
+            for (marked.items) |value| seen.unset(@intCast(value));
+            marked.deinit(self.allocator);
         }
-        if (!try self.ensureClaimContainerUnit(state, container, seen, mutations)) return false;
+        var pending = std.ArrayList(PendingContainerClaim).empty;
+        defer pending.deinit(self.allocator);
+
+        var value = root;
+        var claimed = walk: while (true) {
+            if (value >= self.values.items.len) break :walk false;
+            const value_index: usize = @intCast(value);
+            if (seen.isSet(value_index)) break :walk false;
+            try marked.ensureUnusedCapacity(self.allocator, 1);
+            seen.set(value_index);
+            marked.appendAssumeCapacity(value);
+
+            const info = self.values.items[value];
+            if (info.payload_source == no_value) break :walk false;
+            const container = info.payload_source;
+            if (info.payload_projection.isNone()) break :walk false;
+            const container_origin = self.values.items[container].origin;
+            const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
+            const field: u32 = switch (container_layout.tag) {
+                .struct_ => info.payload_projection.first,
+                .tag_union => blk: {
+                    if (!arc_dismantle.projectionOwnsAllRc(
+                        self.store,
+                        self.layouts,
+                        container_origin,
+                        info.origin,
+                        info.payload_projection,
+                    )) break :walk false;
+                    break :blk 0;
+                },
+                .scalar,
+                .box,
+                .box_of_zst,
+                .erased_box,
+                .list,
+                .list_of_zst,
+                .closure,
+                .erased_callable,
+                .zst,
+                .ptr,
+                => break :walk false,
+            };
+            const required = try self.requiredClaims(container) orelse break :walk false;
+            if (!required.contains(field)) break :walk false;
+            const existing = state.claimsOf(container);
+            if (existing.contains(field)) {
+                // Only a complete projection can spend another whole unit;
+                // repeating a partial field claim would lose its other fields.
+                if (!required.isSingleton(field)) break :walk false;
+                // A second stamped take of the same projection spends that field
+                // from an intact surplus aggregate unit. The first unit remains
+                // represented by the existing claim set.
+                if (try self.hasIntactSurplusUnit(state, container)) {
+                    const before = state.balanceOf(container);
+                    try state.addBalance(container, -1);
+                    if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                        .value = container,
+                        .before = before,
+                        .after = before - 1,
+                    } });
+                    break :walk true;
+                }
+                // A complete projected container can hold another unit in its
+                // parent even when its only explicit balance is the unit already
+                // described by `existing`. Claim that exact parent unit for the
+                // duplicate projection.
+                value = container;
+                continue :walk;
+            }
+            if (state.balanceOf(container) >= 1) {
+                try self.claimContainerField(state, container, field, existing, mutations);
+                break :walk true;
+            }
+            if (state.conditionalConditionOf(container) != null) break :walk false;
+            // A nested projection container's unit becomes explicit in the
+            // certifier's state by claiming that complete container from its
+            // own parent. This is bookkeeping only: the parent claim and child
+            // balance are the two sides of the same single runtime ownership
+            // unit.
+            try pending.append(self.allocator, .{ .container = container, .field = field, .existing = existing });
+            value = container;
+        };
+
+        while (pending.pop()) |claim| {
+            if (!claimed) break;
+            const before = state.balanceOf(claim.container);
+            try state.addBalance(claim.container, 1);
+            if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                .value = claim.container,
+                .before = before,
+                .after = before + 1,
+            } });
+            try self.claimContainerField(state, claim.container, claim.field, claim.existing, mutations);
+            claimed = true;
+        }
+        return claimed;
+    }
+
+    fn claimContainerField(
+        self: *Certifier,
+        state: *State,
+        container: ValueId,
+        field: u32,
+        existing: ClaimSet,
+        mutations: ?*std.ArrayList(OwnershipMutation),
+    ) Allocator.Error!void {
         const updated = try existing.withField(self.state_arena.allocator(), field);
         try state.setClaims(container, updated);
         if (mutations) |list| try list.append(self.allocator, .{ .claims = .{
@@ -2403,31 +2465,6 @@ const Certifier = struct {
             .before = existing,
             .after = updated,
         } });
-        return true;
-    }
-
-    /// Makes a nested projection container's unit explicit in the certifier's
-    /// state by claiming that complete container from its own parent. This is
-    /// bookkeeping only: the parent claim and child balance are the two sides
-    /// of the same single runtime ownership unit.
-    fn ensureClaimContainerUnit(
-        self: *Certifier,
-        state: *State,
-        container: ValueId,
-        seen: *std.bit_set.DynamicBitSetUnmanaged,
-        mutations: ?*std.ArrayList(OwnershipMutation),
-    ) Allocator.Error!bool {
-        if (state.balanceOf(container) >= 1) return true;
-        if (state.conditionalConditionOf(container) != null) return false;
-        if (!try self.tryClaimSeen(state, container, seen, mutations)) return false;
-        const before = state.balanceOf(container);
-        try state.addBalance(container, 1);
-        if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
-            .value = container,
-            .before = before,
-            .after = before + 1,
-        } });
-        return true;
     }
 
     /// Whether the value's single unit is fully spent by claims: every
@@ -2643,7 +2680,7 @@ const Certifier = struct {
         }
     }
 
-    fn restitutedParamsForDiscriminant(self: *const Certifier, discriminant: u16) ?arc_sig.ParamMask {
+    fn restitutedParamsForDiscriminant(self: *const Certifier, discriminant: u32) ?arc_sig.ParamMask {
         const outcomes = self.sigs.outcomesOf(self.current_sig);
         for (outcomes) |outcome| {
             if (outcome.discriminant == discriminant) return outcome.restituted_params;
@@ -2656,7 +2693,7 @@ const Certifier = struct {
         if (state.result_discriminant == no_dense) {
             return self.fail("outcome-specialized return lacked an exact current result discriminant witness", .{});
         }
-        const discriminant: u16 = @intCast(state.result_discriminant);
+        const discriminant: u32 = @intCast(state.result_discriminant);
         const mask = self.restitutedParamsForDiscriminant(discriminant) orelse {
             return self.fail("returned discriminant {d} was absent from the proc's complete ARC outcome signature", .{discriminant});
         };
@@ -2689,11 +2726,11 @@ const Certifier = struct {
     }
 
     fn callOutcomeMask(self: *const Certifier, value: ValueId, discriminant: u64) ?arc_sig.ParamMask {
-        if (value >= self.values.items.len or discriminant > std.math.maxInt(u16)) return null;
+        if (value >= self.values.items.len or discriminant > std.math.maxInt(u32)) return null;
         const info = self.values.items[value];
         const outcomes = self.sigs.outcomesOf(.{ .outcomes = info.call_outcomes });
         for (outcomes) |outcome| {
-            if (outcome.discriminant == @as(u16, @intCast(discriminant))) return outcome.restituted_params;
+            if (outcome.discriminant == @as(u32, @intCast(discriminant))) return outcome.restituted_params;
         }
         return null;
     }
@@ -2842,65 +2879,144 @@ const Certifier = struct {
     fn collectBorrowSummaryAnchorValues(self: *Certifier, state: *const State, value: ValueId, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
         const seen = try self.valueWalkScratch();
         anchors.clearRetainingCapacity();
-        if (try self.collectBorrowSummaryAbiAnchorsSeen(state, value, seen, anchors)) {
+        if (try self.collectBorrowSummaryAbiAnchorsSeen(value, seen, anchors)) {
             return true;
         }
         anchors.clearRetainingCapacity();
         return self.collectBorrowSummaryCarrierAnchorsSeen(state, value, seen, anchors);
     }
 
-    fn collectBorrowSummaryAbiAnchorsSeen(self: *Certifier, state: *const State, value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
+    /// A value whose lenders (and, for carrier anchors, holder) decide its
+    /// anchors. Its `seen` bit stays set until the frame finishes.
+    const AnchorFrame = struct {
+        value: ValueId,
+        /// The anchor count before this value's anchors, restored when its
+        /// lender chain is incomplete.
+        start: usize,
+        index: usize = 0,
+        stage: enum { lenders, holder, holder_result } = .lenders,
+    };
+
+    fn popAnchorFrame(frames: *std.ArrayList(AnchorFrame), seen: *std.bit_set.DynamicBitSetUnmanaged) void {
+        const frame = frames.pop().?;
+        seen.unset(@intCast(frame.value));
+    }
+
+    fn releaseAnchorFrames(self: *Certifier, frames: *std.ArrayList(AnchorFrame), seen: *std.bit_set.DynamicBitSetUnmanaged) void {
+        for (frames.items) |frame| seen.unset(@intCast(frame.value));
+        frames.deinit(self.allocator);
+    }
+
+    /// Anchors of a borrow whose every lender chain reaches ABI-live values.
+    fn collectBorrowSummaryAbiAnchorsSeen(self: *Certifier, root: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
+        var frames = std.ArrayList(AnchorFrame).empty;
+        defer self.releaseAnchorFrames(&frames, seen);
+        var answer = try self.enterAbiAnchor(&frames, root, seen, anchors);
+        while (frames.items.len > 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (answer) |complete| if (!complete) {
+                anchors.shrinkRetainingCapacity(frame.start);
+                popAnchorFrame(&frames, seen);
+                continue;
+            };
+            const lenders = self.values.items[frame.value].lenders;
+            if (frame.index < lenders.len) {
+                const lender = lenders[frame.index];
+                frame.index += 1;
+                answer = try self.enterAbiAnchor(&frames, lender, seen, anchors);
+                continue;
+            }
+            popAnchorFrame(&frames, seen);
+            answer = true;
+        }
+        return answer.?;
+    }
+
+    fn enterAbiAnchor(self: *Certifier, frames: *std.ArrayList(AnchorFrame), value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!?bool {
         if (value >= self.values.items.len) return false;
         const value_index: usize = @intCast(value);
         if (seen.isSet(value_index)) return false;
-        seen.set(value_index);
-        defer seen.unset(value_index);
-
         const info = self.values.items[value];
         if (info.always_live) {
             try appendUniqueValueId(anchors, self.allocator, value);
             return true;
         }
         if (info.lenders.len == 0) return false;
-        const start = anchors.items.len;
-        for (info.lenders) |lender| {
-            if (!try self.collectBorrowSummaryAbiAnchorsSeen(state, lender, seen, anchors)) {
-                anchors.shrinkRetainingCapacity(start);
-                return false;
-            }
-        }
-        return true;
+        try frames.append(self.allocator, .{ .value = value, .start = anchors.items.len });
+        seen.set(value_index);
+        return null;
     }
 
-    fn collectBorrowSummaryCarrierAnchorsSeen(self: *Certifier, state: *const State, value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
+    /// Anchors of a borrow at the shallowest live carriers: a live value
+    /// anchors itself, then complete lender chains, then the holder.
+    fn collectBorrowSummaryCarrierAnchorsSeen(self: *Certifier, state: *const State, root: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!bool {
+        var frames = std.ArrayList(AnchorFrame).empty;
+        defer self.releaseAnchorFrames(&frames, seen);
+        var answer = try self.enterCarrierAnchor(state, &frames, root, seen, anchors);
+        while (frames.items.len > 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (frame.stage) {
+                .lenders => {
+                    if (answer) |complete| if (!complete) {
+                        anchors.shrinkRetainingCapacity(frame.start);
+                        frame.stage = .holder;
+                        answer = null;
+                        continue;
+                    };
+                    const lenders = self.values.items[frame.value].lenders;
+                    if (frame.index < lenders.len) {
+                        const lender = lenders[frame.index];
+                        frame.index += 1;
+                        answer = try self.enterCarrierAnchor(state, &frames, lender, seen, anchors);
+                        continue;
+                    }
+                    popAnchorFrame(&frames, seen);
+                    answer = true;
+                },
+                .holder => {
+                    const holder = state.holderOf(frame.value);
+                    if (holder == no_value) {
+                        popAnchorFrame(&frames, seen);
+                        answer = false;
+                        continue;
+                    }
+                    frame.stage = .holder_result;
+                    answer = try self.enterCarrierAnchor(state, &frames, holder, seen, anchors);
+                },
+                .holder_result => popAnchorFrame(&frames, seen),
+            }
+        }
+        return answer.?;
+    }
+
+    fn enterCarrierAnchor(self: *Certifier, state: *const State, frames: *std.ArrayList(AnchorFrame), value: ValueId, seen: *std.bit_set.DynamicBitSetUnmanaged, anchors: *std.ArrayList(ValueId)) Allocator.Error!?bool {
         if (value >= self.values.items.len) return false;
         const value_index: usize = @intCast(value);
         if (seen.isSet(value_index)) return false;
-        seen.set(value_index);
-        defer seen.unset(value_index);
-
         const info = self.values.items[value];
-        if (info.always_live or
-            (state.balanceOf(value) > 0 and !try self.claimsSpendUnit(state, value)))
-        {
+        if (info.always_live) {
             try appendUniqueValueId(anchors, self.allocator, value);
             return true;
         }
-        if (info.lenders.len != 0) {
-            const start = anchors.items.len;
-            var complete = true;
-            for (info.lenders) |lender| {
-                if (!try self.collectBorrowSummaryCarrierAnchorsSeen(state, lender, seen, anchors)) {
-                    complete = false;
-                    break;
-                }
-            }
-            if (complete) return true;
-            anchors.shrinkRetainingCapacity(start);
+        seen.set(value_index);
+        const live = state.balanceOf(value) > 0 and !(self.claimsSpendUnit(state, value) catch |err| {
+            seen.unset(value_index);
+            return err;
+        });
+        if (live) {
+            seen.unset(value_index);
+            try appendUniqueValueId(anchors, self.allocator, value);
+            return true;
         }
-        const holder = state.holderOf(value);
-        if (holder != no_value) return try self.collectBorrowSummaryCarrierAnchorsSeen(state, holder, seen, anchors);
-        return false;
+        frames.append(self.allocator, .{
+            .value = value,
+            .start = anchors.items.len,
+            .stage = if (info.lenders.len != 0) .lenders else .holder,
+        }) catch |err| {
+            seen.unset(value_index);
+            return err;
+        };
+        return null;
     }
 
     /// Adds one lifetime dependency to a normalized representative list. A
@@ -2998,7 +3114,7 @@ const Certifier = struct {
             .holder_reprs = self.provenance_holder_scratch.items,
             .payload_source = payload_source,
             .payload_projection = if (payload_source == no_dense)
-                arc_dismantle.no_projection
+                arc_dismantle.Projection.none
             else
                 info.payload_projection,
         };
@@ -3029,40 +3145,6 @@ const Certifier = struct {
         interned.key_ptr.* = provenance.*;
         interned.value_ptr.* = provenance;
         return .{ .provenance = provenance, .uncarried_live_lender = uncarried_live_lender };
-    }
-
-    /// The provenance both states prove, for widening a group at the cap.
-    ///
-    /// Each component is an independent proof, so a component survives only
-    /// when the two agree on it exactly; a conjunction that differs proves
-    /// nothing in common and is dropped whole. Losing every component leaves
-    /// no provenance, which is the strictest state and always safe.
-    fn meetProvenance(
-        a: ?*const SummaryProvenance,
-        b: ?*const SummaryProvenance,
-    ) ?*const SummaryProvenance {
-        // Names that agree keep what they prove. A name the two disagree
-        // about drops to no provenance at all rather than to the components
-        // they happen to share: dropping everything is a fixed point, so a
-        // later summary that disagrees again finds the group already at the
-        // bottom and is simply covered, which is what stops widening from
-        // re-walking the body once per arriving edge.
-        return if (summaryProvenanceEql(a, b)) a else null;
-    }
-
-    /// Weakens a group's provenance to what it and `summary` both prove.
-    /// Reports whether anything moved, so a group whose state is unchanged is
-    /// not re-walked.
-    fn widenGroupProvenance(group: *JoinGroup, summary: []const LocalSummary) bool {
-        var changed = false;
-        for (group.summary, summary) |*ge, se| {
-            const met = meetProvenance(ge.provenance, se.provenance);
-            if (met != ge.provenance) {
-                ge.provenance = met;
-                changed = true;
-            }
-        }
-        return changed;
     }
 
     fn summaryDigest(cursor: LIR.CFStmtId, summary: []const LocalSummary) u64 {
@@ -3261,20 +3343,6 @@ const Certifier = struct {
                 },
             }
         }
-        // At the cap, stop splitting on provenance: absorb into a group that
-        // agrees on every other mode component and weaken its provenance to
-        // what both prove. See `max_join_groups`.
-        if (record.groups.items.len >= max_join_groups) {
-            for (record.groups.items, 0..) |*group, group_index| {
-                if (!modesCompatibleWith(group.summary, summary, .ignore_provenance)) continue;
-                const widened = widenGroupProvenance(group, summary);
-                return switch (try self.meetGroupSummary(group, summary)) {
-                    .unchanged => if (widened) .{ .walk = group_index } else .covered,
-                    .refined, .conflict => .{ .walk = group_index },
-                };
-            }
-        }
-
         const copy = try self.allocator.dupe(LocalSummary, summary);
         errdefer self.allocator.free(copy);
         try record.groups.append(self.allocator, .{ .summary = copy, .queued = false });
@@ -3286,17 +3354,6 @@ const Certifier = struct {
     /// and the same sparse provenance. Partition (`repr`) and balances are the
     /// joinable components and are deliberately not compared here.
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
-        return modesCompatibleWith(a, b, .compare_provenance);
-    }
-
-    /// Whether provenance participates in mode compatibility. Ignoring it is
-    /// what lets a join at `max_join_groups` absorb instead of split; the
-    /// group's provenance is then weakened to the meet, so the walk assumes
-    /// only what both members prove.
-    const ProvenanceMatch = enum { compare_provenance, ignore_provenance };
-
-    fn modesCompatibleWith(a: []const LocalSummary, b: []const LocalSummary, provenance: ProvenanceMatch) bool {
-        const compare = provenance == .compare_provenance;
         for (a, b) |ga, sb| {
             if (ga.class != sb.class) return false;
             if (ga.abi_live != sb.abi_live) return false;
@@ -3306,11 +3363,11 @@ const Certifier = struct {
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
                 .owned => if (!ga.claims.eql(sb.claims) or
-                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
+                    !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
                 .conditional_owned => if (ga.condition != sb.condition or
                     ga.condition_mask != sb.condition_mask or
-                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
-                .borrowed => if (compare and !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                    !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                .borrowed => if (!summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
                 .representation => {},
             }
         }
@@ -4829,7 +4886,7 @@ const Certifier = struct {
                 return self.fail("outcome-specialized proc did not return an RC-bearing top-level tag union", .{});
             }
             const params = self.store.getLocalSpan(proc.args);
-            var previous: ?u16 = null;
+            var previous: ?u32 = null;
             for (published_outcomes) |outcome| {
                 if (previous != null and outcome.discriminant <= previous.?) {
                     return self.fail("outcome signature rows were not strictly discriminant-sorted", .{});
@@ -5293,7 +5350,7 @@ const Certifier = struct {
                         return self.fail("incref of non-refcounted local {d}", .{@intFromEnum(rc.value)});
                     }
                     const value = try self.requireLive(&state, rc.value);
-                    try state.addBalance(value, rc.count);
+                    try state.addBalance(value, std.math.cast(i32, rc.count) orelse return error.OutOfMemory);
                     cursor = rc.next;
                 },
                 .decref => |rc| {
@@ -5332,7 +5389,7 @@ const Certifier = struct {
                     // variants are infeasible once the variant is proven, and
                     // an arm proves its variant where nothing did before.
                     const variant_container = state.variantDiscriminant(switch_stmt.cond);
-                    const known_variant: ?u16 = if (variant_container) |container| state.knownVariant(container) else null;
+                    const known_variant: ?u32 = if (variant_container) |container| state.knownVariant(container) else null;
                     var known_is_listed = false;
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
@@ -5344,7 +5401,7 @@ const Certifier = struct {
                         errdefer branch_state.deinit();
                         branch_state.clearOutcomeDiscriminants();
                         if (variant_container) |container| {
-                            if (known_variant == null and branch.value <= std.math.maxInt(u16)) {
+                            if (known_variant == null and branch.value < no_variant) {
                                 try branch_state.setKnownVariant(container, @intCast(branch.value));
                             }
                         }
@@ -5586,7 +5643,7 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64, take_kind: LIR.TakeKind, tag_discriminant: ?u16) CertifyError!void {
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: arc_dismantle.Projection, take_kind: LIR.TakeKind, tag_discriminant: ?u32) CertifyError!void {
         if (!self.isRc(target) and self.isRc(source) and
             self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag == .struct_)
         {
@@ -5635,7 +5692,7 @@ const Certifier = struct {
         container: ValueId,
         source: LIR.LocalId,
         target: LIR.LocalId,
-        projection: u64,
+        projection: arc_dismantle.Projection,
     ) CertifyError!void {
         try self.settleNegativeClaims(state);
         const claims = state.claimsOf(container);
@@ -5643,10 +5700,7 @@ const Certifier = struct {
         const container_origin = self.values.items[container].origin;
         const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
         const taken = switch (container_layout.tag) {
-            .struct_ => blk: {
-                const field_idx: u16 = @intCast(projection & 0xffff);
-                break :blk claims.contains(field_idx);
-            },
+            .struct_ => claims.contains(projection.first),
             .tag_union => true,
             .scalar,
             .box,
@@ -5712,10 +5766,10 @@ const Certifier = struct {
         var observed: ClaimSet = .{};
         for (0..absent_fields.len) |index| {
             const field_index = GuardedList.at(absent_fields, index);
-            if (field_index > std.math.maxInt(u16) or !required.contains(@intCast(field_index))) {
+            if (field_index > std.math.maxInt(u32) or !required.contains(@intCast(field_index))) {
                 return self.fail("residual-shell metadata names non-RC or absent field {d}", .{field_index});
             }
-            const field: u16 = @intCast(field_index);
+            const field: u32 = @intCast(field_index);
             if (observed.contains(field)) {
                 return self.fail("residual-shell metadata repeats field {d}", .{field_index});
             }
@@ -7646,6 +7700,73 @@ test "certify flags branches that disagree at a join" {
     try testing.expect(std.mem.find(u8, f.diag.message(), "unbound") != null);
 }
 
+fn certifyDistinctBorrowLenders(release_last_lender: bool) (CertifyError || error{ TestUnexpectedResult, TestExpectedError, TestUnexpectedError, NoSpaceLeft })!void {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    var owners: [12]LIR.LocalId = undefined;
+    for (&owners) |*owner| owner.* = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.u64);
+    const join_id = f.freshJoinPointId();
+
+    var body = try f.ret(result);
+    for (owners) |owner| body = try f.decrefStmt(owner, f.pair_str, body);
+    body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .str_count_utf8_bytes,
+        .rc_effect = LIR.LowLevel.str_count_utf8_bytes.rcEffect(),
+        .args = try f.store.addLocalSpan(&.{field}),
+        .next = body,
+    } }, .test_fixture);
+
+    var branches: [owners.len]LIR.CFSwitchBranch = undefined;
+    for (owners, &branches, 0..) |owner, *branch, index| {
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+        const read = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = field,
+            .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+            .next = if (release_last_lender and index == owners.len - 1)
+                try f.decrefStmt(owner, f.pair_str, jump)
+            else
+                jump,
+        } }, .test_fixture);
+        branch.* = .{ .value = @intCast(index), .body = read };
+    }
+    const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try f.store.addCFSwitchBranches(&branches),
+        .default_branch = branches[0].body,
+    } }, .test_fixture);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = body,
+        .remainder = choose,
+    } }, .test_fixture);
+    _ = try f.addProc(&owners, try f.assignI64(cond, join), .u64);
+    if (release_last_lender) {
+        try testing.expectError(error.Certification, f.certify());
+        errdefer std.debug.print("{s}\n", .{f.diag.message()});
+        var buffer: [96]u8 = undefined;
+        const expected = try std.fmt.bufPrint(&buffer, "use of unbound refcounted local {d}", .{@intFromEnum(field)});
+        try testing.expect(std.mem.find(u8, f.diag.message(), expected) != null);
+    } else {
+        f.certify() catch |err| {
+            std.debug.print("{s}\n", .{f.diag.message()});
+            return err;
+        };
+    }
+}
+
+test "certify preserves distinct borrow lenders beyond eight join arrivals" {
+    try certifyDistinctBorrowLenders(false);
+}
+
+test "certify rejects a dead lender among distinct borrow lenders" {
+    try certifyDistinctBorrowLenders(true);
+}
+
 test "certify accepts agreeing jumps through a join" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -8159,7 +8280,7 @@ test "certify flags unbounded per-iteration balance accumulation" {
     try testing.expect(std.mem.find(u8, f.diag.message(), "accumulation") != null);
 }
 
-fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u16, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
         .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
@@ -8171,7 +8292,7 @@ fn tagPayloadStructReadStmt(
     f: *CertifyTest,
     target: LIR.LocalId,
     source: LIR.LocalId,
-    variant_index: u16,
+    variant_index: u32,
     next: LIR.CFStmtId,
 ) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
@@ -8817,7 +8938,7 @@ test "certify accepts a fully dismantled record via field takes" {
 }
 
 test "certify accepts a complete field transfer with wide scalar siblings" {
-    for ([_]u16{ 0, 63, 64, 128 }) |rc_index| {
+    for ([_]u32{ 0, 63, 64, 128 }) |rc_index| {
         var f = try CertifyTest.init(testing.allocator);
         defer f.deinit();
         var fields: [129]layout_mod.StructField = undefined;
@@ -8878,7 +8999,7 @@ test "certify joins equal wide claims made in different orders" {
     const join_body = try fieldReadStmt(&f, last, record, 0, try f.decrefStmt(last, .str, end));
     const join_id = f.freshJoinPointId();
     var branches: [2]LIR.CFStmtId = undefined;
-    const orders = [_][2]u16{ .{ 128, 129 }, .{ 129, 128 } };
+    const orders = [_][2]u32{ .{ 128, 129 }, .{ 129, 128 } };
     for (&branches, orders) |*branch, order| {
         var body = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         for (order) |index| {

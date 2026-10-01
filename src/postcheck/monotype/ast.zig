@@ -224,6 +224,18 @@ pub const FnTemplate = struct {
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
     cached: ?Common.SpecCacheHit = null,
+    /// Set for a closed specialization of a Builtin template whose checked
+    /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
+    /// allow list. Direct LIR identifies the plain procedure of such a
+    /// specialization by its argument and result layouts, so specializations
+    /// whose closed types commit the same layouts share one procedure
+    /// (design.md "Layout-Keyed Builtin Procedures").
+    procedure_keyed_by_layout: bool = false,
+    /// The checked template is called at exactly one site of its module's
+    /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
+    /// when Monotype finalizes the program. Dev inline analysis decides
+    /// single-use inlining by this flag, which is the same in every program.
+    single_source_call: bool = false,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
@@ -321,7 +333,7 @@ pub const SpecIdentity = struct {
 /// computes the same key as one that names the backing type.
 pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.monotype.spec-key.v3");
+    hasher.update("roc.monotype.spec-key.v4");
     switch (identity.callable) {
         .proc_template => |template| {
             hasher.update("proc_template");
@@ -532,6 +544,7 @@ pub fn fnEvidenceEql(
     right_head: ?u32,
 ) bool {
     if (left_head != right_head or left_evidence.len != right_evidence.len or left_frames.len != right_frames.len) return false;
+    if (left_evidence.ptr == right_evidence.ptr and left_frames.ptr == right_frames.ptr) return true;
     for (left_evidence, right_evidence) |left, right| {
         switch (left) {
             .target => |left_target| switch (right) {
@@ -1092,8 +1105,6 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
-    /// Explicit consumer input: opaque until target LIR selects run/omit.
-    inline_expects_enabled: void,
     comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),
@@ -1743,7 +1754,8 @@ pub const ProgramBuilder = struct {
     }
 
     /// Fork the immutable specialization output while preserving every id.
-    /// The fork owns its arrays and diagnostic/literal bytes independently.
+    /// The fork owns its arrays and diagnostic/literal bytes independently,
+    /// and retains the shared constant payloads its literals view.
     pub fn cloneFrozen(self: *const ProgramBuilder, allocator: std.mem.Allocator) std.mem.Allocator.Error!ProgramBuilder {
         if (!self.types.isFrozen()) Common.invariant("Monotype cloning requires a frozen program");
         var result = ProgramBuilder.init(allocator);
@@ -1756,10 +1768,9 @@ pub const ProgramBuilder = struct {
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
         for (self.string_literals.unsafeRawItemsForView()) |literal| {
-            var copied = literal;
-            copied.backing = try allocator.dupe(u8, literal.backing);
+            const copied = try literal.clone(allocator);
             result.string_literals.append(allocator, copied) catch |err| {
-                allocator.free(copied.backing);
+                copied.deinit(allocator);
                 return err;
             };
         }

@@ -445,7 +445,7 @@ pub const ModuleType = enum {
             .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .static_data, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
             .ipc => &.{},
 
-            .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy },
+            .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy, .reporting },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
@@ -609,6 +609,8 @@ pub const RocModules = struct {
             .vendor_llvm_ir = b.addModule("vendor_llvm_ir", .{ .root_source_file = b.path("vendor/llvm_ir/mod.zig") }),
             .vendor_llvm_compile_bindings = b.addModule("vendor_llvm_compile_bindings", .{ .root_source_file = b.path("vendor/llvm_compile_bindings.zig") }),
         };
+
+        self.fmt.addAnonymousImport("builtin_source", .{ .root_source_file = b.path("src/build/builtin_source.zig") });
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
         // Note: unbundle uses Zig's stdlib zstd for WASM compatibility
@@ -862,6 +864,7 @@ pub const RocModules = struct {
             const dep_module = self.getModule(dep_type);
             step.root_module.addImport(@tagName(dep_type), dep_module);
         }
+        if (module_type == .fmt) step.root_module.addImport("builtin_source", self.fmt.import_table.get("builtin_source").?);
         self.applyVendorImports(step.root_module, module_type);
     }
 

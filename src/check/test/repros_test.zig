@@ -1345,3 +1345,120 @@ test "check - branch whose type contains an already-reported error adds no type 
     try test_env.assertOneCanError("Name Not In Scope");
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
 }
+
+// Regression for https://github.com/roc-lang/roc/issues/11940.
+// A pure annotation must reject effects reached through an inferred method helper.
+test "check - repro - issue 11940 - pure annotation rejects effectful for_each helper" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\summarize : List(Str) -> U64
+        \\summarize = |lines| {
+        \\    print_all!(lines)
+        \\    lines.len()
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check - issue 11940 - effectful annotation accepts for_each helper" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\summarize! : List(Str) => U64
+        \\summarize! = |lines| {
+        \\    print_all!(lines)
+        \\    lines.len()
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - a literal-free boundary settles its own instantiated relations before a later definition's literals" {
+    // `rec` has no literals, so its boundary skips literal defaulting. Its
+    // instantiated `Set.insert` relations must still settle at that boundary;
+    // left queued, `run`'s literal defaulting would resolve them and judge the
+    // variables they instantiate as `run`'s own unpinnable receivers.
+    const src =
+        \\rec : Set({ a : x, b : List(x) }), x -> U64
+        \\    where [x.is_eq : x, x -> Bool, x.to_hash : x, Hasher -> Hasher]
+        \\rec = |s, x| s.insert({ a: x, b: [x] }).len()
+        \\
+        \\run : {} -> U64
+        \\run = |_| Set.empty().insert("a").len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 11940 - deferred method helper has independent pure and effectful uses" {
+    const src =
+        \\Pure := {}.{
+        \\    run! : Pure -> U64
+        \\    run! = |_| 7
+        \\}
+        \\Effectful := {}.{
+        \\    run! : Effectful => U64
+        \\    run! = |_| 7
+        \\}
+        \\apply = |value| value.run!()
+        \\
+        \\pure_result : Pure -> U64
+        \\pure_result = |value| apply(value)
+        \\effectful_result! : Effectful => U64
+        \\effectful_result! = |value| apply(value)
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 11940 - imported deferred method helper rejects a pure annotation" {
+    var helper = try TestEnv.init("Helper",
+        \\Helper :: [].{
+        \\    apply = |value| value.run!()
+        \\}
+    );
+    defer helper.deinit();
+    try helper.assertNoErrors();
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import Helper
+        \\Effectful := {}.{
+        \\    run! : Effectful => U64
+        \\    run! = |_| 7
+        \\}
+        \\result : Effectful -> U64
+        \\result = |value| Helper.apply(value)
+    , "Helper", &helper);
+    defer test_env.deinit();
+    try test_env.assertCanErrors(&.{});
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check - issue 11940 - creating an effectful callback leaves its enclosing function pure" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\make_callback : List(Str) -> (() => {})
+        \\make_callback = |lines| || print_all!(lines)
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
