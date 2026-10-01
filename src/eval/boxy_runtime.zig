@@ -5706,27 +5706,13 @@ pub const BoxyRuntime = struct {
         try out.appendSlice(self.eval_arena, text);
     }
 
+    /// Quotes a string exactly as the `str_escape_and_quote` builtin behind
+    /// `Str.inspect` does: only `"` and `\` are escaped.
     fn appendQuotedInspectBytes(self: *const BoxyRuntime, out: *std.ArrayList(u8), bytes: []const u8) Error!void {
         try out.append(self.eval_arena, '"');
         for (bytes) |byte| {
-            switch (byte) {
-                '"' => try out.appendSlice(self.eval_arena, "\\\""),
-                '\\' => try out.appendSlice(self.eval_arena, "\\\\"),
-                '\n' => try out.appendSlice(self.eval_arena, "\\n"),
-                '\r' => try out.appendSlice(self.eval_arena, "\\r"),
-                '\t' => try out.appendSlice(self.eval_arena, "\\t"),
-                else => if (byte < 0x20) {
-                    // Hand-written hex rather than `{x}`: see `appendScalarInspect`
-                    // for why this object links no `std.fmt` formatter.
-                    const hex_digits = "0123456789abcdef";
-                    try out.appendSlice(self.eval_arena, "\\u(");
-                    if (byte >= 0x10) try out.append(self.eval_arena, hex_digits[byte >> 4]);
-                    try out.append(self.eval_arena, hex_digits[byte & 0xf]);
-                    try out.append(self.eval_arena, ')');
-                } else {
-                    try out.append(self.eval_arena, byte);
-                },
-            }
+            if (byte == '"' or byte == '\\') try out.append(self.eval_arena, '\\');
+            try out.append(self.eval_arena, byte);
         }
         try out.append(self.eval_arena, '"');
     }
