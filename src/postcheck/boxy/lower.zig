@@ -15274,7 +15274,10 @@ const ProcBodyBuilder = struct {
             .unary_minus => |child| try self.lowerUnaryLowLevelInto(target, expr.ty, .num_negate, child, next),
             .unary_not => |child| try self.lowerUnaryLowLevelInto(target, expr.ty, .bool_not, child, next),
             .binop => |binop| try self.lowerBoolBinopInto(target, binop.op, binop.lhs, binop.rhs, next),
-            .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, null, eq.negated, next),
+            .structural_eq => |eq| if (eq.discriminant) |discriminant|
+                try self.lowerTagDiscriminantEqInto(target, discriminant, eq.negated, next)
+            else
+                try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, null, eq.negated, next),
             .method_eq => |plan| try self.lowerMethodEqInto(target, plan, next),
             .structural_hash => |hash| try self.lowerStructuralHashInto(target, hash.value, hash.hasher, next),
             .record => |record| try self.lowerRecordExprInto(target, expr_id, expr.ty, record, next),
@@ -31410,6 +31413,46 @@ const ProcBodyBuilder = struct {
         const cond = try self.addFrameLocalForType(lhs_expr.ty);
         const switch_stmt = try self.boolSwitchNoContinuation(cond, true_body, false_body);
         return try self.lowerExprInto(cond, lhs, switch_stmt);
+    }
+
+    /// The checker decided this equality compares against one payload-free
+    /// tag, so it is exactly a test of the value's tag, as a `match` arm for
+    /// that tag would perform.
+    fn lowerTagDiscriminantEqInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        discriminant: checked.CheckedTagDiscriminantEquality,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const value_expr = self.module.checked_bodies.expr(discriminant.value);
+        const value_rep = self.matchConditionRep(discriminant.value, self.repForType(value_expr.ty));
+        const value = try self.addFrameBoundaryTargetLocalForRep(value_rep);
+        if (self.parent.result.store.getLocal(value).boxy_desc == null and
+            self.matchConditionNeedsExactResultDescriptor(discriminant.value, value_rep))
+        {
+            const desc_local = try self.addFrameLocal(.opaque_ptr);
+            self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
+        }
+
+        const done = self.freshJoinPointId();
+        const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
+        const matched = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
+        const tested = try self.lowerAppliedTagPatternRepThen(value_expr.ty, value_rep, discriminant.tag, &.{}, value, matched, miss, &.{});
+        const missed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
+        const test_stmt = try self.parent.result.store.addCFStmt(.{ .join = .{
+            .id = miss.join_id,
+            .params = LIR.LocalSpan.empty(),
+            .body = missed,
+            .remainder = tested,
+        } }, self.glueOrigin());
+        const params = [_]LIR.LocalId{target};
+        return try self.parent.result.store.addCFStmt(.{ .join = .{
+            .id = done,
+            .params = try self.joinParamSpan(&params),
+            .body = next,
+            .remainder = try self.lowerMatchConditionInto(value, value_rep, discriminant.value, test_stmt),
+        } }, self.glueOrigin());
     }
 
     fn lowerStructuralEqInto(

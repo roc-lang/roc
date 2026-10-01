@@ -13903,6 +13903,10 @@ by the derived frame, which is none when the derived type names no type
 variable (so every frame shares its static decisions) and otherwise the worker
 lowering it, and lowering reads them, never re-deciding. Every derived
 comparison and hash is compiled code; Boxy has no descriptor-guided equality.
+A structural equality that checking marked as a comparison against one
+payload-free tag (`CheckedTagDiscriminantEquality`) is not a derived root: Boxy
+lowers it as the same tag test a `match` arm for that tag performs, which an
+open tag row supports through its descriptor without any equality dictionary.
 
 Expanding a nominal enters its backing under an environment binding the
 backing's formals to the actuals of that use, resolved through the enclosing

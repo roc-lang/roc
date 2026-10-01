@@ -14447,6 +14447,8 @@ const Builder = struct {
                 try self.analyzeDispatchCallTarget(view, expr_id, interpolation.plan);
             },
             .structural_eq => |eq| {
+                // Equality against a payload-free tag tests the value's tag.
+                if (eq.discriminant) |discriminant| return try self.analyzeExprTypes(view, discriminant.value);
                 try self.analyzeExprTypes(view, eq.lhs);
                 try self.analyzeExprTypes(view, eq.rhs);
                 const operand_ty = bodies.expr(eq.lhs).ty;
