@@ -37865,6 +37865,10 @@ const ProcBodyBuilder = struct {
         var continuation = next;
         if (self.descriptor_slots.len == 0) return continuation;
 
+        // A slot's template may capture another slot, so the static
+        // initializers, which capture nothing, run before all the others.
+        var static_inits = std.ArrayList(struct { local: LIR.LocalId, desc: LIR.BoxyDescRef }).empty;
+        defer static_inits.deinit(self.parent.allocator);
         var index = self.descriptor_slots.len;
         while (index > 0) {
             index -= 1;
@@ -37874,14 +37878,38 @@ const ProcBodyBuilder = struct {
             if (outer) |snapshot| {
                 if (snapshot.slots[index] == local and snapshot.slot_reps[index] == slot_rep) continue;
             }
-            if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null) continue;
-            if (self.descriptorBindingIsBoundForRep(slot_rep)) continue;
+            // A write mark comes from a statement that may execute after code
+            // that already reads this slot, so only evidence binds, which are
+            // initialized before anything that observes them, skip the slot.
+            if (self.descriptorBindingIsEvidenceBoundForRep(slot_rep)) continue;
             if (self.localIsReadOnlyDescriptorInput(local)) continue;
-            const materialization = try self.descriptorMaterializationForKnownRep(slot_rep);
+            // A slot a body statement writes is read by templates initialized
+            // here before that write executes. When its representation's
+            // descriptor is static, it is initialized here as well.
+            const runtime_initialized = std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null;
+            const materialization = if (runtime_initialized)
+                try self.descriptorMaterializationForKnownRepExcludingLocal(slot_rep, local)
+            else
+                try self.descriptorMaterializationForKnownRep(slot_rep);
+            if (materialization.captures.len == 0 and materialization.desc == .static) {
+                try static_inits.append(self.parent.allocator, .{ .local = local, .desc = materialization.desc });
+                continue;
+            }
+            if (runtime_initialized) continue;
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = local,
                 .desc = materialization.desc,
                 .captures = materialization.captures,
+                .next = continuation,
+            } }, self.glueOrigin());
+        }
+        var static_index = static_inits.items.len;
+        while (static_index > 0) {
+            static_index -= 1;
+            const static_init = static_inits.items[static_index];
+            continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                .target = static_init.local,
+                .desc = static_init.desc,
                 .next = continuation,
             } }, self.glueOrigin());
         }

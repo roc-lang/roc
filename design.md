@@ -9921,6 +9921,15 @@ or object symbols. In particular, Boxy adapters wrap and unwrap generalized
 field-presence slots only from the explicit presence-slot discriminant; tag
 names and tag-union shapes are never used to recover that field-presence kind.
 
+A worker's descriptor slots are initialized in its prologue, before any body
+statement, and a body template may capture a slot. A slot that a body statement
+also writes is still initialized in the prologue when its representation's
+descriptor is static, because lowering visits statements in reverse execution
+order and a template recorded for an earlier statement can capture the slot
+before that write executes. Only an evidence bind, which is initialized before
+anything that observes it, lets the prologue skip a slot. Static initializers
+precede the ones with captures.
+
 Descriptors are never stored inside ordinary Roc values. A value of type
 variable `a` is a one-word box pointer, not `{ data, desc }`. A record field,
 list item, tag payload, function argument, return value, or host ABI slot
