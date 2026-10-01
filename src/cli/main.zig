@@ -40,6 +40,7 @@ pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_i
 
 const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
+const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
 const reporting = @import("reporting");
 const parse = @import("parse");
@@ -432,6 +433,7 @@ const CliMainError =
         NoCacheDir,
         NoPlatformSource,
         NotAnAppHeader,
+        SourceTokenizationFailed,
         PathAlreadyExists,
         PlatformNotSupported,
         ProcessCreationFailed,
@@ -6069,7 +6071,7 @@ fn renderSummaryHeaderLine(
     if (sanitised_path.len > 0) {
         try writer.writeByte(' ');
         try writer.writeAll(palette.primary);
-        try writer.writeAll(sanitised_path);
+        try base.bidi.writeVisible(writer, sanitised_path);
     }
     try writer.writeAll(palette.reset);
     try writer.writeAll("\n\n");
@@ -7233,7 +7235,21 @@ pub fn resolvePlatformPaths(ctx: *CliCtx, roc_file_path: []const u8) (CliError |
 }
 
 fn parseCliAppHeader(ctx: *CliCtx, app_file_path: []const u8) (Allocator.Error || error{CliError})!compile.app_header.AppHeaderInfo {
-    return compile.app_header.parseAppHeader(ctx.coreCtx(), ctx.gpa, ctx.arena, app_file_path) catch |err| switch (err) {
+    var source_reports = std.ArrayList(reporting.Report).empty;
+    defer {
+        for (source_reports.items) |*report| report.deinit();
+        source_reports.deinit(ctx.gpa);
+    }
+    return compile.app_header.parseAppHeaderReporting(ctx.coreCtx(), ctx.gpa, ctx.arena, app_file_path, &source_reports) catch |err| switch (err) {
+        error.SourceTokenizationFailed => blk: {
+            for (source_reports.items) |*report| {
+                reporting.renderReportWithConfig(report, ctx.io.stderr(), ctx.reportConfig(.stderr)) catch |render_err| switch (render_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => return error.CliError,
+                };
+            }
+            break :blk error.CliError;
+        },
         error.OutOfMemory => error.OutOfMemory,
         error.NotAnAppHeader => ctx.fail(.{ .expected_app_header = .{
             .path = app_file_path,
@@ -8004,9 +8020,9 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 
 /// Use the Coordinator to discover every transitive module the entry point
 /// imports (directly, via re-exports, or via a `package [...]` header) and
-/// append the absolute path of any not already in `source_paths`. Also
+/// append module paths and their recorded file imports to `source_paths`. Also
 /// validates platform target binaries if a platform is found.
-fn discoverAndAddBundleModules(
+fn discoverAndAddBundleInputs(
     ctx: *CliCtx,
     abs_entry: []const u8,
     source_paths: *std.ArrayList([]const u8),
@@ -8020,24 +8036,11 @@ fn discoverAndAddBundleModules(
 
     // Run the build—the Coordinator discovers all transitive module dependencies
     build_env.build(abs_entry) catch |build_err| {
-        // Drain and display any errors from the build
-        const drained = try build_env.drainReports();
-        defer build_env.freeDrainedReportsPathsOnly(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => {
-                        try stderr.print("{s}: error in module\n", .{mod.abs_path});
-                    },
-                    .warning => {
-                        try stderr.print("{s}: warning in module\n", .{mod.abs_path});
-                    },
-                }
-            }
-        }
+        _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
         return build_err;
     };
+    const diagnostics = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
+    if (diagnostics.errors != 0) return error.CliError;
 
     // Detect platform from BuildEnv packages using the accessor
     const platform_root_file = build_env.getPlatformRootFile();
@@ -8058,14 +8061,39 @@ fn discoverAndAddBundleModules(
     if (build_env.coordinator) |coord| {
         var coord_pkg_it = coord.packages.iterator();
         while (coord_pkg_it.next()) |pkg_entry| {
-            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
+            // Dependency headers are source inputs even when the coordinator
+            // does not check them as modules. Consumers need these headers to
+            // resolve the same local package aliases after extraction.
+            if (pkg_entry.value_ptr.*.root_file) |root_file| {
+                if (build_env.isBundleableModule(pkg_entry.key_ptr.*, root_file) and !bundled_set.contains(root_file)) {
+                    const owned_root_file = try ctx.arena.dupe(u8, root_file);
+                    try source_paths.append(ctx.arena, owned_root_file);
+                    try bundled_set.put(owned_root_file, {});
+                }
+            }
+
+            for (pkg_entry.value_ptr.*.modules.items) |*mod_state| {
                 const abs_path = mod_state.path;
                 if (!build_env.isBundleableModule(pkg_entry.key_ptr.*, abs_path)) continue;
-                if (bundled_set.contains(abs_path)) continue;
+                if (!bundled_set.contains(abs_path)) {
+                    const owned_abs_path = try ctx.arena.dupe(u8, abs_path);
+                    try source_paths.append(ctx.arena, owned_abs_path);
+                    try bundled_set.put(owned_abs_path, {});
+                }
 
-                const owned_abs_path = try ctx.arena.dupe(u8, abs_path);
-                try source_paths.append(ctx.arena, owned_abs_path);
-                try bundled_set.put(owned_abs_path, {});
+                // Checked environments retain source-relative file dependencies
+                // on both fresh builds and cache hits. Preserve their logical
+                // paths so extraction keeps each import relative to its module.
+                const env = mod_state.moduleEnv().?;
+                for (env.file_dependencies.items.items) |dep| {
+                    const dep_path = try std.fs.path.resolve(ctx.arena, &.{
+                        mod_state.canonicalSourceDir(),
+                        env.fileDependencyRelativePath(dep),
+                    });
+                    if (bundled_set.contains(dep_path)) continue;
+                    try source_paths.append(ctx.arena, dep_path);
+                    try bundled_set.put(dep_path, {});
+                }
             }
         }
     }
@@ -8179,11 +8207,10 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         return error.InvalidPath;
     };
 
-    // Use the Coordinator to discover all transitive module dependencies
-    // (explicit imports plus modules exposed by a `package [...]` header)
-    // and append any not already in the file list.
+    // Discover transitive modules and their recorded file imports, including
+    // modules exposed by a `package [...]` header, and add their source paths.
     if (first_roc_index != null) {
-        try discoverAndAddBundleModules(ctx, entry_source_path, &source_paths, stderr);
+        try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
     }
 
     var entries = std.ArrayList(bundle.Entry).empty;
@@ -10256,6 +10283,27 @@ test "LLVM fuzz output uses position-independent code" {
     try std.testing.expect(!llvmObjectUsesPic(.x64musl, .exe, false));
 }
 
+test "LLVM builds link the SHA-256 rounds each target's CPU features select" {
+    const expected = [_]struct { RocTarget, Sha256Rounds }{
+        // x86-64-v3 has no SHA extension, so no x86_64 feature level carries it.
+        .{ .x64musl, .portable },
+        .{ .x64v1musl, .portable },
+        .{ .x64mac, .portable },
+        .{ .arm64musl, .aarch64_sha2 },
+        .{ .arm64glibc, .aarch64_sha2 },
+        .{ .arm64win, .aarch64_sha2 },
+        .{ .arm64mac, .aarch64_sha2 },
+        .{ .arm64v1musl, .portable },
+        .{ .arm64v1win, .portable },
+        .{ .arm32musl, .portable },
+        .{ .wasm32, .portable },
+    };
+    for (expected) |entry| {
+        const std_target = try std.zig.system.resolveTargetQuery(std.Options.debug_io, entry[0].llvmTargetQuery());
+        try std.testing.expectEqual(entry[1], Sha256Rounds.forCpu(std_target.cpu));
+    }
+}
+
 test "wasm32 LLVM objects are always position-independent" {
     try std.testing.expect(llvmObjectUsesPic(.wasm32, .archive, false));
     try std.testing.expect(llvmObjectUsesPic(.wasm32, .exe, false));
@@ -10368,11 +10416,13 @@ fn compileLlvmAppObject(
         .features = llvm_features,
         .debug = args.debug,
         .fuzz = args.fuzz,
-        .link_builtins = true,
+        .link_builtins = .{
+            // Linked LLVM output uses the symbol ABI: builtins reach the host
+            // through extern symbols, never through a RocOps parameter.
+            .host_call_extern = true,
+            .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+        },
         .pic = pic,
-        // Linked LLVM output uses the symbol ABI: builtins reach the host
-        // through extern symbols, never through a RocOps parameter.
-        .host_call_extern = true,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
@@ -16449,7 +16499,7 @@ fn renderCliTestResultEntry(
             const region_info = source_env.calcRegionInfo(entry.result.region);
             const green = if (report_config.shouldUseColors()) ansi_term.green else "";
             const reset = if (report_config.shouldUseColors()) ansi_term.reset else "";
-            try stdout_body.print("{s}PASS{s}: {s}:{}\n", .{ green, reset, source_path, region_info.start_line_idx + 1 });
+            try stdout_body.print("{s}PASS{s}: {f}:{}\n", .{ green, reset, base.bidi.Display{ .bytes = source_path }, region_info.start_line_idx + 1 });
         },
         .failed => {
             const region_info = source_env.calcRegionInfo(entry.result.region);
@@ -16890,7 +16940,9 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     const stderr = ctx.io.stderr();
     // Formatting a file brings its `roc` version pin up to date when this
     // compiler is a newer nightly than the one it names.
-    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version };
+    var builtin_facts = fmt.BuiltinFacts{ .allocator = ctx.gpa };
+    defer builtin_facts.deinit();
+    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version, .builtin_facts = &builtin_facts };
     if (args.stdin) {
         fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
@@ -16923,11 +16975,11 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         if (unformatted_files.items.len > 0) {
             try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.print("    {s}\n", .{file_name});
+                try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = file_name }});
             }
             try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
             had_errors = true;
-        } else {
+        } else if (failure_count == 0) {
             try stdout.print("All formatting valid.\n", .{});
         }
         if (failure_count > 0) {
@@ -17814,7 +17866,7 @@ fn printBuildSuccess(
         error_color, error_count, reset, errors_word, warning_color, warning_count, reset, warnings_word,
     });
     try progress.writeDuration(stdout, elapsed_ns);
-    try stdout.print(" while successfully building:\n\n    {s}\n", .{final_output_path});
+    try stdout.print(" while successfully building:\n\n    {f}\n", .{base.bidi.Display{ .bytes = final_output_path }});
 
     if (verbose) {
         try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
@@ -17872,7 +17924,7 @@ const ProcessFileError = ReturnErrorSet(@TypeOf(rocCheckDefaultAppPreserved)) ||
     ReturnErrorSet(@TypeOf(checkFileWithBuildEnv));
 
 fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const u8) ProcessFileError!void {
-    stderr.print("Failed to check {s}: ", .{path}) catch {};
+    stderr.print("Failed to check {f}: ", .{base.bidi.Display{ .bytes = path }}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
         error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
@@ -18594,7 +18646,7 @@ fn finishRocCheck(
         writeNoErrors(stdout, ctx.usesColor(.stdout)) catch {};
         stdout.writeAll(" found in ") catch {};
         formatElapsedTimeMs(stdout, elapsed) catch {};
-        stdout.print(" for {s}\n", .{args.path}) catch {};
+        stdout.print(" for {f}\n", .{base.bidi.Display{ .bytes = args.path }}) catch {};
 
         if (args.verbose) {
             printVerboseStats(stdout, check_result);
@@ -20433,4 +20485,15 @@ test "bundle archive paths are relative to the entry point directory" {
     try testing.expectEqualStrings("internal/Helper.roc", nested_archive_path);
 
     try testing.expectError(error.InvalidPath, bundleArchivePath(allocator, root, outside));
+}
+
+test "bidi controls in diagnostic summary paths remain visible" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    for (base.bidi.controls) |control| {
+        try renderSummaryHeaderLine(&output.writer, 1, 0, control.utf8, reporting.ReportingConfig.initForTesting());
+        try std.testing.expect(std.mem.find(u8, output.written(), control.visible) != null);
+    }
+    var iter = base.bidi.Iterator{ .bytes = output.written() };
+    try std.testing.expect(iter.next() == null);
 }

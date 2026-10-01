@@ -164,14 +164,6 @@ EndOfFile,
 			(e-string
 				(e-string-part (raw "on        (string 'onmo %')))"))))))
 ~~~
-# FORMATTED
-~~~roc
-
-
-foo =
-
-	"on        (string 'onmo %')))"
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
