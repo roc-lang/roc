@@ -2071,9 +2071,17 @@ pub const LowLevel = enum(u16) {
         // the solved graph. Emission may still select the borrowing variant
         // when the box lender survives, but an owned variant must not leave
         // the payload's unit keyed to the consumed box allocation.
-        if (self == .box_unbox) return declared;
-        const borrowed = self.arcBorrowedResultVariant() orelse return declared;
-        return borrowed.rcEffect();
+        if (!self.arcOwnedResultConsumesLender()) return declared;
+        return self.arcBorrowedResultVariant().?.rcEffect();
+    }
+
+    /// Whether ARC solves this operation through its borrowed-result variant
+    /// and materializes the ordinary operation, which consumes the lender
+    /// argument, exactly when the result is owned. An ownership demand on such
+    /// a result is therefore a demand on its lender's unit.
+    pub fn arcOwnedResultConsumesLender(self: LowLevel) bool {
+        if (self == .box_unbox) return false;
+        return self.arcBorrowedResultVariant() != null;
     }
 
     /// Whether this primitive can consume borrowed string views directly,
