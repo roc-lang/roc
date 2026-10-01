@@ -356,7 +356,7 @@ const Lowerer = struct {
             try self.program.literal_roots.append(self.allocator, .{
                 .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                 .module = root.module,
-                .site = root.site,
+                .subject = root.subject,
             });
         }
 

@@ -1406,13 +1406,14 @@ pub const Root = struct {
 };
 
 /// One literal root, at its `Common.LiteralRootId` position: a zero-argument
-/// definition that converts one custom literal at the concrete type one
+/// definition that computes its subject—one custom literal's conversion, or
+/// one specialization-owned top-level value—at the concrete type one
 /// specialization gives it, and is evaluated at compile time.
 pub const LiteralRoot = struct {
     def: DefId,
-    /// Checked module that owns the literal.
+    /// Checked module that owns the subject.
     module: checked.ModuleId,
-    site: Common.LiteralRejectionSite,
+    subject: Common.LiteralRootSubject,
 };
 
 /// Runtime layout requested for a checked data value.

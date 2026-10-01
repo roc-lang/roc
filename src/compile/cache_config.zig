@@ -282,7 +282,10 @@ pub const Constants = struct {
     /// 127: Type descriptors mark declared nominal backing structure.
     /// 128: Stored closure captures record whether each is a lexical capture
     ///      or a top-level compile-time root's recursive binding.
-    pub const CACHE_VERSION = 128;
+    /// 129: Compile-time roots of specialization-owned top-level values are
+    ///      marked `per_specialization`, and stored compile-time debug
+    ///      observations carry an optional value site.
+    pub const CACHE_VERSION = 129;
 };
 
 /// Configuration for the Roc cache system.

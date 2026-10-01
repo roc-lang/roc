@@ -673,6 +673,11 @@ pub const ModuleState = struct {
     /// with a published artifact; borrows the platform's checked env.
     platform_requirement_surface: ?PlatformRequirementSurface = null,
     pending_evaluation: ?*messages.PendingEvaluationState = null,
+    /// Failures of this module's specialization-owned values that an earlier
+    /// finalization program of this compilation reported, handed to every
+    /// later program so the same specialization is not reported again
+    /// (`eval.CompileTimeFinalization.ReportedValueFailure`).
+    reported_value_failures: std.ArrayListUnmanaged(eval.CompileTimeFinalization.ReportedValueFailure) = .empty,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -833,6 +838,7 @@ pub const ModuleState = struct {
         }
 
         if (self.pending_evaluation) |state| state.deinit();
+        self.reported_value_failures.deinit(gpa);
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact != null) {
                 // The checked artifact owns the ModuleEnv after publication.
@@ -1293,6 +1299,9 @@ pub const Coordinator = struct {
 
     /// Shared read-only builtin modules
     builtin_modules: *const BuiltinModules,
+    /// `ModuleState.reported_value_failures` for the shared Builtin module,
+    /// which has no module state of its own here.
+    builtin_reported_value_failures: std.ArrayListUnmanaged(eval.CompileTimeFinalization.ReportedValueFailure) = .empty,
 
     /// I/O abstraction for reading sources and other filesystem/stdio operations.
     roc_ctx: CoreCtx,
@@ -1451,6 +1460,7 @@ pub const Coordinator = struct {
         // Stop workers
         self.shutdown();
         self.inline_worker_allocs.deinit();
+        self.builtin_reported_value_failures.deinit(self.gpa);
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
@@ -2951,6 +2961,7 @@ pub const Coordinator = struct {
                 try output.append(coord.gpa, .{
                     .module = artifact,
                     .problem_store = &entry.mod.pending_evaluation.?.problems,
+                    .reported_value_failures = entry.mod.reported_value_failures.items,
                 });
                 states[index] = .complete;
             }
@@ -3110,7 +3121,11 @@ pub const Coordinator = struct {
             const builtin_artifact = &coord.builtin_modules.checked_artifact;
             if (builtin_artifact.key.eql(key)) {
                 if (self.builtin_problems == null) self.builtin_problems = try newState(coord);
-                return .{ .module = builtin_artifact, .problem_store = &self.builtin_problems.?.problems };
+                return .{
+                    .module = builtin_artifact,
+                    .problem_store = &self.builtin_problems.?.problems,
+                    .reported_value_failures = coord.builtin_reported_value_failures.items,
+                };
             }
             const mod = moduleState(coord, key);
             if (mod.pending_evaluation == null) {
@@ -3122,7 +3137,11 @@ pub const Coordinator = struct {
                     return err;
                 };
             }
-            return .{ .module = mod.checkedArtifact().?, .problem_store = &mod.pending_evaluation.?.problems };
+            return .{
+                .module = mod.checkedArtifact().?,
+                .problem_store = &mod.pending_evaluation.?.problems,
+                .reported_value_failures = mod.reported_value_failures.items,
+            };
         }
 
         fn commit(self: *UnfinalizedReportDestinations) Allocator.Error!void {
@@ -3145,6 +3164,7 @@ pub const Coordinator = struct {
                 for (state.problems.problems.items) |problem| {
                     try root_mod.reports.append(coord.gpa, try rb.build(problem));
                 }
+                try eval.CompileTimeFinalization.recordReportedValueFailures(coord.gpa, &coord.builtin_reported_value_failures, state.problems.problems.items);
             }
             while (self.modules.pop()) |mod| {
                 const state = mod.pending_evaluation.?;
@@ -3164,6 +3184,7 @@ pub const Coordinator = struct {
                 for (state.problems.problems.items) |problem| {
                     try mod.reports.append(coord.gpa, try rb.build(problem));
                 }
+                try eval.CompileTimeFinalization.recordReportedValueFailures(coord.gpa, &mod.reported_value_failures, state.problems.problems.items);
             }
         }
 
@@ -3198,6 +3219,7 @@ pub const Coordinator = struct {
         for (problems[state.reported_problem_count..]) |problem| {
             try mod.reports.append(self.gpa, try rb.build(problem));
         }
+        try eval.CompileTimeFinalization.recordReportedValueFailures(self.gpa, &mod.reported_value_failures, problems[state.reported_problem_count..]);
         if (artifact.hasUnboundPlatformRequirements()) {
             var diagnostics = try CheckedArtifact.EvaluationDiagnostics.fromStore(artifact.canonical_names.allocator, &state.problems);
             errdefer diagnostics.deinit(artifact.canonical_names.allocator);

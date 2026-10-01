@@ -10,6 +10,7 @@ const types_mod = @import("types");
 const can = @import("can");
 
 const snapshot = @import("../snapshot.zig");
+const canonical_names = @import("../canonical_names.zig");
 const context_mod = @import("context.zig");
 
 const CIR = can.CIR;
@@ -241,12 +242,31 @@ pub const ComptimeOrigin = struct {
     column: u32,
 };
 
+/// The explicit identity of a failed specialization of a specialization-owned
+/// top-level value (design.md "Specialization-Owned Top-Level Values"): the
+/// value's checked compile-time root in the reporting module and the
+/// specialization's content identity. Every program that evaluates the same
+/// specialization gives it the same identity, so a failure it already
+/// reported at the same explicitly stamped site is not reported again.
+pub const ComptimeValueSpecialization = struct {
+    root: u32,
+    specialization: canonical_names.TypeDigest,
+
+    pub fn eql(a: ComptimeValueSpecialization, b: ComptimeValueSpecialization) bool {
+        return a.root == b.root and std.meta.eql(a.specialization, b.specialization);
+    }
+};
+
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
     message: ExtraStringIdx,
     region: base.Region,
     /// See `ComptimeOrigin`.
     origin: ?ComptimeOrigin = null,
+    /// Set when the crash is a specialization-owned value's failure at an
+    /// explicitly stamped site of this module; see
+    /// `ComptimeValueSpecialization`.
+    value_specialization: ?ComptimeValueSpecialization = null,
 
     pub const Origin = ComptimeOrigin;
 };
@@ -281,6 +301,8 @@ pub const ComptimeExpectFailed = struct {
     /// inside a `??` field default fails while the consuming module's
     /// compile-time root evaluates the inlined copy.
     origin: ?ComptimeOrigin = null,
+    /// See `ComptimeCrash.value_specialization`.
+    value_specialization: ?ComptimeValueSpecialization = null,
 };
 
 /// An error that occurred during compile-time evaluation

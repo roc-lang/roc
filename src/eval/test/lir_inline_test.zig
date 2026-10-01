@@ -239,6 +239,7 @@ const LowerMonotypeOptions = struct {
     diagnostics: ?*MonoLower.Diagnostics = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     root_selection: enum { all, test_expects } = .all,
+    literal_roots: bool = false,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -288,6 +289,7 @@ fn lowerMonotypeModuleWithOptions(
             .specialization_counters = options.specialization_counters,
             .diagnostics = options.diagnostics,
             .post_check_executor = options.post_check_executor,
+            .literal_roots = options.literal_roots,
         },
     );
     errdefer mono.deinit();
@@ -12368,6 +12370,41 @@ const stored_encoder_optional_gate_source =
     \\main : List(Str) -> Try(List(Str), [])
     \\main = |state| encode_stored(value, state)
 ;
+
+fn specializedValueRootCount(allocator: Allocator, source: []const u8) TestError!usize {
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{ .literal_roots = true });
+    defer lowered.deinit(allocator);
+    var count: usize = 0;
+    for (lowered.mono.view().literal_roots) |root| {
+        if (root.subject == .value) count += 1;
+    }
+    return count;
+}
+
+test "a generalized stored parser is a literal root of a program that evaluates compile-time work" {
+    // design.md "Specialization-Owned Top-Level Values": writing `..` in the
+    // stored parser's error row generalizes it, so the module cannot evaluate
+    // it; the program evaluates its one specialization (the row `main`
+    // closes) as a literal root instead of running the parser construction
+    // at runtime. The monomorphic original is module-evaluated and restored,
+    // so it has no such root.
+    const allocator = std.testing.allocator;
+    const closed_row = "[FormatError, MissingRequiredField(Str)])\n";
+    const open_row = "[FormatError, MissingRequiredField(Str), ..])\n";
+    const annotation = "parse_stored : State -> Try({ value : { foo : Str }, rest : State }, ";
+    const closed = annotation ++ closed_row;
+    const open = annotation ++ open_row;
+    const index = std.mem.find(u8, stored_parser_gate_source, closed) orelse return error.TestUnexpectedResult;
+    const generalized = try std.mem.concat(allocator, u8, &.{
+        stored_parser_gate_source[0..index],
+        open,
+        stored_parser_gate_source[index + closed.len ..],
+    });
+    defer allocator.free(generalized);
+
+    try std.testing.expectEqual(@as(usize, 0), try specializedValueRootCount(allocator, stored_parser_gate_source));
+    try std.testing.expectEqual(@as(usize, 1), try specializedValueRootCount(allocator, generalized));
+}
 
 test "stored parser restore lowers a shape with an optional field" {
     // Not an equivalence gate: this program panicked before W2b

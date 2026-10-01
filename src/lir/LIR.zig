@@ -462,9 +462,44 @@ pub const LiteralRejectionSite = struct {
     kind: LiteralRejectionKind,
 };
 
-/// Program-local index of one literal root: a custom literal's conversion at
-/// one specialization's concrete type, which only post-check lowering can name.
+/// Program-local index of one literal root: a compile-time root at one
+/// specialization's concrete type, which only post-check lowering can name.
+/// Its subject (`LiteralRootSubject`) is a custom literal's conversion or a
+/// specialization-owned top-level value.
 pub const LiteralRootId = enum(u32) { _ };
+
+/// A specialization-owned checked top-level value evaluated at one
+/// specialization's concrete type (design.md "Specialization-Owned Top-Level
+/// Values").
+pub const SpecializedValueRoot = struct {
+    owner: LoweringModuleId,
+    /// The value binding's checked compile-time root in `owner`; checking
+    /// marked it `per_specialization`.
+    root: check.CheckedModule.ComptimeRootId,
+    /// The specialization's content identity: the digest Monotype gives the
+    /// root's definition (the value root's identity seed plus its sealed
+    /// return type), by which uses at one type share one root. It is the same
+    /// for the same specialization in every program that lowers it, so a
+    /// failure it reports is identified by it across programs.
+    specialization: names.TypeDigest,
+};
+
+/// What one literal root evaluates at its specialization's concrete type.
+pub const LiteralRootSubject = union(enum) {
+    /// A custom literal's checked conversion, named by the literal a
+    /// rejection reports.
+    conversion: LiteralRejectionSite,
+    /// A specialization-owned top-level value's checked body.
+    value: SpecializedValueRoot,
+
+    /// The checked module that owns the subject, and reports its failures.
+    pub fn owner(self: LiteralRootSubject) LoweringModuleId {
+        return switch (self) {
+            .conversion => |site| site.owner,
+            .value => |value| value.owner,
+        };
+    }
+};
 
 /// The producer of one compile-time value: a checked compile-time root of its
 /// module, or a literal root of the lowered program.
