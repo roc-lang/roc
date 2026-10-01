@@ -7537,6 +7537,11 @@ const ProcedureBuilder = struct {
             iter_value.* = try proc.addFrameBoundaryTargetLocalForRep(target_rep);
         }
 
+        // Each node's fields are read from the iterator nominal's backing,
+        // which is written in its declaration formals; bind them to this
+        // iterator's actuals while the nodes are built.
+        const scope = try proc.enterNominalWrapperFormalScopes(target_rep);
+        defer proc.dropNominalBackingFormalScope(scope);
         var continuation = next;
         for (0..iter_values.len) |index| {
             continuation = try self.lowerGeneratedInterpolationIterNodeInto(
@@ -7550,7 +7555,7 @@ const ProcedureBuilder = struct {
                 continuation,
             );
         }
-        return continuation;
+        return try proc.leaveNominalBackingFormalScope(scope, continuation);
     }
 
     fn lowerGeneratedInterpolationIterNodeInto(
@@ -20367,8 +20372,10 @@ const ProcBodyBuilder = struct {
         }
         continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(call_arg_descriptor_initializers.items, continuation);
-        continuation = try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
-        return try self.prependLoweredCallOperandsExpected(
+        // Descriptors the dictionary method supplies depend only on the
+        // dictionary, and a generated operand (an interpolation's iterator)
+        // is built from them, so they are read before the operands.
+        continuation = try self.prependLoweredCallOperandsExpected(
             operands,
             operand_types,
             arg_types,
@@ -20376,6 +20383,7 @@ const ProcBodyBuilder = struct {
             lowered,
             continuation,
         );
+        return try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
     }
 
     fn bindQuoteDictionaryDescriptorArgs(
