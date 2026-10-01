@@ -17077,13 +17077,15 @@ const ProcBodyBuilder = struct {
         const static_fn = planned orelse
             boxyLowerInvariant("stored function value had no producer-selected static plan");
         const worker = self.parent.plan.workers.items[@intFromEnum(static_fn.worker)];
-        return try self.lowerWorkerValueWithCallTypeRefInto(
+        return try self.lowerWorkerValueWithValueRepInto(
             target,
             worker.checked_type,
-            self.parent.plan.representations.items[@intFromEnum(static_fn.rep)].source_type,
+            static_fn.rep,
             worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
+            self.parent.plan.directCallHiddenDescriptorArgSlice(static_fn.hidden_desc_args),
+            null,
             next,
         );
     }
@@ -17437,7 +17439,6 @@ const ProcBodyBuilder = struct {
         const static_fn = planned orelse
             boxyLowerInvariant("ConstStore function value had no producer-selected static plan");
         const worker = self.parent.plan.workers.items[@intFromEnum(static_fn.worker)];
-        const planned_type = self.parent.plan.representations.items[@intFromEnum(static_fn.rep)].source_type;
         const callable_target = if (static_fn.rep == requested_rep)
             target
         else
@@ -17452,13 +17453,15 @@ const ProcBodyBuilder = struct {
                 static_fn.rep,
                 next,
             );
-        return try self.lowerWorkerValueWithCallTypeRefInto(
+        return try self.lowerWorkerValueWithValueRepInto(
             callable_target,
             worker.checked_type,
-            planned_type,
+            static_fn.rep,
             worker.source,
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
+            self.parent.plan.directCallHiddenDescriptorArgSlice(static_fn.hidden_desc_args),
+            null,
             continuation,
         );
     }
@@ -18376,10 +18379,35 @@ const ProcBodyBuilder = struct {
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        return try self.lowerWorkerValueWithValueRepInto(
+            target,
+            worker_type,
+            self.repForTypeRef(call_type),
+            source,
+            maybe_expr,
+            stored_capture_sources,
+            hidden_desc_args,
+            hidden_dict_args,
+            next,
+        );
+    }
+
+    fn lowerWorkerValueWithValueRepInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        worker_type: Plan.CheckedTypeIdentity,
+        value_rep: Plan.TypeRepId,
+        source: Plan.WorkerSource,
+        maybe_expr: ?checked.CheckedExprId,
+        stored_capture_sources: []const Plan.StoredCallableCaptureSource,
+        hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
+        hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const worker_id = self.parent.plan.workerForSourceType(source, worker_type) orelse
             boxyLowerInvariant("planned callable value had no worker for its source type");
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
-        const value_function = self.functionChildrenForRep(self.repForTypeRef(call_type)) orelse
+        const value_function = self.functionChildrenForRep(value_rep) orelse
             boxyLowerInvariant("boxy callable value type was not an erased-callable representation");
         const worker_function = self.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("boxy callable worker was not an erased-callable representation");

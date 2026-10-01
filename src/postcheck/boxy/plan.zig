@@ -202,7 +202,9 @@ pub const RepresentationKind = union(enum) {
     dynamic: DynamicKind,
     primitive: checked.CheckedPrimitive,
     bool_tag_union,
-    erased_callable: checked.CheckedFunctionKind,
+    /// Every function value, pure or effectful, has the one erased-callable
+    /// representation.
+    erased_callable,
     alias,
     record,
     tuple,
@@ -611,6 +613,8 @@ pub const StaticFnPlan = struct {
     rep: TypeRepId,
     worker: WorkerPlanId,
     capture_sources: Span = .{},
+    /// The worker's hidden descriptors at the stored value's instantiation.
+    hidden_desc_args: Span = .{},
 };
 
 /// One checked static-dispatch constraint requiring a runtime dictionary slot.
@@ -2272,8 +2276,8 @@ const LiteralPlanner = struct {
                     shape.kind = .tuple;
                     for (args, 0..) |arg, index| try children.append(allocator, self.literalChild(.{ .tuple_elem = @intCast(index) }, arg));
                 },
-                .function => |function| {
-                    shape.kind = .{ .erased_callable = checked.finalizedFunctionKind(function.kind) };
+                .function => {
+                    shape.kind = .erased_callable;
                     for (args[0 .. args.len - 1], 0..) |arg, index| try children.append(allocator, self.literalChild(.{ .function_arg = @intCast(index) }, arg));
                     try children.append(allocator, self.literalChild(.function_ret, args[args.len - 1]));
                 },
@@ -3137,6 +3141,7 @@ pub fn analyzeProgram(
     try builder.materializeWorkerHiddenDictionaryParams();
     try builder.materializeWorkerErasedCaptures();
     try builder.materializeStoredCallableCaptureSources();
+    try builder.materializeStoredCallableHiddenDescriptorArgs();
     try builder.materializeRootHiddenDescriptorArgs();
     try builder.materializeDirectCallHiddenDescriptorArgs();
     try builder.materializeGeneratedCodecCallHiddenDescriptorArgs();
@@ -6617,10 +6622,7 @@ const Builder = struct {
         });
         return .{
             .source_type = checked_source,
-            .kind = .{ .erased_callable = checked.finalizedFunctionKind(checkedFunctionPayload(
-                self.moduleForId(checked_source.module),
-                checked_source.ty,
-            ).kind) },
+            .kind = .erased_callable,
             .children = try self.commitPendingChildren(children.items),
         };
     }
@@ -7702,7 +7704,7 @@ const Builder = struct {
         try self.appendPendingChild(&children, view, .function_ret, function.ret);
         return .{
             .source_type = source_type,
-            .kind = .{ .erased_callable = checked.finalizedFunctionKind(function.kind) },
+            .kind = .erased_callable,
             .children = try self.commitPendingChildren(children.items),
         };
     }
@@ -8351,6 +8353,9 @@ const Builder = struct {
             try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
         }
         for (self.plan.callable_uses.items) |use| {
+            // A stored callable's descriptors come from its stored value, not
+            // from the frame restoring it.
+            if (use.stored_fn != null) continue;
             try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
             try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
         }
@@ -9427,6 +9432,82 @@ const Builder = struct {
                 .fn_id = static_fn.fn_id,
             }, static_fn.worker);
         }
+    }
+
+    /// A stored callable value fixes its worker's instantiation: every type
+    /// variable its worker's descriptors describe occupies some position of
+    /// the stored function type or of a stored capture's type, and the stored
+    /// representation at that position is that descriptor's concrete source.
+    /// A checked use supplies its signature and evidence descriptors as any
+    /// callable use does; the variables of the scope that created the stored
+    /// closure appear in no type the use names, so the stored value supplies
+    /// those.
+    fn materializeStoredCallableHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
+        for (self.plan.callable_uses.items) |use| {
+            const stored_fn = use.stored_fn orelse continue;
+            const worker = self.plan.workers.items[@intFromEnum(use.worker)];
+            if (worker.enclosing_descs.len == 0) continue;
+            const value_rep = self.plan.repForSourceType(use.callable_ty) orelse
+                boxyPlanInvariant("stored callable use type was not analyzed");
+            const args = self.plan.direct_call_hidden_desc_args.items[use.hidden_desc_args.start..][0..use.hidden_desc_args.len];
+            const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+            if (args.len != params.len) boxyPlanInvariant("stored callable use did not plan every worker descriptor");
+            const enclosing_start = worker.enclosing_descs.start - worker.hidden_descs.start;
+            for (params[enclosing_start..][0..worker.enclosing_descs.len], args[enclosing_start..][0..worker.enclosing_descs.len]) |param, *arg| {
+                const rep = try self.storedCallableDescriptorRep(stored_fn, worker, value_rep, param.rep);
+                arg.* = .{
+                    .worker_desc = param.desc,
+                    .worker_rep = param.rep,
+                    .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
+                    .rep = rep,
+                };
+            }
+        }
+        for (self.plan.static_fns.items) |*static_fn| {
+            const stored_fn = StoredFnSource{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
+            const worker = self.plan.workers.items[@intFromEnum(static_fn.worker)];
+            const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+            const start: u32 = @intCast(self.plan.direct_call_hidden_desc_args.items.len);
+            for (params) |param| {
+                const rep = try self.storedCallableDescriptorRep(stored_fn, worker, static_fn.rep, param.rep);
+                try self.plan.direct_call_hidden_desc_args.append(self.allocator, .{
+                    .worker_desc = param.desc,
+                    .worker_rep = param.rep,
+                    .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
+                    .rep = rep,
+                });
+            }
+            static_fn.hidden_desc_args = .{ .start = start, .len = @intCast(params.len) };
+        }
+    }
+
+    /// The concrete representation a stored callable gives one worker
+    /// descriptor representation. `value_rep` is the callable value's own
+    /// concrete function type.
+    fn storedCallableDescriptorRep(
+        self: *Builder,
+        stored_fn: StoredFnSource,
+        worker: WorkerPlan,
+        value_rep: TypeRepId,
+        desc_rep: TypeRepId,
+    ) Allocator.Error!TypeRepId {
+        if (try self.repAtTypePosition(worker.rep, desc_rep, value_rep)) |found| return found;
+        const store_view = self.moduleForId(stored_fn.module);
+        const store = store_view.const_store orelse
+            boxyPlanInvariant("stored callable descriptor planning had no ConstStore");
+        const fn_value = store.getFn(stored_fn.fn_id);
+        for (self.plan.erasedCaptureSlice(worker.erased_captures)) |capture| {
+            if (capture.kind != .captured_value) continue;
+            const capture_id = capture.capture_id orelse
+                boxyPlanInvariant("stored callable value capture had no checked capture id");
+            const persisted = for (fn_value.captures) |persisted| {
+                if (std.meta.eql(persisted.id, capture_id)) break persisted;
+            } else continue;
+            const persisted_rep = self.plan.repForStoredType(.{ .module = stored_fn.module, .ty = persisted.ty }) orelse
+                boxyPlanInvariant("stored callable capture type was not analyzed");
+            if (try self.repAtTypePosition(capture.rep, desc_rep, persisted_rep)) |found| return found;
+        }
+        boxyPlanInvariant("stored callable worker descriptor was absent from its stored types");
     }
 
     fn appendStoredCallableCaptureSources(
@@ -11935,6 +12016,63 @@ const Builder = struct {
             current = next.rep;
         }
         return current;
+    }
+
+    /// The representation at the position `target` occupies in `worker_root`,
+    /// read from `value_root`, a representation of the same type structure.
+    /// Unlike a runtime descriptor path, a type position may lie inside a
+    /// function's arguments or result.
+    fn repAtTypePosition(
+        self: *Builder,
+        worker_root: TypeRepId,
+        target: TypeRepId,
+        value_root: TypeRepId,
+    ) Allocator.Error!?TypeRepId {
+        var path = std.ArrayList(RepChild).empty;
+        defer path.deinit(self.allocator);
+        var active = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer active.deinit();
+        if (!try self.findTypePositionPath(worker_root, self.repQuery().descriptorArgumentIdentityRep(target), &path, &active)) return null;
+
+        var current = value_root;
+        for (path.items) |step| {
+            var candidate = current;
+            const next: RepChild = while (true) {
+                const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(candidate)].children);
+                if (self.namedQuery().findMatchingChildByRole(children, step)) |child| break child;
+                candidate = self.repQuery().structuralWrapperBackingRep(candidate) orelse return null;
+            };
+            current = next.rep;
+        }
+        return current;
+    }
+
+    fn findTypePositionPath(
+        self: *Builder,
+        current: TypeRepId,
+        target: TypeRepId,
+        path: *std.ArrayList(RepChild),
+        active: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!bool {
+        if (self.repQuery().descriptorArgumentIdentityRep(current) == target) return true;
+        const entry = try active.getOrPut(current);
+        if (entry.found_existing) return false;
+        defer _ = active.remove(current);
+        var index: usize = 0;
+        while (index < self.plan.representations.items[@intFromEnum(current)].children.len) : (index += 1) {
+            const child = self.plan.children.items[self.plan.representations.items[@intFromEnum(current)].children.start + index];
+            switch (child.role) {
+                .function_arg, .function_ret => {},
+                .alias_backing, .nominal_backing, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload, .alias_arg, .nominal_arg, .nominal_padding_field => {
+                    if (!childCarriesRuntimeDescriptor(child.role)) continue;
+                },
+            }
+            if (self.plan.childIsSharedBackingTemplate(current, child)) continue;
+            try path.append(self.allocator, child);
+            if (try self.findTypePositionPath(child.rep, target, path, active)) return true;
+            path.items.len -= 1;
+        }
+        return false;
     }
 
     fn findWorkerRuntimePath(
@@ -18671,7 +18809,7 @@ test "evidence representation paths use exact nominal backing substitutions" {
     });
     const worker_substitutions = try testNominalSubstitution(&builder.plan, generalized_arg, exact_arg);
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .erased_callable = .pure }, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .erased_callable, .children = .{ .start = 0, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 1, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .empty_record },
@@ -18780,7 +18918,7 @@ test "evidence representation paths apply structural steps through a call-side n
     });
     const call_substitutions = try testNominalSubstitution(&builder.plan, formal, actual);
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .erased_callable = .pure } },
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .erased_callable },
         .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .tuple, .children = .{ .start = 2, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
@@ -18822,7 +18960,7 @@ test "dictionary method hidden descriptors preserve exact implementation substit
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(2), .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .erased_callable = .pure } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .erased_callable },
     });
     try builder.plan.hidden_descriptor_params.appendSlice(gpa, &.{
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .rep = worker_left_rep, .desc = @enumFromInt(fixtureTableIndex(0)) },

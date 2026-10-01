@@ -9769,6 +9769,19 @@ captures follow the same rule. Boxy planning and lowering do not scan the
 checked type graph, infer a producer from the requested layout, or treat the
 checked use type as evidence for the stored bytes.
 
+A stored function value fixes its worker's instantiation. Its worker is planned
+at the checked definition type of its source, which may name type variables of
+the generic procedure that created the closure. Every such variable occupies a
+position of the callable value's own concrete function type or of a stored
+capture's type, and the representation at that position is the concrete source
+of the worker descriptor for it. Planning records those descriptors as the
+stored value's hidden descriptor arguments. A use that restores a stored callable
+is therefore not a descriptor-propagating edge: the restoring frame never
+describes the stored worker's variables. A stored function nested in a stored
+aggregate is constructed directly at its exact stored representation; its
+representation's checked source labels the enclosing stored value, not a
+function type.
+
 `.boxy` represents an unknown type-variable value with the explicit
 pointer-sized `erased_box` layout. Its nullable or non-null Roc value points to
 an allocation that stores the payload bytes, with the refcount immediately
@@ -9829,6 +9842,8 @@ value. The payload starts with the erased-callable header and stores capture
 bytes after the fixed capture offset. Captures may include hidden descriptors
 or dictionaries because the host ABI for `Box(function)` already treats
 capture bytes as opaque. The value pointer and header layout do not change.
+Pure and effectful function types share this one representation; the function
+kind is checked typing information and is not part of a Boxy representation.
 Zero-capture functions may use a static or otherwise immutable erased callable
 payload, but their value shape is still the erased callable pointer.
 
