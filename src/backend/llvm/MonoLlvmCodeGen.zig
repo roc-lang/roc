@@ -2984,6 +2984,7 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -3117,6 +3118,7 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -3390,6 +3392,10 @@ pub const MonoLlvmCodeGen = struct {
             },
             .assign_boxy_box => |assign| {
                 try self.emitBoxyBox(assign);
+                try work.append(wa, .{ .node = assign.next });
+            },
+            .assign_boxy_record_update => |assign| {
+                try self.emitBoxyRecordUpdate(assign);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_boxy_reuse_box => |assign| {
@@ -3828,6 +3834,28 @@ pub const MonoLlvmCodeGen = struct {
                 if (assign.source_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
                 try self.resolveBoxyDesc(payload_desc_ref),
                 try self.boxyInt(.i8, @intFromEnum(assign.payload_mode)),
+                try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.target))),
+            },
+        );
+        try self.storeBoxyOutDesc(assign.target, out_desc);
+    }
+
+    fn emitBoxyRecordUpdate(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
+        try self.prepareLocalWrite(assign.target);
+        const ptr_ty = try self.ptrType();
+        const out_desc = try self.boxyOutDescPtr("boxy_record_update_desc");
+        try self.callBoxyVoid(
+            "roc_boxy_record_update",
+            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty, .i32, ptr_ty, .i32 },
+            &.{
+                try self.boxyValuePtr(assign.target),
+                out_desc,
+                try self.boxyValuePtr(assign.base),
+                try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.base))),
+                try self.resolveBoxyDesc(assign.base_desc),
+                try self.boxyValuePtr(assign.fields),
+                try self.boxyInt(.i32, @intFromEnum(assign.fields_layout)),
+                try self.resolveBoxyDesc(assign.fields_desc),
                 try self.boxyInt(.i32, @intFromEnum(self.localLayout(assign.target))),
             },
         );

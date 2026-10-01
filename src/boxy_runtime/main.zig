@@ -212,6 +212,7 @@ comptime {
         "roc_boxy_inspect",
         "roc_boxy_box",
         "roc_boxy_unbox",
+        "roc_boxy_record_update",
         "roc_boxy_adapt",
         "roc_boxy_tag",
         "roc_boxy_tag_payload",

@@ -2122,6 +2122,7 @@ pub const Interpreter = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -2162,6 +2163,7 @@ pub const Interpreter = struct {
                 .assign_boxy_desc_ref => |assign| assign.next,
                 .assign_boxy_dict_ref => |assign| assign.next,
                 .assign_boxy_box => |assign| assign.next,
+                .assign_boxy_record_update => |assign| assign.next,
                 .assign_boxy_reuse_box => |assign| assign.next,
                 .assign_boxy_unbox => |assign| assign.next,
                 .assign_boxy_adapt => |assign| assign.next,
@@ -2959,6 +2961,21 @@ pub const Interpreter = struct {
                     frame.setLocalDesc(assign.target, boxed.desc);
                     current = assign.next;
                 },
+                .assign_boxy_record_update => |assign| {
+                    const updated = try self.boxy_runtime.boxyRecordUpdate(
+                        self.boxyFrameHooks(frame),
+                        try self.getLocalChecked(frame, assign.base),
+                        self.store.getLocal(assign.base).layout_idx,
+                        try self.resolveBoxyDescRef(frame, assign.base_desc),
+                        try self.getLocalChecked(frame, assign.fields),
+                        assign.fields_layout,
+                        try self.resolveBoxyDescRef(frame, assign.fields_desc),
+                        self.store.getLocal(assign.target).layout_idx,
+                    );
+                    try self.setLocalChecked(frame, current, assign.target, updated.value, false);
+                    frame.setLocalDesc(assign.target, updated.desc);
+                    current = assign.next;
+                },
                 .assign_boxy_reuse_box => |assign| {
                     _ = try self.resolveBoxyDescRef(frame, assign.desc);
                     const source_value = try self.getLocalChecked(frame, assign.source);
@@ -3611,6 +3628,7 @@ pub const Interpreter = struct {
                 },
                 inline .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,

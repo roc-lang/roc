@@ -632,7 +632,7 @@ fn writeFailureContext(
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -799,6 +799,18 @@ fn writeFailureContext(
                 }
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
+            .assign_boxy_record_update => |a| {
+                context.append(" target={d} base={d} fields={d} fields_layout={d} base_desc=", .{
+                    @intFromEnum(a.target),
+                    @intFromEnum(a.base),
+                    @intFromEnum(a.fields),
+                    @intFromEnum(a.fields_layout),
+                });
+                appendBoxyDescRef(context, a.base_desc);
+                context.append(" fields_desc=", .{});
+                appendBoxyDescRef(context, a.fields_desc);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
             .assign_tag => |a| {
                 const target_layout_idx = store.getLocal(a.target).layout_idx;
                 const target_layout = layouts.getLayout(target_layout_idx);
@@ -924,6 +936,8 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_boxy_box => |a| a.target == needle or a.payload == needle or
             (a.source_desc != null and boxyDescRefReadsLocal(a.source_desc.?, needle)) or
             (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
+        .assign_boxy_record_update => |a| a.target == needle or a.base == needle or a.fields == needle or
+            boxyDescRefReadsLocal(a.base_desc, needle) or boxyDescRefReadsLocal(a.fields_desc, needle),
         .assign_boxy_reuse_box => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.desc, needle),
         .assign_boxy_unbox => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle) or
             (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)),
@@ -1145,6 +1159,7 @@ fn resultBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -3504,6 +3519,14 @@ const Certifier = struct {
                     if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     try stack.append(self.allocator, assign.next);
                 },
+                .assign_boxy_record_update => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.base);
+                    try self.noteProcLocal(assign.fields);
+                    if (assign.base_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    if (assign.fields_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
                 .assign_boxy_reuse_box => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.source);
@@ -3755,6 +3778,7 @@ const Certifier = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -4034,6 +4058,14 @@ const Certifier = struct {
                 .assign_boxy_box => |assign| {
                     self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.payload);
                     if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_record_update => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.base);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.fields);
+                    if (assign.base_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.fields_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -5045,6 +5077,14 @@ const Certifier = struct {
                     if (assign.payload_desc) |desc| try self.requireBoxyDescRef(&state, desc);
                     const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
                     try self.consumeBoxyTransferIntoHolder(&state, assign.payload, assign.payload_mode, target_value);
+                    cursor = assign.next;
+                },
+                .assign_boxy_record_update => |assign| {
+                    try self.requireBoxyDescRef(&state, assign.base_desc);
+                    try self.requireBoxyDescRef(&state, assign.fields_desc);
+                    _ = try self.requireBoxyTransferSource(&state, assign.base, .borrow);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    try self.consumeBoxyTransferIntoHolder(&state, assign.fields, .move, target_value);
                     cursor = assign.next;
                 },
                 .assign_boxy_reuse_box => |assign| {

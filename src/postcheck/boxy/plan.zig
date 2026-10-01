@@ -7116,7 +7116,9 @@ const Builder = struct {
                     current = record.ext;
                 },
                 .alias => |alias| current = alias.backing,
-                .flex, .rigid => |variable| return variable.row_default == .empty_record,
+                // A quantified row variable stands for whatever fields each
+                // instantiation supplies; only an unquantified one seals to `{}`.
+                .flex, .rigid => return self.variableRowIsDefaultClosed(view, current, .empty_record),
                 .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => return false,
             }
         }

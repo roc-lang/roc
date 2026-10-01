@@ -260,6 +260,7 @@ pub fn appendSuccessorsWithAllocator(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -421,6 +422,12 @@ pub fn forEachStmtRead(
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
             if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
         },
+        .assign_boxy_record_update => |s| {
+            note(ctx, s.base);
+            note(ctx, s.fields);
+            emitDesc(ctx, note, s.base_desc);
+            emitDesc(ctx, note, s.fields_desc);
+        },
         .assign_boxy_reuse_box => |s| {
             note(ctx, s.source);
             emitDesc(ctx, note, s.desc);
@@ -571,6 +578,7 @@ pub fn forEachStmtDef(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -796,6 +804,7 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -1341,6 +1350,15 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
                     .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
                     .payload_mode = s.payload_mode,
+                    .next = try self.cloneStmt(s.next),
+                } }, origin),
+                .assign_boxy_record_update => |s| try self.store.addCFStmt(.{ .assign_boxy_record_update = .{
+                    .target = try self.mapLocal(s.target),
+                    .base = try self.mapLocal(s.base),
+                    .base_desc = try self.mapBoxyDescRef(s.base_desc),
+                    .fields = try self.mapLocal(s.fields),
+                    .fields_layout = s.fields_layout,
+                    .fields_desc = try self.mapBoxyDescRef(s.fields_desc),
                     .next = try self.cloneStmt(s.next),
                 } }, origin),
                 .assign_boxy_reuse_box => |s| try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{

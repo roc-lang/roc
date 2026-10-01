@@ -226,6 +226,17 @@ const Printer = struct {
                     try writer.print(" mode={s}\n", .{@tagName(s.payload_mode)});
                     current = s.next;
                 },
+                .assign_boxy_record_update => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_record_update base=l{d} desc=", .{@intFromEnum(s.base)});
+                    try writeBoxyDescRef(s.base_desc, writer);
+                    try writer.print(" fields=l{d} layout=", .{@intFromEnum(s.fields)});
+                    try writeLayout(self.layouts, s.fields_layout, writer);
+                    try writer.writeAll(" desc=");
+                    try writeBoxyDescRef(s.fields_desc, writer);
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
                 .assign_boxy_reuse_box => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("boxy_reuse_box source=l{d} desc=", .{@intFromEnum(s.source)});

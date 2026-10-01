@@ -412,6 +412,7 @@ pub const BoxyBuiltinFn = enum {
     inspect,
     box,
     unbox,
+    record_update,
     adapt,
     tag,
     tag_payload,
@@ -464,6 +465,7 @@ pub const BoxyBuiltinFn = enum {
             .inspect => "roc_boxy_inspect",
             .box => "roc_boxy_box",
             .unbox => "roc_boxy_unbox",
+            .record_update => "roc_boxy_record_update",
             .adapt => "roc_boxy_adapt",
             .tag => "roc_boxy_tag",
             .tag_payload => "roc_boxy_tag_payload",
@@ -509,6 +511,7 @@ pub const BoxyBuiltinFn = enum {
             .call_erased => &.{ p, p, p, p, p, p, p, 4, p, 4, 4, 4, 4 },
             .tag_payload => &.{ p, p, p, 4, p, 4, 4, 4, 1 },
             .call_dict => &.{ p, p, p, 4, 4, p, p, p, p, p, 4 },
+            .record_update => &.{ p, p, p, 4, p, p, 4, p, 4 },
             .list_concat => &.{ p, p, p, p, p, p, p, 4, p, 4, p, p },
             .list_prepend => &.{ p, p, p, p, 4, p, p, 4, p, 1 },
             .list_sublist => &.{ p, p, p, p, 4, p, p, p, 4, p, 1 },
@@ -10133,6 +10136,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_desc_ref,
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
+                    .assign_boxy_record_update,
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
@@ -10181,7 +10185,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                         .i64_literal, .i128_literal, .f32_literal, .f64_literal, .dec_literal, .str_literal, .bytes_literal, .null_ptr, .static_data, .proc_ref => {},
                     },
-                    inline .assign_boxy_box, .assign_boxy_unbox, .assign_boxy_adapt => |s| ctx.outputDescriptor(s.target),
+                    inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt => |s| ctx.outputDescriptor(s.target),
                     .assign_call_dict => |s| ctx.outputDescriptor(s.target),
                     inline .incref, .decref, .decref_if_initialized, .free => |s| if (s.rc == .boxy) {
                         ctx.descriptor(s.rc.boxy);
@@ -10275,6 +10279,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_desc_ref,
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
+                    .assign_boxy_record_update,
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
@@ -18151,6 +18156,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
+        fn generateBoxyRecordUpdate(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const base_off = try self.boxyLocalBytesOffset(assign.base);
+            const base_layout = self.localLayout(assign.base);
+            const base_desc_slot = try self.boxyDescRefToSlot(assign.base_desc);
+            const fields_off = try self.boxyLocalBytesOffset(assign.fields);
+            const fields_desc_slot = try self.boxyDescRefToSlot(assign.fields_desc);
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
+            if (base_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(base_layout));
+            try builder.addMemArg(frame_ptr, base_desc_slot);
+            if (fields_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(assign.fields_layout));
+            try builder.addMemArg(frame_ptr, fields_desc_slot);
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try self.callBoxyBuiltin(&builder, .record_update);
+            try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
         fn generateBoxyUnbox(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
             const target_layout = assign.target_layout;
             const source_off = try self.boxyLocalBytesOffset(assign.source);
@@ -22676,6 +22706,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .assign_boxy_box => |assign| {
                             const value_loc = try self.generateBoxyBox(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_record_update => |assign| {
+                            const value_loc = try self.generateBoxyRecordUpdate(assign);
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
