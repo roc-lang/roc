@@ -23570,7 +23570,9 @@ const BodyContext = struct {
     fn instNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        return (try self.runInst(.{ .node = .{ .checked_ty = checked_ty } })).get(.node);
+        var task = InstNodeTask{ .checked_ty = checked_ty };
+        if (try self.probeInstNode(&task)) |existing| return existing;
+        return (try self.runInst(.{ .node = task })).get(.node);
     }
 
     fn instNominalDeclarationBackingNode(
@@ -23657,7 +23659,16 @@ const BodyContext = struct {
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
             switch (try self.stepInst(frame, input)) {
-                .call => |task| {
+                .call => |called| {
+                    var task = called;
+                    // Most checked types are already instantiated in their
+                    // scope; such a request answers without a frame.
+                    if (task == .node) {
+                        if (try self.probeInstNode(&task.node)) |existing| {
+                            input = .{ .node = existing };
+                            continue;
+                        }
+                    }
                     frames.append(self.allocator, .{ .task = task }) catch |err| {
                         self.destroyInstTaskBox(task);
                         return err;
@@ -23724,87 +23735,135 @@ const BodyContext = struct {
     const InstNodeTask = struct {
         checked_ty: checked.CheckedTypeId,
         scoped_ty: checked.CheckedTypeId = undefined,
+        /// Whether `probeInstNode` already looked this type up and missed.
+        probed: bool = false,
         /// Whether this frame registered `scoped_ty` as building.
         reserved: bool = false,
         /// A component instantiated before the last one.
         first: InstResult = undefined,
+        /// What the frame instantiates next once its pending component
+        /// returns, recorded when its payload was decoded.
+        next: Next = .none,
+
+        const Next = union(enum) {
+            none,
+            alias: struct { args: []const checked.CheckedTypeId, backing: checked.CheckedTypeId },
+            record_ext: checked.CheckedTypeId,
+            tuple,
+            function_ret: checked.CheckedTypeId,
+            tag_union_ext: checked.CheckedTypeId,
+            nominal,
+        };
     };
+
+    /// The node `task`'s checked type already has in its scope; null, with
+    /// the task marked probed, when it must be instantiated.
+    fn probeInstNode(self: *BodyContext, task: *InstNodeTask) Allocator.Error!?NodeId {
+        self.builder.countBodyDiagnostic("checked_node_requests");
+        task.scoped_ty = self.scopedCheckedType(task.checked_ty);
+        if (try self.scopedNode(task.scoped_ty)) |existing| {
+            self.builder.countBodyDiagnostic("checked_node_cache_hits");
+            return existing;
+        }
+        task.probed = true;
+        return null;
+    }
 
     fn stepInstNode(self: *BodyContext, frame: *InstFrame, task: *InstNodeTask, input: ?InstResult) Allocator.Error!InstStep {
         if (frame.cursor == 0) {
-            self.builder.countBodyDiagnostic("checked_node_requests");
-            task.scoped_ty = self.scopedCheckedType(task.checked_ty);
-            if (try self.scopedNode(task.scoped_ty)) |existing| {
-                self.builder.countBodyDiagnostic("checked_node_cache_hits");
-                return .{ .ret = .{ .node = existing } };
+            if (!task.probed) {
+                if (try self.probeInstNode(task)) |existing| return .{ .ret = .{ .node = existing } };
             }
             self.builder.countBodyDiagnostic("checked_node_cache_misses");
             try self.scopedNodeMap(task.scoped_ty).put(task.scoped_ty, .{ .building = null });
             task.reserved = true;
             frame.cursor = 1;
         }
-        const built: NodeId = switch (checkedPayload(self.view, task.checked_ty)) {
-            .pending => Common.invariant("pending checked type reached Monotype instantiation"),
-            .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
-            .flex, .rigid => |variable| try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
-                variable.numeric_default_phase,
-                variable.row_default,
-            ) }),
-            .empty_record => try self.graph.newNode(.empty_record),
-            .empty_tag_union => try self.graph.newNode(.empty_tag_union),
-            // Aliases are checked views, not value identities. Instantiate
-            // their parameter cells in this scope, then use the explicit
-            // backing cell, just as alias-transparent unification does.
-            .alias => |alias| blk: {
-                if (input != null) frame.index += 1;
-                if (frame.index < alias.args.len) return instNodeStep(alias.args[frame.index]);
-                if (frame.index == alias.args.len) return instNodeStep(alias.backing);
-                break :blk input.?.get(.node);
-            },
-            .record => |record| blk: {
-                if (input == null) return .{ .call = .{ .fields = .{ .fields = record.fields } } };
-                if (frame.cursor == 1) {
-                    task.first = input.?;
-                    frame.cursor = 2;
-                    return instNodeStep(record.ext);
-                }
-                break :blk try self.graph.newNode(.{ .record = .{
-                    .fields = task.first.get(.fields),
-                    .ext = input.?.get(.node),
-                } });
-            },
-            .tuple => |items| blk: {
-                if (input == null) return instSliceStep(items);
-                break :blk try self.graph.newNode(.{ .tuple = input.?.get(.nodes) });
-            },
-            .function => |function| blk: {
-                if (input == null) return instSliceStep(function.args);
-                if (frame.cursor == 1) {
-                    task.first = input.?;
-                    frame.cursor = 2;
-                    return instNodeStep(function.ret);
-                }
-                break :blk try self.graph.newNode(.{ .func = .{
-                    .args = task.first.get(.nodes),
-                    .ret = input.?.get(.node),
-                } });
-            },
-            .tag_union => |tag_union| blk: {
-                if (input == null) return .{ .call = .{ .tags = .{ .tags = tag_union.tags } } };
-                if (frame.cursor == 1) {
-                    task.first = input.?;
-                    frame.cursor = 2;
-                    return instNodeStep(tag_union.ext);
-                }
-                break :blk try self.graph.newNode(.{ .tag_union = .{
-                    .tags = task.first.get(.tags),
-                    .ext = input.?.get(.node),
-                } });
-            },
-            .nominal => |nominal| blk: {
-                if (input == null) return .{ .call = .{ .nominal = try self.boxInstTask(InstNominalTask, .{ .checked_ty = task.checked_ty, .nominal = nominal }) } };
-                break :blk input.?.get(.node);
-            },
+        const built: NodeId = built: {
+            // A resumed frame continues from what its first step recorded,
+            // so a checked payload is decoded once per instantiation.
+            if (input) |result| switch (task.next) {
+                .none => Common.invariant("Monotype instantiation frame resumed without a pending component"),
+                .alias => |alias| {
+                    frame.index += 1;
+                    if (frame.index < alias.args.len) return instNodeStep(alias.args[frame.index]);
+                    if (frame.index == alias.args.len) return instNodeStep(alias.backing);
+                    break :built result.get(.node);
+                },
+                .record_ext => |ext| {
+                    if (frame.cursor == 1) {
+                        task.first = result;
+                        frame.cursor = 2;
+                        return instNodeStep(ext);
+                    }
+                    break :built try self.graph.newNode(.{ .record = .{
+                        .fields = task.first.get(.fields),
+                        .ext = result.get(.node),
+                    } });
+                },
+                .tuple => break :built try self.graph.newNode(.{ .tuple = result.get(.nodes) }),
+                .function_ret => |ret| {
+                    if (frame.cursor == 1) {
+                        task.first = result;
+                        frame.cursor = 2;
+                        return instNodeStep(ret);
+                    }
+                    break :built try self.graph.newNode(.{ .func = .{
+                        .args = task.first.get(.nodes),
+                        .ret = result.get(.node),
+                    } });
+                },
+                .tag_union_ext => |ext| {
+                    if (frame.cursor == 1) {
+                        task.first = result;
+                        frame.cursor = 2;
+                        return instNodeStep(ext);
+                    }
+                    break :built try self.graph.newNode(.{ .tag_union = .{
+                        .tags = task.first.get(.tags),
+                        .ext = result.get(.node),
+                    } });
+                },
+                .nominal => break :built result.get(.node),
+            };
+            switch (checkedPayload(self.view, task.checked_ty)) {
+                .pending => Common.invariant("pending checked type reached Monotype instantiation"),
+                .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
+                .flex, .rigid => |variable| break :built try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
+                    variable.numeric_default_phase,
+                    variable.row_default,
+                ) }),
+                .empty_record => break :built try self.graph.newNode(.empty_record),
+                .empty_tag_union => break :built try self.graph.newNode(.empty_tag_union),
+                // Aliases are checked views, not value identities. Instantiate
+                // their parameter cells in this scope, then use the explicit
+                // backing cell, just as alias-transparent unification does.
+                .alias => |alias| {
+                    task.next = .{ .alias = .{ .args = alias.args, .backing = alias.backing } };
+                    if (alias.args.len != 0) return instNodeStep(alias.args[0]);
+                    return instNodeStep(alias.backing);
+                },
+                .record => |record| {
+                    task.next = .{ .record_ext = record.ext };
+                    return .{ .call = .{ .fields = .{ .fields = record.fields } } };
+                },
+                .tuple => |items| {
+                    task.next = .tuple;
+                    return instSliceStep(items);
+                },
+                .function => |function| {
+                    task.next = .{ .function_ret = function.ret };
+                    return instSliceStep(function.args);
+                },
+                .tag_union => |tag_union| {
+                    task.next = .{ .tag_union_ext = tag_union.ext };
+                    return .{ .call = .{ .tags = .{ .tags = tag_union.tags } } };
+                },
+                .nominal => |nominal| {
+                    task.next = .nominal;
+                    return .{ .call = .{ .nominal = try self.boxInstTask(InstNominalTask, .{ .checked_ty = task.checked_ty, .nominal = nominal }) } };
+                },
+            }
         };
         const map = self.scopedNodeMap(task.scoped_ty);
         var entry = map.get(task.scoped_ty).?;

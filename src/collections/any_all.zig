@@ -125,7 +125,8 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
                     .group => |nested| {
                         const start = frame.next;
                         frame.next += nested.count;
-                        try frames.append(allocator, .{
+                        if (frames.items.len == frames.capacity) try frames.ensureUnusedCapacity(allocator, 1);
+                        frames.appendAssumeCapacity(.{
                             .op = nested.op,
                             .owner = null,
                             .items_start = start,
@@ -156,17 +157,20 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
                     return value;
                 },
                 .group => |op| {
-                    frames.append(allocator, .{
+                    if (frames.items.len == frames.capacity) {
+                        frames.ensureUnusedCapacity(allocator, 1) catch |err| {
+                            items.shrinkRetainingCapacity(start);
+                            context.exit(leaf, null) catch unreachable;
+                            return err;
+                        };
+                    }
+                    frames.appendAssumeCapacity(.{
                         .op = op,
                         .owner = leaf,
                         .items_start = start,
                         .items_end = items.items.len,
                         .next = start,
-                    }) catch |err| {
-                        items.shrinkRetainingCapacity(start);
-                        context.exit(leaf, null) catch unreachable;
-                        return err;
-                    };
+                    });
                     return null;
                 },
             }

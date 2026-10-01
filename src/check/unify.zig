@@ -584,6 +584,20 @@ const Unifier = struct {
         // Visited vars are stored as pairs: [a1, b1, a2, b2, ...]
         const items = scratch.visited_vars.items.items;
         const pair_count = items.len / 2;
+        if (pair_count <= visited_scan_limit) {
+            // Few pairs are in flight in nearly every unification, and
+            // scanning them is cheaper than keeping the index in step. The
+            // index catches up from `visited_index_pairs` once it is needed.
+            const a = self.types_store.resolveVar(a_var).desc_idx;
+            const b = self.types_store.resolveVar(b_var).desc_idx;
+            var i: usize = 0;
+            while (i + 1 < items.len) : (i += 2) {
+                const visited_a = self.types_store.resolveVar(items[i]).desc_idx;
+                const visited_b = self.types_store.resolveVar(items[i + 1]).desc_idx;
+                if ((a == visited_a and b == visited_b) or (a == visited_b and b == visited_a)) return true;
+            }
+            return false;
+        }
         if (scratch.visited_index_generation != self.types_store.slot_generation or scratch.visited_index_pairs > pair_count) {
             scratch.visited_index.clearRetainingCapacity();
             scratch.visited_index_pairs = 0;
@@ -599,6 +613,10 @@ const Unifier = struct {
         // with unify(B,A).
         return scratch.visited_index.contains(self.visitedPairKey(a_var, b_var));
     }
+
+    /// In-flight pairs up to this many are scanned; more are looked up in
+    /// the index.
+    const visited_scan_limit = 16;
 
     fn visitedPairKey(self: *Self, a_var: Var, b_var: Var) VisitedPairKey {
         const a = @intFromEnum(self.types_store.resolveVar(a_var).desc_idx);

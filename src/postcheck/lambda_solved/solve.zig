@@ -2418,6 +2418,10 @@ const Solver = struct {
     }
 
     fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
+        // A remembered answer needs no scan.
+        if (self.uninhabited_memo.get(self.program.types.rootCompressed(ty))) |answer| {
+            if (answer.epoch == self.program.types.mutation_epoch) return answer.uninhabited;
+        }
         const var_count = self.program.types.vars.items.len;
         if (self.uninhabited_path.bit_length < var_count) {
             try self.uninhabited_path.resize(self.allocator, var_count, false);
