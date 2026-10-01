@@ -199,6 +199,13 @@ from a URL, since those `expect`s are the responsibility of the package's author
 Inside a top-level `expect`, the [`?` operator](operators#-unwrap-if-ok-early-return-if-err) causes
 the `expect` to fail if its expression evaluates to an `Err`, rather than returning early from a function.
 
+If running a top-level `expect` reaches code that has a compilation error (such as a type
+mismatch), `roc test` counts that `expect` as a compiler error rather than as passed or failed. This
+applies even when the error is only reached indirectly, for example inside a function the `expect`
+calls, or inside a method that `==` or a [parser](parsers) calls. An `expect` that calls a function
+containing an error, but never reaches the part with the error, runs as usual. The error itself is
+reported once. See [Code With Errors](compile-time#code-with-errors).
+
 ### Inline `expect`
 
 An `expect` inside a function body checks an assumption each time that code runs:

@@ -653,6 +653,39 @@ pub fn roc_builtins_expect_err_str(str_ptr: *const RocStr, region_start: u32, re
     roc_ops.crash(str_ptr.asSlice());
 }
 
+const CheckedErrorRecorder = in_process_host.CheckedErrorRecorder;
+
+/// The recorder for a crash at code checking rejected, resolved exactly like
+/// `expectErrRegionRecorder`.
+inline fn checkedErrorRecorder() ?CheckedErrorRecorder {
+    if (in_process_host.checkedErrorRecorder()) |recorder| return recorder;
+    if (comptime builtin.target.cpu.arch != .wasm64) return null;
+    const recorder = @extern(CheckedErrorRecorder, .{ .name = in_process_host.roc_checked_error_reached, .linkage = .weak });
+    var address: usize = if (recorder) |pointer| @intFromPtr(pointer) else 0;
+    asm volatile (""
+        : [address] "+r" (address),
+    );
+    if (address == 0) return null;
+    return @ptrFromInt(address);
+}
+
+/// Crash at code checking rejected and already reported, using static message
+/// bytes owned by generated code. Records the fact first, so a test harness
+/// counts the evaluation as blocked by that problem rather than as a crash.
+pub fn roc_builtins_checked_error_crashed(msg_bytes: [*]const u8, msg_len: usize) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    if (checkedErrorRecorder()) |record| record();
+    roc_ops.crash(msg_bytes[0..msg_len]);
+}
+
+/// Crash at code checking rejected and already reported, with a runtime
+/// RocStr message. Records the fact first, like `roc_builtins_checked_error_crashed`.
+pub fn roc_builtins_checked_error_crash_str(str_ptr: *const RocStr) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    if (checkedErrorRecorder()) |record| record();
+    roc_ops.crash(str_ptr.asSlice());
+}
+
 /// Report a failed `expect` using static message bytes owned by generated code.
 pub fn roc_builtins_roc_expect_failed(msg_bytes: [*]const u8, msg_len: usize) callconv(.c) void {
     const roc_ops = in_process_host.ops();

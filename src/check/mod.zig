@@ -120,6 +120,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11602_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11625_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11246_test.zig"));
+    std.testing.refAllDecls(@import("test/derived_codec_call_shape_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11730_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11838_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11948_test.zig"));

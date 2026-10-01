@@ -489,7 +489,7 @@ pub const Evaluator = struct {
             .try_record_sequence => |seq| return try self.evalTryRecordSequence(frame, expr.ty, seq),
             .comptime_branch_taken => |taken| return self.evalExpr(frame, taken.body),
             .comptime_exhaustiveness_failed => return self.comptimeExhaustAbort(),
-            .crash => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
+            .crash, .checked_error => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
             .dbg => |child| {
                 const value = try self.evalExpr(frame, child);
                 const bytes = self.alloc().dupe(u8, value.str) catch return error.OutOfMemory;
@@ -861,7 +861,7 @@ pub const Evaluator = struct {
                 self.return_type = self.exprType(expr_id);
                 return error.Returned;
             },
-            .crash => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
+            .crash, .checked_error => |sid| return self.crashAbort(self.program.stringLiteralText(sid)),
         }
     }
 

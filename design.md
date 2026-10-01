@@ -665,22 +665,21 @@ problem. It propagates only through explicit checked dependencies, such as a
 lookup of an erroneous local or top-level value, or a call whose callee's body
 contains code checking replaced with a runtime error: the post-solve walk that
 confirms a hoisted root's dependencies already follows each callee's body, and a
-root whose evaluation can reach such code is not kept, so the crash that code
-lowers to is never reported a second time as a compile-time crash. Top-level
-roots get the same guarantee from CheckedModule construction, which records in
-`checked_error_templates` every procedure template whose evaluation can reach a
-checked runtime error. It follows each template's explicit procedure
-references, constant references, direct dispatch targets, the method calls
-recorded in generated codec derivations, and the checked evidence carried by
-each instantiation site and direct target to a fixpoint,
-reads an imported template's answer from the importing CheckedModule's view of
-that module's `checked_error_templates` list, and never requests a compile-time
-root whose entry wrapper is in the list. This includes expect roots: a checked
-error in a callee or referenced constant blocks execution and counts as a
-compiler-error test result, with the original checking diagnostic reported once.
-A CheckedModule whose bodies and imports contain no checked runtime error
-records an empty list and does no traversal. It must never become a module,
-package, or program flag. A checked module or checked program may contain
+root whose evaluation can reach such code is not kept.
+
+Top-level roots are requested and evaluated whether or not their evaluation can
+reach code checking replaced with a runtime error, and the decision is made by
+the evaluation itself. Post-check lowering marks every crash it emits for such
+code (Monotype's `checked_error` expression, `LIR.CFStmt.crash.checked_error`),
+so an evaluation that stops at one knows its problem is already reported: it
+stores a `checked_error` value for the root (`ConstValue.checked_error`) and
+reports nothing further. A read of that value crashes exactly as the rejected
+code does, and the root's failure record carries the same kind
+(`ComptimeFailureKind.checked_error`), so a dependent root that reads it stops
+the same way. A root whose evaluation never reaches the rejected code completes
+normally, whatever its callees contain elsewhere. A top-level expect that
+reaches a checked error counts as a compiler-error test result, with the
+original checking diagnostic reported once. A checked module or checked program may contain
 user-facing diagnostics and still produce hoisted roots for every independent
 expression whose own dependency region is resolved and otherwise eligible. This
 is required for Roc's recover-and-continue behavior: `roc check`, tests, and
@@ -3996,19 +3995,22 @@ The CheckedModule data must therefore be able to contain both diagnostics and
 successful compile-time root requests. The presence of diagnostics is not an
 module-level root-selection failure.
 
-`roc test` counts each diagnostic-blocked top-level expect from the existing
-compile-time root table and the recorded checked-error reachability of its body
-and referenced procedures and constants. A type error inside a called function,
-including an inline expect condition, blocks the calling expect just like a
-type error in that expect's own body; it never becomes a runtime test failure.
-`runtime_entrypoint` root requests intentionally exclude these expects; their
-absence is not a test inventory. Blocked expects produce one compiler-error test result each, even
-when several diagnostics belong to one expect or one diagnostic blocks several
-expects. Independent roots still execute and may reuse cached results. Checking
-diagnostics are rendered once and are counted separately from test outcomes;
-errors outside tests also prevent an unqualified success summary. This consumes
-existing checked data only during test planning, without another checker pass
-or serialized inventory. Inline expects remain execution observations.
+`roc test` runs every top-level expect it can evaluate. An expect whose
+evaluation stops at code checking rejected counts as a compiler-error test
+result: the interpreter recognizes the marked crash it stopped at, and compiled
+code records the crash through the in-process host's
+`roc_checked_error_reached` just before it happens. An expect whose own
+condition checking rejected outright, leaving the root no type to evaluate at,
+is counted the same way during test planning. A type error inside a called
+function, including an inline expect condition, blocks the calling expect only
+when the expect's evaluation reaches it, and it never becomes a runtime test
+failure. Each blocked expect produces one compiler-error test result, even when
+several diagnostics belong to one expect or one diagnostic blocks several
+expects. These results follow from the checked module alone, so they are cached
+and replayed with the module's passes and failures; a test backend failing to
+run is never cached. Checking diagnostics are rendered once and are counted
+separately from test outcomes; errors outside tests also prevent an unqualified
+success summary. Inline expects remain execution observations.
 
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
@@ -5263,6 +5265,16 @@ encoding and state types for exactly the methods needed by that shape:
 - type aliases use their expanded structural shape;
 - named nominal values call that nominal type's explicit method. If the method
   is missing, checking reports the missing static-dispatch requirement.
+
+Selecting a derived method relates its public signature to the call before
+deciding whether the shape is supported, exactly as selecting an ordinary
+method relates that method's signature. A call on a type name such as
+`List.parser_for(format)` names the receiver with fresh type arguments, so the
+parser's `value` or the encoder's value argument is what determines them.
+Derivation needs every part of the receiver: a receiver that is still
+undetermined after numeric defaulting waits for the final codec boundary, and
+one that is undetermined there is reported as an undetermined codec type and
+its call becomes a checked runtime error.
 
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
@@ -7173,40 +7185,50 @@ exactly as before; a host boundary opts out because the host is a fixed ABI
 rather than a Roc producer participating in unification.
 
 The annotation still BOUNDS the definition—widening happens only at
-instantiation sites. A tag the annotation does not list is absorbed by
-ordinary unification rather than rejected, so `Check.auditImplicitOpenExts`
-runs immediately after the definition's right-hand side is checked, over every
-extension the annotation's generation minted (`Check.implicit_open_exts`,
-sliced per annotation by `annotation_implicit_open_exts`), and reports a Type
-Mismatch in the annotation context for any that resolved to a row carrying
-tags—showing the row the body produced against the union the annotation
-wrote. The recovery is the one every annotation mismatch gets: the
-definition's body (a function's body, or the right-hand side) becomes a
-runtime error, and the row keeps exactly what solving gave it. The row is
-not poisoned: other definitions call this one and its uses have already
-related to the row, or will, so an erroneous type there would leave code
-nothing lowers, such as an `expect` calling the definition, which then fails
-at the retired body like any test reaching a checked error.
+instantiation sites. When the definition's body pass generates its annotation,
+every extension that generation mints (`Check.implicit_open_exts`, sliced per
+annotation by `annotation_implicit_open_exts`) is marked bounded
+(`DescriptorFlags.bounded_row_ext`, `Check.beginBoundedAnnotationRows`). A
+bounded row may close or stay open, but the unifier refuses any relation that
+would add a tag to it, before any merge and exactly as a closed row refuses it;
+the bound travels with the row's equivalence class, and joining a tagless row
+hands it to that row's own extension. The refused relation is reported where it
+happens, as a Type Mismatch that names the unlisted tag
+(`tag_not_in_annotation`), and its recovery is the one every rejected relation
+gets: the offending expression becomes a runtime error, and the definition
+keeps its annotated type. That type is also exactly what its predeclared
+scheme says, which method dispatch and early references instantiate, so every
+use of the definition relates to one signature. Instantiation never copies the
+bound, so uses widen their own copies freely. A definition whose type
+generalizes keeps its rows bounded for the rest of checking; a weak value
+binding's row is shared by every use, so its bound ends with its right-hand
+side. A platform relates a required definition as a caller does, so that
+definition's bound ends before its requirement relation. Rows of different
+definitions can share one class, so `Check.bounded_row_marks` records each
+mark with the annotation that owns it, and ending one bound re-applies every
+mark another definition still owns. A relation refused at a match pattern is
+reported at that pattern: the matched value is also produced by a definition
+whose annotation does not list the tag. `Check.auditImplicitOpenExts` then hands every extension of the
+definition to the late audit below.
 
-That pass is a single READ of a mutable variable, and a definition can still
-widen its own row afterwards through a generated codec its body introduced: a
-derived parser or encoder is often validated only once
-`finalizeGeneratedCodecConstraintsToQuiescence` resolves it, after every audit
-in the module has run, and its validation adds error tags to the codec's error
-row (Derived Parser Required-Field Error Composition). Every extension the
-post-body pass cleared is therefore kept, stamped with the source region of its
-binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`) and
-that right-hand side itself (`owner_expr`), which a report retires. Each
-codec validation records, with the region of the expression that introduced
-the codec relation, exactly which tags it requires in which error row
+A definition can still widen a row after its body is checked through a
+generated codec its body introduced: a derived parser or encoder is often
+validated only once `finalizeGeneratedCodecConstraintsToQuiescence` resolves
+it, and its validation adds error tags to the codec's error row (Derived
+Parser Required-Field Error Composition). For a definition that generalizes,
+the bound refuses that relation and codec validation reports it. For a weak
+value binding, each extension is kept, stamped with the source region of its
+binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`) and that
+right-hand side itself (`owner_expr`), which a report retires. Each codec
+validation records, with the region of the expression that introduced the
+codec relation, exactly which tags it requires in which error row
 (`Check.codec_row_demands`): `MissingRequiredField(Str)`, a nested custom
 parser's error tags, and any tag the validation added to the row by relating it
 to a format method. After finalize, `Check.runLateImplicitOpenExtAudit` reports
 every demanded tag that lies in the extension of a binding whose right-hand side
 contains the demanding expression and whose row the demand shares (the two rows
 end in the same extension variable), before `closeWeakValueImplicitOpenExts`
-grounds the leftovers to `[]`. The rejected-parent-row case of issue #11246 is
-one such report.
+grounds the leftovers to `[]`.
 
 Provenance is exact, so neither timing nor type-graph reachability decides who
 widened a row. A caller that widens the same row with other tags is not
@@ -7578,8 +7600,8 @@ does not exist today and is not designed.
 The change itself is at one unification: where a closed row meets an
 implicitly open annotated output row, coerce rather than bind. An incoming row
 whose tags are a subset of the listed tags coerces and leaves the extension
-open; an incoming row carrying unlisted tags binds as it does today, and
-`Check.auditImplicitOpenExts` reports it. The coercion's first instance is
+open; an incoming row carrying unlisted tags is refused by the bounded row,
+as it is today. The coercion's first instance is
 already built and running: the Result-Row Widening Adapter specializes a
 template at its own declared row and re-tags the result at the requested row.
 That adapter is wired to template completion for dispatch plans, so the one
@@ -7615,10 +7637,9 @@ the picture (`test/cli/WidenClosedImpl.roc` and its siblings), and the host
 case is one instance of it.
 
 Two questions are settled in the same pass, because each asks what a closed
-row means at a boundary. `Check.auditImplicitOpenExts` fires on an extension
-that resolved to a row carrying tags, and the Type Mismatch it reports is
-sound only because the audit has already proved the extension carries tags, so
-a coercion that changes when an extension gains tags moves the audit with it.
+row means at a boundary. A bounded row refuses exactly the relations that
+would add a tag to it, so a coercion that changes when an extension gains tags
+changes what the bound refuses with it.
 `Check.closeWeakValueImplicitOpenExts` grounds a top-level weak value's
 still-open extensions to `[]`, and cross-module widening of annotated weak
 values waits on this same coercion rather than on a lowering default.
@@ -9845,6 +9866,21 @@ Other solved-graph mutations:
   Accepted and rejected codec cases are pinned by
   `src/check/test/issue_11632_test.zig` and the polarity derivation tests in
   `src/check/test/type_checking_integration.zig`.
+- `boundAnnotationRows` / `releaseBoundedAnnotationRows` /
+  `markBoundedRowChain` / `clearBoundedRowChain` (`Store.markBoundedRowExt` /
+  `Store.clearBoundedRowExt`) and the unifier's `refuseTagsIntoBoundedExt`—
+  policy: Polarity's bounded annotation rows (above). A definition's body
+  check marks its annotation's implicitly opened extensions bounded; the flag
+  is OR-preserved by flex class merges and never copied by instantiation or
+  import. The unifier refuses a relation that would add a tag to a bounded
+  row, and a bounded flex joining a tagless row passes the mark to that row's
+  tail. Every mark is recorded with the annotation that owns it, so releasing
+  a weak binding's bound, or a platform-required definition's bound before
+  its requirement relation, clears that annotation's chains and re-applies
+  every mark still owned. Accepted and rejected cases are pinned by the
+  `check type - polarity` tests in
+  `src/check/test/type_checking_integration.zig` and by
+  `test/cli/platform_requirement_wider_error_row/`.
 - `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
   dispatch reaches quiescence, a record inferred from use sites closes its
@@ -12435,10 +12471,9 @@ ordinary computation: a generic-codec requirement forwarded through the
 enclosing templates' evidence chains takes precedence over a rejected concrete
 target, and those chains come from sealing, which consumes the ordinary column.
 Once all plans are resolved, checked-module construction propagates these seeds through the existing body
-diagnostic analysis and updates `CompileTimeRoot.request_eligibility` before
-creating compile-time root requests. Both the conversion root and any enclosing
-constant roots are
-ineligible; independent roots still evaluate. `unreachable` is not a diagnostic
+diagnostic analysis before creating compile-time root requests. The conversion
+root and any enclosing constant root evaluate to the checked error they reach;
+independent roots evaluate normally. `unreachable` is not a diagnostic
 seed. The existing `contains_diagnostic_error` field carries this state through serialization;
 the resolution pass merely records whether recovery propagation is needed, so
 successful modules allocate no new index and perform no additional traversal.
@@ -12485,8 +12520,8 @@ a checked `runtime_error` there. A call whose callee is an immediate checked
 error becomes the same error: the callee evaluates before its arguments.
 An error-path worklist propagates this outcome along explicit callee and
 callable-binding alias edges, visiting each edge once. Aliases discovered here
-also record `checked_error`; their already-assigned evaluation roots become
-ineligible, and runtime uses never consume their wrappers. Checked-module
+also record `checked_error`; their already-assigned evaluation roots evaluate to
+that checked error, and runtime uses never consume their wrappers. Checked-module
 construction refreshes diagnostic, divergence, and inspection-elision metadata
 before collecting specialization relations. Recovery scratch is allocated only
 when checked-module construction consumes a rejected binding or an immediately

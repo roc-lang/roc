@@ -799,6 +799,24 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Bound an annotated definition's implicitly opened row (design.md
+    /// "Polarity"). The bound travels with the row's equivalence class.
+    pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.flags.bounded_row_ext = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// End the bound on a row every use shares: a weak value binding's row is
+    /// bounded only while its own right-hand side is checked.
+    pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.flags.bounded_row_ext = false;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
     /// The declared rule a `dangerousSetVarRedirect` call site bends the solved
     /// graph under. A redirect outside ordinary unification is indistinguishable
     /// at review time from a change to the language's typing rules, so every call
@@ -1587,6 +1605,7 @@ pub const Store = struct {
         var merged_desc = new_desc;
         merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
             (a_data.desc.flags.annotation_tag_ext or b_data.desc.flags.annotation_tag_ext);
+        merged_desc.flags.bounded_row_ext = a_data.desc.flags.bounded_row_ext or b_data.desc.flags.bounded_row_ext;
         const merged_is_empty_tag_union = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {

@@ -231,7 +231,11 @@ test "issue 11236: rejection survives exports and serialization without callable
     const alias = build.findModuleByPath(alias_path).?.semanticData().?.checked_artifact.?;
     try std.testing.expectEqual(@as(usize, 1), alias.exported_procedure_bindings.bindings.len);
     try std.testing.expect(alias.exported_procedure_bindings.bindings[0].body == .checked_error);
-    for (alias.compile_time_roots.roots) |root| try std.testing.expect(root.request_eligibility == .ineligible);
+    // The alias's evaluation reaches the rejected binding and stores the crash.
+    for (alias.compile_time_roots.roots) |root| {
+        try std.testing.expect(root.payload == .const_node);
+        try std.testing.expect(alias.const_store.get(root.payload.const_node) == .checked_error);
+    }
     const importer = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     var found_use = false;
     for (importer.checked_bodies.stored_exprs.items) |expr| {

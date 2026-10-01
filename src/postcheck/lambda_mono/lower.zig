@@ -864,6 +864,7 @@ const Lowerer = struct {
             .@"unreachable",
             .uninitialized,
             .crash,
+            .checked_error,
             => {},
             .comptime_value => |value| plan.add(.{ .expr = value.initializer }),
             .static_data_candidate => |candidate| plan.add(.{ .expr = candidate.runtime_expr }),
@@ -1119,6 +1120,7 @@ const Lowerer = struct {
             } },
             .return_ => .{ .return_ = parts[0].get(.expr) },
             .crash => |msg| .{ .crash = msg },
+            .checked_error => |msg| .{ .checked_error = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = parts[0].get(.comptime_site),
                 .branch_index = taken.branch_index,
@@ -1170,7 +1172,7 @@ const Lowerer = struct {
                 .expr, .dbg => |expr| task.plan.add(.{ .expr = expr }),
                 .expect => |expr| if (self.inline_expects != .omit) task.plan.add(.{ .expr = expr }),
                 .return_ => |ret| task.plan.add(.{ .expr = ret.value }),
-                .crash => {},
+                .crash, .checked_error => {},
             }
             frame.cursor = 1;
             if (try self.nextPart(&task.parts, task.plan.slice(), null)) |step| return step;
@@ -1192,6 +1194,7 @@ const Lowerer = struct {
             .dbg => .{ .dbg = parts[0].get(.expr) },
             .return_ => .{ .return_ = parts[0].get(.expr) },
             .crash => |msg| .{ .crash = msg },
+            .checked_error => |msg| .{ .checked_error = msg },
         };
         const lowered = try self.program.addStmt(lowered_stmt);
         self.stmt_map[index] = lowered;

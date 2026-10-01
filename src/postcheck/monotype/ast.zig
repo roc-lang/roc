@@ -1168,6 +1168,10 @@ pub const ExprData = union(enum(u8)) {
     jump: JumpExpr,
     return_: Return,
     crash: StringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: StringLiteralId,
     comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
@@ -1300,6 +1304,10 @@ pub const Stmt = union(enum(u8)) {
     dbg: ExprId,
     return_: Return,
     crash: StringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: StringLiteralId,
 };
 
 /// Top-level or generated Monotype definition.

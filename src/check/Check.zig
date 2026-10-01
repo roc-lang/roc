@@ -83,6 +83,8 @@ const ExpectEffectSlotId = enum(u32) { _ };
 
 const ExpectEffectSlot = struct {
     region: Region,
+    /// The condition the effect makes erroneous.
+    body: CIR.Expr.Idx,
     effectful: bool = false,
 };
 
@@ -639,6 +641,15 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// `annotation_implicit_open_exts` slices it per annotation for the post-body
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
+/// The annotation whose definition's body check is about to generate it; its
+/// implicitly opened rows are bounded for the rest of that body check
+/// (`beginBoundedAnnotationRows`).
+bounding_annotation: ?CIR.Annotation.Idx = null,
+/// Every implicitly opened extension a definition's bound currently covers,
+/// with the annotation that owns the bound. The bound is a flag on the row's
+/// whole class, and rows of different definitions can share one class, so
+/// releasing one definition's bound restores every bound still owned there.
+bounded_row_marks: std.ArrayListUnmanaged(BoundedRowMark) = .empty,
 /// Scoped sink owned by the alias declaration currently being constructed.
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
@@ -650,8 +661,8 @@ annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, Impl
 /// against—is the closed row the annotation produced before polarity.
 weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
 /// Every implicitly opened extension the post-body audit
-/// (`auditImplicitOpenExts`) visited and did not report, in visit order, with
-/// the binding that owns it. A generated codec validated after that audit can
+/// (`auditImplicitOpenExts`) visited, in visit order, with the binding that
+/// owns it. A generated codec validated after that audit can
 /// still require tags in the row, so `runLateImplicitOpenExtAudit` checks the
 /// recorded `codec_row_demands` against these once the module's types settle.
 /// Entries are copied rather than sliced out of `implicit_open_exts` by range
@@ -3297,6 +3308,7 @@ pub fn deinit(self: *Self) void {
     self.nominal_positions.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
+    self.bounded_row_marks.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.codec_row_demands.deinit(self.gpa);
@@ -5633,6 +5645,13 @@ fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.m
     var unify_opts = opts;
     unify_opts.record_construction_var = construction_var;
     const result = try unifier.unify(&unify_env, a, b, unify_opts);
+    switch (result) {
+        .problem => |problem_idx| {
+            const mismatch = &self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch;
+            mismatch.context = self.mismatchContext(mismatch.context, b);
+        },
+        .unified, .suppressed_by_error, .mismatch => {},
+    }
 
     if (result.isAccepted()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
@@ -5781,12 +5800,13 @@ fn unifyOwnedRootRelation(
         .nominal_record_mismatch_role = nominal_record_mismatch_role,
     });
     if (result.isAccepted()) return result;
-    return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
+    return .{ .problem = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual)) };
 }
 
 /// Record a type mismatch between two vars under a context. Every caller that
 /// owns its own rejection reports through here, so a rejection re-decided at
-/// the settled state renders exactly like the relation-time one.
+/// the settled state renders exactly like the relation-time one. A caller
+/// reporting the relation it just ran passes `mismatchContext(ctx, actual)`.
 fn appendTypeMismatch(
     self: *Self,
     expected: Var,
@@ -5807,6 +5827,24 @@ fn appendTypeMismatch(
         .context = ctx,
         .evidence = evidence,
     } });
+}
+
+/// The context the relation just rejected reports under. A relation the
+/// unifier rejected because it would add a tag to a bounded annotation row
+/// reports that tag at the expression that produced it (design.md
+/// "Polarity"). Reading the refusal consumes it, so it describes only the
+/// report of the relation that made it.
+fn mismatchContext(self: *Self, ctx: problem.Context, actual: Var) problem.Context {
+    const violation = self.unify_scratch.bounded_row_violation orelse return ctx;
+    self.unify_scratch.bounded_row_violation = null;
+    const raw_actual = @intFromEnum(actual);
+    const actual_is_pattern = raw_actual < self.cir.store.nodes.len() and
+        isPatternNodeTag(self.cir.store.nodes.get(@enumFromInt(raw_actual)).tag);
+    return .{ .tag_not_in_annotation = .{
+        .region = self.getRegionAt(actual),
+        .tag_name = violation.tag,
+        .source = if (actual_is_pattern) .pattern else .expression,
+    } };
 }
 
 /// The constructor's operand is an ordinary value expression whose solved class
@@ -7902,8 +7940,8 @@ const PolarizedInstanceKey = struct {
 };
 
 /// Record alias markers an annotation-position instantiation resolved open,
-/// so the post-body audit covers rows opened through an alias exactly like
-/// rows opened directly in the annotation.
+/// so a definition's body check bounds rows opened through an alias exactly
+/// like rows opened directly in the annotation.
 fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarkerExt, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!void {
     if (opened.len == 0) return;
     const region = switch (region_behavior) {
@@ -10383,7 +10421,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Check generated-codec error demands against their owners' annotated
     // rows now that nothing further unifies: a codec can be validated during
-    // finalize, long after the post-body audit read the row.
+    // finalize, long after its owner's body was checked.
     try self.runLateImplicitOpenExtAudit(&env);
 
     try self.validateSettledValueRows(&env);
@@ -13533,6 +13571,15 @@ fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
             .region = slot.region,
         } });
+        // The diagnostic owns the failure, so the condition becomes the
+        // checked runtime error every checker-owned problem leaves behind.
+        // Effects are known only now, after the general erroneous-expression
+        // sweep, so the replacement happens here.
+        if (self.cir.store.getExpr(slot.body) == .e_runtime_error) continue;
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(slot.body),
+        } });
+        try self.replaceExprWithRuntimeError(slot.body, diagnostic_idx);
     }
 }
 
@@ -14853,11 +14900,15 @@ const DefActivity = struct {
         active_scheme_root: ?Var,
         function_effect_dependency_scope_start: usize,
         current_expect_effect_slot: ?ExpectEffectSlotId,
+        /// The enclosing definition's bound, while this definition's body is
+        /// bounded by its own annotation.
+        bounding_annotation: ?CIR.Annotation.Idx,
     };
 
     /// Restore the saved state, innermost replacement first.
     fn restore(state: *DefActivity, checker: *Self) void {
         const saved = state.saved orelse return;
+        checker.bounding_annotation = saved.bounding_annotation;
         checker.current_expect_effect_slot = saved.current_expect_effect_slot;
         checker.function_effect_dependency_scope_start = saved.function_effect_dependency_scope_start;
         checker.active_scheme_root = saved.active_scheme_root;
@@ -14923,6 +14974,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
         .active_scheme_root = self.active_scheme_root,
         .function_effect_dependency_scope_start = self.function_effect_dependency_scope_start,
         .current_expect_effect_slot = self.current_expect_effect_slot,
+        .bounding_annotation = self.bounding_annotation,
     };
     errdefer state.restore(self);
     // A definition forced by a forward reference has its own effect context.
@@ -15017,6 +15069,9 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     else
         expr_var;
     self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else state.saved.?.active_scheme_root;
+    // The annotation bounds the definition's body: a tag it produces beyond
+    // an implicitly opened union is an error (design.md "Polarity").
+    state.saved.?.bounding_annotation = self.beginBoundedAnnotationRows(def.annotation);
     state.stage = .body;
     return .{ .push = .{ .expr = .{ .next = .{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr } } } };
 }
@@ -15030,20 +15085,19 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     const def_expr = self.cir.store.getExpr(def.expr);
     const def_is_function = state.def_is_function;
     const platform_required = self.platform_required_defs.get(def_idx);
-    // The annotation bounds the definition: a tag the body produced beyond an
-    // implicitly opened union is an error (design.md "Polarity").
+    // A function, a pure signature, and a value alias generalize regardless
+    // of any written `..`, so a `..` in their output positions is redundant;
+    // on a value it is the opt-in to a quantified row.
+    const is_value_alias = def_expr == .e_lookup_local or def_expr == .e_lookup_external;
+    const generalizes_regardless = def_is_function or def_expr == .e_anno_only or is_value_alias;
+    const annotation_generalizes = generalizes_regardless or
+        (if (def.annotation) |annotation_idx| self.cir.store.getAnnotation(annotation_idx).mentions_type_var else false);
+    try self.endBoundedAnnotationRows(state.saved.?.bounding_annotation, def.annotation, annotation_generalizes);
     if (def.annotation) |annotation_idx| {
-        // A function, a pure signature, and a value alias generalize
-        // regardless of any written `..`, so a `..` in their output
-        // positions is redundant; on a value it is the opt-in to a
-        // quantified row.
-        const is_value_alias = def_expr == .e_lookup_local or def_expr == .e_lookup_external;
-        const generalizes_regardless = def_is_function or def_expr == .e_anno_only or is_value_alias;
         try self.auditImplicitOpenExts(
             annotation_idx,
             generalizes_regardless,
             def.expr,
-            env,
         );
 
         // A top-level value binding that does not generalize (not a function,
@@ -15051,16 +15105,17 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
         // variable) shares its implicitly opened rows weakly with every use;
         // whatever is still open after the module solves is grounded to `[]`
         // (`closeWeakValueImplicitOpenExts`).
-        if (!generalizes_regardless and
-            !self.cir.store.getAnnotation(annotation_idx).mentions_type_var)
-        {
+        if (!annotation_generalizes) {
             if (self.annotation_implicit_open_exts.get(annotation_idx)) |range| {
                 if (range.len > 0) try self.weak_value_implicit_open_ext_ranges.append(self.gpa, range);
             }
         }
     }
-    if (def.annotation != null) {
+    if (def.annotation) |annotation_idx| {
         if (platform_required) |required| {
+            // The platform uses the definition as a caller does, so it may
+            // relate the definition's rows at a wider union.
+            try self.releaseBoundedAnnotationRows(annotation_idx);
             _ = try self.unifyInContext(
                 required.expected_var,
                 ModuleEnv.varFrom(def.expr),
@@ -17126,8 +17181,8 @@ const GenTypeAnnoCtx = union(enum) {
         adapter_reach: AdapterReach = .nested,
 
         pub const OpeningBehavior = enum {
-            /// An output-position union gets a fresh flex ext, recorded for
-            /// the post-body audit.
+            /// An output-position union gets a fresh flex ext, bounded while
+            /// its definition's body is checked.
             implicit_open,
             /// An output-position union gets the polarity marker: the
             /// annotation is a where-method signature, a scheme the
@@ -17271,8 +17326,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     const annotation = self.cir.store.getAnnotation(annotation_idx);
 
     // Every implicitly opened extension this generation mints is recorded for
-    // the post-body audit (`auditImplicitOpenExts`); the range is committed
-    // at the end of this function.
+    // the definition's bound (`boundAnnotationRows`) and the post-body audit
+    // (`auditImplicitOpenExts`); the range is committed at the end of this
+    // function.
     const implicit_open_exts_start: u32 = @intCast(self.implicit_open_exts.items.len);
 
     // Reset seen type annos
@@ -17341,7 +17397,7 @@ const ImplicitOpenExtRange = struct {
     len: u32,
 };
 
-/// One extension the post-body audit cleared, kept for the late audit, with
+/// One extension the post-body audit handed to the late audit, with
 /// the binding that owns it named by source region.
 ///
 /// The owner is stamped HERE—at the audit—rather than where the extension is
@@ -17390,12 +17446,106 @@ const CodecRowDemand = struct {
 /// therefore kept, with its owner, for that audit. The `..` warning is NOT
 /// repeated—it is a property of the annotation's own text, fully decided
 /// here.
+/// Bound the implicitly opened rows of `annotation` from its definition's
+/// body check on: the annotation bounds the definition, so those rows may
+/// close or stay open but never gain a tag the annotation does not list
+/// (design.md "Polarity"). The rows are minted when the body pass generates
+/// the annotation, which `boundAnnotationRows` marks. Returns the bound an
+/// enclosing definition's body check is waiting to apply.
+fn beginBoundedAnnotationRows(self: *Self, annotation: ?CIR.Annotation.Idx) ?CIR.Annotation.Idx {
+    const saved = self.bounding_annotation;
+    self.bounding_annotation = annotation;
+    return saved;
+}
+
+/// End a definition's body check. A definition whose type generalizes keeps
+/// its rows bounded: its uses instantiate fresh copies, which they may widen.
+/// A weak value binding's row is shared by every use, so its bound ends here.
+fn endBoundedAnnotationRows(
+    self: *Self,
+    saved: ?CIR.Annotation.Idx,
+    annotation: ?CIR.Annotation.Idx,
+    generalizes: bool,
+) std.mem.Allocator.Error!void {
+    self.bounding_annotation = saved;
+    if (generalizes) return;
+    try self.releaseBoundedAnnotationRows(annotation orelse return);
+}
+
+/// An extension one annotation's bound covers.
+const BoundedRowMark = struct {
+    owner: CIR.Annotation.Idx,
+    ext: Var,
+};
+
+fn boundAnnotationRows(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
+    // A mark outlives any rollback scope, so it is only made outside one.
+    self.types.assertNoSavepointActive();
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        try self.bounded_row_marks.append(self.gpa, .{ .owner = annotation_idx, .ext = entry.var_ });
+        try self.markBoundedRowChain(entry.var_);
+    }
+}
+
+/// End `owner`'s bound. Its rows' classes may also hold rows another
+/// definition still bounds, so after clearing, every remaining mark is applied
+/// again.
+fn releaseBoundedAnnotationRows(self: *Self, owner: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+    var released = false;
+    var index: usize = 0;
+    while (index < self.bounded_row_marks.items.len) {
+        const mark = self.bounded_row_marks.items[index];
+        if (mark.owner != owner) {
+            index += 1;
+            continue;
+        }
+        try self.clearBoundedRowChain(mark.ext);
+        _ = self.bounded_row_marks.swapRemove(index);
+        released = true;
+    }
+    if (!released) return;
+    for (self.bounded_row_marks.items) |mark| try self.markBoundedRowChain(mark.ext);
+}
+
+/// The bound passes along a tagless row to that row's own extension
+/// (`unify.refuseTagsIntoBoundedExt`), so it covers that whole chain.
+fn markBoundedRowChain(self: *Self, ext: Var) std.mem.Allocator.Error!void {
+    var current = ext;
+    var remaining = self.types.len();
+    while (remaining > 0) : (remaining -= 1) {
+        try self.types.markBoundedRowExt(current);
+        current = self.boundedRowChainNext(current) orelse return;
+    }
+    std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+}
+
+fn clearBoundedRowChain(self: *Self, ext: Var) std.mem.Allocator.Error!void {
+    var current = ext;
+    var remaining = self.types.len();
+    while (remaining > 0) : (remaining -= 1) {
+        try self.types.clearBoundedRowExt(current);
+        current = self.boundedRowChainNext(current) orelse return;
+    }
+    std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+}
+
+fn boundedRowChainNext(self: *Self, current: Var) ?Var {
+    return switch (self.types.resolveVar(current).desc.content) {
+        .alias => |alias| self.types.getAliasBackingVar(alias),
+        .structure => |flat_type| switch (flat_type) {
+            .tag_union => |tag_union| tag_union.ext,
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => null,
+        },
+        .flex, .rigid, .field_presence, .err => null,
+    };
+}
+
 fn auditImplicitOpenExts(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     redundant_open_warns: bool,
     owner_expr: CIR.Expr.Idx,
-    env: *Env,
 ) std.mem.Allocator.Error!void {
     const owner_rhs = self.cir.store.getExprRegion(owner_expr);
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
@@ -17407,16 +17557,17 @@ fn auditImplicitOpenExts(
                 } });
             }
         }
-        if (!self.implicitOpenExtCarriesTags(entry)) {
-            try self.late_implicit_open_ext_audits.append(self.gpa, .{
-                .ext = entry,
-                .owner_rhs = owner_rhs,
-                .owner_expr = owner_expr,
-            });
-            continue;
+        // The body check bounded this row (`beginBoundedAnnotationRows`), so
+        // the unifier refused every tag the annotation does not list at the
+        // expression that produced it.
+        if (self.implicitOpenExtCarriesTags(entry)) {
+            std.debug.panic("checker invariant violated: a bounded annotation row gained a tag during its definition's body check", .{});
         }
-        const first_tag = self.types.tags.get(self.types.resolveVar(entry.var_).desc.content.structure.tag_union.tags.start);
-        try self.reportImplicitOpenExtExtension(entry, first_tag.name, owner_expr, env);
+        try self.late_implicit_open_ext_audits.append(self.gpa, .{
+            .ext = entry,
+            .owner_rhs = owner_rhs,
+            .owner_expr = owner_expr,
+        });
     }
 }
 
@@ -17438,8 +17589,8 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
 /// constructs directly. Callers may still widen the row; a tag a caller added
 /// that the codec does not demand is never reported.
 ///
-/// Codec relations can be validated after the post-body audit read the row,
-/// so this runs once nothing further unifies, before
+/// Codec relations can be validated after the owner's body was checked, so
+/// this runs once nothing further unifies, before
 /// `closeWeakValueImplicitOpenExts` grounds the remaining extensions to `[]`.
 /// Provenance is exact: each demand names its owning expression and the tags
 /// it requires, so neither timing nor type-graph reachability decides who
@@ -17685,16 +17836,16 @@ fn reportImplicitOpenExtExtension(
         .context = .{ .tag_not_in_annotation = .{
             .region = entry.region,
             .tag_name = tag_name,
+            .source = .generated_codec,
         } },
     } });
     try self.retireRowExtendingDefinition(owner_expr);
 }
 
-/// Recovery after a definition was reported for producing a tag its
-/// annotation does not list: the definition's body becomes a runtime error,
-/// as for any other annotation mismatch. The row keeps what solving gave it,
-/// which every use has already related to or will relate to consistently, so
-/// the definition's type stays usable by the code that calls it.
+/// Recovery after a weak value binding was reported for a tag a generated
+/// codec in its right-hand side demands but its annotation does not list: the
+/// right-hand side becomes a runtime error. The row keeps what solving gave
+/// it, because every use of a weak value shares that one row.
 fn retireRowExtendingDefinition(self: *Self, owner_expr: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     try self.erroneous_value_exprs.put(self.gpa, self.definitionBodyExpr(owner_expr), {});
 }
@@ -22028,6 +22179,10 @@ fn beginExprCheckFrame(
 
         if (expected.annotation) |annotation_idx| {
             try self.generateAnnotationType(annotation_idx, env);
+            if (self.bounding_annotation == annotation_idx) {
+                self.bounding_annotation = null;
+                try self.boundAnnotationRows(annotation_idx);
+            }
             try self.recordPredeclaredBodySlots(annotation_idx);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
             const anno_backup = try self.expectedTypeBackup(anno_var, env);
@@ -23924,6 +24079,8 @@ const DeclStatementCheck = struct {
     func_name_saved: bool = false,
     expectation: Expected = undefined,
     saved_active_scheme_root: ?Var = null,
+    /// The enclosing bound while this declaration's annotation bounds its body.
+    saved_bounding_annotation: ?CIR.Annotation.Idx = null,
 };
 
 /// Begin statements until one suspends on a child expression. Returns that
@@ -24114,6 +24271,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 self.suppress_generalize_expr = decl_stmt.expr;
                 self.active_scheme_root = decl_pattern_var;
             }
+            decl.saved_bounding_annotation = self.beginBoundedAnnotationRows(decl_stmt.anno);
             return .{ .expr = decl_stmt.expr, .expected = decl.expectation };
         },
         .s_var => |var_stmt| {
@@ -24219,7 +24377,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
         },
         .s_expect => |expr_stmt| {
             self.markCurrentHoistObservableEffect();
-            statement.kind = .{ .expect = try self.beginExpectBody(stmt_region) };
+            statement.kind = .{ .expect = try self.beginExpectBody(stmt_region, expr_stmt.body) };
             return .{ .expr = expr_stmt.body, .expected = expectBodyExpected(statement_expected) };
         },
         .s_crash => {
@@ -24277,13 +24435,15 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
             const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
             std.debug.assert(self.suppress_generalize_expr == null);
+            const decl_annotation_generalizes = decl.decl_is_fn or
+                (if (decl_stmt.anno) |annotation_idx| self.cir.store.getAnnotation(annotation_idx).mentions_type_var else false);
+            try self.endBoundedAnnotationRows(decl.saved_bounding_annotation, decl_stmt.anno, decl_annotation_generalizes);
             // The annotation bounds the definition (see `DefActivity`).
             if (decl_stmt.anno) |annotation_idx| {
                 try self.auditImplicitOpenExts(
                     annotation_idx,
                     decl.decl_is_fn,
                     decl_stmt.expr,
-                    env,
                 );
             }
             try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr, decl.expectation.hoist_position);
@@ -24684,9 +24844,9 @@ fn expectBodyExpected(expected: Expected) Expected {
     return expected.suppressComptimeConditionWarnings().guardHoistSelection();
 }
 
-fn beginExpectBody(self: *Self, expect_region: Region) std.mem.Allocator.Error!ExpectBodyScope {
+fn beginExpectBody(self: *Self, expect_region: Region, body: CIR.Expr.Idx) std.mem.Allocator.Error!ExpectBodyScope {
     const slot: ExpectEffectSlotId = @enumFromInt(self.expect_effect_slots.items.len);
-    try self.expect_effect_slots.append(self.gpa, .{ .region = expect_region });
+    try self.expect_effect_slots.append(self.gpa, .{ .region = expect_region, .body = body });
 
     const saved_slot = self.current_expect_effect_slot;
     self.current_expect_effect_slot = slot;
@@ -24709,7 +24869,7 @@ fn checkExpectBody(
     expected: Expected,
     expect_region: Region,
 ) std.mem.Allocator.Error!bool {
-    const scope = try self.beginExpectBody(expect_region);
+    const scope = try self.beginExpectBody(expect_region, body);
     errdefer self.abortExpectBody(scope);
     const does_fx = try self.checkExpr(body, env, expectBodyExpected(expected));
     self.finishExpectBody(scope, does_fx);
@@ -24741,7 +24901,7 @@ fn resumeExpectCheck(self: *Self, task: *ExprTask, state: *ExpectCheck, env: *En
     }
 
     self.markCurrentHoistObservableEffect();
-    state.scope = try self.beginExpectBody(frame.expr_region);
+    state.scope = try self.beginExpectBody(frame.expr_region, expect.body);
     return .{ .child = .{ .expr = expect.body, .expected = expectBodyExpected(frame.nested_expected.forStatement()) } };
 }
 
@@ -34877,7 +35037,7 @@ fn relateResultValue(
     const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
     if (!result.isProblem()) return result;
     const result_expr = self.resultValueExpr(actual_expr);
-    const problem_idx = try self.appendTypeMismatch(expected, actual, ctx);
+    const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
     self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(expected, actual);
@@ -34892,7 +35052,7 @@ fn relateResultValue(
 fn unifyReturnContribution(self: *Self, expected: Var, actual: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
     if (result.isAccepted()) return result;
-    return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
+    return .{ .problem = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual)) };
 }
 
 /// The expression that produces `expr_idx`'s value. A block whose type is its
@@ -37997,6 +38157,7 @@ fn resumeStaticDispatchDrain(
                             // rows inside the nominal's args (eg a Dict
                             // key union). See closeTagRowsForDerivation.
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
+                            if ((try self.relateDerivedParserShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
                             switch (combineDerivedSupport(
                                 try self.nominalSupportsDerivedParseShape(nominal_type),
                                 self.generatedCodecFormatSupport(constraint),
@@ -38014,7 +38175,10 @@ fn resumeStaticDispatchDrain(
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
-                                } else try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var),
+                                } else {
+                                    try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
+                                    try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
+                                },
                                 .unsupported => try self.reportConstraintError(
                                     deferred_constraint.var_,
                                     constraint,
@@ -38044,6 +38208,7 @@ fn resumeStaticDispatchDrain(
                             // rows inside the nominal's args (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
+                            if ((try self.relateDerivedEncoderShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
                             switch (combineDerivedSupport(
                                 try self.nominalSupportsDerivedEncodeShape(nominal_type),
                                 self.generatedCodecFormatSupport(constraint),
@@ -38061,7 +38226,10 @@ fn resumeStaticDispatchDrain(
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
-                                } else try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var),
+                                } else {
+                                    try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
+                                    try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
+                                },
                                 .unsupported => try self.reportConstraintError(
                                     deferred_constraint.var_,
                                     constraint,
@@ -38347,6 +38515,7 @@ fn resumeStaticDispatchDrain(
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
+                            if ((try self.relateDerivedParserShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
                             switch (combineDerivedSupport(
                                 try self.varSupportsDerivedParseShape(backing_var),
                                 self.generatedCodecFormatSupport(constraint),
@@ -38367,7 +38536,11 @@ fn resumeStaticDispatchDrain(
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
-                                } else try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var),
+                                } else {
+                                    try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
+                                    try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
+                                    continue;
+                                },
                                 .unsupported => {},
                             }
                         }
@@ -38399,6 +38572,7 @@ fn resumeStaticDispatchDrain(
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
+                            if ((try self.relateDerivedEncoderShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
                             switch (combineDerivedSupport(
                                 try self.varSupportsDerivedEncodeShape(backing_var),
                                 self.generatedCodecFormatSupport(constraint),
@@ -38419,7 +38593,11 @@ fn resumeStaticDispatchDrain(
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
-                                } else try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var),
+                                } else {
+                                    try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
+                                    try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
+                                    continue;
+                                },
                                 .unsupported => {},
                             }
                         }
@@ -42931,7 +43109,7 @@ fn relateDerivedDispatchOperand(
     if (!result.isProblem()) return true;
     if (!report_mismatch) return false;
     if (!try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) {
-        _ = try self.appendTypeMismatch(expected, actual, .none);
+        _ = try self.appendTypeMismatch(expected, actual, self.mismatchContext(.none, actual));
         try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
         try self.markStaticDispatchRejected(constraint);
     }
@@ -42987,6 +43165,55 @@ fn satisfyDerivedToHashConstraint(
     }
 }
 
+/// The public shape of a derived codec call, related to its dispatcher.
+const DerivedCodecShape = struct {
+    /// The constructor's return: the runtime parser or encoder function.
+    runtime_fn: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+};
+
+/// Relate a derived `parser_for` call to the public parser shape of its
+/// dispatcher: `encoding -> (state -> Try({ value : dispatcher, rest : state }, err))`.
+/// This is the derived method's signature, related when the method is
+/// selected, exactly as an ordinary method's signature is; the dispatcher's
+/// shape is then the one its value is used at. Null when the call's shape
+/// cannot be a parser's, which this reports or rejects.
+fn relateDerivedParserShape(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!?DerivedCodecShape {
+    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
+        return null;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 1) {
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
+        return null;
+    }
+
+    // Copy the call's vars before adding fresh vars; the args slice may dangle.
+    const encoding_var = args[0];
+    const runtime_fn_var = resolved_func.ret;
+    const state_var = try self.fresh(env, region);
+    const err_var = try self.fresh(env, region);
+    const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, state_var, err_var, env, region);
+    const parser_var = try self.freshFromContent(try self.types.mkFuncPure(&.{state_var}, parse_result_var), env, region);
+    const ret_result = try self.unifyInContext(parser_var, runtime_fn_var, env, .none);
+    if (!ret_result.isEstablished()) {
+        try self.markStaticDispatchRejected(constraint);
+        return null;
+    }
+    return .{ .runtime_fn = runtime_fn_var, .encoding_var = encoding_var, .state_var = state_var, .err_var = err_var };
+}
 /// An implicit parser relation whose derived parser is validated as one
 /// walk.
 const ImplicitParseRequest = struct {
@@ -43059,41 +43286,12 @@ fn beginImplicitParse(self: *Self, request: ImplicitParseRequest, env: *Env) All
     const constraint_fn_var = request.constraint_fn_var;
     const region = request.region;
     const failure_expr = request.failure_expr;
-    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
-    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return null;
-    };
-
-    const args = self.types.sliceVars(resolved_func.args);
-    if (args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return null;
-    }
-
-    // Copy the encoding arg before adding fresh vars; the args slice may dangle.
-    const encoding_var = args[0];
-    const runtime_fn_var = resolved_func.ret;
-    const resolved_runtime_fn = self.types.resolveVar(runtime_fn_var);
-    const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return null;
-    };
-    const runtime_args = self.types.sliceVars(runtime_func.args);
-    if (runtime_args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return null;
-    }
-
-    // Copy the state arg before adding fresh vars; the args slice may dangle.
-    const state_var = runtime_args[0];
-    const err_var = try self.fresh(env, region);
-    const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, state_var, err_var, env, region);
-    const ret_result = try self.unifyInContext(parse_result_var, runtime_func.ret, env, .none);
-    if (!ret_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return null;
-    }
+    std.debug.assert(constraint_fn_var == constraint.fn_var);
+    const shape = (try self.relateDerivedParserShape(dispatcher_var, constraint, env, region, failure_expr)) orelse return null;
+    const encoding_var = shape.encoding_var;
+    const runtime_fn_var = shape.runtime_fn;
+    const state_var = shape.state_var;
+    const err_var = shape.err_var;
 
     const generated_calls_start = self.scratch_generated_codec_calls.items.len;
     const run = try self.gpa.create(ImplicitParseRun);
@@ -43159,6 +43357,44 @@ fn endImplicitParse(self: *Self, run: *ImplicitParseRun) void {
     self.gpa.destroy(run);
 }
 
+/// Relate a derived `encoder_for` call to the public encoder shape of its
+/// dispatcher: `encoding -> (dispatcher, state -> Try(state, err))`, as
+/// `relateDerivedParserShape` does for a parser.
+fn relateDerivedEncoderShape(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    owner_expr: ?CIR.Expr.Idx,
+) Allocator.Error!?DerivedCodecShape {
+    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
+        return null;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 1) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
+        return null;
+    }
+
+    // Copy the call's vars before adding fresh vars; the args slice may dangle.
+    const encoding_var = args[0];
+    const runtime_fn_var = resolved_func.ret;
+    const state_var = try self.fresh(env, region);
+    const err_var = try self.fresh(env, region);
+    const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
+    const encoder_var = try self.freshFromContent(try self.types.mkFuncPure(&.{ dispatcher_var, state_var }, encode_result_var), env, region);
+    const ret_result = try self.unifyInContext(encoder_var, runtime_fn_var, env, .none);
+    if (!ret_result.isEstablished()) {
+        try self.markStaticDispatchRejected(constraint);
+        return null;
+    }
+    return .{ .runtime_fn = runtime_fn_var, .encoding_var = encoding_var, .state_var = state_var, .err_var = err_var };
+}
+
 fn satisfyImplicitEncoderForConstraint(
     self: *Self,
     dispatcher_var: Var,
@@ -43168,46 +43404,11 @@ fn satisfyImplicitEncoderForConstraint(
     region: Region,
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
-    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
-        return;
-    };
-
-    const args = self.types.sliceVars(resolved_func.args);
-    if (args.len != 1) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
-        return;
-    }
-
-    const encoding_var = args[0];
-
-    const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
-    const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
-        return;
-    };
-    const runtime_args = self.types.sliceVars(runtime_func.args);
-    if (runtime_args.len != 2) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
-        return;
-    }
-
-    const value_var = runtime_args[0];
-    const state_var = runtime_args[1];
-    const value_result = try self.unifyInContext(dispatcher_var, value_var, env, .none);
-    if (!value_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return;
-    }
-
-    const err_var = try self.fresh(env, region);
-    const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
-    const ret_result = try self.unifyInContext(encode_result_var, runtime_func.ret, env, .none);
-    if (!ret_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return;
-    }
+    std.debug.assert(constraint_fn_var == constraint.fn_var);
+    const shape = (try self.relateDerivedEncoderShape(dispatcher_var, constraint, env, region, owner_expr)) orelse return;
+    const encoding_var = shape.encoding_var;
+    const state_var = shape.state_var;
+    const err_var = shape.err_var;
 
     const generated_calls_start = self.scratch_generated_codec_calls.items.len;
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
@@ -43229,7 +43430,7 @@ fn satisfyImplicitEncoderForConstraint(
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .encoder,
             constraint_fn_var,
-            resolved_func.ret,
+            shape.runtime_fn,
             dispatcher_var,
             validation_var,
             encoding_var,
@@ -47230,7 +47431,7 @@ fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: 
             .actual_var = body_var,
             .actual_snapshot = actual_snapshot,
         },
-        .context = ctx,
+        .context = self.mismatchContext(ctx, body_var),
     } });
 }
 
@@ -47593,6 +47794,44 @@ fn reportEqualityError(
 
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
     try self.markStaticDispatchRejected(constraint);
+}
+
+/// Report a compiler-derived codec whose receiver type is never fully
+/// determined, at `owner_expr` (the obligation's owner) when given.
+fn reportUndeterminedCodecType(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    owner_expr: ?CIR.Expr.Idx,
+) Allocator.Error!void {
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, owner_expr)) return;
+
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
+        .undetermined_codec_type = .{
+            .dispatcher_snapshot = snapshot,
+            .fn_var = constraint.fn_var,
+            .method_name = constraint.fn_name,
+            .owner_region = self.constraintOwnerRegion(owner_expr),
+        },
+    } });
+
+    try self.poisonConstraintFailure(dispatcher_var, constraint, env, owner_expr);
+    try self.markStaticDispatchRejected(constraint);
+}
+
+/// A derived codec whose receiver is still undetermined after numeric
+/// defaulting waits for the final codec boundary, where later source checking
+/// has had every chance to determine it; there it is reported.
+fn settleUndeterminedDerivedCodec(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!void {
+    if (try self.deferGeneratedCodecConstraintToFinalization(deferred, constraint)) return;
+    try self.reportUndeterminedCodecType(deferred.var_, constraint, env, explicitDeferredConstraintFailureExpr(deferred));
 }
 
 /// Report a compiler-derived `map`/`map!` that has no unambiguous payload,

@@ -101,16 +101,7 @@ NO CHANGE
 		(ty-tag-union
 			(ty-tag-name (name "Task"))))
 	(s-expect
-		(e-block
-			(s-let
-				(p-assign (ident "task"))
-				(e-nominal (nominal "Task")
-					(e-tag (name "Task"))))
-			(e-dispatch-call (method "run!") (constraint-fn-var 248)
-				(receiver
-					(e-lookup-local
-						(p-assign (ident "task"))))
-				(args)))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

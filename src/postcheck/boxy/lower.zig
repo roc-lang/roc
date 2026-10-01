@@ -17624,7 +17624,10 @@ const ProcBodyBuilder = struct {
                     snapshot.deinit(self.parent.allocator);
                     break :blk chain.current;
                 },
-                .runtime_error => try self.parent.result.store.addCFStmt(.runtime_error, self.origin),
+                .runtime_error => try self.parent.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
+                    .checked_error = true,
+                } }, self.origin),
                 .prepend_descriptor_initializers => |initializers| blk: {
                     chain.items[chain.index - 1] = .runtime_error;
                     defer self.parent.allocator.free(initializers);
@@ -17772,7 +17775,10 @@ const ProcBodyBuilder = struct {
             } }, self.origin)),
             .break_ => exprDone(try self.lowerBreak()),
             .return_ => |ret| try self.beginReturn(ret.expr, ret.lambda),
-            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.runtime_error, self.origin)),
+            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
+                .checked_error = true,
+            } }, self.origin)),
             .lambda,
             .closure,
             => if (try self.nestedCallableUseTypeForCurrentWorker(expr_id)) |use_type|
@@ -19144,7 +19150,10 @@ const ProcBodyBuilder = struct {
             .crash => |msg| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(self.module.checked_bodies.stringLiteral(msg)) },
             } }, self.origin)),
-            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.runtime_error, self.origin)),
+            .runtime_error => exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
+                .checked_error = true,
+            } }, self.origin)),
             .import_,
             .alias_decl,
             .nominal_decl,
@@ -19406,7 +19415,7 @@ const ProcBodyBuilder = struct {
                 .equality, .hash, .map, .map_effectful => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             },
             .evidence_dependent => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
-            .checked_error => return exprDone(try self.lowerUnexecutableDispatchInto("method dispatch failed to check")),
+            .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
             .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
         }
 
@@ -19576,7 +19585,7 @@ const ProcBodyBuilder = struct {
             .structural,
             => try self.beginDispatchCall(target, plan.expr, maybe_plan, self.module.checked_bodies.expr(plan.expr).ty, next),
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            .checked_error => exprDone(try self.lowerUnexecutableDispatchInto("method dispatch failed to check")),
+            .checked_error => exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
             .@"unreachable" => exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
         };
     }
@@ -19674,7 +19683,7 @@ const ProcBodyBuilder = struct {
                 const plan = self.iteratorForPlan(plan_id);
                 inline for (.{ plan.iter.resolution, plan.next.resolution }) |resolution| {
                     switch (resolution) {
-                        .checked_error => return exprDone(try self.lowerUnexecutableDispatchInto("method dispatch failed to check")),
+                        .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
                         .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
                         .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
                         .direct_closed, .direct_parametric, .evidence_dependent => {},
@@ -19943,7 +19952,7 @@ const ProcBodyBuilder = struct {
             .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
             .evidence_dependent => return .{ .child = (try self.unresolvedIteratorDispatchStep(task.target, task.plan, task.kind, call, task.loop_iterator, task.next)).tail },
             .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
-            .checked_error => return .{ .child = .{ .chain = .{ .items = try self.parent.allocator.alloc(ExprChainItem, 0), .current = try self.lowerUnexecutableDispatchInto("method dispatch failed to check") } } },
+            .checked_error => return .{ .child = .{ .chain = .{ .items = try self.parent.allocator.alloc(ExprChainItem, 0), .current = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check") } } },
             .@"unreachable" => return .{ .child = .{ .chain = .{ .items = try self.parent.allocator.alloc(ExprChainItem, 0), .current = try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist") } } },
         }
 
@@ -20957,7 +20966,7 @@ const ProcBodyBuilder = struct {
             .imported_const,
             => |const_use| try self.beginRestoreConstUse(target, checked_ty, const_use, next),
             .platform_required_const => |required| try self.beginRestoreConstUse(target, checked_ty, required.const_use, next),
-            .platform_required_checked_error => exprDone(try self.lowerUnexecutableDispatchInto("platform requirement failed checking")),
+            .platform_required_checked_error => exprDone(try self.lowerCheckedErrorDispatchInto("platform requirement failed checking")),
             .local_proc => try self.beginProcedureValueRef(target, expr_id, checked_ty, ref_id, next),
             .top_level_proc,
             .imported_proc,
@@ -21967,6 +21976,10 @@ const ProcBodyBuilder = struct {
             .crash => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
             } }, self.scaffoldOrigin())),
+            .checked_error => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .checked_error = true,
+            } }, self.scaffoldOrigin())),
             .list => |items| try self.beginRestoreConstList(target, store_module, type_module, items, checked_ty, next),
             .box => |payload| try self.beginRestoreConstBox(target, store_module, type_module, payload, checked_ty, next),
             .tuple => |items| try self.beginRestoreConstTuple(target, store_module, type_module, items, checked_ty, next),
@@ -22020,7 +22033,7 @@ const ProcBodyBuilder = struct {
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing_node = switch (store_module.const_store.get(node)) {
                         .nominal => |nominal| nominal.backing,
-                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .fn_value => node,
+                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => node,
                     };
                     const backing_local = try self.addFrameLocalForRep(backing_rep);
                     const assign = try self.assignRepresentationBoundary(
@@ -22041,7 +22054,7 @@ const ProcBodyBuilder = struct {
                 while (true) switch (store_module.const_store.get(bool_node)) {
                     .nominal => |nominal| bool_node = nominal.backing,
                     .tag => |tag| return exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
-                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
                 };
             },
             .in_progress, .dynamic, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
@@ -22054,6 +22067,10 @@ const ProcBodyBuilder = struct {
             .str => |str| exprDone(try self.assignStringBytesView(target, store_module.const_store.blobData(str.data), str.offset, str.len, next)),
             .crash => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+            } }, self.scaffoldOrigin())),
+            .checked_error => |str| exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .checked_error = true,
             } }, self.scaffoldOrigin())),
             .list => |items| try self.beginRestoreStoredConstList(target, store_module, items, stored_type, rep_id, next),
             .box => |payload| try self.beginRestoreStoredConstBox(target, store_module, payload, stored_type, rep_id, next),
@@ -24677,6 +24694,16 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .crash = .{
             .msg = .{ .literal = try self.parent.result.store.insertString(message) },
+        } }, self.origin);
+    }
+
+    fn lowerCheckedErrorDispatchInto(
+        self: *ProcBodyBuilder,
+        comptime message: []const u8,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .crash = .{
+            .msg = .{ .literal = try self.parent.result.store.insertString(message) },
+            .checked_error = true,
         } }, self.origin);
     }
 
@@ -45703,7 +45730,7 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
-test "boxy lowerer emits checked runtime error expressions as terminal runtime_error" {
+test "boxy lowerer emits checked runtime error expressions as checked-error crashes" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -45771,10 +45798,11 @@ test "boxy lowerer emits checked runtime error expressions as terminal runtime_e
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    try std.testing.expectEqual(LIR.CFStmt.runtime_error, out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult));
+    const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
+    try std.testing.expect(body == .crash and body.crash.checked_error);
 }
 
-test "boxy lowerer emits checked runtime error statements as terminal runtime_error" {
+test "boxy lowerer emits checked runtime error statements as checked-error crashes" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -45858,7 +45886,8 @@ test "boxy lowerer emits checked runtime error statements as terminal runtime_er
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    try std.testing.expectEqual(LIR.CFStmt.runtime_error, out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult));
+    const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
+    try std.testing.expect(body == .crash and body.crash.checked_error);
 }
 
 test "boxy lowerer emits checked while statements as join-backed loops" {

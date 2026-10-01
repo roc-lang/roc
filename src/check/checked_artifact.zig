@@ -18250,17 +18250,6 @@ const TemplateIteratorRefs = struct {
     default_scheme_uses: artifact_serialize.Span = .{},
     default_scope_sites: artifact_serialize.Span = .{},
 
-    /// Extend the per-template spans for `count` templates appended after
-    /// sealing whose bodies have no iterator plans, instantiation sites, or
-    /// nested-procedure construction sites.
-    fn appendEmptyTemplates(self: *TemplateIteratorRefs, allocator: Allocator, count: usize) Allocator.Error!void {
-        inline for (.{ "spans", "scheme_use_spans", "scope_site_spans" }) |field| {
-            const old_len = @field(self, field).len;
-            @field(self, field) = try allocator.realloc(@field(self, field), old_len + count);
-            @memset(@field(self, field)[old_len..], .{});
-        }
-    }
-
     fn deinit(self: *TemplateIteratorRefs, allocator: Allocator) void {
         allocator.free(self.spans);
         allocator.free(self.pool);
@@ -22634,10 +22623,6 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_interface_relations: []SpecializationInterfaceRelation = &.{},
     /// Checked argument types backing call-relation spans.
     specialization_interface_types: []CheckedTypeId = &.{},
-    /// Templates whose evaluation can reach code checking replaced with a
-    /// runtime error, in ascending id order. Empty for a module whose checked
-    /// bodies and imports contain no such code.
-    checked_error_templates: []canonical.CheckedProcedureTemplateId = &.{},
     /// Templates no other module can call and whose module's source calls
     /// them at exactly one site and never uses them as a value, in ascending
     /// id order. Every program that specializes such a template finds its
@@ -22658,7 +22643,6 @@ pub const CheckedProcedureTemplateTable = struct {
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
-        checked_error_templates: SerializedSlice(canonical.CheckedProcedureTemplateId) = .{},
         single_source_call_templates: SerializedSlice(canonical.CheckedProcedureTemplateId) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
@@ -22973,15 +22957,8 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.dispatch_scopes);
         allocator.free(self.specialization_interface_relations);
         allocator.free(self.specialization_interface_types);
-        allocator.free(self.checked_error_templates);
         allocator.free(self.single_source_call_templates);
         self.* = .{};
-    }
-
-    /// Whether evaluating this template can reach code checking replaced with
-    /// a runtime error.
-    pub fn templateReachesCheckedError(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) bool {
-        return sortedTemplateIdsContain(self.checked_error_templates, id);
     }
 
     /// Whether this template is called at exactly one site of its module's
@@ -25717,7 +25694,6 @@ fn publishLiteralConversionRoots(
     roots: *CompileTimeRootTable,
     wrappers: *EntryWrapperTable,
     templates: *CheckedProcedureTemplateTable,
-    template_refs: *TemplateIteratorRefs,
 ) Allocator.Error!void {
     const first_root = roots.roots.len;
     var root_list = std.ArrayList(CompileTimeRoot).empty;
@@ -25805,7 +25781,6 @@ fn publishLiteralConversionRoots(
     @memcpy(added, root_list.items);
     for (added, first_root..) |*root, index| root.id = @enumFromInt(@as(u32, @intCast(index)));
     try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added);
-    excludeErroneousCompileTimeRootRequests(bodies, added);
 
     const first_template = templates.templates.items.len;
     try templates.appendEntryWrappersForRoots(allocator, module, names, owner_artifact, &checked_types.store, wrappers, added);
@@ -25821,7 +25796,6 @@ fn publishLiteralConversionRoots(
     templates.specialization_interface_relations = try allocator.realloc(templates.specialization_interface_relations, first_relation + added.len);
     const root_evidence = try allocator.realloc(@constCast(plans.template_root_evidence), templates.templates.items.len);
     plans.template_root_evidence = root_evidence;
-    try template_refs.appendEmptyTemplates(allocator, added.len);
     for (added, templates.templates.items[first_template..], 0..) |root, *template, i| {
         const plan_id = switch (bodies.expr(root.expr).data) {
             .numeral => |numeral| numeral.plan.?,
@@ -28402,458 +28376,6 @@ fn publishCompileTimeRootRequestEligibility(
         root.request_eligibility = if (context_free) .eligible else .ineligible;
     }
 }
-
-/// The checker already owns the diagnostic for an erroneous root; evaluating it
-/// would only add a secondary compile-time crash for its replacement node.
-/// Solved root types are unchanged by diagnostic publication, so this only
-/// removes erroneous requests and never repeats the context-free traversal.
-fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, roots: []CompileTimeRoot) void {
-    for (roots) |*root| {
-        if (compileTimeRootRequestIsEligible(root.*) and bodies.exprContainsDiagnosticError(root.expr)) {
-            root.request_eligibility = .ineligible;
-        }
-    }
-}
-
-/// A compile-time root whose evaluation can call into code checking replaced
-/// with a runtime error would report that already-reported problem a second
-/// time as a compile-time crash, so it is not requested. This includes expect
-/// roots, which are counted as compiler errors without execution. Reachability
-/// follows every call edge checking recorded for a procedure template, local and
-/// imported: procedure and constant references, direct dispatch targets, the
-/// method calls inside generated codec derivations, and the evidence each
-/// instantiation site and direct target carries. The result is
-/// recorded per template so importing modules consume it directly; a module
-/// whose bodies and imports contain no checked error records nothing and
-/// performs no traversal.
-const CheckedErrorReachability = struct {
-    artifact_key: CheckedModuleArtifactKey,
-    imports: CheckedImportViews,
-    checked_bodies: *const CheckedBodyStore,
-    templates: *CheckedProcedureTemplateTable,
-    entry_wrappers: *const EntryWrapperTable,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
-    compile_time_roots: *const CompileTimeRootTable,
-    hoisted_constants: *const HoistedConstTable,
-    const_templates: *const ConstTemplateTable,
-    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-    template_refs: *const TemplateIteratorRefs,
-
-    const Target = union(enum) {
-        none,
-        reaches,
-        local: canonical.CheckedProcedureTemplateId,
-    };
-
-    /// The template whose outgoing edges are being recorded, with the shared
-    /// reachability state those edges feed.
-    const Recorder = struct {
-        allocator: Allocator,
-        reaches: []bool,
-        dependents: []std.ArrayList(canonical.CheckedProcedureTemplateId),
-        work: *std.ArrayList(canonical.CheckedProcedureTemplateId),
-        owner: canonical.CheckedProcedureTemplateId,
-
-        fn record(self: Recorder, target: Target) Allocator.Error!void {
-            try recordTarget(self.allocator, self.reaches, self.dependents, self.work, self.owner, target);
-        }
-    };
-
-    /// Evidence still to expand for the current owner, with the evidence nodes
-    /// and generated-codec derivations already queued for it. A recursive
-    /// type's codec derivation names itself, and a shared evidence node can
-    /// appear under several sites.
-    const EvidenceVisits = struct {
-        nodes: std.DynamicBitSetUnmanaged,
-        derivations: std.DynamicBitSetUnmanaged,
-        touched_nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
-        touched_derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
-        pending: std.ArrayList(Item) = .empty,
-
-        const Item = union(enum) {
-            /// Range into `StaticDispatchPlanTable.evidence_refs`.
-            evidence: artifact_serialize.Span,
-            node: static_dispatch.EvidenceNodeId,
-            derivation: static_dispatch.GeneratedCodecDerivationId,
-        };
-
-        fn init(allocator: Allocator, plans: *const static_dispatch.StaticDispatchPlanTable) Allocator.Error!EvidenceVisits {
-            var nodes = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.evidence_nodes.len);
-            errdefer nodes.deinit(allocator);
-            return .{
-                .nodes = nodes,
-                .derivations = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.generated_codec_derivations.len),
-            };
-        }
-
-        fn deinit(self: *EvidenceVisits, allocator: Allocator) void {
-            self.nodes.deinit(allocator);
-            self.derivations.deinit(allocator);
-            self.touched_nodes.deinit(allocator);
-            self.touched_derivations.deinit(allocator);
-            self.pending.deinit(allocator);
-        }
-
-        fn reset(self: *EvidenceVisits) void {
-            for (self.touched_nodes.items) |id| self.nodes.unset(@intFromEnum(id));
-            for (self.touched_derivations.items) |id| self.derivations.unset(@intFromEnum(id));
-            self.touched_nodes.clearRetainingCapacity();
-            self.touched_derivations.clearRetainingCapacity();
-        }
-
-        fn pushNode(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.EvidenceNodeId) Allocator.Error!void {
-            if (self.nodes.isSet(@intFromEnum(id))) return;
-            self.nodes.set(@intFromEnum(id));
-            try self.touched_nodes.append(allocator, id);
-            try self.pending.append(allocator, .{ .node = id });
-        }
-
-        fn pushDerivation(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!void {
-            if (self.derivations.isSet(@intFromEnum(id))) return;
-            self.derivations.set(@intFromEnum(id));
-            try self.touched_derivations.append(allocator, id);
-            try self.pending.append(allocator, .{ .derivation = id });
-        }
-    };
-
-    fn publish(
-        self: CheckedErrorReachability,
-        allocator: Allocator,
-        any_local_diagnostic_error: bool,
-        roots: []CompileTimeRoot,
-    ) Allocator.Error!void {
-        if (!any_local_diagnostic_error and !self.importsReachCheckedError()) return;
-
-        const count = self.templates.templates.items.len;
-        const reaches = try allocator.alloc(bool, count);
-        defer allocator.free(reaches);
-        @memset(reaches, false);
-        const dependents = try allocator.alloc(std.ArrayList(canonical.CheckedProcedureTemplateId), count);
-        for (dependents) |*items| items.* = .empty;
-        defer {
-            for (dependents) |*items| items.deinit(allocator);
-            allocator.free(dependents);
-        }
-        var work = std.ArrayList(canonical.CheckedProcedureTemplateId).empty;
-        defer work.deinit(allocator);
-        var visits = try EvidenceVisits.init(allocator, self.static_dispatch_plans);
-        defer visits.deinit(allocator);
-
-        const plans = self.static_dispatch_plans;
-        const refs = self.template_refs;
-        for (self.templates.templates.items, 0..) |template, raw| {
-            const id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(raw)));
-            if (self.bodyContainsDiagnosticError(template.body)) {
-                try markReached(allocator, reaches, &work, id);
-            }
-            const recorder = Recorder{
-                .allocator = allocator,
-                .reaches = reaches,
-                .dependents = dependents,
-                .work = &work,
-                .owner = id,
-            };
-            visits.reset();
-            const refs_end = template.resolved_value_refs.start + template.resolved_value_refs.len;
-            for (self.resolved_value_refs.template_refs[template.resolved_value_refs.start..refs_end]) |ref_id| {
-                const record = self.resolved_value_refs.records[@intFromEnum(ref_id)];
-                try recorder.record(self.resolvedRefTarget(record.ref));
-                try self.recordSiteEvidence(&visits, recorder, record.expr);
-            }
-            const scheme_uses = refs.scheme_use_spans[raw];
-            for (refs.scheme_use_sites[scheme_uses.start..][0..scheme_uses.len]) |site| {
-                try self.recordSiteEvidence(&visits, recorder, site.checked_expr);
-            }
-            const scope_sites = refs.scope_site_spans[raw];
-            for (refs.scope_sites[scope_sites.start..][0..scope_sites.len]) |site| {
-                try self.recordSiteEvidence(&visits, recorder, site.checked_expr);
-            }
-            const direct = template.direct_dispatch_plans;
-            for (plans.direct_template_refs[direct.start..][0..direct.len]) |plan_id| {
-                try self.recordDispatchPlan(&visits, recorder, plans.plans[@intFromEnum(plan_id)]);
-            }
-            const relations = template.dispatch_relations;
-            for (plans.dispatch_relation_refs[relations.start..][0..relations.len]) |plan_id| {
-                try self.recordDispatchPlan(&visits, recorder, plans.plans[@intFromEnum(plan_id)]);
-            }
-        }
-
-        while (work.pop()) |reached| {
-            for (dependents[@intFromEnum(reached)].items) |dependent| {
-                try markReached(allocator, reaches, &work, dependent);
-            }
-        }
-
-        var published = std.ArrayList(canonical.CheckedProcedureTemplateId).empty;
-        errdefer published.deinit(allocator);
-        for (reaches, 0..) |reached, raw| {
-            if (reached) try published.append(allocator, @enumFromInt(@as(u32, @intCast(raw))));
-        }
-        allocator.free(self.templates.checked_error_templates);
-        self.templates.checked_error_templates = try published.toOwnedSlice(allocator);
-
-        for (roots) |*root| {
-            if (!compileTimeRootRequestIsEligible(root.*)) continue;
-            const wrapper = self.entry_wrappers.lookupByRoot(root.id) orelse continue;
-            if (reaches[@intFromEnum(wrapper.template.template)]) root.request_eligibility = .ineligible;
-        }
-    }
-
-    fn markReached(
-        allocator: Allocator,
-        reaches: []bool,
-        work: *std.ArrayList(canonical.CheckedProcedureTemplateId),
-        id: canonical.CheckedProcedureTemplateId,
-    ) Allocator.Error!void {
-        if (reaches[@intFromEnum(id)]) return;
-        reaches[@intFromEnum(id)] = true;
-        try work.append(allocator, id);
-    }
-
-    fn recordTarget(
-        allocator: Allocator,
-        reaches: []bool,
-        dependents: []std.ArrayList(canonical.CheckedProcedureTemplateId),
-        work: *std.ArrayList(canonical.CheckedProcedureTemplateId),
-        owner: canonical.CheckedProcedureTemplateId,
-        target: Target,
-    ) Allocator.Error!void {
-        switch (target) {
-            .none => {},
-            .reaches => try markReached(allocator, reaches, work, owner),
-            .local => |callee| try dependents[@intFromEnum(callee)].append(allocator, owner),
-        }
-    }
-
-    fn importsReachCheckedError(self: CheckedErrorReachability) bool {
-        for (self.imports.direct) |import| {
-            if (import.view.checked_procedure_templates.checked_error_templates.len != 0) return true;
-        }
-        for (self.imports.available) |available| {
-            if (available.checked_procedure_templates.checked_error_templates.len != 0) return true;
-        }
-        for (self.imports.relations) |relation| {
-            if (relation.checked_procedure_templates.checked_error_templates.len != 0) return true;
-        }
-        return false;
-    }
-
-    fn bodyContainsDiagnosticError(self: CheckedErrorReachability, body: CheckedProcedureBody) bool {
-        return switch (body) {
-            .checked_body => |body_id| self.checked_bodies.exprContainsDiagnosticError(self.checked_bodies.body(body_id).root_expr),
-            .entry_wrapper => |wrapper_id| self.checked_bodies.exprContainsDiagnosticError(self.entry_wrappers.get(wrapper_id).body_expr),
-            .intrinsic_wrapper, .unimplemented => false,
-        };
-    }
-
-    fn importedView(self: CheckedErrorReachability, key: CheckedModuleArtifactKey) ImportedModuleView {
-        return importedViewForKey(self.imports, key) orelse
-            checkedArtifactInvariant("checked-error reachability referenced an artifact outside the import views", .{});
-    }
-
-    fn isLocal(self: CheckedErrorReachability, key: CheckedModuleArtifactKey) bool {
-        return checkedArtifactKeyEql(key, self.artifact_key);
-    }
-
-    fn resolvedRefTarget(self: CheckedErrorReachability, ref: ResolvedValueRef) Target {
-        return switch (ref) {
-            .top_level_const, .imported_const => |use| self.constTarget(use.const_ref),
-            .selected_hoisted_const => |selected| self.constTarget(selected.const_use.const_ref),
-            .platform_required_const => |required| self.constTarget(required.const_use.const_ref),
-            .top_level_proc, .imported_proc, .promoted_top_level_proc => |procedure| self.procedureTarget(procedure),
-            .platform_required_proc => |required| self.procedureTarget(required.procedure),
-            .platform_required_checked_error => .reaches,
-            .local_param,
-            .local_value,
-            .local_mutable_version,
-            .pattern_binder,
-            .local_proc,
-            .hosted_proc,
-            .platform_required_declaration,
-            => .none,
-        };
-    }
-
-    fn procedureTarget(self: CheckedErrorReachability, procedure: ProcedureUseTemplate) Target {
-        return switch (procedure.binding) {
-            .top_level => |binding| self.topLevelBindingTarget(binding.artifact, binding.binding),
-            .platform_required => |required| self.topLevelBindingTarget(required.artifact, required.procedure_binding),
-            .imported => |binding| blk: {
-                const imported = self.importedView(binding.artifact);
-                const row = importedProcedureBindingForDef(imported, binding.def) orelse
-                    checkedArtifactInvariant("checked-error reachability referenced an unexported imported procedure", .{});
-                break :blk switch (row.body) {
-                    .direct_template => |direct| self.callableTemplateTarget(direct.template),
-                    .callable_eval_template => |id| self.importedRootTarget(imported, imported.callable_eval_templates.templates[@intFromEnum(id)].root),
-                    .checked_error => .reaches,
-                };
-            },
-            .hosted => .none,
-        };
-    }
-
-    fn topLevelBindingTarget(
-        self: CheckedErrorReachability,
-        artifact: CheckedModuleArtifactKey,
-        binding: TopLevelProcedureBindingRef,
-    ) Target {
-        if (self.isLocal(artifact)) {
-            return switch (self.top_level_procedure_bindings.get(binding).body) {
-                .direct_template => |direct| self.callableTemplateTarget(direct.template),
-                .callable_eval_template => |id| self.localRootTarget(self.callable_eval_templates.get(id).root),
-                .checked_error => .reaches,
-            };
-        }
-        const imported = self.importedView(artifact);
-        return switch (imported.top_level_procedure_bindings.get(binding).body) {
-            .direct_template => |direct| self.callableTemplateTarget(direct.template),
-            .callable_eval_template => |id| self.importedRootTarget(imported, imported.callable_eval_templates.templates[@intFromEnum(id)].root),
-            .checked_error => .reaches,
-        };
-    }
-
-    fn callableTemplateTarget(self: CheckedErrorReachability, template: canonical.CallableProcedureTemplateRef) Target {
-        return switch (template) {
-            .checked => |checked_template| self.templateTarget(checked_template),
-            .lifted,
-            .synthetic,
-            => checkedArtifactInvariant("checked-error reachability referenced a post-check template", .{}),
-        };
-    }
-
-    fn templateTarget(self: CheckedErrorReachability, template: canonical.ProcedureTemplateRef) Target {
-        const key = checkedArtifactKeyFromArtifactRef(template.artifact);
-        if (self.isLocal(key)) return .{ .local = template.template };
-        return if (self.importedView(key).checked_procedure_templates.templateReachesCheckedError(template.template)) .reaches else .none;
-    }
-
-    fn localRootTarget(self: CheckedErrorReachability, root: ComptimeRootId) Target {
-        const wrapper = self.entry_wrappers.lookupByRoot(root) orelse return .none;
-        return self.templateTarget(wrapper.template);
-    }
-
-    fn importedRootTarget(self: CheckedErrorReachability, imported: ImportedModuleView, root: ComptimeRootId) Target {
-        const wrapper = imported.entry_wrappers.lookupByRoot(root) orelse return .none;
-        return self.templateTarget(wrapper.template);
-    }
-
-    fn constTarget(self: CheckedErrorReachability, const_ref: ConstRef) Target {
-        if (self.isLocal(const_ref.artifact)) {
-            if (self.const_templates.get(const_ref).state == .unimplemented) return .none;
-            const root = switch (const_ref.owner) {
-                .top_level_binding => |top_level| self.compile_time_roots.lookupIdByPattern(top_level.pattern),
-                .hoisted_expr => |hoisted| if (self.hoisted_constants.lookupByExpr(hoisted.expr)) |entry| entry.root else null,
-            } orelse return .none;
-            return self.localRootTarget(root);
-        }
-        const imported = self.importedView(const_ref.artifact);
-        if (imported.const_templates.get(const_ref).state == .unimplemented) return .none;
-        const root = switch (const_ref.owner) {
-            .top_level_binding => |top_level| imported.compile_time_roots.lookupIdByPattern(top_level.pattern),
-            .hoisted_expr => |hoisted| if (imported.hoisted_constants.lookupByExpr(hoisted.expr)) |entry| entry.root else null,
-        } orelse return .none;
-        return self.importedRootTarget(imported, root);
-    }
-
-    fn recordDispatchPlan(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-        plan: static_dispatch.StaticDispatchCallPlan,
-    ) Allocator.Error!void {
-        switch (plan.resolution) {
-            .direct_closed, .direct_parametric => |direct| {
-                if (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind == .structural) {
-                    checkedArtifactInvariant("direct checked call targeted a structural derivation", .{});
-                }
-                try visits.pushNode(recorder.allocator, direct.evidence);
-            },
-            .structural => if (plan.generated_codec_derivation) |derivation| {
-                try visits.pushDerivation(recorder.allocator, derivation);
-            },
-            .checked_error => try recorder.record(.reaches),
-            // The enclosing callable's evidence supplies this target, so the
-            // edge belongs to the instantiation site that supplies it.
-            .evidence_dependent, .@"unreachable" => {},
-            .direct_pending => checkedArtifactInvariant("checked-error reachability read an unfinalized direct call", .{}),
-        }
-        try self.drainEvidence(visits, recorder);
-    }
-
-    fn recordSiteEvidence(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-        expr: CheckedExprId,
-    ) Allocator.Error!void {
-        const span = self.static_dispatch_plans.siteEvidenceSpan(expr) orelse return;
-        try visits.pending.append(recorder.allocator, .{ .evidence = span });
-        try self.drainEvidence(visits, recorder);
-    }
-
-    /// Record every template the pending evidence reaches. The traversal keeps
-    /// an explicit stack because nested evidence follows the depth of the
-    /// dispatched types.
-    fn drainEvidence(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-    ) Allocator.Error!void {
-        const plans = self.static_dispatch_plans;
-        while (visits.pending.pop()) |item| switch (item) {
-            .evidence => |span| for (plans.evidence_refs[span.start..][0..span.len]) |evidence| {
-                switch (evidence.resolution) {
-                    .direct => |node| try visits.pushNode(recorder.allocator, node),
-                    .structural => |structural| if (structural.generated_codec_derivation) |derivation| {
-                        try visits.pushDerivation(recorder.allocator, derivation);
-                    },
-                    .checked_error => try recorder.record(.reaches),
-                    // Forwarded obligations are supplied by an enclosing
-                    // instantiation site, and an unreachable obligation lowers
-                    // to a crash, never a call.
-                    .constraint, .from_callable, .from_scheme, .unreachable_value => {},
-                }
-                if (evidence.callable_contracts.len != 0) {
-                    try visits.pending.append(recorder.allocator, .{ .evidence = evidence.callable_contracts });
-                }
-            },
-            .node => |id| {
-                const node = plans.evidenceNode(id);
-                switch (node.target.kind) {
-                    .procedure => |procedure| switch (procedure.runtime_target) {
-                        .procedure => try recorder.record(self.templateTarget(procedure.template)),
-                        .low_level, .intrinsic, .graph_participating => {},
-                    },
-                    // A local procedure's body belongs to the template that declares it.
-                    .local_proc => {},
-                    // A structural target's body is the derivation it names below.
-                    .structural => {},
-                }
-                if (node.generated_codec_derivation) |derivation| {
-                    try visits.pushDerivation(recorder.allocator, derivation);
-                }
-                switch (node.nested) {
-                    .resolved => |nested| if (nested.len != 0) {
-                        try visits.pending.append(recorder.allocator, .{ .evidence = nested });
-                    },
-                    // Checking recorded no per-edge evidence entries for this target.
-                    .from_callable => {},
-                }
-            },
-            .derivation => |id| {
-                const derivation = plans.generated_codec_derivations[@intFromEnum(id)];
-                for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
-                    .callable => |node| try visits.pushNode(recorder.allocator, node),
-                    .structural => |nested| try visits.pushDerivation(recorder.allocator, nested),
-                    .checked_error => try recorder.record(.reaches),
-                    .pending => checkedArtifactInvariant("checked-error reachability read an unlinked generated codec call", .{}),
-                };
-            },
-        };
-    }
-};
 
 /// Finds the procedure templates whose every call, in every program, comes
 /// from one site of their module's source: a template that is private (a
@@ -33805,17 +33327,6 @@ pub const CheckedModuleArtifact = struct {
         );
     }
 
-    /// Whether a compile-time root's evaluation can reach code checking
-    /// reported and replaced with a runtime error, in its own body or through
-    /// the procedures and constants it references. Such a root is never
-    /// requested. An expect that reaches a checked error is counted as a
-    /// compiler error without running its replacement crash.
-    pub fn compileTimeRootReachesCheckedError(self: *const CheckedModuleArtifact, root: CompileTimeRoot) bool {
-        if (self.checked_bodies.exprContainsDiagnosticError(root.expr)) return true;
-        const wrapper = self.entry_wrappers.lookupByRoot(root.id) orelse return false;
-        return self.checked_procedure_templates.templateReachesCheckedError(wrapper.template.template);
-    }
-
     /// A platform with declared app requirements is runtime-lowerable only
     /// after checking has published its exact app relation.
     pub fn hasUnboundPlatformRequirements(self: *const CheckedModuleArtifact) bool {
@@ -33960,11 +33471,11 @@ pub const CheckedModuleArtifact = struct {
             // independent of stored data size. The optional-field body tables
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more. Ordered debug entries and their
-            // byte pool add two explicit relocation pointers, and the
-            // checked-error template list one more. Loop mutation plans add one.
-            // Promoted local procedure templates and callable contract types add one each,
-            // and the single-source-call template list one more.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 233);
+            // byte pool add two explicit relocation pointers. Loop mutation
+            // plans add one. Promoted local procedure templates and callable
+            // contract types add one each, and the single-source-call template
+            // list one more.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 232);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -37710,8 +37221,7 @@ pub fn publishFromTypedModule(
     const dispatch_operands = try checkedDispatchOperands(allocator, checked_bodies.exprCount(), &static_dispatch_plans, null);
     defer freeCheckedDispatchOperands(allocator, dispatch_operands);
     try CheckedLoopMutationPublisher.publish(allocator, checked_bodies, dispatch_operands);
-    var any_diagnostic_error = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, null);
-    excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
+    _ = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, null);
 
     var template_iterator_refs = TemplateIteratorRefs{};
     errdefer template_iterator_refs.deinit(allocator);
@@ -37787,7 +37297,6 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
         &entry_wrappers,
         &checked_procedure_templates,
-        &template_iterator_refs,
     );
     try classifyTemplateDispatchPlanRefs(
         allocator,
@@ -37795,29 +37304,13 @@ pub fn publishFromTypedModule(
         &checked_procedure_templates,
     );
     if (rejected_dispatches) {
-        any_diagnostic_error = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, .{
+        _ = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, .{
             .module = artifact_key,
             .refs = &resolved_value_refs,
             .roots = &compile_time_roots,
             .const_templates = &const_templates,
         });
-        excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
     }
-    try (CheckedErrorReachability{
-        .artifact_key = artifact_key,
-        .imports = .{ .current_owner = artifact_key, .direct = inputs.imports, .available = inputs.available_artifacts, .relations = inputs.relation_artifacts },
-        .checked_bodies = checked_bodies,
-        .templates = &checked_procedure_templates,
-        .entry_wrappers = &entry_wrappers,
-        .resolved_value_refs = &resolved_value_refs,
-        .top_level_procedure_bindings = &top_level_procedure_bindings,
-        .callable_eval_templates = &callable_eval_templates,
-        .compile_time_roots = &compile_time_roots,
-        .hoisted_constants = &hoisted_constants,
-        .const_templates = &const_templates,
-        .static_dispatch_plans = &static_dispatch_plans,
-        .template_refs = &template_iterator_refs,
-    }).publish(allocator, any_diagnostic_error, compile_time_roots.roots);
     try (SingleSourceCalls{
         .module = module,
         .artifact_key = artifact_key,

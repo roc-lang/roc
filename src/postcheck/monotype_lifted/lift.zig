@@ -651,7 +651,7 @@ const Lifter = struct {
             .dbg,
             => |expr| try work.append(self.allocator, .{ .expr = expr }),
             .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -708,6 +708,7 @@ const Lifter = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .fn_ref => |fn_ref| {
@@ -1483,7 +1484,7 @@ const CaptureSet = struct {
             .dbg,
             => |expr| try work.append(self.allocator, .{ .expr = expr }),
             .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -1525,6 +1526,7 @@ const CaptureSet = struct {
             .uninitialized_payload,
             .def_ref,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .fn_ref => |fn_ref| {
@@ -2362,7 +2364,7 @@ const CaptureGraphBuilder = struct {
             .dbg,
             => |expr| try work.append(allocator, .{ .expr = .{ .expr = expr, .node = node } }),
             .return_ => |ret| try work.append(allocator, .{ .expr = .{ .expr = ret.value, .node = node } }),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -2410,6 +2412,7 @@ const CaptureGraphBuilder = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .def_ref => if (self.graph.lifter == null) Common.invariant("post-lift capture graph saw a definition reference"),

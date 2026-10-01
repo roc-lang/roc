@@ -56,6 +56,7 @@ const MkSafeList = collections.SafeList;
 const Allocator = std.mem.Allocator;
 
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
+const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 
 const Var = types_mod.Var;
 const Rank = types_mod.Rank;
@@ -364,6 +365,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
 
     // Openings from a call that may still roll back must not outlive it.
     if (!env.types.savepointActive()) try env.unify_scratch.persistOpenings();
+    // A refusal a mismatch handler absorbed did not reject this relation.
+    env.unify_scratch.bounded_row_violation = null;
     return .unified;
 }
 
@@ -827,6 +830,86 @@ const Unifier = struct {
         }
     }
 
+    fn isBoundedRowExt(self: *Self, var_: Var) bool {
+        return self.types_store.resolveVar(var_).desc.flags.bounded_row_ext;
+    }
+
+    /// Whether a row reaches a bounded extension along its extension chain,
+    /// so that tags added at the end of the chain would extend it.
+    fn rowChainIsBounded(self: *Self, tag_union: TagUnion) bool {
+        var ext = tag_union.ext;
+        var remaining = self.types_store.len();
+        while (remaining > 0) : (remaining -= 1) {
+            if (self.isBoundedRowExt(ext)) return true;
+            switch (self.types_store.resolveVar(ext).desc.content) {
+                .alias => |alias| ext = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .tag_union => |next| ext = next.ext,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+                },
+                .flex, .rigid, .field_presence, .err => return false,
+            }
+        }
+        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+    }
+
+    /// The first tag a row carries anywhere along its extension chain.
+    fn firstRowTag(self: *Self, start: Var) ?Ident.Idx {
+        var current = start;
+        var remaining = self.types_store.len();
+        while (remaining > 0) : (remaining -= 1) {
+            switch (self.types_store.resolveVar(current).desc.content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .tag_union => |tag_union| {
+                        if (tag_union.tags.count != 0) return self.types_store.tags.get(tag_union.tags.start).name;
+                        current = tag_union.ext;
+                    },
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
+                },
+                .flex, .rigid, .field_presence, .err => return null,
+            }
+        }
+        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+    }
+
+    /// A bounded extension may close or stay open, never gain a tag. Joining
+    /// a tagless row hands the bound to that row's own extension.
+    fn refuseTagsIntoBoundedExt(self: *Self, ext: ResolvedVarDesc, other: Var) Error!void {
+        if (ext.desc.content != .flex or !ext.desc.flags.bounded_row_ext) return;
+        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag);
+        if (self.rowTail(other)) |tail| try self.types_store.markBoundedRowExt(tail);
+    }
+
+    /// The final extension of a tagless row, if `start` is one.
+    fn rowTail(self: *Self, start: Var) ?Var {
+        var current = start;
+        var saw_row = false;
+        var remaining = self.types_store.len();
+        while (remaining > 0) : (remaining -= 1) {
+            switch (self.types_store.resolveVar(current).desc.content) {
+                .alias => |alias| current = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .tag_union => |tag_union| {
+                        saw_row = true;
+                        current = tag_union.ext;
+                    },
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
+                },
+                .flex => return if (saw_row) current else null,
+                .rigid, .field_presence, .err => return null,
+            }
+        }
+        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+    }
+
+    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx) Error!void {
+        if (self.scratch.bounded_row_violation == null) {
+            self.scratch.bounded_row_violation = .{ .tag = tag };
+        }
+        return error.TypeMismatch;
+    }
+
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -839,6 +922,9 @@ const Unifier = struct {
     fn unifyVars(self: *Self, vars: *const ResolvedVarDescs) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        try self.refuseTagsIntoBoundedExt(vars.a, vars.b.var_);
+        try self.refuseTagsIntoBoundedExt(vars.b, vars.a.var_);
 
         switch (vars.a.desc.content) {
             .flex => |flex| {
@@ -3194,6 +3280,14 @@ const Unifier = struct {
             // b has unique tags but a is closed - can't extend
             return error.TypeMismatch;
         }
+        // A bounded annotation row refuses unlisted tags exactly as a closed
+        // row does, and for the same reason this check precedes any merge.
+        if ((tags_ext == .b_extends_a or tags_ext == .both_extend) and self.rowChainIsBounded(a_tag_union)) {
+            return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name);
+        }
+        if ((tags_ext == .a_extends_b or tags_ext == .both_extend) and self.rowChainIsBounded(b_tag_union)) {
+            return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name);
+        }
 
         // Unify tags (recursion guard in unifyGuarded prevents infinite loops,
         // and unifySharedTags handles the final merge)
@@ -4123,6 +4217,11 @@ pub const ChainDuplicateTag = struct {
     repeated: Var.SafeList.Range,
 };
 
+/// A tag a unification refused to add to a bounded annotation extension.
+pub const BoundedRowViolation = struct {
+    tag: Ident.Idx,
+};
+
 /// An unordered pair of resolved type descriptors.
 const VisitedPairKey = struct { low: u32, high: u32 };
 
@@ -4196,6 +4295,9 @@ pub const Scratch = struct {
 
     // records - used internal by unification
     gathered_tags: TagSafeList,
+    /// The bounded extension and the tag the current unify call refused to add
+    /// to it, when a refusal caused its mismatch.
+    bounded_row_violation: ?BoundedRowViolation,
     only_in_a_tags: TagSafeList,
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
@@ -4370,6 +4472,7 @@ pub const Scratch = struct {
             .in_both_fields = try TwoRecordFieldsSafeList.initCapacity(gpa, 32),
             .absorbed_record_defaults = try AbsorbedRecordDefault.SafeList.initCapacity(gpa, 4),
             .gathered_tags = try TagSafeList.initCapacity(gpa, 32),
+            .bounded_row_violation = null,
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
@@ -4442,6 +4545,7 @@ pub const Scratch = struct {
         self.in_both_fields.items.clearRetainingCapacity();
         self.absorbed_record_defaults.items.clearRetainingCapacity();
         self.gathered_tags.items.clearRetainingCapacity();
+        self.bounded_row_violation = null;
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();

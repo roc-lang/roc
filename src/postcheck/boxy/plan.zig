@@ -6122,7 +6122,10 @@ const Builder = struct {
             .const_node => |node| {
                 const store = view.const_store orelse
                     boxyPlanInvariant("finalized from_quote conversion module had no ConstStore");
-                if (store.get(node) == .crash) return;
+                switch (store.get(node)) {
+                    .crash, .checked_error => return,
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => {},
+                }
                 try self.pushStaticConstRoot(actions, view, node, try self.analyzeType(view, view.checked_bodies.expr(expr_id).ty), null);
             },
             .pending => {
@@ -6173,7 +6176,10 @@ const Builder = struct {
             .const_node => |node| {
                 const store = view.const_store orelse
                     boxyPlanInvariant("finalized from_numeral conversion module had no ConstStore");
-                if (store.get(node) == .crash) return;
+                switch (store.get(node)) {
+                    .crash, .checked_error => return,
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => {},
+                }
                 try self.pushStaticConstRoot(actions, view, node, try self.analyzeType(view, view.checked_bodies.expr(expr_id).ty), null);
             },
             .pending => {
@@ -6777,7 +6783,7 @@ const Builder = struct {
                     const backing = requiredSingleChildOf(&self.plan, rep_id, .nominal_backing).rep;
                     const backing_node = switch (store.get(node)) {
                         .nominal => |nominal| nominal.backing,
-                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .fn_value => node,
+                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => node,
                     };
                     const backing_type = if (const_type) |stored_type| switch (store.type_store.get(stored_type)) {
                         .named => |named| (named.backing orelse
@@ -6808,7 +6814,7 @@ const Builder = struct {
         defer finishPlanSequence(actions, start);
         switch (store.get(node)) {
             .pending => boxyPlanInvariant("pending ConstStore node reached static data planning"),
-            .zst, .scalar, .str, .crash => {},
+            .zst, .scalar, .str, .crash, .checked_error => {},
             .box => |payload| try actions.append(self.allocator, child.at(
                 state,
                 payload,

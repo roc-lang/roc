@@ -343,6 +343,10 @@ pub const ExprData = union(enum) {
     jump: JumpExpr,
     return_: ExprId,
     crash: StringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: StringLiteralId,
     comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
@@ -449,6 +453,10 @@ pub const Stmt = union(enum) {
     dbg: ExprId,
     return_: ExprId,
     crash: StringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: StringLiteralId,
 };
 
 /// Lambda Mono function body.

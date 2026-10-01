@@ -2792,6 +2792,7 @@ fn scalarConstNodeI64(
         .tuple,
         .record,
         .crash,
+        .checked_error,
         .tag,
         .nominal,
         .fn_value,

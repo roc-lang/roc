@@ -417,7 +417,7 @@ const InlineAnalyzer = struct {
             switch (item.child) {
                 .stmt => |stmt_id| switch (self.solved.lifted.getStmt(stmt_id)) {
                     .return_ => return .open,
-                    .let_, .expr, .expect, .dbg, .uninitialized, .crash => try Lifted.appendStmtChildren(self.allocator, &self.solved.lifted, stmt_id, &children),
+                    .let_, .expr, .expect, .dbg, .uninitialized, .crash, .checked_error => try Lifted.appendStmtChildren(self.allocator, &self.solved.lifted, stmt_id, &children),
                 },
                 .expr => |expr_id| switch (self.solved.lifted.getExpr(expr_id).data) {
                     .return_ => return .open,
@@ -433,6 +433,7 @@ const InlineAnalyzer = struct {
                     .uninitialized,
                     .uninitialized_payload,
                     .crash,
+                    .checked_error,
                     .comptime_exhaustiveness_failed,
                     => {},
                     .call_proc => |call| {
@@ -679,6 +680,7 @@ const InlineAnalyzer = struct {
                 .dec_lit,
                 .str_lit,
                 .crash,
+                .checked_error,
                 .bytes_lit,
                 .def_ref,
                 => {},
@@ -789,6 +791,7 @@ const InlineAnalyzer = struct {
                     => .body,
                     .@"unreachable",
                     .crash,
+                    .checked_error,
                     .def_ref,
                     .fn_ref,
                     .list,
@@ -846,7 +849,7 @@ const InlineAnalyzer = struct {
                     if (lifted.stmtSpan(block.statements).len != 0) return false;
                     try stack.append(self.allocator, .{ .role = .body, .expr = block.final_expr });
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
         return true;
@@ -859,7 +862,7 @@ const InlineAnalyzer = struct {
         var expr_id = root;
         while (true) {
             switch (lifted.getExpr(expr_id).data) {
-                .crash => return true,
+                .crash, .checked_error => return true,
                 .low_level => |call| {
                     if (call.op != .crash) return false;
                     const args = lifted.exprSpan(call.args);
@@ -876,7 +879,7 @@ const InlineAnalyzer = struct {
                     // followed by unreachable. No preceding work is admitted.
                     if (stmts.len != 1 or lifted.getExpr(block.final_expr).data != .@"unreachable") return false;
                     switch (lifted.getStmt(GuardedList.at(stmts, 0))) {
-                        .crash => return true,
+                        .crash, .checked_error => return true,
                         .expr => |child| expr_id = child,
                         .uninitialized, .let_, .expect, .dbg, .return_ => return false,
                     }
@@ -893,7 +896,7 @@ const InlineAnalyzer = struct {
                 .str_lit => return true,
                 .nominal => |backing| expr_id = backing,
                 .typed_boundary => |boundary| expr_id = boundary.value,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
     }
