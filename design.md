@@ -6696,6 +6696,15 @@ item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
 
+Monotype lowering also packs source lists whose elements are all checked builtin
+numeric literals, before constructing per-element IR. It consumes the checked
+numeral facts and concrete element type through the ordinary exact numeral-to-bit
+conversion, and records the scalar encoding and item count on the packed view.
+This applies at every list length and includes the initial compile-time evaluation,
+not just restoration of completed constants. A custom conversion plan or root,
+non-literal element, or rejected conversion retains its ordinary computation and
+diagnostic behavior; list packing never evaluates or bypasses such computations.
+
 Readonly literal export demand comes from the retained LIR procedure control-flow
 graphs and their explicit join-point inventories. String literals, packed-list
 literals, and string-match prefixes and delimiters name their exact backing
