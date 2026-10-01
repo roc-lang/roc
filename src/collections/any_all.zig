@@ -41,12 +41,16 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
             allocator: Allocator,
             list: *std.ArrayList(Item),
 
-            pub fn add(self: Items, leaf: Leaf) Allocator.Error!void {
-                try self.list.append(self.allocator, .{ .leaf = leaf });
+            /// Leaves are added one at a time from inner loops, so the
+            /// common case of spare capacity stays inline.
+            pub inline fn add(self: Items, leaf: Leaf) Allocator.Error!void {
+                if (self.list.items.len == self.list.capacity) try self.list.ensureUnusedCapacity(self.allocator, 1);
+                self.list.appendAssumeCapacity(.{ .leaf = leaf });
             }
 
-            pub fn group(self: Items, op: Op, count: usize) Allocator.Error!void {
-                try self.list.append(self.allocator, .{ .group = .{ .op = op, .count = count } });
+            pub inline fn group(self: Items, op: Op, count: usize) Allocator.Error!void {
+                if (self.list.items.len == self.list.capacity) try self.list.ensureUnusedCapacity(self.allocator, 1);
+                self.list.appendAssumeCapacity(.{ .group = .{ .op = op, .count = count } });
             }
         };
 
@@ -60,40 +64,64 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
             next: usize,
         };
 
+        /// The stacks one evaluation runs on. An owner that evaluates
+        /// repeatedly keeps one and hands it to every run, so the runs reuse
+        /// its allocated capacity; a run leaves it as it found it, so nested
+        /// runs may share it.
+        pub const Scratch = struct {
+            frames: std.ArrayList(Frame) = .empty,
+            items: std.ArrayList(Item) = .empty,
+
+            pub fn deinit(self: *Scratch, allocator: Allocator) void {
+                self.frames.deinit(allocator);
+                self.items.deinit(allocator);
+            }
+        };
+
         pub fn run(allocator: Allocator, context: *Context, root: Leaf) Allocator.Error!bool {
-            var frames: std.ArrayList(Frame) = .empty;
-            defer frames.deinit(allocator);
-            var items: std.ArrayList(Item) = .empty;
-            defer items.deinit(allocator);
+            var scratch: Scratch = .{};
+            defer scratch.deinit(allocator);
+            return runWith(allocator, &scratch, context, root);
+        }
+
+        pub fn runWith(allocator: Allocator, scratch: *Scratch, context: *Context, root: Leaf) Allocator.Error!bool {
+            const frames = &scratch.frames;
+            const items = &scratch.items;
+            const frames_base = frames.items.len;
+            const items_base = items.items.len;
+            defer {
+                frames.shrinkRetainingCapacity(frames_base);
+                items.shrinkRetainingCapacity(items_base);
+            }
             errdefer {
                 var index = frames.items.len;
-                while (index > 0) {
+                while (index > frames_base) {
                     index -= 1;
                     if (frames.items[index].owner) |owner| context.exit(owner, null) catch unreachable;
                 }
             }
 
-            var pending: ?bool = try begin(allocator, context, &frames, &items, root);
+            var pending: ?bool = try begin(allocator, context, frames, items, root);
             while (true) {
                 if (pending) |value| {
-                    if (frames.items.len == 0) return value;
+                    if (frames.items.len == frames_base) return value;
                     const top = frames.items[frames.items.len - 1];
                     const decided = switch (top.op) {
                         .any => value,
                         .all => !value,
                     };
-                    pending = if (decided) try finish(context, &frames, &items, value) else null;
+                    pending = if (decided) try finish(context, frames, items, value) else null;
                     continue;
                 }
                 const frame = &frames.items[frames.items.len - 1];
                 if (frame.next == frame.items_end) {
-                    pending = try finish(context, &frames, &items, frame.op == .all);
+                    pending = try finish(context, frames, items, frame.op == .all);
                     continue;
                 }
                 const item = items.items[frame.next];
                 frame.next += 1;
                 switch (item) {
-                    .leaf => |leaf| pending = try begin(allocator, context, &frames, &items, leaf),
+                    .leaf => |leaf| pending = try begin(allocator, context, frames, items, leaf),
                     .group => |nested| {
                         const start = frame.next;
                         frame.next += nested.count;
