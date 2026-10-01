@@ -265,3 +265,20 @@ test "issue 11923: an expect reaching an erroneous format method through a gener
         \\
     , null, "(p(Format.Default))({}) == Err(Bad)");
 }
+
+test "issue 11923: an erroneous module with a custom numeral literal still blocks the codec expect" {
+    try expectRecovery(
+        \\N := [Val(I64)].{
+        \\    from_numeral : Numeral -> Try(N, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(N.Val(0))
+        \\}
+        \\n : N
+        \\n = 1
+        \\Format := [Default].{
+        \\    parse_u8 : Format, {} -> Try({ value : U8, rest : {} }, [Bad])
+        \\    parse_u8 = |_, _| Err(OtherErr)
+        \\}
+        \\expect (U8.parser_for(Format.Default))({}) == Err(Bad)
+        \\
+    , null, "(U8.parser_for(Format.Default))({}) == Err(Bad)");
+}

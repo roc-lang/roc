@@ -18025,6 +18025,17 @@ const TemplateIteratorRefs = struct {
     default_scheme_uses: artifact_serialize.Span = .{},
     default_scope_sites: artifact_serialize.Span = .{},
 
+    /// Extend the per-template spans for `count` templates appended after
+    /// sealing whose bodies have no iterator plans, instantiation sites, or
+    /// nested-procedure construction sites.
+    fn appendEmptyTemplates(self: *TemplateIteratorRefs, allocator: Allocator, count: usize) Allocator.Error!void {
+        inline for (.{ "spans", "scheme_use_spans", "scope_site_spans" }) |field| {
+            const old_len = @field(self, field).len;
+            @field(self, field) = try allocator.realloc(@field(self, field), old_len + count);
+            @memset(@field(self, field)[old_len..], .{});
+        }
+    }
+
     fn deinit(self: *TemplateIteratorRefs, allocator: Allocator) void {
         allocator.free(self.spans);
         allocator.free(self.pool);
@@ -25001,6 +25012,7 @@ fn publishLiteralConversionRoots(
     roots: *CompileTimeRootTable,
     wrappers: *EntryWrapperTable,
     templates: *CheckedProcedureTemplateTable,
+    template_refs: *TemplateIteratorRefs,
 ) Allocator.Error!void {
     const first_root = roots.roots.len;
     var root_list = std.ArrayList(CompileTimeRoot).empty;
@@ -25104,6 +25116,7 @@ fn publishLiteralConversionRoots(
     templates.specialization_interface_relations = try allocator.realloc(templates.specialization_interface_relations, first_relation + added.len);
     const root_evidence = try allocator.realloc(@constCast(plans.template_root_evidence), templates.templates.items.len);
     plans.template_root_evidence = root_evidence;
+    try template_refs.appendEmptyTemplates(allocator, added.len);
     for (added, templates.templates.items[first_template..], 0..) |root, *template, i| {
         const plan_id = switch (bodies.expr(root.expr).data) {
             .numeral => |numeral| numeral.plan.?,
@@ -28158,14 +28171,23 @@ const CheckedErrorReachability = struct {
         }
     };
 
-    /// Evidence nodes and generated-codec derivations already expanded for the
-    /// current owner. A recursive type's codec derivation names itself, and a
-    /// shared evidence node can appear under several sites.
+    /// Evidence still to expand for the current owner, with the evidence nodes
+    /// and generated-codec derivations already queued for it. A recursive
+    /// type's codec derivation names itself, and a shared evidence node can
+    /// appear under several sites.
     const EvidenceVisits = struct {
         nodes: std.DynamicBitSetUnmanaged,
         derivations: std.DynamicBitSetUnmanaged,
         touched_nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
         touched_derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
+        pending: std.ArrayList(Item) = .empty,
+
+        const Item = union(enum) {
+            /// Range into `StaticDispatchPlanTable.evidence_refs`.
+            evidence: artifact_serialize.Span,
+            node: static_dispatch.EvidenceNodeId,
+            derivation: static_dispatch.GeneratedCodecDerivationId,
+        };
 
         fn init(allocator: Allocator, plans: *const static_dispatch.StaticDispatchPlanTable) Allocator.Error!EvidenceVisits {
             var nodes = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.evidence_nodes.len);
@@ -28181,6 +28203,7 @@ const CheckedErrorReachability = struct {
             self.derivations.deinit(allocator);
             self.touched_nodes.deinit(allocator);
             self.touched_derivations.deinit(allocator);
+            self.pending.deinit(allocator);
         }
 
         fn reset(self: *EvidenceVisits) void {
@@ -28190,18 +28213,18 @@ const CheckedErrorReachability = struct {
             self.touched_derivations.clearRetainingCapacity();
         }
 
-        fn visitNode(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.EvidenceNodeId) Allocator.Error!bool {
-            if (self.nodes.isSet(@intFromEnum(id))) return false;
+        fn pushNode(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.EvidenceNodeId) Allocator.Error!void {
+            if (self.nodes.isSet(@intFromEnum(id))) return;
             self.nodes.set(@intFromEnum(id));
             try self.touched_nodes.append(allocator, id);
-            return true;
+            try self.pending.append(allocator, .{ .node = id });
         }
 
-        fn visitDerivation(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!bool {
-            if (self.derivations.isSet(@intFromEnum(id))) return false;
+        fn pushDerivation(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!void {
+            if (self.derivations.isSet(@intFromEnum(id))) return;
             self.derivations.set(@intFromEnum(id));
             try self.touched_derivations.append(allocator, id);
-            return true;
+            try self.pending.append(allocator, .{ .derivation = id });
         }
     };
 
@@ -28455,10 +28478,10 @@ const CheckedErrorReachability = struct {
                 if (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind == .structural) {
                     checkedArtifactInvariant("direct checked call targeted a structural derivation", .{});
                 }
-                try self.recordEvidenceNode(visits, recorder, direct.evidence);
+                try visits.pushNode(recorder.allocator, direct.evidence);
             },
             .structural => if (plan.generated_codec_derivation) |derivation| {
-                try self.recordCodecDerivation(visits, recorder, derivation);
+                try visits.pushDerivation(recorder.allocator, derivation);
             },
             .checked_error => try recorder.record(.reaches),
             // The enclosing callable's evidence supplies this target, so the
@@ -28466,6 +28489,7 @@ const CheckedErrorReachability = struct {
             .evidence_dependent, .@"unreachable" => {},
             .direct_pending => checkedArtifactInvariant("checked-error reachability read an unfinalized direct call", .{}),
         }
+        try self.drainEvidence(visits, recorder);
     }
 
     fn recordSiteEvidence(
@@ -28474,83 +28498,70 @@ const CheckedErrorReachability = struct {
         recorder: Recorder,
         expr: CheckedExprId,
     ) Allocator.Error!void {
-        const evidence = self.static_dispatch_plans.siteEvidence(expr) orelse return;
-        try self.recordEvidenceSlice(visits, recorder, evidence);
+        const span = self.static_dispatch_plans.siteEvidenceSpan(expr) orelse return;
+        try visits.pending.append(recorder.allocator, .{ .evidence = span });
+        try self.drainEvidence(visits, recorder);
     }
 
-    fn recordEvidenceSlice(
+    /// Record every template the pending evidence reaches. The traversal keeps
+    /// an explicit stack because nested evidence follows the depth of the
+    /// dispatched types.
+    fn drainEvidence(
         self: CheckedErrorReachability,
         visits: *EvidenceVisits,
         recorder: Recorder,
-        evidence: []const static_dispatch.CheckedEvidence,
     ) Allocator.Error!void {
-        for (evidence) |entry| try self.recordEvidence(visits, recorder, entry);
-    }
-
-    fn recordEvidence(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-        evidence: static_dispatch.CheckedEvidence,
-    ) Allocator.Error!void {
-        switch (evidence.resolution) {
-            .direct => |node| try self.recordEvidenceNode(visits, recorder, node),
-            .structural => |structural| if (structural.generated_codec_derivation) |derivation| {
-                try self.recordCodecDerivation(visits, recorder, derivation);
+        const plans = self.static_dispatch_plans;
+        while (visits.pending.pop()) |item| switch (item) {
+            .evidence => |span| for (plans.evidence_refs[span.start..][0..span.len]) |evidence| {
+                switch (evidence.resolution) {
+                    .direct => |node| try visits.pushNode(recorder.allocator, node),
+                    .structural => |structural| if (structural.generated_codec_derivation) |derivation| {
+                        try visits.pushDerivation(recorder.allocator, derivation);
+                    },
+                    .checked_error => try recorder.record(.reaches),
+                    // Forwarded obligations are supplied by an enclosing
+                    // instantiation site, and an unreachable obligation lowers
+                    // to a crash, never a call.
+                    .constraint, .from_callable, .from_scheme, .unreachable_value => {},
+                }
+                if (evidence.callable_contracts.len != 0) {
+                    try visits.pending.append(recorder.allocator, .{ .evidence = evidence.callable_contracts });
+                }
             },
-            .checked_error => try recorder.record(.reaches),
-            // Forwarded obligations are supplied by an enclosing instantiation
-            // site, and an unreachable obligation lowers to a crash, never a call.
-            .constraint, .from_callable, .from_scheme, .unreachable_value => {},
-        }
-        const contracts = evidence.callable_contracts;
-        try self.recordEvidenceSlice(visits, recorder, self.static_dispatch_plans.evidence_refs[contracts.start..][0..contracts.len]);
-    }
-
-    fn recordEvidenceNode(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-        id: static_dispatch.EvidenceNodeId,
-    ) Allocator.Error!void {
-        if (!try visits.visitNode(recorder.allocator, id)) return;
-        const node = self.static_dispatch_plans.evidenceNode(id);
-        switch (node.target.kind) {
-            .procedure => |procedure| switch (procedure.runtime_target) {
-                .procedure => try recorder.record(self.templateTarget(procedure.template)),
-                .low_level, .intrinsic, .graph_participating => {},
+            .node => |id| {
+                const node = plans.evidenceNode(id);
+                switch (node.target.kind) {
+                    .procedure => |procedure| switch (procedure.runtime_target) {
+                        .procedure => try recorder.record(self.templateTarget(procedure.template)),
+                        .low_level, .intrinsic, .graph_participating => {},
+                    },
+                    // A local procedure's body belongs to the template that declares it.
+                    .local_proc => {},
+                    // A structural target's body is the derivation it names below.
+                    .structural => {},
+                }
+                if (node.generated_codec_derivation) |derivation| {
+                    try visits.pushDerivation(recorder.allocator, derivation);
+                }
+                switch (node.nested) {
+                    .resolved => |nested| if (nested.len != 0) {
+                        try visits.pending.append(recorder.allocator, .{ .evidence = nested });
+                    },
+                    // Checking recorded no per-edge evidence entries for this target.
+                    .from_callable => {},
+                }
             },
-            // A local procedure's body belongs to the template that declares it.
-            .local_proc => {},
-            // A structural target's body is the derivation it names below.
-            .structural => {},
-        }
-        if (node.generated_codec_derivation) |derivation| {
-            try self.recordCodecDerivation(visits, recorder, derivation);
-        }
-        switch (node.nested) {
-            .resolved => |nested| try self.recordEvidenceSlice(visits, recorder, self.static_dispatch_plans.evidence_refs[nested.start..][0..nested.len]),
-            // Checking recorded no per-edge evidence entries for this target.
-            .from_callable => {},
-        }
-    }
-
-    fn recordCodecDerivation(
-        self: CheckedErrorReachability,
-        visits: *EvidenceVisits,
-        recorder: Recorder,
-        id: static_dispatch.GeneratedCodecDerivationId,
-    ) Allocator.Error!void {
-        if (!try visits.visitDerivation(recorder.allocator, id)) return;
-        const derivation = self.static_dispatch_plans.generated_codec_derivations[@intFromEnum(id)];
-        for (derivation.callsSlice(self.static_dispatch_plans)) |call| {
-            switch (call.resolution) {
-                .callable => |node| try self.recordEvidenceNode(visits, recorder, node),
-                .structural => |nested| try self.recordCodecDerivation(visits, recorder, nested),
-                .checked_error => try recorder.record(.reaches),
-                .pending => checkedArtifactInvariant("checked-error reachability read an unlinked generated codec call", .{}),
-            }
-        }
+            .derivation => |id| {
+                const derivation = plans.generated_codec_derivations[@intFromEnum(id)];
+                for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
+                    .callable => |node| try visits.pushNode(recorder.allocator, node),
+                    .structural => |nested| try visits.pushDerivation(recorder.allocator, nested),
+                    .checked_error => try recorder.record(.reaches),
+                    .pending => checkedArtifactInvariant("checked-error reachability read an unlinked generated codec call", .{}),
+                };
+            },
+        };
     }
 };
 
@@ -38019,6 +38030,7 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
         &entry_wrappers,
         &checked_procedure_templates,
+        &template_iterator_refs,
     );
     try classifyTemplateDispatchPlanRefs(
         allocator,
