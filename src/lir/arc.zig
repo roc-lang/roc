@@ -13771,7 +13771,65 @@ test "RC Box.unbox keeps the payload borrowed while the box survives" {
     try f.expectRc(boxed, 0, 1, 0);
 }
 
-test "RC borrow: owned sublist from borrowed parameter retains one input unit" {
+test "RC borrow: read-only sublist keeps its parameter borrowed" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const use_slice = try f.expectStmt(slice, try f.assignI64(result, 1, ret));
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = LIR.LowLevel.list_sublist.rcEffect(),
+        .args = try f.span(&.{ param, range }),
+        .next = use_slice,
+    } }, .test_fixture);
+    const proc = try f.addProc(&.{param}, try f.assignI64(range, 0, sublist), .i64);
+    try insert(&f.store, &f.layouts, .{ .specialize = false });
+    try testing.expectEqual(@as(u64, 1), f.store.getProcSpec(proc).rc_borrowed_params);
+    try testing.expectEqual(LIR.LowLevel.list_sublist_borrowed, f.reachableLowLevelAssign(slice).op);
+    try f.expectRc(param, 0, 0, 0);
+    try f.expectRc(slice, 0, 0, 0);
+}
+
+test "RC borrow: returned sublist transfers a dying caller buffer" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const range = try f.local(.i64);
+    const slice = try f.local(f.list_i64);
+    const result_alias = try f.local(f.list_i64);
+    const ret = try f.ret(result_alias);
+    const alias = try f.assignRefLocal(result_alias, slice, ret);
+    const sublist = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = slice,
+        .op = .list_sublist,
+        .rc_effect = LIR.LowLevel.list_sublist.rcEffect(),
+        .args = try f.span(&.{ param, range }),
+        .next = alias,
+    } }, .test_fixture);
+    const callee = try f.addProc(&.{param}, try f.assignI64(range, 0, sublist), f.list_i64);
+    const list = try f.local(f.list_i64);
+    const result = try f.local(f.list_i64);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = try f.ret(result),
+    } }, .test_fixture);
+    const caller = try f.addProc(&.{}, try f.assignList(list, &.{}, call), f.list_i64);
+    try insert(&f.store, &f.layouts, .{ .roots = &.{caller}, .specialize = false });
+    try testing.expectEqual(@as(u64, 0), f.store.getProcSpec(callee).rc_borrowed_params);
+    try testing.expectEqual(LIR.LowLevel.list_sublist, f.reachableLowLevelAssign(slice).op);
+    try f.expectRc(param, 0, 0, 0);
+    try f.expectRc(slice, 0, 0, 0);
+    try f.expectRc(list, 0, 0, 0);
+}
+
+test "RC borrow: owned sublist consumes its parameter without retaining" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const list = try f.local(f.list_i64);
@@ -13797,7 +13855,7 @@ test "RC borrow: owned sublist from borrowed parameter retains one input unit" {
     const emitted = f.reachableLowLevelAssign(slice);
     try testing.expectEqual(LIR.LowLevel.list_sublist, emitted.op);
     try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
-    try f.expectRc(list, 1, 0, 0);
+    try f.expectRc(list, 0, 0, 0);
     try f.expectRc(slice, 0, 0, 0);
 }
 

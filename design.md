@@ -15270,7 +15270,17 @@ generates constraints per statement:
   an owned result materializes the ordinary consuming operation and its
   effect. If the ordinary operation needs to consume an argument whose solved
   binding is borrowed, ARC emits one retain immediately before the operation
-  to supply that consumed unit. Every post-ARC statement therefore contains
+  to supply that consumed unit. For a variant that transfers an input
+  allocation into an owned result (`list_sublist`), ownership demands on the
+  result flow to every input consumed by the ordinary operation. These are
+  explicit ownership-flow edges, separate from same-value alias edges: slicing
+  changes a list descriptor. Returned slices also demand this transfer, through
+  pure aliases, so lending a unique parameter and retaining its result cannot
+  discard the buffer's reserved capacity. Multi-bound results select ownership
+  and demand their consumed inputs too. Read-only slices can still select the
+  borrowing operation and keep their lender live. Parameter demands and these
+  edges settle together with direct-call demands, including across wrappers.
+  Every post-ARC statement therefore contains
   the exact concrete operation and effect the backend executes. The variant
   mapping is static low-level-op data, and only ARC may select from it.
   `Box.unbox` is the ownership-transfer case: its neutral operation is solved
