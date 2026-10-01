@@ -1248,9 +1248,9 @@ pub fn builtinHasherDefinitionResolvesExactOwner() integration_spec.SpecError!vo
     defer result.deinit(h.allocator);
     try std.testing.expect(std.mem.endsWith(u8, result.uri, "/Builtin.roc"));
     const builtin_source = @import("compiled_builtins").builtin_source;
-    const declaration = std.mem.indexOf(u8, builtin_source, "Hasher :: { state : U64 }.{") orelse return error.TestUnexpectedResult;
+    const declaration = std.mem.find(u8, builtin_source, "Hasher :: { state : U64 }.{") orelse return error.TestUnexpectedResult;
     const line: u32 = @intCast(std.mem.count(u8, builtin_source[0..declaration], "\n"));
-    const line_start = (std.mem.lastIndexOfScalar(u8, builtin_source[0..declaration], '\n') orelse return error.TestUnexpectedResult) + 1;
+    const line_start = (std.mem.findScalarLast(u8, builtin_source[0..declaration], '\n') orelse return error.TestUnexpectedResult) + 1;
     try std.testing.expectEqual(line, result.range.start_line);
     try std.testing.expectEqual(@as(u32, @intCast(declaration - line_start)), result.range.start_col);
 }

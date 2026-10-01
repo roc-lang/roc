@@ -355,7 +355,7 @@ pub const builtin_namespace_roots = blk: {
     for (builtin_type_containers) |container| {
         if (!std.mem.startsWith(u8, container.qualified_name, "Builtin.")) continue;
         const name = container.qualified_name["Builtin.".len..];
-        if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
+        if (std.mem.findScalar(u8, name, '.') != null) continue;
         var registered = false;
         for (entries[0..count]) |entry| {
             if (std.mem.eql(u8, entry.display_name, name)) {
@@ -391,7 +391,7 @@ pub fn resolveBuiltinNamespace(name: []const u8) ?BuiltinNamespace {
 
 /// Whether an unqualified source name denotes a registered builtin root.
 pub fn isBuiltinType(name: []const u8) bool {
-    if (std.mem.indexOfScalar(u8, name, '.') != null) return false;
+    if (std.mem.findScalar(u8, name, '.') != null) return false;
     return resolveBuiltinNamespace(name) != null;
 }
 

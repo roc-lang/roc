@@ -71,7 +71,7 @@ pub const SourceNamespaceRoot = union(enum) { imported: []const u8, local, unbou
 /// Source declarations select their namespace before compiler auto-imports.
 pub fn resolveSourceNamespaceRoot(module_env: ?*ModuleEnv, name: []const u8) SourceNamespaceRoot {
     const env = module_env orelse return .unbound;
-    const root = name[0 .. std.mem.indexOfScalar(u8, name, '.') orelse name.len];
+    const root = name[0 .. std.mem.findScalar(u8, name, '.') orelse name.len];
     if (std.mem.eql(u8, env.module_name, root)) return .local;
     for (env.store.sliceStatements(env.all_statements)) |stmt_idx| {
         const stmt = env.store.getSourceStatement(stmt_idx);
