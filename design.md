@@ -16386,10 +16386,27 @@ ARC therefore marks every solved base procedure a call could demand a variant
 of under the run's options (`rc_variant_demandable`): a borrowed position with
 an owned-only field-take benefit, an available outcome span, a borrowed
 position reached by a same-SCC tail call from another procedure, and, with
-general specialization, a borrowed position with a uniqueness seed or a
-borrowed return lent by a borrowed position. A pack never offers a marked
+general specialization, a position with a uniqueness seed or a borrowed
+return lent by a borrowed position. A pack never offers a marked
 procedure, so a warm build lowers it from source and demands the same
-variants the cold build did.
+variants the cold build did. An entry it does offer carries its base
+procedure's uniqueness facts with the signature (`read_only_params`,
+`ret_unique`, `ret_unique_fields`, and the conditional return rows), and the
+linking program's ARC adopts them as fixed: settlement keeps a pinned
+procedure's facts rather than inferring them, so callers of a cached
+procedure prove exactly the uniqueness they would against its body.
+
+Every program must lower a procedure an entry offers to the same LIR, since
+any of them may link it. A pack program therefore makes the inline decisions
+any program makes: it keeps a keyed specialization's procedure, and withholds
+single-use inlining only where the single caller is one of its own export
+wrappers, a call no other program makes. Generated code names nothing a
+program numbers: a Debug invariant check names its procedure by content
+identity and its local by position in the procedure's frame. Under
+`ROC_PACK_TRACE`, every offered and every compiled procedure prints a LIR
+fingerprint with program numbering canonicalized, and the CLI suite checks
+that each offered identity has one fingerprint across a build, an edited
+warm build, and the edited source's cold build.
 
 ### Outcome-Conditioned Argument Restitution
 
@@ -17207,6 +17224,18 @@ and its uniqueness check gets cheaper.
 The debug certifier mirrors the analysis with one more rule: no
 single-thread RC statement may name a local that is flow-connected to a
 host-visibility seed.
+
+Only optimized builds (`--opt=speed` and `--opt=size`) run the analysis
+(`thread_confined_rc`). Dev builds, compile-time evaluation, and the
+interpreter emit atomic count updates for every allocation and record no
+visibility facts. Confinement is a whole-program fact about a procedure's
+callers, and object-cache entries are compiled once and linked into
+programs whose callers differ: an entry compiled with plain updates on a
+confined parameter would be unsound in a program that passes it a
+host-visible value, and its callers could not match a cold build's
+confinement either. Uncontended atomic updates cost dev programs little,
+and the analysis itself is a negligible share of ARC, so dev takes the
+always-sound answer instead of carrying confinement facts in the cache.
 
 ### Uniqueness Inference
 

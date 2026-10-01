@@ -340,12 +340,18 @@ test "test metadata uses explicit union request positions across equal root orde
 
 /// What the object cache knows about a specialization it can serve: the
 /// content identity of its compiled procedure and the ownership signature
-/// ARC solved for it, which the program that links the entry adopts as fixed.
+/// and uniqueness facts ARC solved for it, which the program that links the
+/// entry adopts as fixed.
 pub const SpecCacheHit = struct {
     identity: [32]u8,
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
+    rc_read_only_params: u64,
+    rc_ret_unique: bool,
+    rc_ret_unique_fields: u64,
+    /// Each entry a `LIR.RcRetCondition`, borrowed from the cache.
+    rc_ret_conditions: []const u32,
 };
 
 /// The object cache's answer for a specialization key, asked when Monotype

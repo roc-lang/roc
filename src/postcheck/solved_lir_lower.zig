@@ -174,6 +174,9 @@ pub const Options = struct {
     /// waits for the evaluation to reach it (`CheckedPipeline` decides).
     comptime_closure_hits: bool = false,
     inline_plan: SolvedInline.Plan = .{},
+    /// Lower every keyed specialization's procedure body, even one whose every
+    /// call was inlined, so a pack program can offer it.
+    keep_specialization_procs: bool = false,
     /// Reuse checking workers for prepared procedure-body lowering.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     /// Whether inline `expect` is lowered into runtime statements. Compile-time
@@ -735,6 +738,11 @@ const Lowerer = struct {
     /// of the representative chosen to lower a shared procedure body.
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
+    /// Keyed specializations whose bodies `keep_specialization_procs` lowers
+    /// whether or not a reference reaches them, and how many are queued.
+    keep_specialization_procs: bool,
+    kept_spec_fns: std.ArrayList(Type.FnId),
+    kept_spec_index: usize,
     inline_plan: SolvedInline.Plan,
     inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
     inline_expects: InlineExpectMode,
@@ -1004,6 +1012,9 @@ const Lowerer = struct {
             .fn_written = .empty,
             .fn_reachable = .empty,
             .fn_reach_queue = .empty,
+            .keep_specialization_procs = options.keep_specialization_procs,
+            .kept_spec_fns = .empty,
+            .kept_spec_index = 0,
             .inline_plan = options.inline_plan,
             .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
@@ -1182,6 +1193,7 @@ const Lowerer = struct {
         self.identity_memo.deinit();
         if (self.layout_digests) |*digests| digests.deinit();
         self.fn_reach_queue.deinit(self.allocator);
+        self.kept_spec_fns.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
@@ -1263,6 +1275,7 @@ const Lowerer = struct {
         self.identity_memo.deinit();
         if (self.layout_digests) |*digests| digests.deinit();
         self.fn_reach_queue.deinit(self.allocator);
+        self.kept_spec_fns.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
@@ -1724,7 +1737,18 @@ const Lowerer = struct {
             self.fn_queue_index = fn_queue_index;
             self.initializer_queue_index = initializer_queue_index;
         }
-        while (fn_queue_index < self.fn_reach_queue.items.len or initializer_queue_index < self.static_initializer_queue.items.len) {
+        while (fn_queue_index < self.fn_reach_queue.items.len or
+            initializer_queue_index < self.static_initializer_queue.items.len or
+            self.kept_spec_index < self.kept_spec_fns.items.len)
+        {
+            // A kept specialization whose calls were all inlined is reached
+            // here instead, between epochs, so the queue is never extended
+            // while an epoch is being prepared.
+            while (self.kept_spec_index < self.kept_spec_fns.items.len) {
+                const fn_id = self.kept_spec_fns.items[self.kept_spec_index];
+                self.kept_spec_index += 1;
+                _ = try self.markReachableFn(fn_id);
+            }
             while (fn_queue_index < self.fn_reach_queue.items.len) {
                 // Prepare the complete currently-reachable epoch before lowering
                 // any of its bodies. This keeps coordinator identity allocation
@@ -2874,6 +2898,10 @@ const Lowerer = struct {
             else
                 null,
         };
+        const cached_ret_conditions = if (cached) |hit|
+            try self.result.store.addU32Span(hit.rc_ret_conditions)
+        else
+            LIR.U32Span.empty();
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .identity = identity,
@@ -2894,6 +2922,10 @@ const Lowerer = struct {
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
             .rc_ret_lenders = if (cached) |hit| hit.rc_ret_lenders else 0,
+            .rc_read_only_params = if (cached) |hit| hit.rc_read_only_params else 0,
+            .rc_ret_unique = if (cached) |hit| hit.rc_ret_unique else false,
+            .rc_ret_unique_fields = if (cached) |hit| hit.rc_ret_unique_fields else 0,
+            .rc_ret_conditions = cached_ret_conditions,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
         if (self.proc_debug_names) {
@@ -2904,8 +2936,13 @@ const Lowerer = struct {
         try self.procs_by_identity.putNoClobber(identity, fn_id);
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
-                if (plain_spec) {
+                // A program that keeps its keyed specializations lowers each
+                // one's body as a procedure, except a single-use body, which
+                // is lowered at its call site alone and so is not kept.
+                const kept = self.keep_specialization_procs and !self.inline_plan.isSingleUse(spec.source);
+                if (plain_spec and (kept or !self.keep_specialization_procs)) {
                     try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
+                    if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
                 }
             }
         }

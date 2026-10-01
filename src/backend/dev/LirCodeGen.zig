@@ -1119,6 +1119,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Proc currently being compiled, for debug-time invariant reporting.
         current_proc_name: ?Symbol = null,
 
+        /// Content identity and frame inventory of the proc currently being
+        /// compiled, which name a failed Debug check in generated code
+        /// independently of the program the code is linked into.
+        current_proc_identity: ?LIR.ProcIdentity = null,
+        current_proc_frame_locals: LIR.LocalSpan = LIR.LocalSpan.empty(),
+
         /// Statement currently being generated, for debug-time invariant reporting.
         current_stmt_id: ?CFStmtId = null,
 
@@ -9946,7 +9952,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Report a failed Debug invariant check on `local` through the
         /// `debug_invalid_local` builtin, which formats the message from the
         /// check's identity, so the site carries five immediates rather than
-        /// message bytes.
+        /// message bytes. The proc is named by its content identity and the
+        /// local by its position in the proc's frame inventory: program-wide
+        /// symbol and local numbers would make a proc's code depend on the
+        /// program compiling it, and an object-cache entry's message wrong in
+        /// every program that links it.
         fn emitDebugCrashInvalidLocal(
             self: *Self,
             kind: builtins.dev_wrappers.InvalidLocalKind,
@@ -9954,15 +9964,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             local: LocalId,
         ) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            const proc: u64 = if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64);
-            const stmt: u32 = if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32);
+            const identity = self.current_proc_identity orelse
+                std.debug.panic("LIR/codegen invariant violated: Debug check on local {d} outside a proc", .{@intFromEnum(local)});
+            const frame = self.store.getLocalSpan(self.current_proc_frame_locals);
+            var frame_index: u32 = std.math.maxInt(u32);
+            var low: usize = 0;
+            var high: usize = GuardedList.borrowLen(frame);
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                const candidate = @intFromEnum(GuardedList.at(frame, middle));
+                if (candidate < @intFromEnum(local)) {
+                    low = middle + 1;
+                } else if (candidate > @intFromEnum(local)) {
+                    high = middle;
+                } else {
+                    frame_index = @intCast(middle);
+                    break;
+                }
+            }
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addImmArg(@intFromEnum(kind));
             try builder.addImmArg(@intFromEnum(reason));
-            try builder.addImmArg(@intFromEnum(local));
-            try builder.addImmArg(@bitCast(proc));
-            try builder.addImmArg(stmt);
+            try builder.addImmArg(frame_index);
+            try builder.addImmArg(@bitCast(std.mem.readInt(u64, identity.bytes[0..8], .big)));
+            try builder.addImmArg(@bitCast(std.mem.readInt(u64, identity.bytes[8..16], .big)));
             try self.callBuiltin(&builder, .debug_invalid_local);
             try self.emitTrap();
         }
@@ -20863,6 +20889,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_runtime_ret_desc_local = self.runtime_ret_desc_local;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
             const saved_current_proc_name = self.current_proc_name;
+            const saved_current_proc_identity = self.current_proc_identity;
+            const saved_current_proc_frame_locals = self.current_proc_frame_locals;
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
             const saved_vector_local_by_reg = self.vector_local_by_reg;
@@ -20901,6 +20929,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.runtime_ret_desc_local = proc.runtime_ret_desc;
             self.uses_caller_stack_arg_base = false;
             self.current_proc_name = proc.name;
+            self.current_proc_identity = proc.identity;
+            self.current_proc_frame_locals = proc.frame_locals;
             self.current_proc_args = proc.args;
             self.current_stmt_id = null;
 
@@ -20968,6 +20998,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
                 self.current_proc_name = saved_current_proc_name;
+                self.current_proc_identity = saved_current_proc_identity;
+                self.current_proc_frame_locals = saved_current_proc_frame_locals;
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
                 self.vector_local_by_reg = saved_vector_local_by_reg;
@@ -21217,6 +21249,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
             self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
             self.current_proc_name = saved_current_proc_name;
+            self.current_proc_identity = saved_current_proc_identity;
+            self.current_proc_frame_locals = saved_current_proc_frame_locals;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
             std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &saved_local_locations);
