@@ -15703,8 +15703,8 @@ ARC therefore marks every solved base procedure a call could demand a variant
 of under the run's options (`rc_variant_demandable`): a borrowed position with
 an owned-only field-take benefit, an available outcome span, a borrowed
 position reached by a same-SCC tail call from another procedure, and, with
-general specialization, a borrowed position with a uniqueness seed or a
-borrowed return lent by a borrowed position. A pack never offers a marked
+general specialization, a position with a uniqueness seed or a borrowed
+return lent by a borrowed position. A pack never offers a marked
 procedure, so a warm build lowers it from source and demands the same
 variants the cold build did.
 

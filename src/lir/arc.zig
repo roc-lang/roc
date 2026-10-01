@@ -685,10 +685,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 }
 
-/// Sets `rc_variant_demandable` on every base proc whose borrowed parameter
-/// positions admit a variant demand at a direct call: the same capabilities
-/// `callArgOwnership` consults before upgrading a borrowed position, and the
-/// outcome spans it can select.
+/// Sets `rc_variant_demandable` on every base proc a direct call could demand
+/// a variant of: the capabilities `callArgOwnership` consults before
+/// upgrading a borrowed position or seeding an owned one, and the outcome
+/// spans it can select.
 fn markVariantDemandableProcs(
     store: *LirStore,
     solution: *const arc_solve.Solution,
@@ -713,7 +713,7 @@ fn markVariantDemandableProcs(
         const sig = solution.sigOf(proc);
         const borrowed = sig.borrowed_params;
         const specialized_demand = specialize and
-            ((solution.uniqueSeedMaskOf(proc) & borrowed) != 0 or
+            (solution.uniqueSeedMaskOf(proc) != 0 or
                 (sig.ret_mode == .borrowed and (sig.ret_lenders & borrowed) != 0));
         spec.rc_variant_demandable = (dismantles.ownedOnlyParamBenefits(proc) & borrowed) != 0 or
             !solution.availableOutcomeSpanOf(proc).isEmpty() or
