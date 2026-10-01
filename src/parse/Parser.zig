@@ -2311,7 +2311,7 @@ fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Er
     const p = try self.store.addPattern(.{ .as = .{
         .name = self.pos,
         .pattern = pattern,
-        .region = .{ .start = parent_region.start, .end = self.pos },
+        .region = .{ .start = parent_region.start, .end = self.pos + 1 },
     } });
     self.advance(); // Advance past LowerIdent;
     return p;

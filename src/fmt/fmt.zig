@@ -1056,6 +1056,7 @@ const Formatter = struct {
         }
 
         if (clauses_are_multiline) {
+            try fmt.flushCommentsBeforeDiscard(clause_coll.region.end - 1);
             try fmt.ensureNewline();
             fmt.curr_indent -= 1;
             try fmt.pushIndent();
@@ -1491,6 +1492,13 @@ const Formatter = struct {
         if (flushed) {
             return;
         }
+    }
+
+    /// Item regions end at the separator or closing delimiter. A source comma
+    /// has trivia on both sides; an inserted comma has only the closing gap.
+    fn flushItemComments(fmt: *Formatter, end: Token.Idx) error{WriteFailed}!void {
+        try fmt.flushCommentsBeforeDiscard(end);
+        if (fmt.ast.tokens.tokenTag(end) == .Comma) try fmt.flushCommentsAfterDiscard(end);
     }
 
     fn flushCommentsAfterDiscard(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!void {
@@ -1959,7 +1967,7 @@ const Formatter = struct {
 
                     try fmt.push(',');
                     if (record_multiline and fields.len > 0) {
-                        try fmt.flushCommentsAfterDiscard(ext_region.end);
+                        try fmt.flushItemComments(ext_region.end);
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     }
@@ -1984,7 +1992,7 @@ const Formatter = struct {
                             try fmt.pushIndent();
                         }
                         try fmt.push(',');
-                        try fmt.flushCommentsAfterDiscard(formatted_field.region.end);
+                        try fmt.flushItemComments(formatted_field.region.end);
                         if (i == fields.len - 1) {
                             fmt.curr_indent -= 1;
                         }
@@ -2031,7 +2039,7 @@ const Formatter = struct {
                     const arg_region = try fmt.formatPattern(arg);
                     if (args_are_multiline) {
                         try fmt.push(',');
-                        try fmt.flushCommentsAfterDiscard(arg_region.end);
+                        try fmt.flushItemComments(arg_region.end);
                         if (i == args.len - 1) {
                             fmt.curr_indent -= 1;
                         }
@@ -2246,9 +2254,11 @@ const Formatter = struct {
                     }
                     try fmt.formatExprDiscard(branch.body);
                 }
+                fmt.curr_indent = branch_indent;
+                try fmt.flushCommentsBeforeDiscard(region.end - 1);
                 // Multiline arms can increase curr_indent beyond the branch level.
                 fmt.curr_indent = branch_indent - 1;
-                try fmt.newline();
+                try fmt.ensureNewline();
                 try fmt.pushIndent();
                 try fmt.push('}');
             },
@@ -2337,7 +2347,7 @@ const Formatter = struct {
                         }
                         try fmt.push(',');
                         if (record_multiline) {
-                            try fmt.flushCommentsAfterDiscard(formatted_field.region.end);
+                            try fmt.flushItemComments(formatted_field.region.end);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
@@ -2347,7 +2357,7 @@ const Formatter = struct {
                             try fmt.pushIndent();
                         }
                         try fmt.push(',');
-                        try fmt.flushCommentsAfterDiscard(formatted_field.region.end);
+                        try fmt.flushItemComments(formatted_field.region.end);
                         fmt.curr_indent -= 1;
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
@@ -7020,5 +7030,19 @@ test "issue 11927: comments between all platform sections survive" {
         const comment = try std.fmt.allocPrint(std.testing.allocator, "# Before {s}.", .{section});
         defer std.testing.allocator.free(comment);
         try std.testing.expect(std.mem.count(u8, result, comment) == 1);
+    }
+}
+
+test "issue 11926: trailing comments survive without a source comma" {
+    const inputs = [_][]const u8{
+        "retry! = |attempt| {\n    match attempt {\n        Ok(v) => Stdout.line!(\"ok\")\n        Err(e) => Stdout.line!(\"err\") # Last item.\n    }\n}",
+        "config = {\n    host: \"localhost\",\n    port: 8080 # Last item.\n}",
+        "render : List(a) -> Str where [\n    a.label : a -> Str # Last item.\n]",
+        "scale = |\n    factor, # First item.\n    clamp # Last item.\n| factor * clamp",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expect(std.mem.count(u8, result, "# Last item.") == 1);
     }
 }
