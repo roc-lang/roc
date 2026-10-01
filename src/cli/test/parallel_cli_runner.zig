@@ -1319,6 +1319,8 @@ const subcommand_cases = [_]CliCase{
     // substitution must pair it, in its own module and through an import.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11765: default-closed value row in a generic function's scheme (defining module)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_11765_default_closed_value_row/Reply.roc", .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11765: default-closed value row in a generic function's scheme (importing module)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_11765_default_closed_value_row/Uses.roc", .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11946: nested package defaults build", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11946_nested_defaults/app.roc", .exit = .success } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11946: repeated nested package defaults run", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11946_nested_defaults/runtime.roc", .exit = .success, .contains = &.{.{ .stream = .stderr, .text = "18000" }} } } },
     // Repro for https://github.com/roc-lang/roc/issues/10705: two public names
     // that resolve to one source module must contribute one type-check
     // environment, not one per import name.
