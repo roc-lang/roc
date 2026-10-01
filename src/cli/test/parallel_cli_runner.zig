@@ -12166,7 +12166,7 @@ fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: 
         "impl HostTree",
         "pub unsafe fn decref(self, roc_host: &RocHost)",
         "extern \"C\" fn decref_box_payload_type",
-        "pub fn roc_alloc(length: usize, alignment: usize) -> *mut c_void;",
+        "pub fn roc_alloc(length: usize, alignment: usize) -> NonNull<c_void>;",
         "pub struct BuilderPrintValueArgs",
         "pub fn roc_stdout_line(arg0: RocStr);",
         "pub fn roc_main();",
@@ -12229,7 +12229,7 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         "pub fn decrefErasedCallable",
         "pub fn decref(self: @This(), roc_host: *RocHost) void",
         "fn decrefBoxPayloadType",
-        "pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;",
+        "pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) *anyopaque;",
         "pub const BuilderPrint_valueArgs = if (@sizeOf(usize) == 4) extern struct",
         "pub extern fn roc_stdout_line(arg0: RocStr) callconv(.c) void;",
         "pub extern fn roc_main() callconv(.c) void;",
@@ -12517,12 +12517,12 @@ fn customGlueZigBoxHelperTest(
         \\    backing: [256]u8 align(16) = undefined,
         \\};
         \\
-        \\fn rocAlloc(host: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        \\fn rocAlloc(host: *abi.RocHost, length: usize, alignment: usize) callconv(.c) *anyopaque {
         \\    const env_ref: *Env = @ptrCast(@alignCast(host.env));
         \\    env_ref.alloc_count += 1;
         \\    env_ref.alloc_length = length;
         \\    env_ref.alloc_alignment = alignment;
-        \\    if (length > env_ref.backing.len or alignment > 16) return null;
+        \\    if (length > env_ref.backing.len or alignment > 16) @panic("test allocation does not fit the backing buffer");
         \\    return @ptrCast(&env_ref.backing);
         \\}
         \\
@@ -12533,7 +12533,7 @@ fn customGlueZigBoxHelperTest(
         \\    env_ref.dealloc_alignment = alignment;
         \\}
         \\
-        \\fn rocRealloc(_: *abi.RocHost, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
+        \\fn rocRealloc(_: *abi.RocHost, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
         \\    unreachable;
         \\}
         \\
@@ -12668,14 +12668,14 @@ fn customGlueZigBoxHelperTest(
         \\    };
         \\    var roc_host = abi.makeRocHost(&env_value);
         \\
-        \\    const alloc_ptr = abi.DefaultAllocators.rocAlloc(&roc_host, 8, 4) orelse return error.OutOfMemory;
+        \\    const alloc_ptr = abi.DefaultAllocators.rocAlloc(&roc_host, 8, 4);
         \\
         \\    const old_bytes: [*]u8 = @ptrCast(alloc_ptr);
         \\    old_bytes[0] = 0xaa;
         \\    old_bytes[1] = 0xbb;
         \\    old_bytes[7] = 0xcc;
         \\
-        \\    const realloc_ptr = abi.DefaultAllocators.rocRealloc(&roc_host, alloc_ptr, 16, 4) orelse return error.OutOfMemory;
+        \\    const realloc_ptr = abi.DefaultAllocators.rocRealloc(&roc_host, alloc_ptr, 16, 4);
         \\
         \\    const new_bytes: [*]u8 = @ptrCast(realloc_ptr);
         \\    try std.testing.expectEqual(@as(u8, 0xaa), new_bytes[0]);

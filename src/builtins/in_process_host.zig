@@ -117,7 +117,7 @@ fn hostInvariant(comptime message: []const u8) noreturn {
     std.process.abort();
 }
 
-fn symbolAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn symbolAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     return host_abi.extern_host.roc_alloc(length, alignment);
 }
 
@@ -125,7 +125,7 @@ fn symbolDealloc(_: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) voi
     host_abi.extern_host.roc_dealloc(ptr, alignment);
 }
 
-fn symbolRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn symbolRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return host_abi.extern_host.roc_realloc(ptr, new_length, alignment);
 }
 
@@ -157,7 +157,7 @@ fn missingHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) voi
 
 var no_hosted_fns: [1]host_abi.HostedFn = .{host_abi.hostedFn(&missingHostedFn)};
 
-fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     const o = requireOps();
     return o.roc_alloc(o, length, alignment);
 }
@@ -167,7 +167,7 @@ fn rocDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     o.roc_dealloc(o, ptr, alignment);
 }
 
-fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const o = requireOps();
     return o.roc_realloc(o, ptr, new_length, alignment);
 }

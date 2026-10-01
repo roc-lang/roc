@@ -149,7 +149,7 @@ pub const TestEnv = struct {
         return self.allocation_map.count();
     }
 
-    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Allocate memory using the testing allocator with comptime alignment
@@ -206,7 +206,7 @@ pub const TestEnv = struct {
         }
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, _: usize) callconv(.c) ?*anyopaque {
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, _: usize) callconv(.c) *anyopaque {
         const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Look up the old allocation
@@ -903,7 +903,7 @@ pub fn allocateWithRefcount(
     const extra_bytes = @max(required_space, element_alignment);
     const length = extra_bytes + data_bytes;
 
-    const new_bytes = @as([*]u8, @ptrCast(roc_ops.tryAlloc(length, alignment)));
+    const new_bytes = @as([*]u8, @ptrCast(roc_ops.allocRaw(length, alignment)));
 
     const data_ptr = new_bytes + extra_bytes;
 
@@ -951,7 +951,7 @@ pub fn unsafeReallocate(
     // Use the same alignment calculation as allocateWithRefcount
     const allocation_alignment = @max(ptr_width, element_alignment);
 
-    const reallocated = roc_ops.tryRealloc(old_allocation, new_width, allocation_alignment);
+    const reallocated = roc_ops.realloc(old_allocation, new_width, allocation_alignment);
 
     const new_source = @as([*]u8, @ptrCast(reallocated)) + extra_bytes;
     if (comptime builtin.os.tag != .freestanding) {
@@ -1362,7 +1362,7 @@ test "TestEnv allocation tracking" {
     try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
 
     // Test deallocation
-    ops.roc_dealloc(ops, allocated.?, 8);
+    ops.roc_dealloc(ops, allocated, 8);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 

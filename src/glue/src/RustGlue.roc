@@ -929,6 +929,7 @@ generate_rust_file_header =
 generate_rust_imports : Str
 generate_rust_imports =
 	\\use core::ffi::c_void;
+	\\use core::ptr::NonNull;
 	\\use core::sync::atomic::{fence, AtomicIsize, Ordering};
 	\\#[cfg(not(no_roc_std_helpers))]
 	\\use std::alloc::Layout;
@@ -1027,9 +1028,11 @@ generate_host_abi_types_rust =
 	\\#[repr(C)]
 	\\pub struct RocHost {
 	\\    pub env: *mut c_void,
-	\\    pub roc_alloc: extern "C" fn(*mut RocHost, usize, usize) -> *mut c_void,
+	\\    /// Never returns null; see `roc_alloc` below.
+	\\    pub roc_alloc: extern "C" fn(*mut RocHost, usize, usize) -> NonNull<c_void>,
 	\\    pub roc_dealloc: extern "C" fn(*mut RocHost, *mut c_void, usize),
-	\\    pub roc_realloc: extern "C" fn(*mut RocHost, *mut c_void, usize, usize) -> *mut c_void,
+	\\    /// Never returns null; see `roc_realloc` below.
+	\\    pub roc_realloc: extern "C" fn(*mut RocHost, *mut c_void, usize, usize) -> NonNull<c_void>,
 	\\    pub roc_dbg: extern "C" fn(*mut RocHost, *const u8, usize),
 	\\    pub roc_expect_failed: extern "C" fn(*mut RocHost, *const u8, usize),
 	\\    pub roc_crashed: extern "C" fn(*mut RocHost, *const u8, usize),
@@ -1044,7 +1047,7 @@ generate_host_abi_types_rust =
 	\\    #[inline]
 	\\    pub unsafe fn alloc(&self, alignment: usize, length: usize) -> *mut c_void {
 	\\        let host = self as *const RocHost as *mut RocHost;
-	\\        (self.roc_alloc)(host, length, alignment)
+	\\        (self.roc_alloc)(host, length, alignment).as_ptr()
 	\\    }
 	\\
 	\\    /// Deallocate memory previously allocated with `alloc`.
@@ -1071,7 +1074,7 @@ generate_host_abi_types_rust =
 	\\        new_length: usize,
 	\\    ) -> *mut c_void {
 	\\        let host = self as *const RocHost as *mut RocHost;
-	\\        (self.roc_realloc)(host, old_ptr, new_length, alignment)
+	\\        (self.roc_realloc)(host, old_ptr, new_length, alignment).as_ptr()
 	\\    }
 	\\}
 	\\
@@ -2838,15 +2841,19 @@ generate_runtime_symbol_externs_rust =
 	\\
 	\\#[allow(improper_ctypes)]
 	\\unsafe extern "C" {
-	\\    pub fn roc_alloc(length: usize, alignment: usize) -> *mut c_void;
+	\\    /// Returns `length` bytes aligned to `alignment`. Never returns null: Roc writes through
+	\\    /// the result without checking it, so a host that cannot allocate must stop the Roc
+	\\    /// program and not return, exactly as `roc_crashed` does.
+	\\    pub fn roc_alloc(length: usize, alignment: usize) -> NonNull<c_void>;
 	\\    pub fn roc_dealloc(ptr: *mut c_void, alignment: usize);
-	\\    pub fn roc_realloc(ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void;
+	\\    /// Never returns null, under the same rule as `roc_alloc`.
+	\\    pub fn roc_realloc(ptr: *mut c_void, new_length: usize, alignment: usize) -> NonNull<c_void>;
 	\\    pub fn roc_dbg(bytes: *const u8, len: usize);
 	\\    pub fn roc_expect_failed(bytes: *const u8, len: usize);
 	\\    pub fn roc_crashed(bytes: *const u8, len: usize);
 	\\}
 	\\
-	\\extern "C" fn direct_roc_alloc(_host: *mut RocHost, length: usize, alignment: usize) -> *mut c_void {
+	\\extern "C" fn direct_roc_alloc(_host: *mut RocHost, length: usize, alignment: usize) -> NonNull<c_void> {
 	\\    unsafe { roc_alloc(length, alignment) }
 	\\}
 	\\
@@ -2854,7 +2861,7 @@ generate_runtime_symbol_externs_rust =
 	\\    unsafe { roc_dealloc(ptr, alignment); }
 	\\}
 	\\
-	\\extern "C" fn direct_roc_realloc(_host: *mut RocHost, ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+	\\extern "C" fn direct_roc_realloc(_host: *mut RocHost, ptr: *mut c_void, new_length: usize, alignment: usize) -> NonNull<c_void> {
 	\\    unsafe { roc_realloc(ptr, new_length, alignment) }
 	\\}
 	\\
@@ -3045,7 +3052,7 @@ generate_default_allocators_direct_rust =
 	\\#[cfg(not(no_roc_std_helpers))]
 	\\impl DefaultAllocators {
 	\\    /// Allocate memory using the Rust global allocator.
-	\\    pub extern "C" fn roc_alloc(_roc_host: *mut RocHost, length: usize, alignment: usize) -> *mut c_void {
+	\\    pub extern "C" fn roc_alloc(_roc_host: *mut RocHost, length: usize, alignment: usize) -> NonNull<c_void> {
 	\\        unsafe {
 	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
@@ -3062,7 +3069,7 @@ generate_default_allocators_direct_rust =
 	\\            let size_ptr = base_ptr.add(size_storage_bytes).sub(core::mem::size_of::<usize>()) as *mut usize;
 	\\            *size_ptr = total_size;
 	\\
-	\\            base_ptr.add(size_storage_bytes) as *mut c_void
+	\\            NonNull::new_unchecked(base_ptr.add(size_storage_bytes) as *mut c_void)
 	\\        }
 	\\    }
 	\\
@@ -3083,7 +3090,7 @@ generate_default_allocators_direct_rust =
 	\\    }
 	\\
 	\\    /// Reallocate memory, preserving existing user data.
-	\\    pub extern "C" fn roc_realloc(_roc_host: *mut RocHost, ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+	\\    pub extern "C" fn roc_realloc(_roc_host: *mut RocHost, ptr: *mut c_void, new_length: usize, alignment: usize) -> NonNull<c_void> {
 	\\        unsafe {
 	\\            let min_alignment = alignment.max(core::mem::align_of::<usize>());
 	\\            let size_storage_bytes = min_alignment;
@@ -3104,7 +3111,7 @@ generate_default_allocators_direct_rust =
 	\\            let new_user_ptr = new_base_ptr.add(size_storage_bytes);
 	\\            let new_size_ptr = new_user_ptr.sub(core::mem::size_of::<usize>()) as *mut usize;
 	\\            *new_size_ptr = new_total_size;
-	\\            new_user_ptr as *mut c_void
+	\\            NonNull::new_unchecked(new_user_ptr as *mut c_void)
 	\\        }
 	\\    }
 	\\}

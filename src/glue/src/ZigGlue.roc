@@ -1896,9 +1896,11 @@ generate_host_abi_types =
 	\\/// linker symbols declared below (`roc_alloc`, hosted symbols, and provided entrypoints).
 	\\pub const RocHost = extern struct {
 	\\    env: *anyopaque,
-	\\    roc_alloc: *const fn (*RocHost, usize, usize) callconv(.c) ?*anyopaque,
+	\\    /// Never returns null; see `roc_alloc` below.
+	\\    roc_alloc: *const fn (*RocHost, usize, usize) callconv(.c) *anyopaque,
 	\\    roc_dealloc: *const fn (*RocHost, *anyopaque, usize) callconv(.c) void,
-	\\    roc_realloc: *const fn (*RocHost, *anyopaque, usize, usize) callconv(.c) ?*anyopaque,
+	\\    /// Never returns null; see `roc_realloc` below.
+	\\    roc_realloc: *const fn (*RocHost, *anyopaque, usize, usize) callconv(.c) *anyopaque,
 	\\    roc_dbg: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
 	\\    roc_expect_failed: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
 	\\    roc_crashed: *const fn (*RocHost, [*]const u8, usize) callconv(.c) void,
@@ -2359,9 +2361,13 @@ generate_runtime_symbol_externs =
 	\\//
 	\\// The host defines these linker symbols. Compiled Roc code calls them directly.
 	\\
-	\\pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+	\\/// Returns `length` bytes aligned to `alignment`. Never returns null: Roc writes through
+	\\/// the result without checking it, so a host that cannot allocate must stop the Roc
+	\\/// program and not return, exactly as `roc_crashed` does.
+	\\pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) *anyopaque;
 	\\pub extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void;
-	\\pub extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+	\\/// Never returns null, under the same rule as `roc_alloc`.
+	\\pub extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque;
 	\\pub extern fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void;
 	\\pub extern fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void;
 	\\pub extern fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void;
@@ -2462,7 +2468,7 @@ generate_default_allocators =
 	\\/// allocation size (required because `roc_dealloc` receives no length).
 	\\pub const DefaultAllocators = struct {
 	\\    /// Allocate memory for the Roc runtime.
-	\\    pub fn rocAlloc(roc_host: *RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+	\\    pub fn rocAlloc(roc_host: *RocHost, length: usize, alignment: usize) callconv(.c) *anyopaque {
 	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        const allocator = env.allocator;
 	\\
@@ -2501,7 +2507,7 @@ generate_default_allocators =
 	\\    }
 	\\
 	\\    /// Reallocate memory, copying existing data to the new allocation.
-	\\    pub fn rocRealloc(roc_host: *RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+	\\    pub fn rocRealloc(roc_host: *RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
 	\\        const env: *RocEnv = @ptrCast(@alignCast(roc_host.env));
 	\\        const allocator = env.allocator;
 	\\

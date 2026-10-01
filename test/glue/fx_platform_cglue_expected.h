@@ -552,6 +552,27 @@ typedef struct {
 } StdoutLineArgs;
 
 
+// Runtime Symbols
+
+/* The host defines these linker symbols. Compiled Roc code calls them directly. */
+
+#if defined(__GNUC__) || defined(__clang__)
+#define ROC_RETURNS_NONNULL __attribute__((returns_nonnull))
+#else
+#define ROC_RETURNS_NONNULL
+#endif
+
+/* Returns `length` bytes aligned to `alignment`. Never returns NULL: Roc writes through
+   the result without checking it, so a host that cannot allocate must stop the Roc
+   program and not return, exactly as roc_crashed does. */
+ROC_RETURNS_NONNULL void* roc_alloc(size_t length, size_t alignment);
+void roc_dealloc(void* ptr, size_t alignment);
+/* Never returns NULL, under the same rule as roc_alloc. */
+ROC_RETURNS_NONNULL void* roc_realloc(void* ptr, size_t new_length, size_t alignment);
+void roc_dbg(const uint8_t* bytes, size_t len);
+void roc_expect_failed(const uint8_t* bytes, size_t len);
+void roc_crashed(const uint8_t* bytes, size_t len);
+
 // Hosted Symbols
 
 /* Builder.print_value!: Builder => {} */

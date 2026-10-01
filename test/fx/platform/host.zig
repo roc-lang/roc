@@ -296,7 +296,7 @@ var g_roc_ops: ?*builtins.host_abi.RocOps = null;
 
 /// Roc allocation function: shared size-tracking scheme plus live-allocation
 /// bookkeeping so the host can report leaks and clean up on test failure.
-fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
     const answer = host_alloc.alloc(host.gpa.allocator(), length, alignment) orelse
@@ -331,7 +331,7 @@ fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usiz
 }
 
 /// Roc reallocation function with size-tracking metadata
-fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
     // Update tracking: remove the old allocation, add the new one

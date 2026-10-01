@@ -160,7 +160,7 @@ fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
     abortProcess();
 }
 
-fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     _ = length;
     _ = alignment;
     rawWriteStderr("roc_alloc called\n");
@@ -174,7 +174,7 @@ fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     abortProcess();
 }
 
-fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     _ = ptr;
     _ = new_length;
     _ = alignment;

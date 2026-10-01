@@ -18313,6 +18313,18 @@ executes Roc code—including threads that invoke stored boxed Roc closures.
 Generated glue exposes closure invocation through helpers that set and restore
 that state so the contract is enforced by signatures rather than remembered.
 
+`roc_alloc` and `roc_realloc` never return null. Roc writes the refcount
+header through the result without checking it, so a host that cannot satisfy
+an allocation stops the Roc program and does not return, exactly as it does
+for `roc_crashed`; a host whose allocator cannot fail needs no check at all.
+The contract is carried by types rather than prose: the Zig ABI declarations
+return a non-optional pointer, generated Rust glue returns `NonNull<c_void>`,
+generated C glue declares both symbols `returns_nonnull`, and the LLVM backend
+marks their declarations' return values `nonnull` in the linked module.
+Compiler-internal hosts follow the same contract: the compile-time evaluator's
+host turns allocation failure into a Roc crash by unwinding the interpreter it
+serves, rather than signaling it with null.
+
 The host symbol ABI is identical for `.lss` and `.boxy`. Host-facing signatures
 are derived from checked platform/provided/hosted declarations and the shared
 C ABI classifier. They are not derived from private `.boxy` worker layouts,

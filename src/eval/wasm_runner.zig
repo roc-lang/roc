@@ -3006,18 +3006,14 @@ fn hostFloatFromUtf8Prefix(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, pa
 
 const WasmRocOps = builtins.host_abi.RocOps;
 
-fn wasmDecAlloc(ops: *WasmRocOps, _: usize, _: usize) callconv(.c) ?*anyopaque {
-    const state: *WasmRunState = @ptrCast(@alignCast(ops.env));
-    state.recordCrash("ran out of memory");
-    return null;
+fn wasmDecAlloc(_: *WasmRocOps, _: usize, _: usize) callconv(.c) *anyopaque {
+    @panic("wasm runner invariant violated: a Dec builtin allocated");
 }
 
 fn wasmDecDealloc(_: *WasmRocOps, _: *anyopaque, _: usize) callconv(.c) void {}
 
-fn wasmDecRealloc(ops: *WasmRocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
-    const state: *WasmRunState = @ptrCast(@alignCast(ops.env));
-    state.recordCrash("ran out of memory");
-    return null;
+fn wasmDecRealloc(_: *WasmRocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
+    @panic("wasm runner invariant violated: a Dec builtin reallocated");
 }
 
 fn wasmDecDbg(_: *WasmRocOps, _: [*]const u8, _: usize) callconv(.c) void {}

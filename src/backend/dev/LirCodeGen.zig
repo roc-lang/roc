@@ -25862,7 +25862,7 @@ const TestRocOps = struct {
         return @max(alignment, @alignOf(usize));
     }
 
-    fn rocAlloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAlloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *TestRocOps = @ptrCast(@alignCast(ops.env));
         const align_enum = std.mem.Alignment.fromByteUnits(alignment);
         const meta = metaBytes(alignment);
@@ -25884,7 +25884,7 @@ const TestRocOps = struct {
         self.allocator.rawFree(alloc_base[0..total], align_enum, @returnAddress());
     }
 
-    fn rocRealloc(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocRealloc(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *TestRocOps = @ptrCast(@alignCast(ops.env));
         const meta = metaBytes(alignment);
         const old_total_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));

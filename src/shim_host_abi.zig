@@ -37,7 +37,7 @@ pub fn hostedNames() []const ?[*:0]const u8 {
     return roc_shim_hosted_names[0..roc_shim_hosted_count.*];
 }
 
-fn shimAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn shimAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     return extern_host.roc_alloc(length, alignment);
 }
 
@@ -45,7 +45,7 @@ fn shimDealloc(_: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void 
     extern_host.roc_dealloc(ptr, alignment);
 }
 
-fn shimRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn shimRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return extern_host.roc_realloc(ptr, new_length, alignment);
 }
 

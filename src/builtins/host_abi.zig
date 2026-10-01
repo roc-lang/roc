@@ -66,9 +66,9 @@ else
 ///
 /// These function-pointer types can be used without linking a host.
 pub const ExternHostFns = struct {
-    pub const roc_alloc = *const fn (length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+    pub const roc_alloc = *const fn (length: usize, alignment: usize) callconv(.c) *anyopaque;
     pub const roc_dealloc = *const fn (ptr: *anyopaque, alignment: usize) callconv(.c) void;
-    pub const roc_realloc = *const fn (ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque;
+    pub const roc_realloc = *const fn (ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque;
     pub const roc_dbg = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
     pub const roc_expect_failed = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
     pub const roc_crashed = *const fn (bytes: [*]const u8, len: usize) callconv(.c) void;
@@ -147,21 +147,22 @@ pub const RocOps = extern struct {
     /// through their leading `*RocOps` argument (`ops.env`) to find things like an arena
     /// allocator. May be null if the host has no context.
     env: *anyopaque,
-    /// Allocate `length` bytes aligned to `alignment`, returning the allocation (or null on
-    /// OOM—see below). Similar to `_aligned_malloc`.
+    /// Allocate `length` bytes aligned to `alignment`, returning the allocation. Similar to
+    /// `_aligned_malloc`, except that it never returns null.
     ///
-    /// A host that cannot provide a non-null pointer (e.g. due to OOM) must not return a real
-    /// pointer; a platform host aborts, while the compiler-internal host returns `null` so the
-    /// surrounding interpreter can turn it into a Roc crash. (`null` and a real pointer share
-    /// the same representation, so codegen and platform hosts that always succeed are
-    /// unaffected.)
-    roc_alloc: *const fn (*RocOps, usize, usize) callconv(.c) ?*anyopaque,
+    /// Roc writes through the returned pointer without checking it, so returning null is
+    /// undefined behavior. A host that cannot satisfy the allocation (e.g. due to OOM) must
+    /// stop execution of the Roc program and not return to it, exactly as `roc_crashed` does
+    /// (a platform host aborts; the compiler-internal hosts longjmp out). A host whose
+    /// allocator cannot fail in the first place needs no check at all.
+    roc_alloc: *const fn (*RocOps, usize, usize) callconv(.c) *anyopaque,
     /// Free the allocation at `ptr` that had alignment `alignment`. Similar to `_aligned_free`.
     /// (The length is not provided, because seamless slices make it unknown at runtime.)
     roc_dealloc: *const fn (*RocOps, *anyopaque, usize) callconv(.c) void,
     /// Reallocate `ptr` to `new_length` bytes aligned to `alignment`, returning the new
-    /// allocation (or null on OOM, as for `roc_alloc`). Similar to `_aligned_realloc`.
-    roc_realloc: *const fn (*RocOps, *anyopaque, usize, usize) callconv(.c) ?*anyopaque,
+    /// allocation. Similar to `_aligned_realloc`, except that it never returns null: a host
+    /// that cannot satisfy the reallocation must not return to Roc, as for `roc_alloc`.
+    roc_realloc: *const fn (*RocOps, *anyopaque, usize, usize) callconv(.c) *anyopaque,
     /// Called when the Roc program runs `dbg`, with the UTF-8 message bytes and length.
     /// The bytes are non-null but not guaranteed to be null-terminated.
     roc_dbg: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
@@ -213,23 +214,23 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const answer = self.tryAlloc(length, alignment);
+        const answer = self.allocRaw(length, alignment);
 
         if (tracy.enable_allocation) {
             tracy.alloc(@ptrCast(answer), length);
         }
 
-        return answer.?;
+        return answer;
     }
 
-    /// Allocate, returning null on OOM exactly as the host reported it.
-    pub fn tryAlloc(self: *RocOps, length: usize, alignment: usize) ?*anyopaque {
+    /// Allocate through the host without tracing. The host never returns null.
+    pub fn allocRaw(self: *RocOps, length: usize, alignment: usize) *anyopaque {
         if (comptime host_role == .platform) return extern_host.roc_alloc(length, alignment);
         return self.roc_alloc(self, length, alignment);
     }
 
-    /// Reallocate, returning null on OOM exactly as the host reported it.
-    pub fn tryRealloc(self: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque {
+    /// Reallocate through the host. The host never returns null.
+    pub fn realloc(self: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) *anyopaque {
         if (comptime host_role == .platform) return extern_host.roc_realloc(ptr, new_length, alignment);
         return self.roc_realloc(self, ptr, new_length, alignment);
     }

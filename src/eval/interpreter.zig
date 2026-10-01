@@ -200,9 +200,10 @@ const InterpreterRocEnv = struct {
         self.recordCrash(msg);
     }
 
-    /// The host allocators signal OOM by returning a null pointer (see
-    /// `host_abi.RocOps.roc_alloc`). Turn that into a Roc crash that unwinds to
-    /// the eval boundary via the active jump buffer, instead of letting it abort.
+    /// Report an allocation failure as a Roc crash and unwind to the eval
+    /// boundary via the active jump buffer. A caller host whose allocator can
+    /// fail reaches this through `OutOfMemoryUnwind`, because host allocation
+    /// callbacks never return null (see `host_abi.RocOps.roc_alloc`).
     fn crashAllocationFailed(self: *InterpreterRocEnv) noreturn {
         self.reportCrash("ran out of memory");
         const active_jmp_buf = self.active_jmp_buf orelse {
@@ -220,10 +221,10 @@ const InterpreterRocEnv = struct {
         longjmp(active_jmp_buf, 1);
     }
 
-    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        const ptr = caller_roc_ops.roc_alloc(caller_roc_ops, length, alignment) orelse self.crashAllocationFailed();
+        const ptr = caller_roc_ops.roc_alloc(caller_roc_ops, length, alignment);
         trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), length, alignment });
         return ptr;
     }
@@ -235,11 +236,11 @@ const InterpreterRocEnv = struct {
         caller_roc_ops.roc_dealloc(caller_roc_ops, ptr, alignment);
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
         const old_ptr = ptr;
-        const new_ptr = caller_roc_ops.roc_realloc(caller_roc_ops, ptr, new_length, alignment) orelse self.crashAllocationFailed();
+        const new_ptr = caller_roc_ops.roc_realloc(caller_roc_ops, ptr, new_length, alignment);
         trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), new_length });
         return new_ptr;
     }
@@ -277,6 +278,17 @@ const InterpreterRocEnv = struct {
         };
         self.active_jmp_buf = null;
         longjmp(active_jmp_buf, 1);
+    }
+};
+
+/// Lets a caller host whose allocator can fail turn that failure into a Roc
+/// crash that unwinds this interpreter's current evaluation, since the host's
+/// allocation callbacks must not return to Roc without an allocation.
+pub const OutOfMemoryUnwind = struct {
+    roc_env: *InterpreterRocEnv,
+
+    pub fn unwind(self: OutOfMemoryUnwind) noreturn {
+        self.roc_env.crashAllocationFailed();
     }
 };
 
@@ -931,6 +943,12 @@ pub const Interpreter = struct {
 
     /// Get the crash message from the last evaluation (if any).
     /// The message is owned by the interpreter and valid until the next eval or deinit.
+    /// The unwind a caller host uses when it cannot satisfy an allocation
+    /// made during this interpreter's evaluation.
+    pub fn outOfMemoryUnwind(self: *const LirInterpreter) OutOfMemoryUnwind {
+        return .{ .roc_env = self.roc_env };
+    }
+
     pub fn getCrashMessage(self: *const LirInterpreter) ?[]const u8 {
         return self.roc_env.crash_message;
     }
@@ -10195,4 +10213,54 @@ test "interpreter evaluates explicit static data by compact id" {
 
     const result = try interpreter.eval(.{ .proc_id = proc, .ret_layout = .u64 });
     try std.testing.expectEqual(static_value, result.value.read(u64));
+}
+
+test "interpreter turns a compiler host allocation failure into a Roc crash" {
+    const CompilerHost = @import("compiler_host.zig");
+    const allocator = std.testing.allocator;
+
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    const list_layout = try layouts.insertList(.u8);
+
+    const capacity = try store.addLocal(.{ .layout_idx = .u64 });
+    const list = try store.addLocal(.{ .layout_idx = list_layout });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = list } }, .test_fixture);
+    const with_capacity = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = list,
+        .op = .list_with_capacity,
+        .rc_effect = base.LowLevel.list_with_capacity.rcEffect(),
+        .args = try store.addLocalSpan(&.{capacity}),
+        .next = ret_stmt,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = capacity,
+        .value = .{ .i64_literal = .{ .value = 64, .layout_idx = .u64 } },
+        .next = with_capacity,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = list_layout,
+        .frame_locals = try store.addLocalSpan(&.{ capacity, list }),
+    }, .none);
+
+    // Every allocation the host attempts fails, so it must unwind the
+    // evaluation instead of returning to the builtin that asked.
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    var host = CompilerHost.init(failing.allocator());
+    defer host.deinit();
+
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
+    defer static_strings.deinit();
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, static_strings.view(), host.ops());
+    defer interpreter.deinit();
+    host.bindInterpreter(&interpreter);
+
+    try std.testing.expectError(error.Crash, interpreter.eval(.{ .proc_id = proc, .ret_layout = list_layout }));
+    try std.testing.expectEqualStrings("ran out of memory", interpreter.getCrashMessage().?);
 }
