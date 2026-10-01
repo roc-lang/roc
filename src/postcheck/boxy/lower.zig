@@ -27509,6 +27509,37 @@ const ProcBodyBuilder = struct {
             return try self.prependLoweredExprs(args, lowered, continuation);
         }
 
+        // list_sort_with calls its comparator through a fixed ABI whose
+        // ordering result is the closed `[Before, Same, After]`. A comparator
+        // written as a callback returns that union open, so cross into the
+        // comparator's exact ABI representation before the call.
+        if (op == .list_sort_with) {
+            if (lowered.len != 2) boxyLowerInvariant("list_sort_with did not take a list and a comparator");
+            const comparator_rep = self.repForType(self.module.checked_bodies.expr(args[1]).ty);
+            const abi_rep = self.parent.plan.hostRepFor(comparator_rep);
+            if (abi_rep != comparator_rep) {
+                const abi_comparator = try self.addFrameBoundaryTargetLocalForRep(abi_rep);
+                const arg_locals = [_]LIR.LocalId{ lowered[0], abi_comparator };
+                var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                    .target = target,
+                    .op = op,
+                    .rc_effect = op.rcEffect(),
+                    .args = try self.parent.result.store.addLocalSpan(&arg_locals),
+                    .next = result_next,
+                } }, self.origin);
+                // A boxed callable is stored as the callable itself, so the
+                // boundary wraps the callable in an adapter for its ABI result.
+                continuation = try self.assignRepresentationBoundaryConsumingSource(
+                    abi_comparator,
+                    lowered[1],
+                    self.repQuery().requiredSingleChild(abi_rep, .box_payload).rep,
+                    self.repQuery().requiredSingleChild(comparator_rep, .box_payload).rep,
+                    continuation,
+                );
+                return try self.prependLoweredExprs(args, lowered, continuation);
+            }
+        }
+
         // list_sublist's { start, len } argument has a fixed concrete ABI; a
         // generic caller supplies it erased, so adapt it out of its dynamic
         // box before the call.

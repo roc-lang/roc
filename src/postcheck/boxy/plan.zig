@@ -14495,6 +14495,12 @@ const Builder = struct {
                 if (builtinTryArgs(view.checked_types, expr.ty) != null) {
                     _ = try self.requestHostRep(try self.analyzeType(view, expr.ty));
                 }
+                // The sort low-level calls its comparator through a fixed ABI
+                // whose ordering result is the closed `[Before, Same, After]`.
+                if (run.op == .list_sort_with) {
+                    if (run.args.len != 2) boxyPlanInvariant("list_sort_with did not take a list and a comparator");
+                    _ = try self.requestHostRep(try self.analyzeType(view, bodies.expr(run.args[1]).ty));
+                }
             },
         }
     }
