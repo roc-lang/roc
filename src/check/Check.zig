@@ -626,6 +626,10 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// `annotation_implicit_open_exts` slices it per annotation for the post-body
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
+/// The annotation whose definition's body check is about to generate it; its
+/// implicitly opened rows are bounded for the rest of that body check
+/// (`beginBoundedAnnotationRows`).
+bounding_annotation: ?CIR.Annotation.Idx = null,
 /// Scoped sink owned by the alias declaration currently being constructed.
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
@@ -637,8 +641,8 @@ annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, Impl
 /// against—is the closed row the annotation produced before polarity.
 weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
 /// Every implicitly opened extension the post-body audit
-/// (`auditImplicitOpenExts`) visited and did not report, in visit order, with
-/// the binding that owns it. A generated codec validated after that audit can
+/// (`auditImplicitOpenExts`) visited, in visit order, with the binding that
+/// owns it. A generated codec validated after that audit can
 /// still require tags in the row, so `runLateImplicitOpenExtAudit` checks the
 /// recorded `codec_row_demands` against these once the module's types settle.
 /// Entries are copied rather than sliced out of `implicit_open_exts` by range
@@ -5579,6 +5583,13 @@ fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.m
     var unify_opts = opts;
     unify_opts.record_construction_var = construction_var;
     const result = try unifier.unify(&unify_env, a, b, unify_opts);
+    switch (result) {
+        .problem => |problem_idx| {
+            const mismatch = &self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch;
+            mismatch.context = self.mismatchContext(mismatch.context, b);
+        },
+        .unified, .suppressed_by_error, .mismatch => {},
+    }
 
     if (result.isAccepted()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
@@ -5750,9 +5761,21 @@ fn appendTypeMismatch(
             .actual_var = actual,
             .actual_snapshot = actual_snapshot,
         },
-        .context = ctx,
+        .context = self.mismatchContext(ctx, actual),
         .evidence = evidence,
     } });
+}
+
+/// The context a rejected relation reports under. A relation the unifier
+/// rejected because it would add a tag to a bounded annotation row reports
+/// that tag at the expression that produced it (design.md "Polarity").
+fn mismatchContext(self: *Self, ctx: problem.Context, actual: Var) problem.Context {
+    const violation = self.unify_scratch.bounded_row_violation orelse return ctx;
+    return .{ .tag_not_in_annotation = .{
+        .region = self.getRegionAt(actual),
+        .tag_name = violation.tag,
+        .source = .expression,
+    } };
 }
 
 /// The constructor's operand is an ordinary value expression whose solved class
@@ -7670,8 +7693,8 @@ fn instantiateVarPolarized(
 }
 
 /// Record alias markers an annotation-position instantiation resolved open,
-/// so the post-body audit covers rows opened through an alias exactly like
-/// rows opened directly in the annotation.
+/// so a definition's body check bounds rows opened through an alias exactly
+/// like rows opened directly in the annotation.
 fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarkerExt, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!void {
     if (opened.len == 0) return;
     const region = switch (region_behavior) {
@@ -9930,7 +9953,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Check generated-codec error demands against their owners' annotated
     // rows now that nothing further unifies: a codec can be validated during
-    // finalize, long after the post-body audit read the row.
+    // finalize, long after its owner's body was checked.
     try self.runLateImplicitOpenExtAudit(&env);
 
     try self.validateSettledValueRows(&env);
@@ -14745,21 +14768,21 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         expr_var;
     self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else saved_active_scheme_root;
     defer self.active_scheme_root = saved_active_scheme_root;
+    // A function, a pure signature, and a value alias generalize regardless
+    // of any written `..`, so a `..` in their output positions is redundant;
+    // on a value it is the opt-in to a quantified row.
+    const is_value_alias = def_expr == .e_lookup_local or def_expr == .e_lookup_external;
+    const generalizes_regardless = def_is_function or def_expr == .e_anno_only or is_value_alias;
+    const annotation_generalizes = generalizes_regardless or
+        (if (def.annotation) |annotation_idx| self.cir.store.getAnnotation(annotation_idx).mentions_type_var else false);
+    const bounded_rows = self.beginBoundedAnnotationRows(def.annotation);
     const def_does_fx = try self.checkExpr(def.expr, env, def_expectation);
-    // The annotation bounds the definition: a tag the body produced beyond an
-    // implicitly opened union is an error (design.md "Polarity").
+    try self.endBoundedAnnotationRows(bounded_rows, def.annotation, annotation_generalizes);
     if (def.annotation) |annotation_idx| {
-        // A function, a pure signature, and a value alias generalize
-        // regardless of any written `..`, so a `..` in their output
-        // positions is redundant; on a value it is the opt-in to a
-        // quantified row.
-        const is_value_alias = def_expr == .e_lookup_local or def_expr == .e_lookup_external;
-        const generalizes_regardless = def_is_function or def_expr == .e_anno_only or is_value_alias;
         try self.auditImplicitOpenExts(
             annotation_idx,
             generalizes_regardless,
             def.expr,
-            env,
         );
 
         // A top-level value binding that does not generalize (not a function,
@@ -14767,9 +14790,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // variable) shares its implicitly opened rows weakly with every use;
         // whatever is still open after the module solves is grounded to `[]`
         // (`closeWeakValueImplicitOpenExts`).
-        if (!generalizes_regardless and
-            !self.cir.store.getAnnotation(annotation_idx).mentions_type_var)
-        {
+        if (!annotation_generalizes) {
             if (self.annotation_implicit_open_exts.get(annotation_idx)) |range| {
                 if (range.len > 0) try self.weak_value_implicit_open_ext_ranges.append(self.gpa, range);
             }
@@ -16982,8 +17003,8 @@ const GenTypeAnnoCtx = union(enum) {
         adapter_reach: AdapterReach = .nested,
 
         pub const OpeningBehavior = enum {
-            /// An output-position union gets a fresh flex ext, recorded for
-            /// the post-body audit.
+            /// An output-position union gets a fresh flex ext, bounded while
+            /// its definition's body is checked.
             implicit_open,
             /// An output-position union gets the polarity marker: the
             /// annotation is a where-method signature, a scheme the
@@ -17127,8 +17148,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     const annotation = self.cir.store.getAnnotation(annotation_idx);
 
     // Every implicitly opened extension this generation mints is recorded for
-    // the post-body audit (`auditImplicitOpenExts`); the range is committed
-    // at the end of this function.
+    // the definition's bound (`boundAnnotationRows`) and the post-body audit
+    // (`auditImplicitOpenExts`); the range is committed at the end of this
+    // function.
     const implicit_open_exts_start: u32 = @intCast(self.implicit_open_exts.items.len);
 
     // Reset seen type annos
@@ -17197,7 +17219,7 @@ const ImplicitOpenExtRange = struct {
     len: u32,
 };
 
-/// One extension the post-body audit cleared, kept for the late audit, with
+/// One extension the post-body audit handed to the late audit, with
 /// the binding that owns it named by source region.
 ///
 /// The owner is stamped HERE—at the audit—rather than where the extension is
@@ -17246,12 +17268,48 @@ const CodecRowDemand = struct {
 /// therefore kept, with its owner, for that audit. The `..` warning is NOT
 /// repeated—it is a property of the annotation's own text, fully decided
 /// here.
+/// Bound the implicitly opened rows of `annotation` from its definition's
+/// body check on: the annotation bounds the definition, so those rows may
+/// close or stay open but never gain a tag the annotation does not list
+/// (design.md "Polarity"). The rows are minted when the body pass generates
+/// the annotation, which `boundAnnotationRows` marks. Returns the bound an
+/// enclosing definition's body check is waiting to apply.
+fn beginBoundedAnnotationRows(self: *Self, annotation: ?CIR.Annotation.Idx) ?CIR.Annotation.Idx {
+    const saved = self.bounding_annotation;
+    self.bounding_annotation = annotation;
+    return saved;
+}
+
+/// End a definition's body check. A definition whose type generalizes keeps
+/// its rows bounded: its uses instantiate fresh copies, which they may widen.
+/// A weak value binding's row is shared by every use, so its bound ends here.
+fn endBoundedAnnotationRows(
+    self: *Self,
+    saved: ?CIR.Annotation.Idx,
+    annotation: ?CIR.Annotation.Idx,
+    generalizes: bool,
+) std.mem.Allocator.Error!void {
+    self.bounding_annotation = saved;
+    if (generalizes) return;
+    const annotation_idx = annotation orelse return;
+    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        try self.types.clearBoundedRowExt(entry.var_);
+    }
+}
+
+fn boundAnnotationRows(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        try self.types.markBoundedRowExt(entry.var_);
+    }
+}
+
 fn auditImplicitOpenExts(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
     redundant_open_warns: bool,
     owner_expr: CIR.Expr.Idx,
-    env: *Env,
 ) std.mem.Allocator.Error!void {
     const owner_rhs = self.cir.store.getExprRegion(owner_expr);
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
@@ -17263,16 +17321,17 @@ fn auditImplicitOpenExts(
                 } });
             }
         }
-        if (!self.implicitOpenExtCarriesTags(entry)) {
-            try self.late_implicit_open_ext_audits.append(self.gpa, .{
-                .ext = entry,
-                .owner_rhs = owner_rhs,
-                .owner_expr = owner_expr,
-            });
-            continue;
+        // The body check bounded this row (`beginBoundedAnnotationRows`), so
+        // the unifier refused every tag the annotation does not list at the
+        // expression that produced it.
+        if (self.implicitOpenExtCarriesTags(entry)) {
+            std.debug.panic("checker invariant violated: a bounded annotation row gained a tag during its definition's body check", .{});
         }
-        const first_tag = self.types.tags.get(self.types.resolveVar(entry.var_).desc.content.structure.tag_union.tags.start);
-        try self.reportImplicitOpenExtExtension(entry, first_tag.name, owner_expr, env);
+        try self.late_implicit_open_ext_audits.append(self.gpa, .{
+            .ext = entry,
+            .owner_rhs = owner_rhs,
+            .owner_expr = owner_expr,
+        });
     }
 }
 
@@ -17294,8 +17353,8 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
 /// constructs directly. Callers may still widen the row; a tag a caller added
 /// that the codec does not demand is never reported.
 ///
-/// Codec relations can be validated after the post-body audit read the row,
-/// so this runs once nothing further unifies, before
+/// Codec relations can be validated after the owner's body was checked, so
+/// this runs once nothing further unifies, before
 /// `closeWeakValueImplicitOpenExts` grounds the remaining extensions to `[]`.
 /// Provenance is exact: each demand names its owning expression and the tags
 /// it requires, so neither timing nor type-graph reachability decides who
@@ -17541,16 +17600,16 @@ fn reportImplicitOpenExtExtension(
         .context = .{ .tag_not_in_annotation = .{
             .region = entry.region,
             .tag_name = tag_name,
+            .source = .generated_codec,
         } },
     } });
     try self.retireRowExtendingDefinition(owner_expr);
 }
 
-/// Recovery after a definition was reported for producing a tag its
-/// annotation does not list: the definition's body becomes a runtime error,
-/// as for any other annotation mismatch. The row keeps what solving gave it,
-/// which every use has already related to or will relate to consistently, so
-/// the definition's type stays usable by the code that calls it.
+/// Recovery after a weak value binding was reported for a tag a generated
+/// codec in its right-hand side demands but its annotation does not list: the
+/// right-hand side becomes a runtime error. The row keeps what solving gave
+/// it, because every use of a weak value shares that one row.
 fn retireRowExtendingDefinition(self: *Self, owner_expr: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     try self.erroneous_value_exprs.put(self.gpa, self.definitionBodyExpr(owner_expr), {});
 }
@@ -21035,6 +21094,10 @@ fn beginExprCheckFrame(
 
         if (expected.annotation) |annotation_idx| {
             try self.generateAnnotationType(annotation_idx, env);
+            if (self.bounding_annotation == annotation_idx) {
+                self.bounding_annotation = null;
+                try self.boundAnnotationRows(annotation_idx);
+            }
             try self.recordPredeclaredBodySlots(annotation_idx);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
             const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var);
@@ -24451,7 +24514,11 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     self.suppress_generalize_expr = decl_stmt.expr;
                     self.active_scheme_root = decl_pattern_var;
                 }
+                const decl_bounded_rows = self.beginBoundedAnnotationRows(decl_stmt.anno);
                 const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
+                const decl_annotation_generalizes = decl_is_fn or
+                    (if (decl_stmt.anno) |annotation_idx| self.cir.store.getAnnotation(annotation_idx).mentions_type_var else false);
+                try self.endBoundedAnnotationRows(decl_bounded_rows, decl_stmt.anno, decl_annotation_generalizes);
                 std.debug.assert(self.suppress_generalize_expr == null);
                 // The annotation bounds the definition (see `checkDef`).
                 if (decl_stmt.anno) |annotation_idx| {
@@ -24459,7 +24526,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                         annotation_idx,
                         decl_is_fn,
                         decl_stmt.expr,
-                        env,
                     );
                 }
                 does_fx = decl_expr_does_fx or does_fx;
@@ -44377,7 +44443,7 @@ fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: 
             .actual_var = body_var,
             .actual_snapshot = actual_snapshot,
         },
-        .context = ctx,
+        .context = self.mismatchContext(ctx, body_var),
     } });
 }
 

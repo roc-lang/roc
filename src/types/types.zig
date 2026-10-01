@@ -111,7 +111,12 @@ pub const DescriptorFlags = packed struct(u8) {
     /// Definition-site implicit annotation openness. Codec derivation may
     /// close this tail before generalization; fresh uses do not inherit it.
     annotation_tag_ext: bool = false,
-    _unused: u5 = 0,
+    /// An implicitly opened row of an annotated definition: the annotation
+    /// bounds the definition, so the class may close or stay open but never
+    /// gain a tag (design.md "Polarity"). Instantiation never copies it, so
+    /// uses of the definition widen freely.
+    bounded_row_ext: bool = false,
+    _unused: u4 = 0,
 };
 
 /// A type descriptor

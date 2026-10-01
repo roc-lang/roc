@@ -1019,10 +1019,17 @@ pub const ReportBuilder = struct {
                     ),
                     .tag_not_in_annotation => |ctx| return try self.makeMismatchReport(
                         ProblemRegion{ .direct = ctx.region },
-                        &.{
-                            D.bytes("This definition can produce the tag"),
-                            D.ident(ctx.tag_name).withAnnotation(.inline_code),
-                            D.bytes("but the annotated tag union does not list it."),
+                        switch (ctx.source) {
+                            .expression => &.{
+                                D.bytes("This expression produces the tag"),
+                                D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                                D.bytes("but the annotated tag union does not list it."),
+                            },
+                            .generated_codec => &.{
+                                D.bytes("This definition can produce the tag"),
+                                D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                                D.bytes("but the annotated tag union does not list it."),
+                            },
                         },
                         &.{D.bytes("It has the type:")},
                         mismatch.types.actual_snapshot,

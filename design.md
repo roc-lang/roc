@@ -6830,40 +6830,44 @@ exactly as before; a host boundary opts out because the host is a fixed ABI
 rather than a Roc producer participating in unification.
 
 The annotation still BOUNDS the definition—widening happens only at
-instantiation sites. A tag the annotation does not list is absorbed by
-ordinary unification rather than rejected, so `Check.auditImplicitOpenExts`
-runs immediately after the definition's right-hand side is checked, over every
-extension the annotation's generation minted (`Check.implicit_open_exts`,
-sliced per annotation by `annotation_implicit_open_exts`), and reports a Type
-Mismatch in the annotation context for any that resolved to a row carrying
-tags—showing the row the body produced against the union the annotation
-wrote. The recovery is the one every annotation mismatch gets: the
-definition's body (a function's body, or the right-hand side) becomes a
-runtime error, and the row keeps exactly what solving gave it. The row is
-not poisoned: other definitions call this one and its uses have already
-related to the row, or will, so an erroneous type there would leave code
-nothing lowers, such as an `expect` calling the definition, which then fails
-at the retired body like any test reaching a checked error.
+instantiation sites. When the definition's body pass generates its annotation,
+every extension that generation mints (`Check.implicit_open_exts`, sliced per
+annotation by `annotation_implicit_open_exts`) is marked bounded
+(`DescriptorFlags.bounded_row_ext`, `Check.beginBoundedAnnotationRows`). A
+bounded row may close or stay open, but the unifier refuses any relation that
+would add a tag to it, before any merge and exactly as a closed row refuses it;
+the bound travels with the row's equivalence class, and joining a tagless row
+hands it to that row's own extension. The refused relation is reported where it
+happens, as a Type Mismatch that names the unlisted tag
+(`tag_not_in_annotation`), and its recovery is the one every rejected relation
+gets: the offending expression becomes a runtime error, and the definition
+keeps its annotated type. That type is also exactly what its predeclared
+scheme says, which method dispatch and early references instantiate, so every
+use of the definition relates to one signature. Instantiation never copies the
+bound, so uses widen their own copies freely. A definition whose type
+generalizes keeps its rows bounded for the rest of checking; a weak value
+binding's row is shared by every use, so its bound ends with its right-hand
+side. `Check.auditImplicitOpenExts` then hands every extension of the
+definition to the late audit below.
 
-That pass is a single READ of a mutable variable, and a definition can still
-widen its own row afterwards through a generated codec its body introduced: a
-derived parser or encoder is often validated only once
-`finalizeGeneratedCodecConstraintsToQuiescence` resolves it, after every audit
-in the module has run, and its validation adds error tags to the codec's error
-row (Derived Parser Required-Field Error Composition). Every extension the
-post-body pass cleared is therefore kept, stamped with the source region of its
-binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`) and
-that right-hand side itself (`owner_expr`), which a report retires. Each
-codec validation records, with the region of the expression that introduced
-the codec relation, exactly which tags it requires in which error row
+A definition can still widen a row after its body is checked through a
+generated codec its body introduced: a derived parser or encoder is often
+validated only once `finalizeGeneratedCodecConstraintsToQuiescence` resolves
+it, and its validation adds error tags to the codec's error row (Derived
+Parser Required-Field Error Composition). For a definition that generalizes,
+the bound refuses that relation and codec validation reports it. For a weak
+value binding, each extension is kept, stamped with the source region of its
+binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`) and that
+right-hand side itself (`owner_expr`), which a report retires. Each codec
+validation records, with the region of the expression that introduced the
+codec relation, exactly which tags it requires in which error row
 (`Check.codec_row_demands`): `MissingRequiredField(Str)`, a nested custom
 parser's error tags, and any tag the validation added to the row by relating it
 to a format method. After finalize, `Check.runLateImplicitOpenExtAudit` reports
 every demanded tag that lies in the extension of a binding whose right-hand side
 contains the demanding expression and whose row the demand shares (the two rows
 end in the same extension variable), before `closeWeakValueImplicitOpenExts`
-grounds the leftovers to `[]`. The rejected-parent-row case of issue #11246 is
-one such report.
+grounds the leftovers to `[]`.
 
 Provenance is exact, so neither timing nor type-graph reachability decides who
 widened a row. A caller that widens the same row with other tags is not
@@ -7214,8 +7218,8 @@ does not exist today and is not designed.
 The change itself is at one unification: where a closed row meets an
 implicitly open annotated output row, coerce rather than bind. An incoming row
 whose tags are a subset of the listed tags coerces and leaves the extension
-open; an incoming row carrying unlisted tags binds as it does today, and
-`Check.auditImplicitOpenExts` reports it. The coercion's first instance is
+open; an incoming row carrying unlisted tags is refused by the bounded row,
+as it is today. The coercion's first instance is
 already built and running: the Result-Row Widening Adapter specializes a
 template at its own declared row and re-tags the result at the requested row.
 That adapter is wired to template completion for dispatch plans, so the one
@@ -7251,10 +7255,9 @@ the picture (`test/cli/WidenClosedImpl.roc` and its siblings), and the host
 case is one instance of it.
 
 Two questions are settled in the same pass, because each asks what a closed
-row means at a boundary. `Check.auditImplicitOpenExts` fires on an extension
-that resolved to a row carrying tags, and the Type Mismatch it reports is
-sound only because the audit has already proved the extension carries tags, so
-a coercion that changes when an extension gains tags moves the audit with it.
+row means at a boundary. A bounded row refuses exactly the relations that
+would add a tag to it, so a coercion that changes when an extension gains tags
+changes what the bound refuses with it.
 `Check.closeWeakValueImplicitOpenExts` grounds a top-level weak value's
 still-open extensions to `[]`, and cross-module widening of annotated weak
 values waits on this same coercion rather than on a lowering default.
