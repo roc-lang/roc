@@ -17,7 +17,7 @@ g = |x| {
 }
 ~~~
 # EXPECTED
-NIL
+TRY OPERATOR IN EXPECT - question_in_inline_expect.md:8:9:8:14
 # PROBLEMS
 ~~~clojure
 (reports

@@ -45,7 +45,6 @@ top_level = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - for_bang_stream.md:14:12:14:15
-EFFECTFUL FUNCTION NAME - for_bang_stream.md:14:1:14:9
 MISSING METHOD - for_bang_stream.md:25:14:25:15
 EFFECTFUL TOP LEVEL VALUE - for_bang_stream.md:31:13:37:2
 # PROBLEMS
