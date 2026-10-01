@@ -1,8 +1,7 @@
-//! CompactWriter provides efficient serialization using scatter-gather I/O operations.
-//! It collects multiple memory regions into iovecs and writes them in a single system call
-//! using pwritev, minimizing system call overhead for serialization tasks.
-//! The writer handles alignment requirements and padding automatically to ensure
-//! proper deserialization of the written data.
+//! Plans relocatable serialization as borrowed slices and owned relocation headers.
+//! Emits deterministic bytes into a destination buffer or a buffered file writer,
+//! canonicalizing padding without a whole-column scratch copy. Alignment and
+//! offsets are identical for both output paths.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -32,19 +31,30 @@ pub fn init() CompactWriter {
     };
 }
 
-/// Write all gathered buffers to a file sequentially using positional writes.
-/// Accepts any file/io pair where `file.writePositionalAll(io, bytes, offset)` is valid
-/// (e.g. the std_io File and Io types). Generic to avoid depending on the io module.
+/// Write the complete plan through the file's buffered positional writer.
+/// Accepts a file/io pair providing `file.writer(io, buffer)`. Generic to avoid
+/// coupling the serialization plan to a particular filesystem implementation.
 pub fn writeGather(
     self: *@This(),
     file: anytype,
     io: anytype,
 ) std.Io.File.WritePositionalError!void {
-    var offset: u64 = 0;
-    for (self.iovecs.items) |iovec| {
-        const bytes = @as([*]const u8, @ptrCast(iovec.iov_base))[0..iovec.iov_len];
-        try file.writePositionalAll(io, bytes, offset);
-        offset += iovec.iov_len;
+    var buffer: [8192]u8 = undefined;
+    var destination = file.writer(io, &buffer);
+    self.writeTo(&destination.interface) catch return destination.err.?;
+    destination.interface.flush() catch return destination.err.?;
+}
+
+/// Emit the planned bytes without materializing a contiguous entry. Scrubbable
+/// slices are canonicalized in bounded, type-aligned chunks at the write boundary.
+pub fn writeTo(self: *const @This(), destination: *std.Io.Writer) std.Io.Writer.Error!void {
+    for (self.iovecs.items) |part| {
+        const bytes = part.iov_base[0..part.iov_len];
+        if (part.canonical) |canonical| {
+            try canonical.write(bytes, destination);
+        } else {
+            try destination.writeAll(bytes);
+        }
     }
 }
 
@@ -165,9 +175,8 @@ pub fn appendSlice(
 /// alone—`needsPaddingZeroing` says which, and rejects at compile time anything whose
 /// undefined bytes nothing could identify.
 ///
-/// Assignment copies ALL bytes, padding included, so this must run on the copy that is
-/// about to be written. `appendSlicePodZeroedOffset` is the one caller that does so on
-/// the serialization path, which keeps a single deterministic-bytes implementation.
+/// Assignment copies ALL bytes, padding included, so this runs only on destination
+/// bytes or bounded streaming scratch, never on the borrowed source.
 pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
     // The padding mask + per-byte `inline for` are O(@sizeOf(V)) comptime work; large
     // POD element types (e.g. the artifact's stored expr/payload unions) exceed the
@@ -262,7 +271,7 @@ pub fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
         // When non-null, recurse into the payload to zero its internal padding,
         // then zero any trailing padding after payload + tag.
         const ChildType = vinfo.optional.child;
-        const item = @as(*const V, @ptrCast(@alignCast(ptr)));
+        const item = @as(*align(1) const V, @ptrCast(ptr));
         if (item.* == null) {
             @memset(ptr[0..vsize], 0);
         } else {
@@ -364,12 +373,13 @@ pub fn needsPaddingZeroing(comptime V: type) bool {
 ///
 /// This is the single append-and-scrub implementation. It pads to the item type's
 /// alignment, then either gathers the caller's bytes verbatim—when every byte of the
-/// item type is already defined, so no copy is needed—or copies them into writer-owned
-/// memory and canonicalizes the undefined bytes there. Either way the caller's data is
+/// item type is already defined, so no copy is needed—or records the type's scrub
+/// operation to canonicalize bytes at the destination. Either way the caller's data is
 /// never modified, so a frozen or shared store can be serialized. Unlike `appendSlice`
 /// (which iovecs the caller's slice verbatim, undefined padding included), the bytes
 /// this writes are byte-identical for byte-identical logical data, which is what
-/// reproducible builds and content-stable cache bodies need.
+/// reproducible builds and content-stable cache bodies need. In both cases the
+/// source slice must remain alive and unchanged until the writer is flushed.
 ///
 /// The offset is returned as an integer, so a store whose data legitimately begins at
 /// byte zero records zero. Anything recording an offset should use this rather than
@@ -386,28 +396,12 @@ pub fn appendSlicePodZeroedOffset(
     const offset = self.total_bytes;
 
     if (len > 0) {
-        if (comptime needsPaddingZeroing(T)) {
-            // `T` has undefined padding; copy into writer-owned memory and zero it so the
-            // bytes are deterministic. Reserve the bookkeeping slots first so the buffer
-            // is never allocated without a path to releasing it.
-            try self.reserveOwnedBuffer(allocator);
-
-            const buf = try allocator.alloc(T, len);
-            for (slice, 0..) |item, i| buf[i] = item;
-            for (buf) |*item| zeroValuePadding(T, @as([*]u8, @ptrCast(item)));
-
-            self.takeOwnedBufferAssumeCapacity(@ptrCast(buf.ptr), len * @sizeOf(T), @alignOf(T));
-        } else {
-            // `T` has no padding to zero, so the source bytes are already deterministic:
-            // iovec them verbatim (no scratch alloc, no copy). The source must outlive the
-            // writer's flush—true on the serialize path, where the store owns the data.
-            try self.iovecs.append(allocator, .{
-                .iov_base = @ptrCast(@as([*]const u8, @ptrCast(slice.ptr))),
-                .iov_len = len * @sizeOf(T),
-            });
-            // The owned-buffer branch accounts for its own bytes when it takes ownership.
-            self.total_bytes += len * @sizeOf(T);
-        }
+        try self.iovecs.append(allocator, .{
+            .iov_base = @ptrCast(slice.ptr),
+            .iov_len = len * @sizeOf(T),
+            .canonical = if (comptime needsPaddingZeroing(T)) &Canonical(T).operations else null,
+        });
+        self.total_bytes += len * @sizeOf(T);
     }
 
     return offset;
@@ -460,6 +454,7 @@ pub fn writeToBuffer(
     var offset: usize = 0;
     for (self.iovecs.items) |iovec| {
         @memcpy(buffer[offset..][0..iovec.iov_len], iovec.iov_base[0..iovec.iov_len]);
+        if (iovec.canonical) |canonical| canonical.scrub(buffer[offset..][0..iovec.iov_len]);
         offset += iovec.iov_len;
     }
 
@@ -479,10 +474,44 @@ pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
     self.iovecs.deinit(allocator);
 }
 
-const Iovec = extern struct {
+const Iovec = struct {
     iov_base: [*]const u8,
     iov_len: usize,
+    canonical: ?*const CanonicalOperations = null,
 };
+
+const CanonicalOperations = struct {
+    scrub: *const fn ([]u8) void,
+    write: *const fn ([]const u8, *std.Io.Writer) std.Io.Writer.Error!void,
+};
+
+fn Canonical(comptime T: type) type {
+    return struct {
+        const operations: CanonicalOperations = .{ .scrub = scrub, .write = write };
+
+        fn scrub(bytes: []u8) void {
+            std.debug.assert(bytes.len % @sizeOf(T) == 0);
+            var offset: usize = 0;
+            while (offset < bytes.len) : (offset += @sizeOf(T)) {
+                zeroValuePadding(T, bytes[offset..].ptr);
+            }
+        }
+
+        fn write(bytes: []const u8, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+            // One item always fits, even when a serialized POD type is larger
+            // than the ordinary I/O chunk. Space depends on T, never row count.
+            var scratch: [@max(1, 32768 / @sizeOf(T)) * @sizeOf(T)]u8 align(@alignOf(T)) = undefined;
+            var offset: usize = 0;
+            while (offset < bytes.len) {
+                const chunk = scratch[0..@min(scratch.len, bytes.len - offset)];
+                @memcpy(chunk, bytes[offset..][0..chunk.len]);
+                scrub(chunk);
+                try destination.writeAll(chunk);
+                offset += chunk.len;
+            }
+        }
+    };
+}
 
 const AllocatedMemory = struct {
     ptr: [*]u8,
@@ -890,4 +919,40 @@ test "allocation failure at any point leaves no writer-owned buffer stranded" {
         try std.testing.expect(reached_success);
         try std.testing.expect(failures_seen > 0);
     }
+}
+
+test "issue 11961: canonical streaming borrows large columns and matches gathered bytes" {
+    const T = union(enum) { small: ?u64, large: u128 };
+    const source = try std.testing.allocator.alloc(T, 10000);
+    defer std.testing.allocator.free(source);
+    @memset(std.mem.sliceAsBytes(source), 0xaa);
+    for (source, 0..) |*item, i| writeLeafwiseForTest(T, @ptrCast(item), .{ .small = @as(u64, @intCast(i)) });
+    const original = try std.testing.allocator.dupe(u8, std.mem.sliceAsBytes(source));
+    defer std.testing.allocator.free(original);
+
+    // Planning a large column must fit in metadata-sized storage. The old
+    // whole-column scrub copy could not satisfy this allocation budget.
+    var metadata: [4096]u8 = undefined;
+    var arena = std.heap.FixedBufferAllocator.init(&metadata);
+    var plan = CompactWriter.init();
+    defer plan.deinit(arena.allocator());
+    _ = try plan.appendSlicePodZeroedOffset(arena.allocator(), source);
+    try std.testing.expectEqual(@as(usize, 0), plan.allocated_memory.items.len);
+
+    const allocation = try std.testing.allocator.alloc(u8, plan.total_bytes + 1);
+    defer std.testing.allocator.free(allocation);
+    // Embedded cache bodies need not start at a host-aligned address.
+    const gathered = allocation[1..];
+    _ = try plan.writeToBuffer(gathered);
+    const streamed = try std.testing.allocator.alloc(u8, plan.total_bytes);
+    defer std.testing.allocator.free(streamed);
+    var destination = std.Io.Writer.fixed(streamed);
+    try plan.writeTo(&destination);
+    try std.testing.expectEqualSlices(u8, gathered, destination.buffered());
+    try std.testing.expectEqualSlices(u8, original, std.mem.sliceAsBytes(source));
+
+    var short: [19]u8 = undefined;
+    var failing = std.Io.Writer.fixed(&short);
+    try std.testing.expectError(error.WriteFailed, plan.writeTo(&failing));
+    try std.testing.expectEqualSlices(u8, original, std.mem.sliceAsBytes(source));
 }

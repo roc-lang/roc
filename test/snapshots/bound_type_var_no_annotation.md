@@ -250,7 +250,7 @@ main! = |_| {
 							(p-assign (ident "text")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 324)
+					(e-call (constraint-fn-var 317)
 						(e-lookup-local
 							(p-assign (ident "addOne")))
 						(e-num (value "5"))))

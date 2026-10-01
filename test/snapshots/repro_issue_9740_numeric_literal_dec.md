@@ -242,16 +242,16 @@ main! = |_| {
 																	(p-assign (ident "x"))))))))
 											(if-else
 												(e-block
-													(e-call (constraint-fn-var 404)
+													(e-call (constraint-fn-var 397)
 														(e-lookup-external
 															(builtin))
-														(e-call (constraint-fn-var 403)
+														(e-call (constraint-fn-var 396)
 															(e-lookup-local
 																(p-assign (ident "slice")))
 															(e-lookup-local
 																(p-assign (ident "rest")))
 															(e-num (value "0"))
-															(e-dispatch-call (method "minus") (constraint-fn-var 399)
+															(e-dispatch-call (method "minus") (constraint-fn-var 392)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "end"))))

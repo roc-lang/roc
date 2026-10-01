@@ -121,7 +121,7 @@ ok = conv(5.U8)
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 254)
+		(e-call (constraint-fn-var 247)
 			(e-lookup-local
 				(p-assign (ident "conv")))
 			(e-typed-int (value "5") (type "U8")))))

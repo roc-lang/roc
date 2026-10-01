@@ -454,7 +454,7 @@ top_level = {
 				(e-num (value "0")))
 			(s-for-bang
 				(p-assign (ident "n"))
-				(e-dispatch-call (method "iter") (constraint-fn-var 554)
+				(e-dispatch-call (method "iter") (constraint-fn-var 547)
 					(receiver
 						(e-list
 							(elems
@@ -464,7 +464,7 @@ top_level = {
 				(e-block
 					(s-reassign
 						(p-var-assign (ident "$total"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 597)
+						(e-dispatch-call (method "plus") (constraint-fn-var 590)
 							(receiver
 								(e-runtime-error (tag "erroneous_value_use")))
 							(args
