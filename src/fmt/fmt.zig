@@ -3236,12 +3236,9 @@ const Formatter = struct {
                     try fmt.pushIndent();
                 }
                 try fmt.push('}');
-                try fmt.ensureNewline();
-                fmt.curr_indent = start_indent + 1;
-                try fmt.pushIndent();
-
-                try fmt.pushAll("exposes");
                 const exposes = fmt.ast.store.getCollection(p.exposes);
+                try fmt.formatSectionBoundary(exposes.region.start - 1, start_indent + 1);
+                try fmt.pushAll("exposes");
                 if (try fmt.flushContinuationComments(exposes.region.start)) {
                     try fmt.pushIndent();
                 } else {
@@ -3286,18 +3283,15 @@ const Formatter = struct {
                 try fmt.formatSymbolMapSection(p.provides, start_indent + 1);
 
                 if (p.hosted.span.len > 0 or fmt.regionHasInteriorComment(p.hosted.region)) {
-                    try fmt.ensureNewline();
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
+                    try fmt.formatSectionBoundary(p.hosted.region.start - 1, start_indent + 1);
                     try fmt.pushAll("hosted ");
                     try fmt.formatSymbolMapSection(p.hosted, start_indent + 1);
                 }
 
                 // Format targets section if present
                 if (p.targets) |targets_idx| {
-                    try fmt.ensureNewline();
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
+                    const targets = fmt.ast.store.getTargetsSection(targets_idx);
+                    try fmt.formatSectionBoundary(targets.region.start - 1, start_indent + 1);
                     try fmt.formatTargetsSection(targets_idx);
                 }
             },
@@ -3305,6 +3299,13 @@ const Formatter = struct {
             .default_app => {},
             .malformed => {},
         }
+    }
+
+    fn formatSectionBoundary(fmt: *Formatter, keyword: Token.Idx, indent: u32) error{WriteFailed}!void {
+        fmt.curr_indent = indent;
+        try fmt.flushCommentsBeforeDiscard(keyword);
+        try fmt.ensureNewline();
+        try fmt.pushIndent();
     }
 
     fn nodeRegion(fmt: *Formatter, idx: u32) AST.TokenizedRegion {
@@ -6996,5 +6997,28 @@ test "issue 11929: continuation comments share their expression indentation" {
         defer std.testing.allocator.free(result);
         try std.testing.expect(std.mem.indexOf(u8, result, "\n# Continuation.") == null);
         try std.testing.expect(std.mem.indexOf(u8, result, "\n\t# Continuation.") != null);
+    }
+}
+
+test "issue 11927: comments between all platform sections survive" {
+    const input =
+        "platform \"\"\n" ++
+        "    requires { process_string : Str -> Str }\n" ++
+        "    # Before exposes.\n" ++
+        "    exposes [Helper, Core]\n" ++
+        "    # Before packages.\n" ++
+        "    packages {}\n" ++
+        "    # Before provides.\n" ++
+        "    provides { \"roc_process_string\": process_string_for_host }\n" ++
+        "    # Before hosted.\n" ++
+        "    hosted { \"print\": print! }\n" ++
+        "    # Before targets.\n" ++
+        "    targets: { x64mac: { inputs: [app] }, }\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    for ([_][]const u8{ "exposes", "packages", "provides", "hosted", "targets" }) |section| {
+        const comment = try std.fmt.allocPrint(std.testing.allocator, "# Before {s}.", .{section});
+        defer std.testing.allocator.free(comment);
+        try std.testing.expect(std.mem.count(u8, result, comment) == 1);
     }
 }
