@@ -3221,6 +3221,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
+                    if (try self.boxyListElementDescForLocals(list_abi, &.{GuardedList.at(args, 0)}, ll.target)) |boxy_elem| {
+                        // Descriptor-governed elements cannot use layout-keyed RC
+                        // callbacks, so the Boxy runtime receives the exact list
+                        // descriptor instead.
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addLeaArg(base_reg, elem_off);
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addMemArg(base_reg, boxy_elem.desc_slot);
+                        try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+
+                        try self.callBoxyBuiltin(&builder, .list_prepend);
+                        return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                    }
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
                     const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
@@ -10038,7 +10059,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn lowLevelListDescRef(self: *Self, s: anytype) ?LIR.BoxyDescRef {
             const op = s.op;
-            if (op != .list_concat and op != .list_set and op != .list_set_in_place_unsafe and
+            if (op != .list_concat and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
                 op != .list_swap and op != .list_drop_first and op != .list_drop_last and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
                 op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
