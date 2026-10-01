@@ -2892,6 +2892,10 @@ const Lowerer = struct {
             else
                 null,
         };
+        const cached_ret_conditions = if (cached) |hit|
+            try self.result.store.addU32Span(hit.rc_ret_conditions)
+        else
+            LIR.U32Span.empty();
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .identity = identity,
@@ -2912,6 +2916,10 @@ const Lowerer = struct {
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
             .rc_ret_lenders = if (cached) |hit| hit.rc_ret_lenders else 0,
+            .rc_read_only_params = if (cached) |hit| hit.rc_read_only_params else 0,
+            .rc_ret_unique = if (cached) |hit| hit.rc_ret_unique else false,
+            .rc_ret_unique_fields = if (cached) |hit| hit.rc_ret_unique_fields else 0,
+            .rc_ret_conditions = cached_ret_conditions,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
         if (self.proc_debug_names) {

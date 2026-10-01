@@ -56,6 +56,10 @@ pub const InsertOptions = struct {
     /// solved single variant per proc. Exact tail-call and field-take
     /// ownership schedules can still require mandatory variants.
     specialize: bool = false,
+    /// Emit single-threaded count updates for allocations the host-visibility
+    /// analysis proves confined. Optimized builds enable this; everything
+    /// else emits only atomic count updates and skips the analysis.
+    thread_confined_rc: bool = false,
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
     /// enable this; the value-model interpreter keeps an explicit borrow.
     consume_dead_boxes: bool = true,
@@ -538,6 +542,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         boxy_rc_descs,
         options.roots,
         options.consume_dead_boxes,
+        options.thread_confined_rc,
         uniqueness_options,
     );
     defer solution.deinit();
@@ -568,7 +573,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 
     const base_proc_count = store.procSpecCount();
-    try markVariantDemandableProcs(store, &solution, &dismantles, options.specialize);
+    try recordObjectCacheFacts(store, &solution, &dismantles, options.specialize);
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
@@ -685,11 +690,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 }
 
-/// Sets `rc_variant_demandable` on every base proc whose borrowed parameter
-/// positions admit a variant demand at a direct call: the same capabilities
-/// `callArgOwnership` consults before upgrading a borrowed position, and the
-/// outcome spans it can select.
-fn markVariantDemandableProcs(
+/// Records on every base proc with a body what an object-cache entry for it
+/// needs: its solved uniqueness facts, and `rc_variant_demandable` when a
+/// direct call could demand a variant of it (the capabilities
+/// `callArgOwnership` consults before upgrading a borrowed position or
+/// seeding an owned one, and the outcome spans it can select). A body-less
+/// proc keeps the facts its cache entry supplied.
+fn recordObjectCacheFacts(
     store: *LirStore,
     solution: *const arc_solve.Solution,
     dismantles: *const arc_dismantle.Dismantles,
@@ -707,13 +714,23 @@ fn markVariantDemandableProcs(
     }
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
-        const spec = store.getProcSpecPtr(proc);
-        spec.rc_variant_demandable = false;
-        if (spec.body == null or solution.isPinnedProc(proc)) continue;
+        if (store.getProcSpec(proc).body == null) continue;
         const sig = solution.sigOf(proc);
+        const rows = solution.sigTable().retConditionsOf(sig);
+        const words = try store.allocator.alloc(u32, rows.len);
+        defer store.allocator.free(words);
+        for (rows, words) |row, *word| word.* = @bitCast(row);
+        const conditions = try store.addU32Span(words);
+        const spec = store.getProcSpecPtr(proc);
+        spec.rc_read_only_params = sig.read_only_params;
+        spec.rc_ret_unique = sig.ret_unique;
+        spec.rc_ret_unique_fields = sig.ret_unique_fields;
+        spec.rc_ret_conditions = conditions;
+        spec.rc_variant_demandable = false;
+        if (solution.isPinnedProc(proc)) continue;
         const borrowed = sig.borrowed_params;
         const specialized_demand = specialize and
-            ((solution.uniqueSeedMaskOf(proc) & borrowed) != 0 or
+            (solution.uniqueSeedMaskOf(proc) != 0 or
                 (sig.ret_mode == .borrowed and (sig.ret_lenders & borrowed) != 0));
         spec.rc_variant_demandable = (dismantles.ownedOnlyParamBenefits(proc) & borrowed) != 0 or
             !solution.availableOutcomeSpanOf(proc).isEmpty() or
@@ -11934,11 +11951,30 @@ test "RC atomicity: confined values update counts single-threaded" {
     const body = try f.assignList(list, &.{}, pair_assign);
     _ = try f.addProc(&.{}, body, .i64);
 
-    try f.run();
+    try insert(&f.store, &f.layouts, .{ .thread_confined_rc = true });
     // No proc is a root and nothing reaches a host boundary, so every count
     // update may use plain loads and stores.
     try f.expectRcAtomicity(list, .single_thread);
     try f.expectRcAtomicity(pair, .single_thread);
+}
+
+test "RC atomicity: without thread-confined counts, confined values stay atomic" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const result = try f.local(.i64);
+
+    // list = []; pair = {list, list}; result = 1; ret result
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const pair_assign = try f.assignStruct(pair, &.{ list, list }, result_assign);
+    const body = try f.assignList(list, &.{}, pair_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try f.expectRcAtomicity(list, .atomic);
+    try f.expectRcAtomicity(pair, .atomic);
 }
 
 test "RC atomicity: root-returned values keep atomic counts" {
@@ -11954,7 +11990,7 @@ test "RC atomicity: root-returned values keep atomic counts" {
     const body = try f.assignList(list, &.{}, pair_assign);
     const proc = try f.addProc(&.{}, body, f.pair_list);
 
-    try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
+    try insert(&f.store, &f.layouts, .{ .roots = &.{proc}, .thread_confined_rc = true });
     try f.expectRcAtomicity(list, .atomic);
 }
 
@@ -11989,7 +12025,7 @@ test "RC atomicity: bodyless callee arguments keep atomic counts" {
     const body = try f.assignList(list, &.{}, alias_assign);
     _ = try f.addProc(&.{}, body, .i64);
 
-    try f.run();
+    try insert(&f.store, &f.layouts, .{ .thread_confined_rc = true });
     try f.expectRcAtomicity(list, .atomic);
 }
 
@@ -12013,6 +12049,55 @@ test "uniqueness: freshly built list consumed by a checked op elides the check" 
     // The list is born unique and its single unit moves into the op, so the
     // op's runtime count check on argument 0 is redundant.
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: a cached proc's supplied facts reach its callers" {
+    // An object-cache proc has no body; its callers read the uniqueness
+    // facts its entry carries, unconditional and argument-conditional alike.
+    const Case = struct { ret_unique: bool, conditions: []const u32, passes_fresh: bool, elided: bool };
+    const whole_if_arg0: u32 = @bitCast(LIR.RcRetCondition{ .field = LIR.RcRetCondition.whole_value, .params = 1 });
+    for ([_]Case{
+        .{ .ret_unique = true, .conditions = &.{}, .passes_fresh = false, .elided = true },
+        .{ .ret_unique = false, .conditions = &.{}, .passes_fresh = false, .elided = false },
+        .{ .ret_unique = false, .conditions = &.{whole_if_arg0}, .passes_fresh = true, .elided = true },
+    }) |case| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const param = try f.local(f.list_i64);
+        const input = try f.local(f.list_i64);
+        const fresh = try f.local(f.list_i64);
+        const elem = try f.local(.i64);
+        const appended = try f.local(f.list_i64);
+        const result = try f.local(.i64);
+
+        const cached = try f.store.addProcSpec(.{
+            .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(12),
+            .args = try f.span(if (case.passes_fresh) &.{param} else &.{}),
+            .body = null,
+            .ret_layout = f.list_i64,
+            .external = true,
+            .rc_ret_unique = case.ret_unique,
+            .rc_ret_conditions = try f.store.addU32Span(case.conditions),
+        }, .none);
+
+        // elem = 5; input = []; fresh = cached(input?); appended = checked_op(fresh, elem); ret 1
+        const ret = try f.ret(result);
+        const result_assign = try f.assignI64(result, 1, ret);
+        const append = try f.assignLowLevel(appended, &.{ fresh, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = fresh,
+            .proc = cached,
+            .args = try f.span(if (case.passes_fresh) &.{input} else &.{}),
+            .next = append,
+        } }, .test_fixture);
+        const input_assign = try f.assignList(input, &.{}, call);
+        const body = try f.assignI64(elem, 5, input_assign);
+        _ = try f.addProc(&.{}, body, .i64);
+
+        try f.run();
+        try testing.expectEqual(@as(u64, @intFromBool(case.elided)), f.uniqueArgsFor(appended));
+    }
 }
 
 test "uniqueness: slice-producing checked op result keeps later check" {

@@ -687,6 +687,8 @@ const Solver = struct {
     rc_local: []const bool,
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
     consume_dead_boxes: bool,
+    /// Run the host-visibility analysis. Off, every local is visible.
+    thread_confined_rc: bool,
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
     pinned: std.bit_set.DynamicBitSetUnmanaged,
@@ -756,7 +758,7 @@ pub fn solve(
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
 ) SolveError!Solution {
-    return solveWithOptions(allocator, store, layouts, rc_local, boxy_rc_descs, roots, consume_dead_boxes, .{});
+    return solveWithOptions(allocator, store, layouts, rc_local, boxy_rc_descs, roots, consume_dead_boxes, true, .{});
 }
 
 /// Solves ARC with optional component-parallel uniqueness execution.
@@ -768,6 +770,7 @@ pub fn solveWithOptions(
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
+    thread_confined_rc: bool,
     options: UniquenessOptions,
 ) SolveError!Solution {
     const local_count = store.localCount();
@@ -785,6 +788,7 @@ pub fn solveWithOptions(
         .rc_local = rc_local,
         .boxy_rc_descs = boxy_rc_descs,
         .consume_dead_boxes = consume_dead_boxes,
+        .thread_confined_rc = thread_confined_rc,
         .domain = &domain,
         .sigs = &.{},
         .pinned = .{},
@@ -896,16 +900,28 @@ pub fn solveWithOptions(
     // Start non-pinned refcounted parameter positions borrowed; demands can
     // only flip positions to owned, so the borrowed set shrinks with each
     // queued change.
+    var external_rows = std.ArrayList(arc_sig.RetCondition).empty;
+    defer external_rows.deinit(allocator);
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         var sig = arc_sig.RcSig.all_owned;
         if (proc.external) {
-            // The cache entry was compiled with this signature; the program
-            // that links it calls it exactly so.
+            // The cache entry was compiled with this signature, and its
+            // uniqueness facts are those its producer solved for this body;
+            // the program that links it calls it exactly so.
+            const words = store.getU32Span(proc.rc_ret_conditions);
+            const rows_start = external_rows.items.len;
+            for (0..GuardedList.borrowLen(words)) |index| {
+                try external_rows.append(allocator, @bitCast(GuardedList.at(words, index)));
+            }
             sig = .{
                 .borrowed_params = @intCast(proc.rc_borrowed_params),
                 .ret_mode = if (proc.rc_ret_borrowed) .borrowed else .owned,
                 .ret_lenders = @intCast(proc.rc_ret_lenders),
+                .ret_unique = proc.rc_ret_unique,
+                .ret_unique_fields = proc.rc_ret_unique_fields,
+                .ret_conditions = .{ .start = @intCast(rows_start), .len = @intCast(external_rows.items.len - rows_start) },
+                .read_only_params = @intCast(proc.rc_read_only_params),
             };
         } else if (!solver.pinned.isSet(proc_index)) {
             const params = store.getLocalSpan(proc.args);
@@ -968,9 +984,17 @@ pub fn solveWithOptions(
         var tail_call_table = try buildTailCallTable(&solver, &binding);
         errdefer tail_call_table.deinit(allocator);
 
-        var visible = try computeVisibilityFromFacts(allocator, &solver);
+        // Without thread-confined counts every local may be host-visible, so
+        // every RC statement is atomic and no visibility fact is consulted.
+        const initial_ret_conditions = try external_rows.toOwnedSlice(allocator);
+        errdefer allocator.free(initial_ret_conditions);
+
+        var visible = if (thread_confined_rc)
+            try computeVisibilityFromFacts(allocator, &solver)
+        else
+            try std.bit_set.DynamicBitSetUnmanaged.initFull(allocator, local_count);
         errdefer visible.deinit(allocator);
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .Debug and thread_confined_rc) {
             var independently_visible = try computeVisibilityFromLift(allocator, store, rc_local, &solver.pinned, solver.proc_stmts, solver.proc_returns);
             defer independently_visible.deinit(allocator);
             if (!visible.eql(independently_visible)) solveInvariant("typed visibility facts disagreed with independent LIR analysis");
@@ -1108,7 +1132,7 @@ pub fn solveWithOptions(
             .unique_conds = unique_conds,
             .unique_origins_ok = unique_origins_ok,
             .fresh_reads = fresh_reads,
-            .ret_conditions = &.{},
+            .ret_conditions = initial_ret_conditions,
             .pinned = solver.pinned,
         };
     };
@@ -2573,12 +2597,13 @@ fn noteDemand(solver: *Solver, local: LIR.LocalId) void {
 }
 
 fn liftVisibilityLink(solver: *Solver, a: LIR.LocalId, b: LIR.LocalId) SolveError!void {
-    if (a == b) return;
+    if (!solver.thread_confined_rc or a == b) return;
     if (solver.domain.indexOf(a) == null or solver.domain.indexOf(b) == null) return;
     try solver.visibility_facts.append(solver.allocator, .{ .link = .{ .a = a, .b = b } });
 }
 
 fn liftVisibilitySeed(solver: *Solver, local: LIR.LocalId) SolveError!void {
+    if (!solver.thread_confined_rc) return;
     if (solver.domain.indexOf(local) == null) return;
     try solver.visibility_facts.append(solver.allocator, .{ .seed = local });
 }
@@ -4906,6 +4931,9 @@ const UniquenessComponentTask = struct {
         var sig = self.solution.sigs[proc_index];
         var rows = std.ArrayList(arc_sig.RetCondition).empty;
         const pinned = self.solution.pinned.isSet(proc_index);
+        // A pinned signature's rows are fixed input: none for an ABI
+        // contract, and an object-cache entry's own for an external proc.
+        if (pinned) try rows.appendSlice(allocator, self.solution.sigTable().retConditionsOf(sig));
         if (!pinned) {
             const proc = self.store.getProcSpec(@enumFromInt(proc_index));
             const params = self.store.getLocalSpan(proc.args);
@@ -5268,6 +5296,7 @@ fn settleUniquenessOracle(
             const sig = &solution.sigs[proc_index];
             const old_rows = solution.sigTable().retConditionsOf(sig.*);
             const row_start = rows.items.len;
+            if (solution.pinned.isSet(proc_index)) try rows.appendSlice(allocator, old_rows);
             // Borrowed positions the body only reads add no holder to the
             // caller's argument.
             if (!solution.pinned.isSet(proc_index)) {
@@ -7193,8 +7222,9 @@ test "component uniqueness preserves shared RC definitions shared statements and
     try std.testing.expect(solution.unique_born.isSet(@intFromEnum(bodyless)));
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(bodyless)]);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(shared)]);
-    // Pinned capabilities are contracts, but their conditional rows follow
-    // the legacy rule and are cleared rather than inferred.
+    // A pinned signature's capabilities and conditional rows are contracts
+    // (an external proc's come from its cache entry): settlement keeps them
+    // rather than inferring them.
     allocator.free(solution.ret_conditions);
     solution.ret_conditions = try allocator.dupe(arc_sig.RetCondition, &.{.{ .field = 0, .params = 1 }});
     solution.sigs[3].ret_conditions = .{ .start = 0, .len = 1 };
@@ -7203,7 +7233,10 @@ test "component uniqueness preserves shared RC definitions shared statements and
     solution.sigs[3].ret_unique_fields = 1;
     metrics = .{};
     try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
-    try std.testing.expectEqual(@as(u32, 0), solution.sigs[3].ret_conditions.len);
+    const kept_rows = solution.sigTable().retConditionsOf(solution.sigs[3]);
+    try std.testing.expectEqual(@as(usize, 1), kept_rows.len);
+    try std.testing.expectEqual(@as(u8, 0), kept_rows[0].field);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), kept_rows[0].params);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.sigs[3].read_only_params);
     try std.testing.expect(solution.sigs[3].ret_unique);
     try std.testing.expectEqual(@as(u64, 1), solution.sigs[3].ret_unique_fields);

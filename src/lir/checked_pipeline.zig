@@ -175,6 +175,12 @@ pub const TargetConfig = struct {
     fuse_tag_cases: bool = true,
     scalarize_joins: bool = true,
     reuse_boxes: bool = true,
+    /// Let ARC prove allocations the host can never touch and give them
+    /// single-threaded count updates. Optimized builds enable this; dev
+    /// builds, compile-time evaluation, and the interpreter use only atomic
+    /// count updates, which also keeps every object-cache entry sound for any
+    /// caller.
+    thread_confined_rc: bool = false,
     /// Build ConstStore materialization plans for requested layouts.
     /// Disable this only for consumers that read requested layout metadata and
     /// never materialize requested-layout values.
@@ -934,6 +940,7 @@ pub const LirPolicy = struct {
     fuse_tag_cases: bool,
     scalarize_joins: bool,
     reuse_boxes: bool,
+    thread_confined_rc: bool,
     layout_request_const_plans: bool,
     tag_reachability: bool,
     prove_ranges: bool,
@@ -1706,6 +1713,7 @@ fn finishLoweredOutput(
         .roots = arc_roots.items,
         .specialize = target.inline_mode != .none,
         .consume_dead_boxes = target.consume_dead_boxes,
+        .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
         .metrics_out = arc_metrics,
     });

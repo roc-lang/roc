@@ -8921,6 +8921,8 @@ fn packFileBytes(
     }
     var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
     defer specs.deinit(allocator);
+    var conditions_arena = std.heap.ArenaAllocator.init(allocator);
+    defer conditions_arena.deinit();
     var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
     const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
@@ -8957,6 +8959,10 @@ fn packFileBytes(
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
+            .rc_read_only_params = proc.rc_read_only_params,
+            .rc_ret_unique = proc.rc_ret_unique,
+            .rc_ret_unique_fields = proc.rc_ret_unique_fields,
+            .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
         });
     }
     if (std.c.getenv("ROC_PACK_TRACE") != null) {
@@ -12731,6 +12737,20 @@ test "post-check optimization scope per opt level" {
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.iterator_fusion, specConstrCloneInliningForOpt(.dev));
 }
 
+test "only optimized builds emit thread-confined count updates" {
+    // Dev builds write the object cache, whose entries link into programs
+    // with different callers, so they never assume an allocation is confined.
+    for ([_]struct { opt: cli_args.OptLevel, confined: bool }{
+        .{ .opt = .speed, .confined = true },
+        .{ .opt = .size, .confined = true },
+        .{ .opt = .dev, .confined = false },
+        .{ .opt = .interpreter, .confined = false },
+    }) |case| {
+        const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, .lss, .native, false);
+        try std.testing.expectEqual(case.confined, config.target.thread_confined_rc);
+    }
+}
+
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
         .size, .speed, .dev => .wrappers,
@@ -12858,6 +12878,7 @@ fn checkedRuntimeLoweringConfig(
             .fuse_tag_cases = optimizeLirForOpt(opt),
             .scalarize_joins = optimizeLirForOpt(opt),
             .reuse_boxes = optimizeLirForOpt(opt),
+            .thread_confined_rc = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names,
         },
     };
