@@ -4266,7 +4266,7 @@ Builtin :: [].{
 		## much larger than the cache, and the index is known some steps
 		## before the item is used, as with a hash table's next bucket.
 		## ```roc
-		## table = List.prefetched(table, next_bucket)
+		## expect List.prefetched([10.U64, 20, 30], 1) == [10, 20, 30]
 		## ```
 		prefetched : List(item), U64 -> List(item)
 		prefetched = |list, index| list_prefetched(list, index)
