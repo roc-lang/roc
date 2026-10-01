@@ -46088,32 +46088,34 @@ const BodyContext = struct {
             Common.invariant("structural equality dispatch did not lower two operands");
         }
 
-        if (try self.graph.typeIsResolved(fn_nodes.args[0])) {
-            const operand_ty = try self.activeTypeFromNode(fn_nodes.args[0]);
-            if (eq.discriminant) |discriminant| {
-                if (discriminant.value_operand >= operands.len) Common.invariant("tag-discriminant equality named a missing operand");
-                return try self.lowerEqualityAgainstTag(
-                    operands[discriminant.value_operand],
+        const operand_node = switch (try self.structuralDerivationOperandFromNode(fn_nodes.args[0])) {
+            .sealed => |operand_ty| {
+                if (eq.discriminant) |discriminant| {
+                    if (discriminant.value_operand >= operands.len) Common.invariant("tag-discriminant equality named a missing operand");
+                    return try self.lowerEqualityAgainstTag(
+                        operands[discriminant.value_operand],
+                        operand_ty,
+                        try self.tagName(self.view, discriminant.tag),
+                        eq.negated,
+                        ret_ty,
+                    );
+                }
+                return try self.lowerStructuralEqFromOperands(
                     operand_ty,
-                    try self.tagName(self.view, discriminant.tag),
+                    operands[0],
+                    operands[1],
                     eq.negated,
                     ret_ty,
                 );
-            }
-            return try self.lowerStructuralEqFromOperands(
-                operand_ty,
-                operands[0],
-                operands[1],
-                eq.negated,
-                ret_ty,
-            );
-        }
+            },
+            .deferred => |operand_node| operand_node,
+        };
         if (eq.discriminant) |discriminant| {
             if (discriminant.value_operand >= operands.len) Common.invariant("tag-discriminant equality named a missing operand");
             const value = operands[discriminant.value_operand];
             return try self.deferStructuralDerivationOperandsAtNode(
                 ret_ty,
-                fn_nodes.args[0],
+                operand_node,
                 value,
                 value,
                 .{ .tag_discriminant = .{
@@ -46123,7 +46125,7 @@ const BodyContext = struct {
                 } },
             );
         }
-        return try self.deferStructuralEqOperandsAtNode(ret_ty, fn_nodes.args[0], operands[0], operands[1], eq.negated);
+        return try self.deferStructuralEqOperandsAtNode(ret_ty, operand_node, operands[0], operands[1], eq.negated);
     }
 
     /// The hash counterpart of `lowerStructuralEqualityAtNode`: the hashed
@@ -46162,21 +46164,16 @@ const BodyContext = struct {
             Common.invariant("structural hash dispatch did not lower two operands");
         }
 
-        if (try self.graph.typeIsResolved(fn_nodes.args[0])) {
-            return try self.lowerHashExpr(
-                try self.activeTypeFromNode(fn_nodes.args[0]),
+        return switch (try self.structuralDerivationOperandFromNode(fn_nodes.args[0])) {
+            .sealed => |value_ty| try self.lowerHashExpr(value_ty, operands[0], operands[1], ret_ty),
+            .deferred => |value_node| try self.deferStructuralDerivationOperandsAtNode(
+                ret_ty,
+                value_node,
                 operands[0],
                 operands[1],
-                ret_ty,
-            );
-        }
-        return try self.deferStructuralDerivationOperandsAtNode(
-            ret_ty,
-            fn_nodes.args[0],
-            operands[0],
-            operands[1],
-            .hash,
-        );
+                .hash,
+            ),
+        };
     }
 
     fn deferStructuralSerializationAtNode(
@@ -51990,26 +51987,36 @@ const BodyContext = struct {
         } } });
     }
 
-    const StructuralEqualityOperand = union(enum) {
+    const StructuralDerivationOperand = union(enum) {
         sealed: Type.TypeId,
         deferred: NodeId,
     };
 
-    fn structuralEqualityOperandType(self: *BodyContext, eq: anytype) Allocator.Error!StructuralEqualityOperand {
+    fn structuralEqualityOperandType(self: *BodyContext, eq: anytype) Allocator.Error!StructuralDerivationOperand {
         const lhs_checked_ty = self.view.bodies.expr(eq.lhs).ty;
         const rhs_checked_ty = self.view.bodies.expr(eq.rhs).ty;
 
         try self.constrainCheckedTypeRelations(lhs_checked_ty, self, rhs_checked_ty);
 
-        if (try self.structuralEqualityExprResultNode(eq.lhs)) |lhs_node| {
+        if (try self.structuralDerivationExprResultNode(eq.lhs)) |lhs_node| {
             return try self.constrainStructuralEqualityOperandNode(lhs_node, eq.rhs, rhs_checked_ty);
         }
-        if (try self.structuralEqualityExprResultNode(eq.rhs)) |rhs_node| {
+        if (try self.structuralDerivationExprResultNode(eq.rhs)) |rhs_node| {
             return try self.constrainStructuralEqualityOperandNode(rhs_node, eq.lhs, lhs_checked_ty);
         }
 
         const operand_node = try self.instNode(lhs_checked_ty);
-        return try self.structuralEqualityOperandFromNode(operand_node);
+        return try self.structuralDerivationOperandFromNode(operand_node);
+    }
+
+    /// The hashed value's node may still carry live row defaults (a tag
+    /// union built from tag constructors, for example), so it resolves to a
+    /// sealed type only when the graph already resolved it and otherwise
+    /// defers the derivation to final graph sealing.
+    fn structuralHashOperandType(self: *BodyContext, h: anytype) Allocator.Error!StructuralDerivationOperand {
+        const value_node = (try self.structuralDerivationExprResultNode(h.value)) orelse
+            try self.instNode(self.view.bodies.expr(h.value).ty);
+        return try self.structuralDerivationOperandFromNode(value_node);
     }
 
     fn deferStructuralEqAtNode(
@@ -52097,13 +52104,13 @@ const BodyContext = struct {
         return expr;
     }
 
-    /// Resolves the graph node an equality operand evaluates to, when that operand is a
-    /// result-producing expression (call, dispatch, lookup, field access). The shared
-    /// equality operand node is taken from this result so an open tag literal on the other
-    /// side cannot narrow it. Returns null for any other expression shape (e.g. a tag
-    /// literal): the caller then falls through to the concrete-shape ladder in
-    /// structuralEqualityOperandType, so this must not materialize a Monotype view.
-    fn structuralEqualityExprResultNode(
+    /// Resolves the graph node a structural derivation operand evaluates to, when that
+    /// operand is a result-producing expression (call, dispatch, lookup, field access).
+    /// For equality, the shared operand node is taken from this result so an open tag
+    /// literal on the other side cannot narrow it. Returns null for any other expression
+    /// shape (e.g. a tag literal): the caller then instantiates the operand's checked type
+    /// instead, so this must not materialize a Monotype view.
+    fn structuralDerivationExprResultNode(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
     ) Allocator.Error!?NodeId {
@@ -52128,18 +52135,18 @@ const BodyContext = struct {
         operand_node: NodeId,
         other_expr_id: checked.CheckedExprId,
         other_checked_ty: checked.CheckedTypeId,
-    ) Allocator.Error!StructuralEqualityOperand {
+    ) Allocator.Error!StructuralDerivationOperand {
         try self.graph.unify(operand_node, try self.instNode(other_checked_ty));
-        if (try self.structuralEqualityExprResultNode(other_expr_id)) |other_node| {
+        if (try self.structuralDerivationExprResultNode(other_expr_id)) |other_node| {
             try self.graph.unify(operand_node, other_node);
         }
-        return try self.structuralEqualityOperandFromNode(operand_node);
+        return try self.structuralDerivationOperandFromNode(operand_node);
     }
 
-    fn structuralEqualityOperandFromNode(
+    fn structuralDerivationOperandFromNode(
         self: *BodyContext,
         operand_node: NodeId,
-    ) Allocator.Error!StructuralEqualityOperand {
+    ) Allocator.Error!StructuralDerivationOperand {
         if (try self.graph.typeIsResolved(operand_node)) {
             return .{ .sealed = try self.activeTypeFromNode(operand_node) };
         }
@@ -52635,10 +52642,21 @@ const BodyContext = struct {
         h: anytype,
         hasher_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const value_ty = try self.lowerExprType(h.value);
-        const value = try self.lowerExprAtType(h.value, value_ty);
-        const hasher = try self.lowerExprAtType(h.hasher, hasher_ty);
-        return try self.lowerHashExpr(value_ty, value, hasher, hasher_ty);
+        return switch (try self.structuralHashOperandType(h)) {
+            .sealed => |value_ty| try self.lowerHashExpr(
+                value_ty,
+                try self.lowerExprAtType(h.value, value_ty),
+                try self.lowerExprAtType(h.hasher, hasher_ty),
+                hasher_ty,
+            ),
+            .deferred => |value_node| try self.deferStructuralDerivationOperandsAtNode(
+                hasher_ty,
+                value_node,
+                try self.lowerExprAtTypeCell(h.value, DraftTypeCell.fromGraphNode(value_node)),
+                try self.lowerExprAtType(h.hasher, hasher_ty),
+                .hash,
+            ),
+        };
     }
 
     /// Emit `Hasher.write_u64(hasher, value)` as a low-level operation.

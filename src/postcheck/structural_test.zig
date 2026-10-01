@@ -668,7 +668,7 @@ test "Monotype structural equality result probes remain graph-native" {
         "fn structuralEqualityOperandType",
         "fn prepareStructuralEqNode",
     );
-    try expectContains(equality_source, "fn structuralEqualityExprResultNode");
+    try expectContains(equality_source, "fn structuralDerivationExprResultNode");
     try expectContains(equality_source, "try self.callResultTypeNode");
     try expectContains(equality_source, "try self.dispatchResultTypeNode");
     try expectContains(equality_source, "try self.lookupExprTypeNode");
@@ -682,9 +682,26 @@ test "Monotype structural equality result probes remain graph-native" {
         "const StructuralBinaryOperands = struct",
     );
     try expectContains(dispatch_equality, "self.graph.functionNodes(callable_node)");
-    try expectContains(dispatch_equality, "self.graph.typeIsResolved(fn_nodes.args[0])");
+    try expectContains(dispatch_equality, "self.structuralDerivationOperandFromNode(fn_nodes.args[0])");
     try expectContains(dispatch_equality, "deferStructuralEqOperandsAtNode");
     try expectNotContains(dispatch_equality, "resolvedTypeViewForNode(callable_node)");
+
+    const dispatch_hash = sourceSliceBetween(
+        lower_source,
+        "fn lowerStructuralHashAtNode(",
+        "fn deferStructuralSerializationAtNode(",
+    );
+    try expectContains(dispatch_hash, "self.structuralDerivationOperandFromNode(fn_nodes.args[0])");
+    try expectContains(dispatch_hash, "deferStructuralDerivationOperandsAtNode");
+
+    const direct_hash = sourceSliceBetween(
+        lower_source,
+        "fn lowerDirectStructuralHashAtType(",
+        "fn hasherWriteU64(",
+    );
+    try expectContains(direct_hash, "self.structuralHashOperandType(h)");
+    try expectContains(direct_hash, "deferStructuralDerivationOperandsAtNode");
+    try expectNotContains(direct_hash, "lowerExprType(");
 }
 
 test "Monotype loop carries remain graph-native through headers and backedges" {
