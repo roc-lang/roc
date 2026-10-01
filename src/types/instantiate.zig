@@ -383,6 +383,9 @@ pub const Instantiator = struct {
         context: *anyopaque,
         resolve: *const fn (*anyopaque, Alias, u32) std.mem.Allocator.Error!?bool,
     } = null,
+    /// Each marker's open/closed choice for the copy in progress. Set by
+    /// `instantiateVarHelp` for the whole copy, so it is null only between
+    /// instantiations.
     marker_choices: ?*std.AutoHashMapUnmanaged(Var, bool) = null,
     /// The polarity of the position currently being instantiated. Starts at
     /// the polarity of the instantiation root (callers using
@@ -715,7 +718,13 @@ pub const Instantiator = struct {
                     const allows_open = item.polarity == .pos and (self.polarity_var_behavior != .defer_open or item.reach != .nested);
                     const entry = try choices.getOrPut(allocator, resolved.var_);
                     entry.value_ptr.* = allows_open and (!entry.found_existing or entry.value_ptr.*);
+                } else {
+                    try self.pushConstraintChoiceItems(Item, &pending, rigid.constraints, item.polarity);
                 },
+                // The copy walk descends into static-dispatch constraints
+                // (`stepFlexLike`), so the markers of their signatures are
+                // occurrences too.
+                .flex => |flex| try self.pushConstraintChoiceItems(Item, &pending, flex.constraints, item.polarity),
                 .alias => |alias| {
                     try binders.appendSlice(allocator, self.store.sliceAliasHiddenArgs(alias));
                     try pending.append(allocator, .{ .var_ = self.store.getAliasBackingVar(alias), .polarity = item.polarity, .reach = item.reach });
@@ -751,7 +760,11 @@ pub const Instantiator = struct {
                         try pending.append(allocator, .{ .var_ = arg, .polarity = item.polarity, .reach = .nested });
                     },
                     .record => |record| {
-                        for (0..record.fields.count) |index| try pending.append(allocator, .{ .var_ = self.store.getRecordFieldAt(record.fields, @intCast(index)).presence.typeVar(), .polarity = item.polarity, .reach = .nested });
+                        for (0..record.fields.count) |index| {
+                            const presence = self.store.getRecordFieldAt(record.fields, @intCast(index)).presence;
+                            try pending.append(allocator, .{ .var_ = presence.typeVar(), .polarity = item.polarity, .reach = .nested });
+                            if (presence.presenceVar()) |presence_var| try pending.append(allocator, .{ .var_ = presence_var, .polarity = item.polarity, .reach = .nested });
+                        }
                         try pending.append(allocator, .{ .var_ = record.ext, .polarity = item.polarity, .reach = .nested });
                     },
                     .tag_union => |union_| {
@@ -763,7 +776,7 @@ pub const Instantiator = struct {
                     },
                     .empty_record, .empty_tag_union => {},
                 },
-                .flex, .field_presence, .err => {},
+                .field_presence, .err => {},
             }
         }
         for (binders.items) |binder| {
@@ -771,6 +784,26 @@ pub const Instantiator = struct {
             if (resolved.desc.content == .rigid and resolved.desc.content.rigid.name.eql(marker_ident)) std.debug.assert(choices.contains(resolved.var_));
         }
         return true;
+    }
+
+    /// Schedule the vars of static-dispatch constraints for
+    /// `collectMarkerChoices`, at the polarity and reach `stepFlexLike` copies
+    /// them with.
+    fn pushConstraintChoiceItems(self: *Self, comptime Item: type, pending: *std.ArrayList(Item), constraints: StaticDispatchConstraint.SafeList.Range, polarity: Polarity) std.mem.Allocator.Error!void {
+        const allocator = self.store.gpa;
+        var i: u32 = 0;
+        while (i < constraints.len()) : (i += 1) {
+            const constraint = self.store.static_dispatch_constraints.items.items[@intFromEnum(constraints.start) + i];
+            try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = polarity, .reach = .nested });
+            if (constraint.interpolation.isPresent()) {
+                const metadata = constraint.interpolation;
+                var part_idx: u32 = 0;
+                while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
+                    try pending.append(allocator, .{ .var_ = self.store.getInterpolationPartAt(metadata.interpolated_parts, part_idx).var_, .polarity = polarity, .reach = .nested });
+                }
+                try pending.append(allocator, .{ .var_ = metadata.item_var, .polarity = polarity, .reach = .nested });
+            }
+        }
     }
 
     fn instantiateVarHelp(
@@ -908,7 +941,16 @@ pub const Instantiator = struct {
                 // caller's rigid policy.
                 if (self.polarity_var_ident) |polarity_ident| {
                     if (rigid.name.eql(polarity_ident)) {
-                        const positive = if (self.marker_choices) |choices| choices.get(resolved_var) orelse (self.current_polarity == .pos) else self.current_polarity == .pos;
+                        // Only the behaviors that decide per occurrence read a
+                        // choice; `instantiateVarHelp` made one, via
+                        // `collectMarkerChoices`, for every marker the copy
+                        // can reach. `.close` and `.preserve` decide
+                        // independently of position.
+                        const positive = switch (self.polarity_var_behavior) {
+                            .close, .preserve => false,
+                            .resolve_by_polarity, .preserve_output, .defer_open => self.marker_choices.?.get(resolved_var) orelse
+                                std.debug.panic("compiler invariant violated: polarity marker reached by instantiation has no marker choice", .{}),
+                        };
                         const opened = self.polarity_var_behavior == .resolve_by_polarity and positive;
                         const marker_content: Content = switch (self.polarity_var_behavior) {
                             .close => .{ .structure = .empty_tag_union },
