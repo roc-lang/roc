@@ -65,6 +65,69 @@ pub const BindingInfo = struct {
     region: Region,
 };
 
+/// Explicit source binding for a namespace root before builtin auto-imports.
+pub const SourceNamespaceRoot = union(enum) { imported: []const u8, local, unbound };
+
+/// Source declarations select their namespace before compiler auto-imports.
+pub fn resolveSourceNamespaceRoot(module_env: ?*ModuleEnv, name: []const u8) SourceNamespaceRoot {
+    const env = module_env orelse return .unbound;
+    const root = name[0 .. std.mem.findScalar(u8, name, '.') orelse name.len];
+    if (std.mem.eql(u8, env.module_name, root)) return .local;
+    for (env.store.sliceStatements(env.all_statements)) |stmt_idx| {
+        const stmt = env.store.getSourceStatement(stmt_idx);
+        if (stmt == .s_import) {
+            const import = stmt.s_import;
+            const visible = env.getIdentText(import.alias_tok orelse import.module_name_tok);
+            if (std.mem.eql(u8, visible, root)) return .{ .imported = env.getIdentText(import.module_name_tok) };
+        }
+        if (statementTypeHeader(stmt)) |header_idx| {
+            const header = env.store.getTypeHeader(header_idx);
+            const declared = stripModulePrefix(env.getIdentText(header.name), env.module_name);
+            if (std.mem.eql(u8, declared, root)) return .local;
+        }
+    }
+    return .unbound;
+}
+
+/// Return the header of a source type declaration.
+pub fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
+    return switch (statement) {
+        .s_alias_decl => |alias| alias.header,
+        .s_nominal_decl => |nominal| nominal.header,
+        .s_where_alias_decl => |where_alias| where_alias.header,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
+/// Strip module prefix from a name.
+pub fn stripModulePrefix(name: []const u8, module_name: []const u8) []const u8 {
+    if (std.mem.eql(u8, name, module_name)) return "";
+    if (std.mem.startsWith(u8, name, module_name) and
+        name.len > module_name.len and name[module_name.len] == '.')
+    {
+        return name[module_name.len + 1 ..];
+    }
+    return name;
+}
+
 // Pattern Extraction Functions
 
 /// Extract the identifier from a binding pattern.
@@ -184,30 +247,7 @@ pub fn findDefinitionByModuleMember(module_env: *ModuleEnv, module_name: []const
 pub fn findTypeDeclarationByModuleMember(module_env: *ModuleEnv, module_name: []const u8, name: []const u8) ?CIR.Statement.Idx {
     const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
     for (statements_slice) |stmt_idx| {
-        const header_idx: ?CIR.TypeHeader.Idx = switch (module_env.store.getSourceStatement(stmt_idx)) {
-            .s_alias_decl => |alias| alias.header,
-            .s_nominal_decl => |nominal| nominal.header,
-            .s_decl,
-            .s_var,
-            .s_var_uninitialized,
-            .s_reassign,
-            .s_crash,
-            .s_dbg,
-            .s_expr,
-            .s_expect,
-            .s_for,
-            .s_while,
-            .s_infinite_loop,
-            .s_breakable_loop,
-            .s_break,
-            .s_return,
-            .s_import,
-            .s_where_alias_decl,
-            .s_type_anno,
-            .s_type_var_alias,
-            .s_runtime_error,
-            => null,
-        };
+        const header_idx = statementTypeHeader(module_env.store.getSourceStatement(stmt_idx));
         if (header_idx) |header_idx_value| {
             const header = module_env.store.getTypeHeader(header_idx_value);
             const header_name = module_env.getIdentText(header.name);
@@ -344,26 +384,6 @@ pub fn findModuleByNameInPackage(
 /// Returns null if the module is not found or the build environment is null.
 pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleInfo {
     return findModuleByNameInPackage(build_env, null, module_name);
-}
-
-/// Find a module by name, optionally checking if it's a builtin type first.
-/// This is a convenience wrapper that combines builtin checking with module lookup.
-pub fn findModuleByNameWithBuiltinCheck(
-    build_env: *BuildEnv,
-    module_name: []const u8,
-    builtin_types: []const []const u8,
-) ?ModuleInfo {
-    // Only check builtin types if module_name is unqualified
-    if (std.mem.find(u8, module_name, ".") == null) {
-        for (builtin_types) |builtin| {
-            if (std.mem.eql(u8, module_name, builtin)) {
-                // Builtin types don't have a separate module env in the normal sense
-                return null;
-            }
-        }
-    }
-
-    return findModuleByName(build_env, module_name);
 }
 
 // Type Variable Functions

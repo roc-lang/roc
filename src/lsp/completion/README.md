@@ -14,7 +14,7 @@ All paths are relative to `src/lsp/`.
 | `syntax.zig` | **Orchestrator.** `SyntaxChecker.getCompletionsAtPosition()` is the main entry point. Builds the file, obtains a `ModuleEnv`, detects the completion context, creates a `CompletionBuilder`, and dispatches to the context-specific branch. Also contains helper resolution functions (`resolveModuleAlias`, `resolveLocalBindingTypeVar`, `resolveAccessChainTypeVar`, `extractReturnType`). |
 | `completion/context.zig` | Pure text analysis. `detectCompletionContext()` scans backwards from the cursor to decide which `CompletionContext` variant applies. Also provides `computeOffset()` for converting LSP line/character to a byte offset. |
 | `completion/builder.zig` | `CompletionBuilder` struct. Accumulates `CompletionItem`s with deduplication (via `seen_labels` hash map). All the `add*` methods live here. |
-| `completion/builtins.zig` | `BUILTIN_TYPES` list (21 entries: `Str`, `List`, `Dict`, …, `Num`) and `isBuiltinType()` helper. |
+| `../../canonicalize/CIR.zig` | Owns builtin declarations, container names, derived auto-imports, and exact builtin namespace resolution. |
 | `completion/mod.zig` | Re-exports `CompletionContext`, `detectCompletionContext`, `computeOffset`, and `CompletionBuilder`. |
 | `scope_map.zig` | Reconstructs lexical scopes from CIR so the builder can answer "which local variables are visible at byte offset X?" |
 | `cir_queries.zig` | Offset-based CIR queries. `findFieldAccessReceiverTypeVar()` finds the receiver type of an existing field-access node. `findTypeAtOffset()` returns the type at an arbitrary offset. Used as a first-pass type resolver before falling back to name-based lookup. |
@@ -133,13 +133,19 @@ every kind of completion the system can produce, grouped by context.
 **Trigger:** `Str.`, `List.`, `Json.`, or `MyNominalType.`
 
 **What happens:**
-1. `resolveModuleAlias(module_env, name)`—if the module was imported with
-   `import Json as J`, this maps `J` back to `Json`.
-2. `builder.addModuleMemberCompletions(env, resolved_name, module_env_opt)`—
+1. `resolveSourceNamespaceRoot(module_env, name)` selects explicit local
+   declarations and imports first. Import aliases retain their declared module
+   name; a local type shadowing a builtin selects the local namespace.
+2. `builder.addModuleMemberCompletions(env, name, module_env_opt)`—
    walks all `exposed_items` from the target module's `ModuleEnv`. For builtin
-   type names (recognised via `isBuiltinType`), it uses the special
+   names (resolved by `CIR.resolveBuiltinNamespace`), it uses the special
    `builtin_module.env`. Items are classified as `function` (lowercase) or
-   `class` (uppercase).
+   `class` (uppercase). The compiler registry resolves `I64` to
+   `Builtin.Num.I64` and `Json` to `Builtin.Encoding.Json` before enumeration.
+   Only immediate children of that exact qualified namespace are offered.
+   The same resolver handles `Num.I64.` and `Encoding.Json.`, including when
+   an incomplete document has no checked module snapshot. Declaration metadata
+   distinguishes namespace chains from chains ending in a value.
 3. `builder.addTagCompletionsForNominalType(module_env, name, null)`—if the
    name is also a nominal type in the current module, adds its tag constructors
    (e.g., `Color.Red`, `Color.Green`).
@@ -199,12 +205,12 @@ does not merge their lookup or resolution.
    in the `BuildEnv`.
 4. `addModuleNameCompletionsFromEnv(env)`—adds all module names from
    `BuildEnv` coordinator packages **and** calls `addBuiltinModuleNameCompletions()`
-   which adds every entry in `BUILTIN_TYPES`.
+   which consumes `CIR.builtin_namespace_roots`.
 
 This means typing `x : ` suggests: user-defined type aliases and nominals,
-imported module names, all loaded module names, and all 21 builtin types
-(`Str`, `List`, `Bool`, `U8`–`U128`, `I8`–`I128`, `F32`, `F64`, `Dec`, `Num`,
-`Dict`, `Set`, `Box`, `Try`).
+imported module names, all loaded module names, all registered auto-imported
+builtin names, and root builtin containers. This includes SIMD types, `Hasher`,
+`Utf8Problem`, `Encoding`, and `Json`; internal codec state types are excluded.
 
 **CompletionItemKind:** `class` (types), `module` (module names)
 
@@ -355,25 +361,19 @@ Every public `add*` method on `CompletionBuilder`:
 
 ---
 
-## BUILTIN_TYPES
+## Builtin name ownership
 
-Defined in `completion/builtins.zig`. These 21 names are added as module-kind
-completions by `addBuiltinModuleNameCompletions()`:
+`CIR.builtin_type_specs` owns builtin type declarations and their auto-import
+policy. `CIR.builtin_type_containers` owns grouping namespaces and their explicit
+auto-import aliases. `CIR.builtin_auto_imports` is derived from those declarations
+and is shared by canonicalization's import maps and scope seeding.
+`CIR.builtin_namespace_roots` additionally includes grouping namespaces and is
+shared by builtin name completion and namespace resolution. There is no separate LSP builtin registry.
 
-```
-Str  List  Dict  Set  Box
-Bool Try
-U8  U16  U32  U64  U128
-I8  I16  I32  I64  I128
-F32  F64
-Dec  Num
-```
-
-`isBuiltinType(name)` does a case-sensitive linear scan of this list. It is
-used to:
-- Route method lookups through the builtin `ModuleEnv` instead of the user's.
-- Add builtin module names to completion lists.
-- Recognise when `addModuleMemberCompletions` should use `builtin_module.env`.
+`CIR.resolveBuiltinNamespace` resolves an auto-import alias or declared container
+path to its qualified root and remaining path. Member enumeration consumes that
+exact namespace in the builtin module. It does not search for matching inner
+segments or mix builtin members with local or imported exports.
 
 ---
 
@@ -388,7 +388,7 @@ used to:
 | `test/syntax_test.zig` | Mid-level tests. Creates a `SyntaxChecker`, builds real Roc source, and calls `getCompletionsAtPosition()` directly. |
 | `completion/context.zig` (inline) | Unit tests for `detectCompletionContext` and `computeOffset`. |
 | `completion/builder.zig` (inline) | Unit tests for helper functions (`stripModulePrefix`, `firstSegment`, `lastSegment`). |
-| `completion/builtins.zig` (inline) | Unit tests for `isBuiltinType` and `BUILTIN_TYPES.len`. |
+| `../../canonicalize/CIR.zig` (inline) | Exact builtin owner resolution and rejection of unrelated roots. |
 
 ### Handler test structure (handler_integration_tests.zig)
 
@@ -422,6 +422,9 @@ Each test follows this pattern:
 | `returns lambda parameters` | `foo = \|x, y\| ...` | inside body | `x`, `y` visible |
 | `returns top-level definitions` | `add = \|a, b\| ...\nresult = ` | after `=` | `add` appears |
 | `returns record fields after dot` | `rec = { name: "hi" }\nresult = rec.` | after `rec.` | `name` field appears |
+| `returns I64 members after I64 dot` | `app [...]\n\nx = I64.` | 2:8 | `to_str`, `abs` (type nested in `Num`) |
+| `returns Json members after Json dot` | `app [...]\n\nx = Json.` | 2:9 | `parse_null` (type nested in `Encoding`) |
+| `returns Iter members after Iter dot` | `app [...]\n\nx = Iter.` | 2:9 | `single` |
 
 ### Syntax test structure (syntax_test.zig)
 

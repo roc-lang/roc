@@ -15,10 +15,11 @@ const types = @import("types");
 const compile = @import("compile");
 
 const completion_handler = @import("../handlers/completion.zig");
-const builtin_completion = @import("builtins.zig");
 const scope_map = @import("../scope_map.zig");
 const module_lookup = @import("../module_lookup.zig");
 const doc_comments = @import("../doc_comments.zig");
+const statementTypeHeader = module_lookup.statementTypeHeader;
+const stripModulePrefix = module_lookup.stripModulePrefix;
 
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
@@ -81,33 +82,6 @@ fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
         .s_alias_decl,
         .s_nominal_decl,
         .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => null,
-    };
-}
-
-fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
-    return switch (statement) {
-        .s_alias_decl => |alias| alias.header,
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_where_alias_decl => |where_alias| where_alias.header,
-        .s_decl,
-        .s_var,
-        .s_var_uninitialized,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
         .s_type_anno,
         .s_type_var_alias,
         .s_runtime_error,
@@ -314,33 +288,28 @@ pub const CompletionBuilder = struct {
         module_name: []const u8,
         module_env_opt: ?*ModuleEnv,
     ) Allocator.Error!void {
-        // Builtins are backed by a single Builtin module env. Treat builtin type
-        // names (Str, List, etc.) as top-level modules for member completions.
-        if (builtin_completion.isBuiltinType(module_name)) {
-            try self.addModuleMemberCompletionsFromModuleEnv(env.builtin_modules.builtin_module.env, module_name);
-        }
-
-        // Try to find the module in imported modules.
-        if (env.findModuleByName(module_name)) |module_state| {
-            if (module_state.moduleEnv()) |imported_env| {
-                try self.addModuleMemberCompletionsFromModuleEnv(imported_env, module_name);
-            }
-            return;
-        }
-
-        // Fall back to local module env for nominal type associated values.
-        // Don't require module_name to match module_env.module_name - this
-        // handles Record2.ttt where Record2 is a nominal type in the current module.
-        if (module_env_opt) |module_env| {
-            try self.addModuleMemberCompletionsFromModuleEnv(module_env, module_name);
+        switch (module_lookup.resolveSourceNamespaceRoot(module_env_opt, module_name)) {
+            .imported => |import_name| {
+                if (env.findModuleByName(import_name)) |module_state| {
+                    if (module_state.moduleEnv()) |imported_env| try self.addModuleMemberCompletionsFromModuleEnv(imported_env, import_name);
+                }
+                return;
+            },
+            .local => {
+                try self.addModuleMemberCompletionsFromModuleEnv(module_env_opt.?, module_name);
+                return;
+            },
+            .unbound => {
+                _ = try self.addBuiltinNamespaceCompletions(env.builtin_modules.builtin_module.env, null, module_name);
+            },
         }
     }
 
     /// Add builtin module name completions (Str, List, Bool, etc.).
     fn addBuiltinModuleNameCompletions(self: *CompletionBuilder) Allocator.Error!void {
-        // We use the builtin type list as module names, because builtin modules
-        // are surfaced as top-level namespaces for completion.
-        for (builtin_completion.BUILTIN_TYPES) |builtin_name| {
+        // The producer supplies source-visible roots, including grouping namespaces.
+        for (CIR.builtin_namespace_roots) |entry| {
+            const builtin_name = entry.display_name;
             _ = try self.addItem(.{
                 .label = builtin_name,
                 .kind = @intFromEnum(CompletionItemKind.module),
@@ -355,6 +324,27 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
         module_name: []const u8,
     ) Allocator.Error!void {
+        try self.addExposedMemberCompletions(module_env, .{ .module = module_name });
+    }
+
+    /// Resolve the builtin owner once, then enumerate only that exact namespace.
+    /// Returns whether the chain names a builtin namespace declaration.
+    pub fn addBuiltinNamespaceCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, source_env: ?*ModuleEnv, source_namespace: []const u8) Allocator.Error!bool {
+        if (module_lookup.resolveSourceNamespaceRoot(source_env, source_namespace) != .unbound) return false;
+        const namespace = CIR.resolveBuiltinNamespace(source_namespace) orelse return false;
+        const qualified_name = try std.mem.concat(self.allocator, u8, &.{ namespace.qualified_root, namespace.suffix });
+        defer self.allocator.free(qualified_name);
+        // A builtin-rooted chain can also end in a value. Only declarations
+        // select namespace completion; value chains continue through type lookup.
+        const ident = module_env.common.findIdent(qualified_name) orelse return false;
+        if (module_env.getExposedTypeNodeIndexById(ident) == null) return false;
+        try self.addExposedMemberCompletions(module_env, .{ .namespace = qualified_name });
+        return true;
+    }
+
+    const MemberScope = union(enum) { module: []const u8, namespace: []const u8 };
+
+    fn addExposedMemberCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, scope: MemberScope) Allocator.Error!void {
         var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
         defer if (type_writer) |*tw| tw.deinit();
 
@@ -365,8 +355,12 @@ pub const CompletionBuilder = struct {
             const name = module_env.common.idents.getText(ident_idx);
             if (name.len == 0) continue;
 
-            const without_module = stripModulePrefix(name, module_env.module_name);
             const label = blk: {
+                if (scope == .namespace) {
+                    break :blk directNamespaceMemberLabel(name, scope.namespace) orelse continue;
+                }
+                const module_name = scope.module;
+                const without_module = stripModulePrefix(name, module_env.module_name);
                 // Module exports can be qualified (Module.member) or unqualified (member).
                 // Prefer matching the actual module name to avoid leaking unrelated items,
                 // but allow unqualified names when we are completing the module itself.
@@ -376,11 +370,9 @@ pub const CompletionBuilder = struct {
                     break :blk without_module;
                 }
 
-                if (!std.mem.startsWith(u8, without_module, module_name)) continue;
-                if (without_module.len <= module_name.len or without_module[module_name.len] != '.') continue;
+                if (directNamespaceMemberLabel(without_module, module_name)) |label| break :blk label;
 
-                const remainder = without_module[module_name.len + 1 ..];
-                break :blk firstSegment(remainder);
+                continue;
             };
             if (label.len == 0) continue;
 
@@ -446,7 +438,7 @@ pub const CompletionBuilder = struct {
             const def = module_env.store.getDef(def_idx);
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, def.pattern) orelse continue;
             const full_name = module_env.getIdentText(ident_idx);
-            const label = namespaceMemberLabel(full_name, namespace_chain) orelse continue;
+            const label = namespaceMemberLabel(full_name, module_env.module_name, namespace_chain) orelse continue;
             if (label.len == 0) continue;
 
             const kind: u32 = if (std.ascii.isUpper(label[0]))
@@ -467,7 +459,7 @@ pub const CompletionBuilder = struct {
             const pattern_idx = parts.pattern orelse continue;
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse continue;
             const full_name = module_env.getIdentText(ident_idx);
-            const label = namespaceMemberLabel(full_name, namespace_chain) orelse continue;
+            const label = namespaceMemberLabel(full_name, module_env.module_name, namespace_chain) orelse continue;
             if (label.len == 0) continue;
 
             const kind: u32 = if (std.ascii.isUpper(label[0]))
@@ -1625,26 +1617,6 @@ fn stripBuiltinPrefix(name: []const u8) []const u8 {
     return name;
 }
 
-/// Strip module prefix from a name.
-fn stripModulePrefix(name: []const u8, module_name: []const u8) []const u8 {
-    var i: usize = 0;
-    while (i < name.len) {
-        const seg_start = i;
-        const dot_idx = std.mem.findScalarPos(u8, name, seg_start, '.') orelse name.len;
-        const seg = name[seg_start..dot_idx];
-
-        if (std.mem.eql(u8, seg, module_name)) {
-            if (dot_idx < name.len) return name[dot_idx + 1 ..];
-            return "";
-        }
-
-        if (dot_idx == name.len) break;
-        i = dot_idx + 1;
-    }
-
-    return name;
-}
-
 /// Get the first segment of a dotted name.
 fn firstSegment(name: []const u8) []const u8 {
     const dot_idx = std.mem.findScalar(u8, name, '.') orelse name.len;
@@ -1658,40 +1630,17 @@ fn lastSegment(name: []const u8) []const u8 {
     return name[dot_idx + 1 ..];
 }
 
-/// Extract the immediate child label under `namespace_chain` from a full name.
-///
-/// Examples:
-/// - full: `MyType.Sub.ta`, chain: `MyType.Sub` => `ta`
-/// - full: `pkg.MyType.Sub.ta`, chain: `MyType.Sub` => `ta`
-fn namespaceMemberLabel(full_name: []const u8, namespace_chain: []const u8) ?[]const u8 {
-    if (namespace_chain.len == 0) return null;
+/// Extract an immediate child from a module-relative or exactly module-qualified name.
+fn namespaceMemberLabel(full_name: []const u8, module_name: []const u8, namespace_chain: []const u8) ?[]const u8 {
+    return directNamespaceMemberLabel(stripModulePrefix(full_name, module_name), namespace_chain);
+}
 
-    // Direct match: `MyType.Sub.<member>`
-    if (std.mem.startsWith(u8, full_name, namespace_chain) and
-        full_name.len > namespace_chain.len and
-        full_name[namespace_chain.len] == '.')
-    {
-        const remainder = full_name[namespace_chain.len + 1 ..];
-        if (remainder.len == 0) return null;
-        return firstSegment(remainder);
-    }
-
-    // Qualified match: `<module>.MyType.Sub.<member>`
-    var i: usize = 0;
-    while (i < full_name.len) : (i += 1) {
-        if (full_name[i] != '.') continue;
-        const start = i + 1;
-        if (start >= full_name.len) break;
-        if (start + namespace_chain.len >= full_name.len) break;
-        if (!std.mem.eql(u8, full_name[start .. start + namespace_chain.len], namespace_chain)) continue;
-        if (full_name[start + namespace_chain.len] != '.') continue;
-
-        const remainder_start = start + namespace_chain.len + 1;
-        if (remainder_start >= full_name.len) return null;
-        return firstSegment(full_name[remainder_start..]);
-    }
-
-    return null;
+fn directNamespaceMemberLabel(full_name: []const u8, namespace: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, full_name, namespace)) return null;
+    if (full_name.len <= namespace.len or full_name[namespace.len] != '.') return null;
+    const remainder = full_name[namespace.len + 1 ..];
+    if (remainder.len == 0) return null;
+    return firstSegment(remainder);
 }
 
 /// Parts extracted from a statement for common processing.

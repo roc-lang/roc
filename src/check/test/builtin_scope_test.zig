@@ -57,6 +57,23 @@ test "builtin types are still available without import" {
     try test_env.assertDefType("y", "List(U64)");
 }
 
+test "registered builtin auto-imports seed type scope" {
+    const src =
+        \\Test := [Whatever]
+        \\
+        \\vector : U8x16
+        \\vector = U8x16.splat(7)
+        \\
+        \\problem : Utf8Problem
+        \\problem = InvalidStartByte
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertDefType("vector", "U8x16");
+    try test_env.assertDefType("problem", "Str.Utf8Problem");
+}
+
 test "can import userspace Builtin module" {
     const builtin_module_src =
         \\Builtin := [D, E, F]

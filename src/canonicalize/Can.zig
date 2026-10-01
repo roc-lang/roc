@@ -1489,34 +1489,11 @@ fn populateBuiltinAutoImportedTypes(
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
 ) Allocator.Error!void {
-    // All auto-imported types with their statement index and fully-qualified ident
-    // Top-level types: "Builtin.Bool", "Builtin.Str", etc.
-    // Nested types under Num: "Builtin.Num.U8", etc.
-    //
-    // Note: builtin_indices.*_ident values are indices into the builtin module's ident store.
-    // We need to get the text and re-insert into the calling module's store since
-    // Ident.Idx values are not transferable between stores.
-    inline for (CIR.builtin_type_specs) |spec| {
-        if (!spec.auto_import) continue;
-        const type_name = spec.display_name;
-        const statement_idx = @field(builtin_indices, spec.type_field);
-        const builtin_qualified_ident = @field(builtin_indices, spec.ident_field);
-
-        // Get the qualified ident text from the builtin module and re-insert into calling module
-        const qualified_text = builtin_module_env.getIdent(builtin_qualified_ident);
-        const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_text));
-
-        const type_ident = try calling_module_env.insertIdent(base.Ident.for_text(type_name));
-        try self.builtin_auto_imported_types.put(gpa, type_ident, .{
-            .env = builtin_module_env,
-            .statement_idx = statement_idx,
-            .qualified_type_ident = qualified_ident,
-            .import_identity = .compiler_builtin,
-        });
+    inline for (CIR.builtin_auto_imports) |entry| {
+        const type_ident = try calling_module_env.insertIdent(base.Ident.for_text(entry.display_name));
+        const type_entry = try builtinAutoImportedType(calling_module_env, builtin_module_env, builtin_indices, entry);
+        try self.builtin_auto_imported_types.put(gpa, type_ident, type_entry);
     }
-
-    try putBuiltinAutoImportedContainerUnmanaged(gpa, &self.builtin_auto_imported_types, calling_module_env, builtin_module_env, "Encoding", "Builtin.Encoding");
-    try putBuiltinAutoImportedContainerUnmanaged(gpa, &self.builtin_auto_imported_types, calling_module_env, builtin_module_env, "Json", "Builtin.Encoding.Json");
 }
 
 /// Legacy helper for caller-owned import maps.
@@ -1527,61 +1504,25 @@ pub fn populateModuleEnvs(
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
 ) Allocator.Error!void {
-    inline for (CIR.builtin_type_specs) |spec| {
-        if (!spec.auto_import) continue;
-        const type_name = spec.display_name;
-        const statement_idx = @field(builtin_indices, spec.type_field);
-        const builtin_qualified_ident = @field(builtin_indices, spec.ident_field);
-
-        const qualified_text = builtin_module_env.getIdent(builtin_qualified_ident);
-        const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_text));
-
-        const type_ident = try calling_module_env.insertIdent(base.Ident.for_text(type_name));
-        try module_envs_map.put(type_ident, .{
-            .env = builtin_module_env,
-            .statement_idx = statement_idx,
-            .qualified_type_ident = qualified_ident,
-            .import_identity = .compiler_builtin,
-        });
+    inline for (CIR.builtin_auto_imports) |entry| {
+        const type_ident = try calling_module_env.insertIdent(base.Ident.for_text(entry.display_name));
+        const type_entry = try builtinAutoImportedType(calling_module_env, builtin_module_env, builtin_indices, entry);
+        try module_envs_map.put(type_ident, type_entry);
     }
-
-    try putBuiltinAutoImportedContainerManaged(module_envs_map, calling_module_env, builtin_module_env, "Encoding", "Builtin.Encoding");
-    try putBuiltinAutoImportedContainerManaged(module_envs_map, calling_module_env, builtin_module_env, "Json", "Builtin.Encoding.Json");
 }
 
-fn putBuiltinAutoImportedContainerUnmanaged(
-    gpa: std.mem.Allocator,
-    map: *std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType),
+fn builtinAutoImportedType(
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    display_name: []const u8,
-    qualified_name: []const u8,
-) Allocator.Error!void {
-    const display_ident = try calling_module_env.insertIdent(base.Ident.for_text(display_name));
-    const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_name));
-    try map.put(gpa, display_ident, .{
+    builtin_indices: CIR.BuiltinIndices,
+    comptime entry: anytype,
+) Allocator.Error!AutoImportedType {
+    return .{
         .env = builtin_module_env,
-        .statement_idx = null,
-        .qualified_type_ident = qualified_ident,
+        .statement_idx = if (entry.type_field) |field| @field(builtin_indices, field) else null,
+        .qualified_type_ident = try calling_module_env.insertIdent(base.Ident.for_text(entry.qualified_name)),
         .import_identity = .compiler_builtin,
-    });
-}
-
-fn putBuiltinAutoImportedContainerManaged(
-    map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
-    calling_module_env: *ModuleEnv,
-    builtin_module_env: *const ModuleEnv,
-    display_name: []const u8,
-    qualified_name: []const u8,
-) Allocator.Error!void {
-    const display_ident = try calling_module_env.insertIdent(base.Ident.for_text(display_name));
-    const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_name));
-    try map.put(display_ident, .{
-        .env = builtin_module_env,
-        .statement_idx = null,
-        .qualified_type_ident = qualified_ident,
-        .import_identity = .compiler_builtin,
-    });
+    };
 }
 
 /// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, Iter, and numeric types) from the Builtin module.
@@ -1607,43 +1548,22 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "Range", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
-    for (builtin_types) |type_name_text| {
-        const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
-        if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
-            const target_node_idx = if (type_entry.statement_idx) |stmt_idx|
-                type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx)
-            else
-                null;
+    for (CIR.builtin_auto_imports) |entry| {
+        const type_ident = try env.insertIdent(base.Ident.for_text(entry.display_name));
+        const type_entry = self.builtin_auto_imported_types.get(type_ident).?;
+        // List and Box use primitive type annotations rather than a nominal node.
+        const primitive = type_ident.eql(env.idents.list) or type_ident.eql(env.idents.box);
+        const target_node_idx = if (!primitive) blk: {
+            const stmt_idx = type_entry.statement_idx orelse break :blk null;
+            break :blk type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx);
+        } else null;
 
-            // Compiler-owned builtin seed data is installed before any source
-            // declaration can exist in this module scope, so this is not a
-            // source-level collision policy decision.
-            try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
-                .external_nominal = .{
-                    .module_ident = builtin_ident,
-                    .original_ident = type_ident,
-                    .target_node_idx = target_node_idx,
-                    .import_idx = builtin_import_idx,
-                    .origin_region = zero_region,
-                    .module_not_found = false,
-                    .is_compiler_builtin = true,
-                },
-            });
-        }
-    }
-
-    const primitive_builtins = [_][]const u8{ "List", "Box" };
-    for (primitive_builtins) |type_name_text| {
-        const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
-
-        // Primitive builtins are compiler-owned seed bindings installed before
-        // source declarations, so collision policy is not involved here.
+        // Compiler-owned seeds are installed before source declarations.
         try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
             .external_nominal = .{
                 .module_ident = builtin_ident,
                 .original_ident = type_ident,
-                .target_node_idx = null,
+                .target_node_idx = target_node_idx,
                 .import_idx = builtin_import_idx,
                 .origin_region = zero_region,
                 .module_not_found = false,
@@ -3729,6 +3649,7 @@ fn prepareAssociatedDeclBody(
     type_qualified_ident: ?Ident.Idx,
     assoc_key: ?AST.DeclIndex.AssocValue,
     type_anno_idx: ?CIR.TypeAnno.Idx,
+    annotation_name_region: ?Region,
     mb_where_clauses: ?CIR.WhereClause.Span,
     type_var_scope: ?TypeVarScopeIdx,
 ) std.mem.Allocator.Error!AssociatedDeclBodyWork {
@@ -3745,6 +3666,7 @@ fn prepareAssociatedDeclBody(
         try self.env.addAnnotation(CIR.Annotation{
             .anno = anno_idx,
             .where = mb_where_clauses,
+            .name_region = annotation_name_region,
         }, pattern_region)
     else
         null;
@@ -4261,6 +4183,7 @@ fn canonicalizeAssociatedItems(
                                         type_qualified_idx,
                                         assoc_key,
                                         type_anno_idx,
+                                        self.parse_ir.tokens.resolve(ta.name),
                                         where_clauses,
                                         type_var_scope,
                                     ) };
@@ -4399,6 +4322,7 @@ fn canonicalizeAssociatedItems(
                             decl_ident,
                             type_qualified_decl_idx,
                             assoc_key,
+                            null,
                             null,
                             null,
                             null,
@@ -5302,6 +5226,7 @@ fn createAnnotationDef(
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
         .where = where_clauses,
+        .name_region = source_binding_region,
     };
     const annotation_idx = try self.env.addAnnotation(annotation, region);
 
@@ -5365,6 +5290,7 @@ fn createAnnotationDefWithPattern(
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
         .where = where_clauses,
+        .name_region = source_binding_region,
     };
     const annotation_idx = try self.env.addAnnotation(annotation, region);
 
