@@ -6860,7 +6860,7 @@ test "issue 11928: invalid string escapes never overwrite source or emit partial
             try std.testing.expectEqualStrings(source, after);
         }
         try std.testing.expectEqual(@as(usize, 0), unformatted.items.len);
-        try std.testing.expect(std.mem.indexOf(u8, stderr.written(), "escape sequence") != null);
+        try std.testing.expect(std.mem.find(u8, stderr.written(), "escape sequence") != null);
 
         const stdin = try tmp.dir.openFile(io, "invalid.roc", .{});
         defer stdin.close(io);
