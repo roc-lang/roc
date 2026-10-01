@@ -1185,7 +1185,7 @@ const Formatter = struct {
         for (items, 0..) |item_idx, i| {
             const item_region = fmt.nodeRegion(@intFromEnum(item_idx));
             if (multiline) {
-                try fmt.flushCommentsBeforeDiscard(item_region.start);
+                _ = try fmt.flushCommentsBeforeWithSpacing(item_region.start, .{ .after_block_open = i == 0 });
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
             }
@@ -1276,7 +1276,7 @@ const Formatter = struct {
             for (fields, 0..) |field_idx, i| {
                 const field_region = fmt.nodeRegion(@intFromEnum(field_idx));
                 if (record_multiline) {
-                    try fmt.flushCommentsBeforeDiscard(field_region.start);
+                    _ = try fmt.flushCommentsBeforeWithSpacing(field_region.start, .{ .after_block_open = i == 0 });
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -1964,7 +1964,7 @@ const Formatter = struct {
                 if (r.ext) |ext| {
                     if (record_multiline) {
                         fmt.curr_indent += 1;
-                        try fmt.flushCommentsAfterDiscard(r.region.start);
+                        _ = try fmt.flushCommentsBeforeWithSpacing(r.region.start + 1, .{ .after_block_open = true });
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
                     } else {
@@ -1985,7 +1985,7 @@ const Formatter = struct {
                 // Format fields
                 if (record_multiline and !has_extension and fields.len > 0) {
                     fmt.curr_indent += 1;
-                    try fmt.flushCommentsAfterDiscard(r.region.start);
+                    _ = try fmt.flushCommentsBeforeWithSpacing(r.region.start + 1, .{ .after_block_open = true });
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -2040,7 +2040,7 @@ const Formatter = struct {
                 try fmt.push('|');
                 if (args_are_multiline) {
                     fmt.curr_indent += 1;
-                    try fmt.flushCommentsAfterDiscard(l.region.start);
+                    _ = try fmt.flushCommentsBeforeWithSpacing(fmt.nodeRegion(@intFromEnum(args[0])).start, .{ .after_block_open = true });
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
@@ -3580,7 +3580,7 @@ const Formatter = struct {
                     for (tags, 0..) |tag_idx, i| {
                         const tag_region = fmt.nodeRegion(@intFromEnum(tag_idx));
                         if (tag_multiline) {
-                            try fmt.flushCommentsBeforeDiscard(tag_region.start);
+                            _ = try fmt.flushCommentsBeforeWithSpacing(tag_region.start, .{ .after_block_open = i == 0 });
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
@@ -6989,5 +6989,22 @@ test "builtin facts are reused across directory files and later paths" {
     for (inputs) |input| {
         const result = try moduleFmtsStable(std.testing.allocator, input, false);
         defer std.testing.allocator.free(result);
+    }
+}
+
+test "issue 11930: first doc comments follow opening delimiters directly" {
+    const inputs = [_][]const u8{
+        "Doc := {\n\t## First field.\n\thost : Str,\n\t## Second field.\n\tport : U64,\n}",
+        "xs = [\n\t## First item.\n\t1,\n]",
+        "f = |\n\t## First argument.\n\tfactor,\n| factor * 2",
+        "r = {\n\t## First field.\n\ta: 1,\n}",
+        "f = || {\n\t## Return value.\n\tx\n}",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        const first_comment = std.mem.indexOf(u8, result, "\t##").?;
+        try std.testing.expect(first_comment >= 2 and result[first_comment - 2] != '\n');
+        try std.testing.expect(std.mem.indexOf(u8, result, "\n\t##") != null);
     }
 }
