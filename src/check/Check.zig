@@ -17305,7 +17305,21 @@ fn endBoundedAnnotationRows(
     const annotation_idx = annotation orelse return;
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
-        try self.types.clearBoundedRowExt(entry.var_);
+        // The bound passes along a tagless row to that row's own extension,
+        // so it ends along the same chain.
+        var current = entry.var_;
+        var remaining = self.types.len();
+        while (remaining > 0) : (remaining -= 1) {
+            try self.types.clearBoundedRowExt(current);
+            switch (self.types.resolveVar(current).desc.content) {
+                .alias => |alias| current = self.types.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .tag_union => |tag_union| current = tag_union.ext,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => break,
+                },
+                .flex, .rigid, .field_presence, .err => break,
+            }
+        }
     }
 }
 
@@ -35785,6 +35799,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                             // rows inside the nominal's args (eg a Dict
                             // key union). See closeTagRowsForDerivation.
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
+                            if ((try self.relateDerivedParserShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
                             switch (combineDerivedSupport(
                                 try self.nominalSupportsDerivedParseShape(nominal_type, env, region),
                                 self.generatedCodecFormatSupport(constraint),
@@ -35802,6 +35817,8 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
+                                } else {
+                                    try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
                                 },
                                 .unsupported => try self.reportConstraintError(
                                     deferred_constraint.var_,
@@ -35832,6 +35849,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                             // rows inside the nominal's args (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
+                            if ((try self.relateDerivedEncoderShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
                             switch (combineDerivedSupport(
                                 try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region),
                                 self.generatedCodecFormatSupport(constraint),
@@ -35849,6 +35867,8 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
+                                } else {
+                                    try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
                                 },
                                 .unsupported => try self.reportConstraintError(
                                     deferred_constraint.var_,
@@ -36135,6 +36155,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
+                            if ((try self.relateDerivedParserShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
                             switch (combineDerivedSupport(
                                 try self.varSupportsDerivedParseShape(backing_var, env, region),
                                 self.generatedCodecFormatSupport(constraint),
@@ -36152,9 +36173,13 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                     }
                                     continue;
                                 },
-                                .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
-                                    try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-                                    break :dispatch_resolution;
+                                .unresolved => {
+                                    if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
+                                        try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
+                                        break :dispatch_resolution;
+                                    }
+                                    try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
+                                    continue;
                                 },
                                 .unsupported => {},
                             }
@@ -36187,6 +36212,7 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                             // deriving against the alias backing (see
                             // closeTagRowsForDerivation).
                             if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
+                            if ((try self.relateDerivedEncoderShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
                             switch (combineDerivedSupport(
                                 try self.varSupportsDerivedEncodeShape(backing_var, encoding_var, env, region),
                                 self.generatedCodecFormatSupport(constraint),
@@ -36204,9 +36230,13 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
                                     }
                                     continue;
                                 },
-                                .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
-                                    try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-                                    break :dispatch_resolution;
+                                .unresolved => {
+                                    if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
+                                        try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
+                                        break :dispatch_resolution;
+                                    }
+                                    try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
+                                    continue;
                                 },
                                 .unsupported => {},
                             }
@@ -40768,6 +40798,56 @@ fn satisfyDerivedToHashConstraint(
     }
 }
 
+/// The public shape of a derived codec call, related to its dispatcher.
+const DerivedCodecShape = struct {
+    /// The constructor's return: the runtime parser or encoder function.
+    runtime_fn: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
+};
+
+/// Relate a derived `parser_for` call to the public parser shape of its
+/// dispatcher: `encoding -> (state -> Try({ value : dispatcher, rest : state }, err))`.
+/// This is the derived method's signature, related when the method is
+/// selected, exactly as an ordinary method's signature is; the dispatcher's
+/// shape is then the one its value is used at. Null when the call's shape
+/// cannot be a parser's, which this reports or rejects.
+fn relateDerivedParserShape(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!?DerivedCodecShape {
+    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
+        return null;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 1) {
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
+        return null;
+    }
+
+    // Copy the call's vars before adding fresh vars; the args slice may dangle.
+    const encoding_var = args[0];
+    const runtime_fn_var = resolved_func.ret;
+    const state_var = try self.fresh(env, region);
+    const err_var = try self.fresh(env, region);
+    const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, state_var, err_var, env, region);
+    const parser_var = try self.freshFromContent(try self.types.mkFuncPure(&.{state_var}, parse_result_var), env, region);
+    const ret_result = try self.unifyInContext(parser_var, runtime_fn_var, env, .none);
+    if (!ret_result.isEstablished()) {
+        try self.markStaticDispatchRejected(constraint);
+        return null;
+    }
+    return .{ .runtime_fn = runtime_fn_var, .encoding_var = encoding_var, .state_var = state_var, .err_var = err_var };
+}
+
 fn satisfyImplicitParserConstraint(
     self: *Self,
     dispatcher_var: Var,
@@ -40777,40 +40857,11 @@ fn satisfyImplicitParserConstraint(
     region: Region,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
-    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return;
-    };
-
-    const args = self.types.sliceVars(resolved_func.args);
-    if (args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return;
-    }
-
-    // Copy the encoding arg before adding fresh vars; the args slice may dangle.
-    const encoding_var = args[0];
-    const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
-    const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return;
-    };
-    const runtime_args = self.types.sliceVars(runtime_func.args);
-    if (runtime_args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
-        return;
-    }
-
-    // Copy the state arg before adding fresh vars; the args slice may dangle.
-    const state_var = runtime_args[0];
-    const err_var = try self.fresh(env, region);
-    const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, state_var, err_var, env, region);
-    const ret_result = try self.unifyInContext(parse_result_var, runtime_func.ret, env, .none);
-    if (!ret_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return;
-    }
+    std.debug.assert(constraint_fn_var == constraint.fn_var);
+    const shape = (try self.relateDerivedParserShape(dispatcher_var, constraint, env, region, failure_expr)) orelse return;
+    const encoding_var = shape.encoding_var;
+    const state_var = shape.state_var;
+    const err_var = shape.err_var;
 
     const generated_calls_start = self.scratch_generated_codec_calls.items.len;
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
@@ -40832,7 +40883,7 @@ fn satisfyImplicitParserConstraint(
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .parser,
             constraint_fn_var,
-            resolved_func.ret,
+            shape.runtime_fn,
             dispatcher_var,
             validation_var,
             encoding_var,
@@ -40854,6 +40905,44 @@ fn satisfyImplicitParserConstraint(
     }
 }
 
+/// Relate a derived `encoder_for` call to the public encoder shape of its
+/// dispatcher: `encoding -> (dispatcher, state -> Try(state, err))`, as
+/// `relateDerivedParserShape` does for a parser.
+fn relateDerivedEncoderShape(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    owner_expr: ?CIR.Expr.Idx,
+) Allocator.Error!?DerivedCodecShape {
+    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
+        return null;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 1) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
+        return null;
+    }
+
+    // Copy the call's vars before adding fresh vars; the args slice may dangle.
+    const encoding_var = args[0];
+    const runtime_fn_var = resolved_func.ret;
+    const state_var = try self.fresh(env, region);
+    const err_var = try self.fresh(env, region);
+    const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
+    const encoder_var = try self.freshFromContent(try self.types.mkFuncPure(&.{ dispatcher_var, state_var }, encode_result_var), env, region);
+    const ret_result = try self.unifyInContext(encoder_var, runtime_fn_var, env, .none);
+    if (!ret_result.isEstablished()) {
+        try self.markStaticDispatchRejected(constraint);
+        return null;
+    }
+    return .{ .runtime_fn = runtime_fn_var, .encoding_var = encoding_var, .state_var = state_var, .err_var = err_var };
+}
+
 fn satisfyImplicitEncoderForConstraint(
     self: *Self,
     dispatcher_var: Var,
@@ -40863,46 +40952,11 @@ fn satisfyImplicitEncoderForConstraint(
     region: Region,
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
-    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
-        return;
-    };
-
-    const args = self.types.sliceVars(resolved_func.args);
-    if (args.len != 1) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
-        return;
-    }
-
-    const encoding_var = args[0];
-
-    const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
-    const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
-        return;
-    };
-    const runtime_args = self.types.sliceVars(runtime_func.args);
-    if (runtime_args.len != 2) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
-        return;
-    }
-
-    const value_var = runtime_args[0];
-    const state_var = runtime_args[1];
-    const value_result = try self.unifyInContext(dispatcher_var, value_var, env, .none);
-    if (!value_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return;
-    }
-
-    const err_var = try self.fresh(env, region);
-    const encode_result_var = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
-    const ret_result = try self.unifyInContext(encode_result_var, runtime_func.ret, env, .none);
-    if (!ret_result.isEstablished()) {
-        try self.markStaticDispatchRejected(constraint);
-        return;
-    }
+    std.debug.assert(constraint_fn_var == constraint.fn_var);
+    const shape = (try self.relateDerivedEncoderShape(dispatcher_var, constraint, env, region, owner_expr)) orelse return;
+    const encoding_var = shape.encoding_var;
+    const state_var = shape.state_var;
+    const err_var = shape.err_var;
 
     const generated_calls_start = self.scratch_generated_codec_calls.items.len;
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
@@ -40924,7 +40978,7 @@ fn satisfyImplicitEncoderForConstraint(
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .encoder,
             constraint_fn_var,
-            resolved_func.ret,
+            shape.runtime_fn,
             dispatcher_var,
             validation_var,
             encoding_var,
@@ -44815,6 +44869,44 @@ fn reportEqualityError(
 
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
     try self.markStaticDispatchRejected(constraint);
+}
+
+/// Report a compiler-derived codec whose receiver type is never fully
+/// determined, at `owner_expr` (the obligation's owner) when given.
+fn reportUndeterminedCodecType(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    owner_expr: ?CIR.Expr.Idx,
+) Allocator.Error!void {
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, owner_expr)) return;
+
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
+        .undetermined_codec_type = .{
+            .dispatcher_snapshot = snapshot,
+            .fn_var = constraint.fn_var,
+            .method_name = constraint.fn_name,
+            .owner_region = self.constraintOwnerRegion(owner_expr),
+        },
+    } });
+
+    try self.poisonConstraintFailure(dispatcher_var, constraint, env, owner_expr);
+    try self.markStaticDispatchRejected(constraint);
+}
+
+/// A derived codec whose receiver is still undetermined after numeric
+/// defaulting waits for the final codec boundary, where later source checking
+/// has had every chance to determine it; there it is reported.
+fn settleUndeterminedDerivedCodec(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!void {
+    if (try self.deferGeneratedCodecConstraintToFinalization(deferred, constraint)) return;
+    try self.reportUndeterminedCodecType(deferred.var_, constraint, env, explicitDeferredConstraintFailureExpr(deferred));
 }
 
 /// Report a compiler-derived `map`/`map!` that has no unambiguous payload,

@@ -4996,6 +4996,16 @@ encoding and state types for exactly the methods needed by that shape:
 - named nominal values call that nominal type's explicit method. If the method
   is missing, checking reports the missing static-dispatch requirement.
 
+Selecting a derived method relates its public signature to the call before
+deciding whether the shape is supported, exactly as selecting an ordinary
+method relates that method's signature. A call on a type name such as
+`List.parser_for(format)` names the receiver with fresh type arguments, so the
+parser's `value` or the encoder's value argument is what determines them.
+Derivation needs every part of the receiver: a receiver that is still
+undetermined after numeric defaulting waits for the final codec boundary, and
+one that is undetermined there is reported as an undetermined codec type and
+its call becomes a checked runtime error.
+
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
 call's method, concrete dispatcher and callable types, optional subject role,

@@ -49,6 +49,7 @@ const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
 const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
 const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
 const TypeDoesNotSupportMap = problem_mod.TypeDoesNotSupportMap;
+const UndeterminedCodecType = problem_mod.UndeterminedCodecType;
 const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
 const RecursiveDispatch = problem_mod.RecursiveDispatch;
 
@@ -1056,6 +1057,7 @@ pub const ReportBuilder = struct {
                     .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
                     .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
                     .type_does_not_support_map => |data| return self.buildTypeDoesNotSupportMap(data),
+                    .undetermined_codec_type => |data| return self.buildUndeterminedCodecType(data),
                     .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
                     .recursive_dispatch => |data| return self.buildStaticDispatchRecursiveDispatch(data),
                 }
@@ -3296,6 +3298,34 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("If every payload is zero-sized, one tag must have exactly one payload and every other tag must have no payloads. Opaque payload types always count as non-zero-sized, and nested values are not searched for a different payload to transform."),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildUndeterminedCodecType(
+        self: *Self,
+        data: UndeterminedCodecType,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Undetermined Codec Type", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("The compiler derives"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("here, which needs every part of the type it works on, but part of that type is never determined."),
+        }, self, &report, &report.headline);
+
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+        try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("A type annotation that names the full type would let the compiler derive it."),
         }, self, &report);
 
         return report;

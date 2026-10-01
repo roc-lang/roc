@@ -365,6 +365,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
 
     // Openings from a call that may still roll back must not outlive it.
     if (!env.types.savepointActive()) try env.unify_scratch.persistOpenings();
+    // A refusal a mismatch handler absorbed did not reject this relation.
+    env.unify_scratch.bounded_row_violation = null;
     return .unified;
 }
 
