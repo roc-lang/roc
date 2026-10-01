@@ -9223,8 +9223,13 @@ const Lowerer = struct {
             sum: ErasedResultDemand = .none,
             any_single_variant: bool = false,
         };
+        // Most results nest a few types deep, so the stack starts in a
+        // buffer on this frame and moves to the heap only past it.
+        var stack_first = std.heap.stackFallback(24 * @sizeOf(Frame), self.allocator);
+        const frame_allocator = stack_first.get();
         var frames: std.ArrayList(Frame) = .empty;
-        defer frames.deinit(self.allocator);
+        defer frames.deinit(frame_allocator);
+        try frames.ensureTotalCapacityPrecise(frame_allocator, 24);
         var child_ty = ty;
         var child_remaining = self.types.typeCount();
         outer: while (true) {
@@ -9232,13 +9237,13 @@ const Lowerer = struct {
                 .erased_fn => .single_slot,
                 .primitive, .callable, .erased_capture_ptr, .zst => .none,
                 .named => |named| if (named.backing) |backing| {
-                    try frames.append(self.allocator, .{ .ty = child_ty, .remaining = child_remaining });
+                    try frames.append(frame_allocator, .{ .ty = child_ty, .remaining = child_remaining });
                     child_ty = backing.ty;
                     child_remaining -= 1;
                     continue :outer;
                 } else .none,
                 .box, .list => |elem| {
-                    try frames.append(self.allocator, .{ .ty = child_ty, .remaining = child_remaining });
+                    try frames.append(frame_allocator, .{ .ty = child_ty, .remaining = child_remaining });
                     child_ty = elem;
                     child_remaining -= 1;
                     continue :outer;
@@ -9248,7 +9253,7 @@ const Lowerer = struct {
                     const first = self.erasedDemandChild(&frame.index, &frame.tag_index, &frame.sum, &frame.any_single_variant, child_ty);
                     switch (first) {
                         .child => |next_ty| {
-                            try frames.append(self.allocator, frame);
+                            try frames.append(frame_allocator, frame);
                             child_ty = next_ty;
                             child_remaining = frame.remaining - 1;
                             continue :outer;

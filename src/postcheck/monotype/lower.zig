@@ -19657,6 +19657,10 @@ const BodyContext = struct {
     /// Node IDs are dense, and each walk unsets on exit, so this replaces a
     /// fresh visitation hash table per query.
     inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
+    /// The stacks the uninhabitedness scans run on, kept between scans.
+    node_uninhabited_scratch: NodeUninhabitedScan.Evaluation.Scratch = .{},
+    type_uninhabited_scratch: TypeUninhabitedScan.Evaluation.Scratch = .{},
+    pattern_uninhabited_scratch: PatternUninhabitedScan.Evaluation.Scratch = .{},
     /// Draft body output owned by this specialization graph.
     draft: *BodyDraftStore,
     /// Checked-type cache and declaration-scope stack for this exact
@@ -20747,6 +20751,9 @@ const BodyContext = struct {
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
+        self.node_uninhabited_scratch.deinit(self.allocator);
+        self.type_uninhabited_scratch.deinit(self.allocator);
+        self.pattern_uninhabited_scratch.deinit(self.allocator);
         self.instantiation.deinit();
         self.local_proc_contexts.deinit();
         self.typed_binders.deinit();
@@ -33538,7 +33545,7 @@ const BodyContext = struct {
         backing_access: UninhabitedBackingAccess,
     ) Allocator.Error!bool {
         var scan = NodeUninhabitedScan{ .body = self, .backing_access = backing_access };
-        return try NodeUninhabitedScan.Evaluation.run(self.allocator, &scan, node);
+        return try NodeUninhabitedScan.Evaluation.runWith(self.allocator, &self.node_uninhabited_scratch, &scan, node);
     }
 
     fn typeIsProvenUninhabited(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
@@ -33553,14 +33560,14 @@ const BodyContext = struct {
             .visiting = collections.DenseMap(Type.TypeId, void).init(self.allocator),
         };
         defer scan.visiting.deinit();
-        const result = try TypeUninhabitedScan.Evaluation.run(self.allocator, &scan, ty);
+        const result = try TypeUninhabitedScan.Evaluation.runWith(self.allocator, &self.type_uninhabited_scratch, &scan, ty);
         try self.draft.uninhabited_type_cache.put(ty, result);
         return result;
     }
 
     fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
         var scan = PatternUninhabitedScan{ .body = self };
-        return try PatternUninhabitedScan.Evaluation.run(self.allocator, &scan, pattern_id);
+        return try PatternUninhabitedScan.Evaluation.runWith(self.allocator, &self.pattern_uninhabited_scratch, &scan, pattern_id);
     }
 
     fn stepStr(self: *BodyContext, task: *StrTask, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -64577,6 +64584,8 @@ test "body context inspects graph-owned types despite program TypeId collisions"
     var ctx: BodyContext = undefined;
     ctx.spare_inst_frames = .empty;
     defer ctx.deinitSpareInstFrames();
+    ctx.type_uninhabited_scratch = .{};
+    defer ctx.type_uninhabited_scratch.deinit(gpa);
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
