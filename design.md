@@ -605,7 +605,7 @@ commitment can ground a copied relation held outside the deferred queue; that
 relation must constrain its arguments before the next literal round.
 
 Effect solving assigns sparse, dense slots to the reachable formula graph and
-propagates unresolved and positive facts along reverse caller edges using an
+propagates unresolved and effectful states along reverse caller edges using an
 iterative worklist. Each slot advances at most twice; recursive cycles without
 an external seed add no effect. Terminal function kinds require no scratch
 allocation. Boundary queries share discovery only while the source graph is

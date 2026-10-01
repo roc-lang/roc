@@ -9,6 +9,7 @@ const std = @import("std");
 const collections = @import("collections");
 const types = @import("types");
 
+/// The effect a function type's formula resolves to, ordered by strength.
 pub const State = enum(u2) { pure, unresolved, effectful };
 const SlotId = enum(u32) { _ };
 const no_edge = std.math.maxInt(u32);
@@ -19,6 +20,8 @@ const Slot = struct {
 };
 const Edge = struct { caller: SlotId, next: u32 };
 
+/// Solves directed function-effect formulas over sparse slots with an
+/// iterative worklist, reusing its storage across sessions.
 pub const Solver = struct {
     gpa: std.mem.Allocator,
     slot_by_var: collections.DenseMap(types.Var, SlotId),
