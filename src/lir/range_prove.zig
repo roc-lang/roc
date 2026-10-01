@@ -91,7 +91,7 @@ const max_rounds: u32 = 48;
 /// Bound on collected facts along one path.
 const max_facts: usize = 1024;
 /// Bound on symbolic value nodes per proc round.
-const max_nodes: usize = 1 << 14;
+const max_nodes: usize = 1 << 18;
 /// Bound on nodes touched by one inequality query.
 const query_visit_cap: usize = 64;
 
