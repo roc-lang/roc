@@ -5999,12 +5999,12 @@ for proven small call-through and low-level wrappers even when they have multipl
 direct uses.
 
 Under `.wrappers_and_source_single_use`, how many callers a whole program has
-plays no part. Checking publishes, per module, the procedure templates its
+plays no part. Checking outputs, per module, the procedure templates its
 source calls at exactly one site and never uses as a value, among those no
 other module can call: promoted local procedures, and source definitions that
 are neither exposed nor methods, since another module can dispatch to any
 method (`CheckedProcedureTemplateTable.single_source_call_templates`).
-Monotype stamps the fact on each function template, and a capture-free body
+Monotype stamps the flag on each function template, and a capture-free body
 without a procedure-relative return that has it is a source-single-use
 candidate. Every call to it in any program is that one site, lowered in some
 specialization of the function containing it, so lowering inlines the call
