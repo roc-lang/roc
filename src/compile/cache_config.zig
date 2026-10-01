@@ -284,7 +284,10 @@ pub const Constants = struct {
     ///      checked procedure names use the module's own name.
     /// 129: Stored closure captures record whether each is a lexical capture
     ///      or a top-level compile-time root's recursive binding.
-    pub const CACHE_VERSION = 129;
+    /// 130: Compile-time roots of specialization-owned top-level values are
+    ///      marked `per_specialization`, and stored compile-time debug
+    ///      observations carry an optional value site.
+    pub const CACHE_VERSION = 130;
 };
 
 /// Configuration for the Roc cache system.

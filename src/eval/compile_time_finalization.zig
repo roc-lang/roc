@@ -79,6 +79,12 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_events: ?*DebugEvents = null,
+    /// The checked root whose evaluation demanded the literal root being
+    /// evaluated. A literal root a checked root demands runs exactly when
+    /// that root runs, so its observations are that root's: persisted and
+    /// replayed with it. One no checked root demands runs on every
+    /// finalization of its program and is replayed, never persisted.
+    literal_debug_owner: ?LiteralDebugOwner = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
     /// A coordinator may persist an early dependency batch, then replay all
@@ -99,6 +105,12 @@ pub const Options = struct {
     unfinalized_reports: ?UnfinalizedReports = null,
 };
 
+/// The checked root that owns a demanded literal root's observations.
+pub const LiteralDebugOwner = struct {
+    module: checked.ModuleId,
+    root: checked.CompileTimeRoot,
+};
+
 /// The report destination of a checked module this finalization does not
 /// complete: one whose finalization completed in an earlier compilation, or
 /// the builtin module.
@@ -111,10 +123,83 @@ pub const UnfinalizedReports = struct {
 pub const ReportDestination = struct {
     module: *const checked.CheckedModuleArtifact,
     problem_store: ?*check.problem.Store,
+    /// Failures of specialization-owned values this module already reported
+    /// from an earlier program of the same compilation; see
+    /// `ReportedValueFailure`.
+    reported_value_failures: []const ReportedValueFailure = &.{},
 };
 
+/// A reported failure of one specialization of a specialization-owned value
+/// at an explicitly stamped site (`check.problem.types.ComptimeValueSpecialization`).
+/// A compilation that finalizes in more than one program (a platform paired
+/// with an app) reports each program's failures into a problem store that
+/// ends with that program, so its driver retains these per module and hands
+/// them to every later program: the same specialization evaluated again
+/// fails at the same site and is not reported again.
+pub const ReportedValueFailure = struct {
+    kind: ComptimeFailureKind,
+    key: check.problem.types.ComptimeValueSpecialization,
+    region: base.Region,
+};
+
+/// The kinds of compile-time failure a specialization-owned value reports.
+pub const ComptimeFailureKind = enum { crash, expect_failed };
+
+/// Append every reported specialization-owned value failure in `problems` to
+/// `out`, for programs that finalize after the one that reported them.
+pub fn recordReportedValueFailures(
+    allocator: Allocator,
+    out: *std.ArrayListUnmanaged(ReportedValueFailure),
+    problems: []const check.problem.Problem,
+) Allocator.Error!void {
+    for (problems) |problem| {
+        if (problem == .comptime_crash) {
+            const crash = problem.comptime_crash;
+            const key = crash.value_specialization orelse continue;
+            try out.append(allocator, .{ .kind = .crash, .key = key, .region = crash.region });
+        } else if (problem == .comptime_expect_failed) {
+            const failed = problem.comptime_expect_failed;
+            const key = failed.value_specialization orelse continue;
+            try out.append(allocator, .{ .kind = .expect_failed, .key = key, .region = failed.region });
+        }
+    }
+}
+
 const DebugEvents = struct {
-    const Event = struct { module: checked.ModuleId, root: checked.ComptimeRootId, sequence: usize, is_repl: bool, message: []const u8 };
+    /// The explicit producer of one observation. A checked root's
+    /// observations are durable checked output keyed by its root id. A
+    /// literal root is re-evaluated by every finalization of its program, so
+    /// its observations are ordered and replayed with the checked ones but
+    /// never persisted; they are keyed by the subject's checked identity
+    /// (the literal's checked expression, or the value's checked root), and
+    /// a subject's specializations keep their evaluation order.
+    const Producer = union(enum) {
+        checked: checked.ComptimeRootId,
+        literal_conversion: u32,
+        literal_value: checked.ComptimeRootId,
+
+        fn rank(self: Producer) struct { u8, u32 } {
+            return switch (self) {
+                .checked => |root| .{ 0, @intFromEnum(root) },
+                .literal_conversion => |expr| .{ 1, expr },
+                .literal_value => |root| .{ 2, @intFromEnum(root) },
+            };
+        }
+    };
+    const Event = struct {
+        module: checked.ModuleId,
+        producer: Producer,
+        sequence: usize,
+        is_repl: bool,
+        message: []const u8,
+        /// The observation's identity when a specialization-owned value's
+        /// evaluation made it at an explicitly stamped site.
+        value_site: ?ValueSite = null,
+        /// Whether a completed checked module stored the observation, rather
+        /// than this finalization making it.
+        stored: bool = false,
+    };
+    const ValueSite = checked.CompileTimeDebugStore.ValueSite;
     allocator: Allocator,
     events: std.ArrayList(Event) = .empty,
 
@@ -124,21 +209,77 @@ const DebugEvents = struct {
     }
 
     fn append(self: *DebugEvents, module: checked.ModuleId, root: checked.CompileTimeRoot, message: []const u8) Allocator.Error!void {
-        const owned = try self.allocator.dupe(u8, message);
+        try self.appendProduced(module, .{ .checked = root.id }, root.kind == .repl_expr, message);
+    }
+
+    /// A literal root's observation, owned by the checked root that demanded
+    /// it (`owner`) or otherwise by the literal root itself. A specialization
+    /// of a specialization-owned value is evaluated by every finalization
+    /// program that specializes it, such as both programs of a platform's
+    /// finalization, so an observation whose value site a stored observation
+    /// already carries was reported by an earlier program and is dropped:
+    /// neither replayed nor stored again. Observations this finalization makes
+    /// never suppress each other, since one evaluation may observe one site
+    /// many times.
+    fn appendLiteral(self: *DebugEvents, owner: ?LiteralDebugOwner, plan: LirProgram.LiteralRootPlan, message: []const u8, value_site: ?ValueSite) Allocator.Error!void {
+        if (value_site) |site| {
+            if (self.storedValueSite(site)) return;
+        }
+        if (owner) |checked_owner| {
+            return self.appendEvent(.{ .module = checked_owner.module, .producer = .{ .checked = checked_owner.root.id }, .sequence = undefined, .is_repl = checked_owner.root.kind == .repl_expr, .message = message, .value_site = value_site });
+        }
+        const producer: Producer = switch (plan.subject) {
+            .conversion => |site| .{ .literal_conversion = site.checked_expr },
+            .value => |value| .{ .literal_value = value.root },
+        };
+        try self.appendEvent(.{ .module = plan.module, .producer = producer, .sequence = undefined, .is_repl = false, .message = message, .value_site = value_site });
+    }
+
+    fn storedValueSite(self: *const DebugEvents, site: ValueSite) bool {
+        for (self.events.items) |event| {
+            if (!event.stored) continue;
+            const stored_site = event.value_site orelse continue;
+            if (stored_site.eql(site)) return true;
+        }
+        return false;
+    }
+
+    fn appendProduced(self: *DebugEvents, module: checked.ModuleId, producer: Producer, is_repl: bool, message: []const u8) Allocator.Error!void {
+        try self.appendEvent(.{ .module = module, .producer = producer, .sequence = undefined, .is_repl = is_repl, .message = message });
+    }
+
+    /// Append `event`, owning a copy of its message, at the next sequence.
+    fn appendEvent(self: *DebugEvents, event: Event) Allocator.Error!void {
+        const owned = try self.allocator.dupe(u8, event.message);
         errdefer self.allocator.free(owned);
-        try self.events.append(self.allocator, .{ .module = module, .root = root.id, .sequence = self.events.items.len, .is_repl = root.kind == .repl_expr, .message = owned });
+        var appended = event;
+        appended.message = owned;
+        appended.sequence = self.events.items.len;
+        try self.events.append(self.allocator, appended);
     }
 
     fn lessThan(_: void, a: Event, b: Event) bool {
         const order = std.mem.order(u8, &a.module.bytes, &b.module.bytes);
         if (order != .eq) return order == .lt;
-        if (a.root != b.root) return @intFromEnum(a.root) < @intFromEnum(b.root);
+        const a_rank = a.producer.rank();
+        const b_rank = b.producer.rank();
+        if (a_rank[0] != b_rank[0]) return a_rank[0] < b_rank[0];
+        if (a_rank[1] != b_rank[1]) return a_rank[1] < b_rank[1];
         return a.sequence < b.sequence;
     }
 
     fn appendCached(self: *DebugEvents, modules: []const *const checked.CheckedModuleArtifact) Allocator.Error!void {
         for (modules) |module| for (module.compile_time_debug.entries) |entry| {
-            try self.append(module.key, module.compile_time_roots.root(entry.root), module.compile_time_debug.message(entry));
+            const root = module.compile_time_roots.root(entry.root);
+            try self.appendEvent(.{
+                .module = module.key,
+                .producer = .{ .checked = root.id },
+                .sequence = undefined,
+                .is_repl = root.kind == .repl_expr,
+                .message = module.compile_time_debug.message(entry),
+                .value_site = entry.valueSite(),
+                .stored = true,
+            });
         };
     }
 
@@ -149,7 +290,11 @@ const DebugEvents = struct {
         for (modules) |entry| {
             inputs.clearRetainingCapacity();
             for (self.events.items) |event| {
-                if (std.meta.eql(entry.module.key, event.module)) try inputs.append(self.allocator, .{ .root = event.root, .message = event.message });
+                if (!std.meta.eql(entry.module.key, event.module)) continue;
+                switch (event.producer) {
+                    .checked => |root| try inputs.append(self.allocator, .{ .root = root, .message = event.message, .value_site = event.value_site }),
+                    .literal_conversion, .literal_value => {},
+                }
             }
             // The artifact owns these bytes for cache publication and replay.
             const artifact_allocator = entry.module.canonical_names.allocator;
@@ -169,6 +314,8 @@ const DebugEvents = struct {
 pub const ProgramModule = struct {
     module: *checked.CheckedModuleArtifact,
     problem_store: ?*check.problem.Store,
+    /// See `ReportDestination.reported_value_failures`.
+    reported_value_failures: []const ReportedValueFailure = &.{},
 };
 
 /// Resolution from one lowered program's dense checked-module ids to the
@@ -207,7 +354,7 @@ const ModuleOwners = struct {
             const index = self.next orelse return null;
             self.next = self.owners.next_alias[index];
             const owner = self.owners.modules[index];
-            return .{ .module = owner.module, .problem_store = owner.problem_store };
+            return .{ .module = owner.module, .problem_store = owner.problem_store, .reported_value_failures = owner.reported_value_failures };
         }
     };
 
@@ -933,6 +1080,9 @@ fn finalizeLoweredProgram(
         /// Literal roots follow the checked roots in demand order.
         literal_active: []bool,
         literal_done: []bool,
+        /// The checked root currently evaluating, which owns the
+        /// observations of the literal roots it demands.
+        literal_debug_owner: ?LiteralDebugOwner = null,
 
         fn ensure(context: *anyopaque, slot: lir.LIR.StaticDataId) (FinalizeError || error{CompileTimeDependencyCycle})!void {
             const self: *Self = @ptrCast(@alignCast(context));
@@ -950,6 +1100,10 @@ fn finalizeLoweredProgram(
             if (self.active[demand_ordinal]) return error.CompileTimeDependencyCycle;
             self.active[demand_ordinal] = true;
             defer self.active[demand_ordinal] = false;
+            const previous_owner = self.literal_debug_owner;
+            defer self.literal_debug_owner = previous_owner;
+            const first_module = self.modules[root.module].module;
+            self.literal_debug_owner = .{ .module = first_module.key, .root = first_module.compile_time_roots.root(id) };
             var module_index: ?u32 = @intCast(root.module);
             while (module_index) |index| : (module_index = self.owners.next_alias[index]) {
                 const entry = self.modules[index];
@@ -978,7 +1132,9 @@ fn finalizeLoweredProgram(
             if (self.literal_active[index]) return error.CompileTimeDependencyCycle;
             self.literal_active[index] = true;
             defer self.literal_active[index] = false;
-            try evalLiteralRoot(self.allocator, self.owners, self.options, self.lowered, self.lowered.lir_result.literal_roots.items[index], self.program);
+            var literal_options = self.options;
+            literal_options.literal_debug_owner = self.literal_debug_owner;
+            try evalLiteralRoot(self.allocator, self.owners, literal_options, self.lowered, self.lowered.lir_result.literal_roots.items[index], self.program);
             self.literal_done[index] = true;
         }
     };
@@ -1075,7 +1231,7 @@ fn finalizeLoweredProgram(
         }
     }
     for (literal_roots, 0..) |plan, index| {
-        var next = publication.first(plan.site.owner, .{ .literal = plan.id });
+        var next = publication.first(plan.subject.owner(), .{ .literal = plan.id });
         while (next) |slot| {
             slot_roots[@intFromEnum(slot)] = root_count + index;
             next = publication.next[@intFromEnum(slot)];
@@ -2016,8 +2172,9 @@ const LiteralRootFailures = struct {
         crash,
         /// The conversion read another literal root's failed value.
         literal: lir.LIR.LiteralRootId,
-        /// The conversion read a checked root's failed value, which that
-        /// root reports.
+        /// Reported elsewhere: the conversion read a checked root's failed
+        /// value, which that root reports, or the evaluation stopped at code
+        /// checking rejected, whose diagnostic checking already reported.
         checked,
     };
 
@@ -2058,7 +2215,7 @@ const LiteralRootFailures = struct {
     }
 
     /// The literal root whose own failure `id`'s failure is, or null when
-    /// it is a checked root's.
+    /// it is reported elsewhere (`Cause.checked`).
     fn source(self: *const LiteralRootFailures, id: lir.LIR.LiteralRootId) ?lir.LIR.LiteralRootId {
         var current = id;
         while (true) {
@@ -2308,18 +2465,20 @@ fn evalInterpreterLiteralRoot(
             };
         };
         defer interpreter.dropValue(result.value, plan.ret_layout);
-        if (options.publish_shared_slots) try program.publishRoot(lowered, plan.site.owner, producer, plan.shape(), result.value);
+        if (options.publish_shared_slots) try program.publishRoot(lowered, plan.subject.owner(), producer, plan.shape(), result.value);
         break :evaluated null;
     };
-    for (program.host.debugMessages()) |message| try emitDebugMessage(allocator, options, false, message);
+    for (interpreter.getDebugObservations()) |observation| {
+        try reportLiteralRootDebugMessage(allocator, owners, lowered, options, plan, observation.message, observation.region, observation.loc);
+    }
     for (interpreter.getExpectFailures()) |expect_failure| {
         try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
     }
     const failed = failure orelse return;
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
     if (options.publish_shared_slots) {
-        program.slotEnvironment().publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
-        try program.slotEnvironment().publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
+        program.slotEnvironment().publishFailureOrigin(lowered, plan.subject.owner(), producer, .{ .loc = failed.loc, .region = failed.region });
+        try program.slotEnvironment().publishFailure(lowered, plan.subject.owner(), producer, .{ .message = failed.message, .kind = RootFailure.of(&lowered.lir_result, failed.stmt) }, .{ .resolve = InterpreterProgram.resolveFunction });
         try program.refreshCallableMetadata();
     }
 }
@@ -2376,19 +2535,19 @@ fn evalDevLiteralRoot(
         .host_oom => return error.OutOfMemory,
     };
     for (host.events.items) |event| switch (event) {
-        .dbg => |message| try emitDebugMessage(allocator, options, false, message),
+        .dbg => |dbg| try reportLiteralRootDebugMessage(allocator, owners, lowered, options, plan, dbg.message, dbg.region, dbg.loc),
         .expect_failed => |expect_failure| try reportLiteralRootExpectFailure(allocator, owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc),
         .crashed => {},
     };
     const failed = failure orelse {
-        if (options.publish_shared_slots) try native.publishRootWithRuntime(lowered, plan.site.owner, producer, plan.shape(), .{ .ptr = ret_buf.ptr }, if (selected_runtime) |runtime| &runtime.runtime else null);
-        if (options.publish_shared_slots) try native.publishFailure(lowered, plan.site.owner, producer, null);
+        if (options.publish_shared_slots) try native.publishRootWithRuntime(lowered, plan.subject.owner(), producer, plan.shape(), .{ .ptr = ret_buf.ptr }, if (selected_runtime) |runtime| &runtime.runtime else null);
+        if (options.publish_shared_slots) try native.publishFailure(lowered, plan.subject.owner(), producer, null);
         return;
     };
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
     if (options.publish_shared_slots) {
-        native.slots.publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
-        try native.publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash });
+        native.slots.publishFailureOrigin(lowered, plan.subject.owner(), producer, .{ .loc = failed.loc, .region = failed.region });
+        try native.publishFailure(lowered, plan.subject.owner(), producer, .{ .message = failed.message, .kind = RootFailure.of(&lowered.lir_result, failed.stmt) });
     }
 }
 
@@ -2401,7 +2560,9 @@ fn recordLiteralRootFailure(
 ) Allocator.Error!void {
     const failures = owners.literal_failures orelse
         finalizationInvariant("a literal root failed in a finalization that records no literal root failures");
-    const cause: LiteralRootFailures.Cause = if (guardProducerSlot(&lowered.lir_result, failure.stmt)) |producer| switch (producer.root) {
+    const cause: LiteralRootFailures.Cause = if (failedAtCheckedError(&lowered.lir_result, failure.stmt))
+        .checked
+    else if (guardProducerSlot(&lowered.lir_result, failure.stmt)) |producer| switch (producer.root) {
         .literal => |read| .{ .literal = read },
         .checked => |producer_root| if (checkedProducerReportedFailure(owners, producer.module, producer_root)) .checked else .crash,
     } else if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site|
@@ -2411,9 +2572,22 @@ fn recordLiteralRootFailure(
     try failures.record(allocator, plan.id, cause, failure);
 }
 
-/// Report a failed literal root that no checked root embeds, in its literal's
+/// The source a literal root's failure is reported at when the failure has no
+/// region of its own: the converted literal, or the specialized value's body.
+fn literalRootSubjectRegion(module: *const checked.CheckedModuleArtifact, subject: lir.LIR.LiteralRootSubject) base.Region {
+    const expr: checked.CheckedExprId = switch (subject) {
+        .conversion => |site| @enumFromInt(site.checked_expr),
+        .value => |value| module.compile_time_roots.root(value.root).expr,
+    };
+    return module.checked_bodies.expr(expr).source_region;
+}
+
+/// Report a failed literal root that no checked root embeds, in its subject's
 /// module: a rejection reports the rejected literal, and any other failure is
-/// a crash of the conversion, reported at the literal.
+/// a crash, reported at the failure's own source or at the subject. The same
+/// specialization of a specialization-owned value failing at the same
+/// explicitly stamped site reports once, however many programs evaluate it
+/// (`comptimeFailureReported`).
 fn reportLiteralRootFailure(
     allocator: Allocator,
     owners: *const ModuleOwners,
@@ -2425,16 +2599,21 @@ fn reportLiteralRootFailure(
     if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site| {
         return reportLiteralRejection(allocator, owners, site, failure.message);
     }
-    var targets = try owners.reportTargets(plan.site.owner);
+    var targets = try owners.reportTargets(plan.subject.owner());
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const literal_region = owner.module.checked_bodies.expr(@enumFromInt(plan.site.checked_expr)).source_region;
-        const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, failure.region, failure.loc);
+        const subject_region = literalRootSubjectRegion(owner.module, plan.subject);
+        const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, subject_region, failure.region, failure.loc);
+        const value_specialization = comptimeValueSpecialization(plan.subject, site);
+        if (value_specialization) |key| {
+            if (comptimeFailureReported(store, owner.reported_value_failures, .crash, key, site.region)) continue;
+        }
         const message_idx = try store.putExtraString(failure.message);
         _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
             .message = message_idx,
             .region = site.region,
             .origin = try comptimeFailureOrigin(store, site),
+            .value_specialization = value_specialization,
         } });
     }
 }
@@ -2448,16 +2627,21 @@ fn reportLiteralRootExpectFailure(
     region: ?base.Region,
     loc: ?base.SourceLoc,
 ) FinalizeError!void {
-    var targets = try owners.reportTargets(plan.site.owner);
+    var targets = try owners.reportTargets(plan.subject.owner());
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const literal_region = owner.module.checked_bodies.expr(@enumFromInt(plan.site.checked_expr)).source_region;
-        const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, region, loc);
+        const subject_region = literalRootSubjectRegion(owner.module, plan.subject);
+        const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, subject_region, region, loc);
+        const value_specialization = comptimeValueSpecialization(plan.subject, site);
+        if (value_specialization) |key| {
+            if (comptimeFailureReported(store, owner.reported_value_failures, .expect_failed, key, site.region)) continue;
+        }
         const message_idx = try store.putExtraString(message);
         _ = try store.appendProblem(allocator, .{ .comptime_expect_failed = .{
             .message = message_idx,
             .region = site.region,
             .origin = try comptimeFailureOrigin(store, site),
+            .value_specialization = value_specialization,
         } });
     }
 }
@@ -4058,7 +4242,7 @@ fn reportDevHostEvents(
     const root_region = module.checked_bodies.expr(root.expr).source_region;
     for (events) |event| {
         switch (event) {
-            .dbg => |msg| try reportDebugMessage(allocator, options, module.key, root, msg),
+            .dbg => |dbg| try reportDebugMessage(allocator, options, module.key, root, dbg.message),
             .expect_failed => |failure| if (maybe_problem_store) |store| {
                 const message_idx = try store.putExtraString(failure.message);
                 const site = comptimeFailureSiteFromLoc(
@@ -4094,6 +4278,52 @@ fn reportInterpreterDebugMessages(
 fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.ModuleId, root: checked.CompileTimeRoot, message: []const u8) Allocator.Error!void {
     if (options.debug_events) |events| return events.append(module, root, message);
     try emitDebugMessage(allocator, options, root.kind == .repl_expr, message);
+}
+
+fn reportLiteralRootDebugMessage(
+    allocator: Allocator,
+    owners: *const ModuleOwners,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    options: Options,
+    plan: LirProgram.LiteralRootPlan,
+    message: []const u8,
+    region: ?base.Region,
+    loc: ?base.SourceLoc,
+) FinalizeError!void {
+    if (options.debug_events) |events| {
+        const value_site = try literalRootDebugValueSite(owners, lowered, plan, region, loc);
+        return events.appendLiteral(options.literal_debug_owner, plan, message, value_site);
+    }
+    try emitDebugMessage(allocator, options, false, message);
+}
+
+/// The identity of a `dbg` a specialization-owned value's evaluation made:
+/// the value, its specialization, and the dbg's explicit source stamp in the
+/// value's module. A conversion literal's observation, and one without its
+/// own stamp in that module, has no identity.
+fn literalRootDebugValueSite(
+    owners: *const ModuleOwners,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    plan: LirProgram.LiteralRootPlan,
+    region: ?base.Region,
+    loc: ?base.SourceLoc,
+) FinalizeError!?checked.CompileTimeDebugStore.ValueSite {
+    const value = switch (plan.subject) {
+        .conversion => return null,
+        .value => |value| value,
+    };
+    var targets = try owners.reportTargets(plan.subject.owner());
+    const owner = targets.nextTarget() orelse
+        finalizationInvariant("a specialization-owned value's observation named no checked module");
+    const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literalRootSubjectRegion(owner.module, plan.subject), region, loc);
+    const key = comptimeValueSpecialization(plan.subject, site) orelse return null;
+    return .{
+        .module = owner.module.key.bytes,
+        .specialization = key.specialization.bytes,
+        .root = @intFromEnum(value.root),
+        .region_start = site.region.start.offset,
+        .region_end = site.region.end.offset,
+    };
 }
 
 fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, message: []const u8) Allocator.Error!void {
@@ -4153,6 +4383,54 @@ fn reportLiteralRejection(
             } }),
         }
     }
+}
+
+/// The explicit identity a specialization-owned value's failure reports
+/// under: the value's checked root and the specialization's content identity
+/// (`LIR.SpecializedValueRoot.specialization`). Only a failure whose site is
+/// the explicit source stamp of a statement in this module has one. A
+/// failure without a stamp would report at the value's body, which names no
+/// failing statement, and a failure in source inlined from another module
+/// reports with a foreign origin that is not a comparable identity; neither
+/// is ever treated as already reported.
+fn comptimeValueSpecialization(
+    subject: lir.LIR.LiteralRootSubject,
+    site: ComptimeFailureSite,
+) ?check.problem.types.ComptimeValueSpecialization {
+    if (!site.stamped) return null;
+    return switch (subject) {
+        .conversion => null,
+        .value => |value| .{ .root = @intFromEnum(value.root), .specialization = value.specialization },
+    };
+}
+
+/// Whether the module already reported a compile-time failure of this kind of
+/// this specialization at this site, in this program's problem store or in an
+/// earlier program of the same compilation (`ReportedValueFailure`). A
+/// specialization-owned value is evaluated by each program that specializes
+/// it, such as both programs of a platform's finalization, so the same
+/// specialization failing at the same stamped site is one diagnostic.
+/// Different specializations, different values, and failures without an
+/// identity (`comptimeValueSpecialization`) always report separately.
+fn comptimeFailureReported(
+    store: *const check.problem.Store,
+    earlier: []const ReportedValueFailure,
+    kind: ComptimeFailureKind,
+    key: check.problem.types.ComptimeValueSpecialization,
+    region: base.Region,
+) bool {
+    for (store.problems.items) |problem| {
+        const reported_region, const reported_key = switch (kind) {
+            .crash => if (problem == .comptime_crash) .{ problem.comptime_crash.region, problem.comptime_crash.value_specialization } else continue,
+            .expect_failed => if (problem == .comptime_expect_failed) .{ problem.comptime_expect_failed.region, problem.comptime_expect_failed.value_specialization } else continue,
+        };
+        const reported = reported_key orelse continue;
+        if (reported.eql(key) and regionsEqual(reported_region, region)) return true;
+    }
+    for (earlier) |failure| {
+        if (failure.kind == kind and failure.key.eql(key) and regionsEqual(failure.region, region)) return true;
+    }
+    return false;
 }
 
 /// Whether a store already reports this literal's rejection.
@@ -4611,6 +4889,9 @@ const ComptimeFailureSite = struct {
     /// A region in the finalized module's source: the failed statement when
     /// it belongs to this module, otherwise the consuming compile-time root.
     region: base.Region,
+    /// Whether `region` is the failed statement's own explicit source stamp
+    /// in this module, rather than the consuming root standing in for it.
+    stamped: bool,
     /// The failed statement's declaring module when it is not the finalized
     /// module (source inlined across modules, e.g. a `??` field default
     /// materialized per specialization).
@@ -4643,17 +4924,18 @@ fn comptimeFailureSiteFrom(
     failed_loc: ?base.SourceLoc,
     failed_file: ?base.SourceFileEntry,
 ) ComptimeFailureSite {
-    const loc = failed_loc orelse return .{ .region = root_region, .foreign = null };
-    const file = failed_file orelse return .{ .region = root_region, .foreign = null };
+    const loc = failed_loc orelse return .{ .region = root_region, .stamped = false, .foreign = null };
+    const file = failed_file orelse return .{ .region = root_region, .stamped = false, .foreign = null };
     const env = module.moduleEnvConst();
     if (@as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(module.module_identity.stable_hash))) {
-        return .{ .region = failed_region orelse root_region, .foreign = null };
+        const region = failed_region orelse return .{ .region = root_region, .stamped = false, .foreign = null };
+        return .{ .region = region, .stamped = true, .foreign = null };
     }
     const bare_name_collides = if (env.common.idents.lookup(base.Ident.for_text(file.name))) |display_ident|
         display_ident.eql(env.display_module_name_idx)
     else
         false;
-    return .{ .region = root_region, .foreign = .{
+    return .{ .region = root_region, .stamped = false, .foreign = .{
         .module_name = if (bare_name_collides) file.qualified_name else file.name,
         .line = loc.line,
         .column = loc.column,
@@ -4887,6 +5169,54 @@ fn finalizationInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
+test "value failure dedupe is keyed on value, specialization, kind, and stamped site" {
+    // A Roc program cannot make one source site of a specialization-owned
+    // value crash with a message that depends on the specialization (a value
+    // generalized over a numeric type is rejected as polymorphic), so the
+    // decision is exercised directly: two specializations of one value at one
+    // site, with different messages, are two diagnostics.
+    const allocator = std.testing.allocator;
+    var store = check.problem.Store.initEmpty(allocator);
+    defer store.deinit(allocator);
+
+    const site: base.Region = .{ .start = .{ .offset = 10 }, .end = .{ .offset = 20 } };
+    const other_site: base.Region = .{ .start = .{ .offset = 30 }, .end = .{ .offset = 40 } };
+    var u64_spec: check.CheckedNames.TypeDigest = .{};
+    u64_spec.bytes[0] = 1;
+    var str_spec: check.CheckedNames.TypeDigest = .{};
+    str_spec.bytes[0] = 2;
+    const at_u64: check.problem.types.ComptimeValueSpecialization = .{ .root = 3, .specialization = u64_spec };
+    const at_str: check.problem.types.ComptimeValueSpecialization = .{ .root = 3, .specialization = str_spec };
+    const other_value: check.problem.types.ComptimeValueSpecialization = .{ .root = 4, .specialization = u64_spec };
+
+    _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
+        .message = try store.putExtraString("U64 message"),
+        .region = site,
+        .value_specialization = at_u64,
+    } });
+
+    try std.testing.expect(comptimeFailureReported(&store, &.{}, .crash, at_u64, site));
+    try std.testing.expect(!comptimeFailureReported(&store, &.{}, .crash, at_str, site));
+    try std.testing.expect(!comptimeFailureReported(&store, &.{}, .crash, other_value, site));
+    try std.testing.expect(!comptimeFailureReported(&store, &.{}, .crash, at_u64, other_site));
+    try std.testing.expect(!comptimeFailureReported(&store, &.{}, .expect_failed, at_u64, site));
+
+    // An earlier program's report of the same failure counts, whatever store
+    // this program reports into.
+    var empty = check.problem.Store.initEmpty(allocator);
+    defer empty.deinit(allocator);
+    const earlier = [_]ReportedValueFailure{.{ .kind = .crash, .key = at_str, .region = site }};
+    try std.testing.expect(comptimeFailureReported(&empty, &earlier, .crash, at_str, site));
+    try std.testing.expect(!comptimeFailureReported(&empty, &earlier, .crash, at_u64, site));
+
+    // A failure without its own source stamp has no identity, so it is never
+    // treated as already reported.
+    const subject: lir.LIR.LiteralRootSubject = .{ .value = .{ .owner = .first, .root = @enumFromInt(3), .specialization = u64_spec } };
+    try std.testing.expect(comptimeValueSpecialization(subject, .{ .region = site, .stamped = false, .foreign = null }) == null);
+    const stamped = comptimeValueSpecialization(subject, .{ .region = site, .stamped = true, .foreign = null }).?;
+    try std.testing.expect(stamped.eql(at_u64));
+}
+
 test "module owners resolve a lowered program's module ids to their finalized modules" {
     const allocator = std.testing.allocator;
     var program = try LirProgram.Result.init(allocator, .u64);
@@ -5052,6 +5382,87 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
     }
 }
 
+test "literal root debug events replay after their module's checked roots, in evaluation order" {
+    const allocator = std.testing.allocator;
+    var events = DebugEvents{ .allocator = allocator };
+    defer events.deinit();
+    const module: checked.ModuleId = .{ .bytes = [_]u8{1} ** 32 };
+    const later: checked.ModuleId = .{ .bytes = [_]u8{2} ** 32 };
+    // The value's root id sorts below the checked root's and the conversion's
+    // expression, so the expected order is decided by producer kind.
+    const value_root: checked.ComptimeRootId = @enumFromInt(1);
+    const checked_root: checked.ComptimeRootId = @enumFromInt(3);
+    const later_root: checked.ComptimeRootId = @enumFromInt(2);
+    const conversion_expr: u32 = 7;
+    try events.appendProduced(module, .{ .literal_value = value_root }, false, "value first spec");
+    try events.appendProduced(later, .{ .checked = later_root }, false, "later module");
+    try events.appendProduced(module, .{ .literal_conversion = conversion_expr }, false, "conversion");
+    try events.appendProduced(module, .{ .checked = checked_root }, false, "checked");
+    try events.appendProduced(module, .{ .literal_value = value_root }, false, "value second spec");
+    const Output = struct {
+        bytes: [256]u8 = undefined,
+        len: usize = 0,
+        fn write(raw: ?*anyopaque, message: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            @memcpy(self.bytes[self.len..][0..message.len], message);
+            self.len += message.len;
+        }
+    };
+    var output = Output{};
+    try events.replay(.{ .stderr = .{ .context = &output, .write = Output.write } });
+    try std.testing.expectEqualStrings(
+        "[dbg] checked\n[dbg] conversion\n[dbg] value first spec\n[dbg] value second spec\n[dbg] later module\n",
+        output.bytes[0..output.len],
+    );
+}
+
+test "a literal root observation an earlier program stored at its value site is not replayed again" {
+    const allocator = std.testing.allocator;
+    var events = DebugEvents{ .allocator = allocator };
+    defer events.deinit();
+    const module: checked.ModuleId = .{ .bytes = [_]u8{1} ** 32 };
+    const value_root: checked.ComptimeRootId = @enumFromInt(1);
+    const checked_root: checked.ComptimeRootId = @enumFromInt(3);
+    const specialization: check.CheckedNames.TypeDigest = .{ .bytes = [_]u8{5} ** 32 };
+    const plan: LirProgram.LiteralRootPlan = .{
+        .module = module,
+        .id = @enumFromInt(1),
+        .subject = .{ .value = .{ .owner = @enumFromInt(1), .root = value_root, .specialization = specialization } },
+        .proc = @enumFromInt(1),
+        .ret_layout = @enumFromInt(1),
+        .plan = @enumFromInt(1),
+        .value_slot = @enumFromInt(1),
+    };
+    const at_dbg: DebugEvents.ValueSite = .{ .module = module.bytes, .specialization = specialization.bytes, .root = @intFromEnum(value_root), .region_start = 10, .region_end = 20 };
+    var at_other_dbg = at_dbg;
+    at_other_dbg.region_start = 30;
+    at_other_dbg.region_end = 40;
+    // An earlier program evaluated the specialization under a checked root
+    // and stored its observation.
+    try events.appendEvent(.{ .module = module, .producer = .{ .checked = checked_root }, .sequence = undefined, .is_repl = false, .message = "stored", .value_site = at_dbg, .stored = true });
+    try events.appendLiteral(null, plan, "again", at_dbg);
+    // Another site, observed twice by this program's one evaluation, and an
+    // observation with no identity, all report.
+    try events.appendLiteral(null, plan, "other site", at_other_dbg);
+    try events.appendLiteral(null, plan, "other site", at_other_dbg);
+    try events.appendLiteral(null, plan, "unstamped", null);
+    const Output = struct {
+        bytes: [256]u8 = undefined,
+        len: usize = 0,
+        fn write(raw: ?*anyopaque, message: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            @memcpy(self.bytes[self.len..][0..message.len], message);
+            self.len += message.len;
+        }
+    };
+    var output = Output{};
+    try events.replay(.{ .stderr = .{ .context = &output, .write = Output.write } });
+    try std.testing.expectEqualStrings(
+        "[dbg] stored\n[dbg] other site\n[dbg] other site\n[dbg] unstamped\n",
+        output.bytes[0..output.len],
+    );
+}
+
 test "shared compile-time debug replay sorts module root and event identities" {
     const allocator = std.testing.allocator;
     var events = DebugEvents{ .allocator = allocator };
@@ -5065,7 +5476,7 @@ test "shared compile-time debug replay sorts module root and event identities" {
     for (inputs, 0..) |input, index| {
         const message = try allocator.dupe(u8, input.message);
         errdefer allocator.free(message);
-        try events.events.append(allocator, .{ .module = .{ .bytes = [_]u8{input.module} ** 32 }, .root = @enumFromInt(input.root), .sequence = index, .is_repl = false, .message = message });
+        try events.events.append(allocator, .{ .module = .{ .bytes = [_]u8{input.module} ** 32 }, .producer = .{ .checked = @enumFromInt(input.root) }, .sequence = index, .is_repl = false, .message = message });
     }
     const Output = struct {
         bytes: [128]u8 = undefined,

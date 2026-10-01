@@ -1537,6 +1537,21 @@ fn consumerRootCount(prepared: PreparedSolved, consumer: Consumer) usize {
     return if (consumer.roots.roots) |positions| positions.len else prepared.root_count;
 }
 
+/// The test plan a consumer observes expects for: the producer's, when the
+/// consumer lowers a test root it describes, and none otherwise. A consumer
+/// that lowers no test root, such as compile-time evaluation's own share,
+/// runs every inline expect it reaches with the ordinary host notification,
+/// including expects inside literal roots that a test root's body registered.
+fn consumerTestPlanMetadata(prepared: PreparedSolved, consumer: Consumer) []const postcheck.Common.RootTestPlanMetadata {
+    const positions = consumer.roots.roots orelse return prepared.test_plan_metadata;
+    for (prepared.test_plan_metadata) |metadata| {
+        for (positions) |position| {
+            if (position == metadata.request_index) return prepared.test_plan_metadata;
+        }
+    }
+    return &.{};
+}
+
 /// One consumer's generated LIR, before the procedure passes and ARC, plus
 /// the resolved target the rest of that continuation runs under.
 const GeneratedConsumerLir = struct {
@@ -1581,7 +1596,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         },
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
-        .test_plan_metadata = prepared.test_plan_metadata,
+        .test_plan_metadata = consumerTestPlanMetadata(prepared.*, consumer),
         .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,

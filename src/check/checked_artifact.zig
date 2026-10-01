@@ -1940,7 +1940,7 @@ fn compileTimeRootRequestIsEligible(root: CompileTimeRoot) bool {
     return switch (root.request_eligibility) {
         .pending => checkedArtifactInvariant("compile-time root request eligibility was pending", .{}),
         .eligible => true,
-        .ineligible => false,
+        .per_specialization, .ineligible => false,
     };
 }
 
@@ -28335,7 +28335,14 @@ pub const CompileTimeRootPayload = union(enum) {
 /// Whether a selected compile-time root may become a root request.
 pub const CompileTimeRootRequestEligibility = enum(u8) {
     pending,
+    /// Context-free: the module requests one evaluation of the root.
     eligible,
+    /// A top-level value binding whose checked type is specialization-owned
+    /// (design.md "Specialization-Owned Top-Level Values"). The module
+    /// requests no evaluation; each post-check specialization that uses the
+    /// value evaluates it once, at that specialization's concrete type, as a
+    /// program-local compile-time root.
+    per_specialization,
     ineligible,
 };
 
@@ -28676,7 +28683,88 @@ fn publishCompileTimeRootRequestEligibility(
             producer_callable_type_is_fixed,
             root.checked_type,
         );
-        root.request_eligibility = if (context_free) .eligible else .ineligible;
+        root.request_eligibility = if (context_free)
+            .eligible
+        else if (try compileTimeRootIsSpecializationOwnedValue(allocator, module, &checked_types.store, root.*))
+            .per_specialization
+        else
+            .ineligible;
+    }
+}
+
+/// A top-level value binding whose type is not context-free is evaluated per
+/// specialization only when specialization can supply what its type lacks:
+/// its type has no error, and it is either concrete (only a callable graph
+/// waits for a consumer) or the checker classified the binding as a scheme,
+/// so each use instantiates its quantified variables. Anything else—an
+/// erroneous type, or a variable no scheme quantifies—has nothing for a
+/// specialization to instantiate and stays ineligible.
+fn compileTimeRootIsSpecializationOwnedValue(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypeStore,
+    root: CompileTimeRoot,
+) Allocator.Error!bool {
+    if (!compileTimeRootIsTopLevelValueBinding(root)) return false;
+    var scan = CheckedTypeErrorScan{ .checked_types = checked_types };
+    var errors = CheckedTypeErrorTraversal.init(allocator, &scan);
+    defer errors.deinit();
+    if (try errors.visit(root.checked_type)) return false;
+    if (try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root.checked_type)) return true;
+    const def_idx = root.source.def;
+    return module.moduleEnvConst().nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(module.def(def_idx).pattern.idx));
+}
+
+/// A top-level value binding's root: the value a source definition names.
+/// Every such value is effect-free and unconditionally evaluated whenever it
+/// is used, so a specialization-owned one is evaluated per specialization.
+fn compileTimeRootIsTopLevelValueBinding(root: CompileTimeRoot) bool {
+    return switch (root.kind) {
+        .constant, .callable_binding => root.source == .def,
+        .hoisted_constant,
+        .hoisted_validation,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        .repl_expr,
+        => false,
+    };
+}
+
+/// A callable binding whose checked right-hand side is one resolved procedure
+/// lookup has no value computation (design.md "Compile-Time Evaluation And
+/// Static Storage"), so it is never evaluated per specialization either.
+fn excludeProcedureReferencesFromPerSpecializationRoots(
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    roots: []CompileTimeRoot,
+) void {
+    for (roots) |*root| {
+        if (root.request_eligibility != .per_specialization) continue;
+        if (compileTimeCallableRootIsProcedureReference(checked_bodies, resolved_value_refs, root.*)) {
+            root.request_eligibility = .ineligible;
+        }
+    }
+}
+
+/// A top-level value whose checked right-hand side diverges on every path
+/// has no value for a specialization to fold (design.md "Specialization-Owned
+/// Top-Level Values"), so it is never evaluated per specialization: it stays
+/// evaluated at its use and fails only when that use runs, which keeps a
+/// placeholder such as `todo = crash "TODO"` usable in code that never reaches
+/// it. Divergence is the checked body's explicit data for the lowering mode
+/// that omits inline expects, which implies divergence when they run too, so
+/// no lowering mode has a value to fold. It must run after dispatch
+/// resolutions fix the body's divergence.
+fn excludeDivergentValuesFromPerSpecializationRoots(
+    checked_bodies: *const CheckedBodyStore,
+    roots: []CompileTimeRoot,
+) void {
+    for (roots) |*root| {
+        if (root.request_eligibility != .per_specialization) continue;
+        if (checked_bodies.exprDiverges(root.expr, .omit)) {
+            root.request_eligibility = .ineligible;
+        }
     }
 }
 
@@ -33499,8 +33587,49 @@ pub const DispatchEvidenceFailure = struct {
 /// Ordered compile-time debug observations owned by checked publication and
 /// replayed from cache without executing their roots again.
 pub const CompileTimeDebugStore = struct {
-    pub const Entry = extern struct { root: ComptimeRootId, message_start: u32, message_len: u32 };
-    pub const Input = struct { root: ComptimeRootId, message: []const u8 };
+    /// The explicit identity of a `dbg` observed while evaluating one
+    /// specialization of a specialization-owned value (design.md
+    /// "Specialization-Owned Top-Level Values"): the value's module and
+    /// checked root, the specialization's identity, and the explicit source
+    /// stamp of the `dbg` in the value's module. A later finalization program
+    /// of the same compilation that evaluates the same specialization again
+    /// reports none of that specialization's observations at a site an
+    /// earlier program's observations carry.
+    pub const ValueSite = extern struct {
+        module: [32]u8 = [_]u8{0} ** 32,
+        specialization: [32]u8 = [_]u8{0} ** 32,
+        /// The value's `ComptimeRootId` in `module`.
+        root: u32 = 0,
+        region_start: u32 = 0,
+        region_end: u32 = 0,
+
+        pub fn eql(a: ValueSite, b: ValueSite) bool {
+            return @as(u256, @bitCast(a.module)) == @as(u256, @bitCast(b.module)) and
+                @as(u256, @bitCast(a.specialization)) == @as(u256, @bitCast(b.specialization)) and
+                a.root == b.root and
+                a.region_start == b.region_start and
+                a.region_end == b.region_end;
+        }
+    };
+    /// Whether an entry carries a `ValueSite`.
+    pub const ValueSiteKind = enum(u32) { none, value, _ };
+    pub const Entry = extern struct {
+        root: ComptimeRootId,
+        message_start: u32,
+        message_len: u32,
+        value_site_kind: ValueSiteKind = .none,
+        /// Meaningful only when `value_site_kind` is `.value`; zeroed otherwise.
+        value_site: ValueSite = .{},
+
+        pub fn valueSite(self: Entry) ?ValueSite {
+            return switch (self.value_site_kind) {
+                .none => null,
+                .value => self.value_site,
+                _ => checkedArtifactInvariant("compile-time debug observation has an unknown value site kind", .{}),
+            };
+        }
+    };
+    pub const Input = struct { root: ComptimeRootId, message: []const u8, value_site: ?ValueSite = null };
     entries: []const Entry = &.{},
     bytes: []const u8 = &.{},
 
@@ -33520,7 +33649,13 @@ pub const CompileTimeDebugStore = struct {
         const bytes = try allocator.alloc(u8, byte_count);
         var offset: usize = 0;
         for (inputs, entries) |input, *entry| {
-            entry.* = .{ .root = input.root, .message_start = @intCast(offset), .message_len = @intCast(input.message.len) };
+            entry.* = .{
+                .root = input.root,
+                .message_start = @intCast(offset),
+                .message_len = @intCast(input.message.len),
+                .value_site_kind = if (input.value_site == null) .none else .value,
+                .value_site = input.value_site orelse .{},
+            };
             @memcpy(bytes[offset..][0..input.message.len], input.message);
             offset += input.message.len;
         }
@@ -33531,6 +33666,10 @@ pub const CompileTimeDebugStore = struct {
         for (self.entries) |entry| {
             if (@intFromEnum(entry.root) >= root_count or entry.message_start > self.bytes.len or
                 entry.message_len > self.bytes.len - entry.message_start) return error.CorruptArtifact;
+            switch (entry.value_site_kind) {
+                .none, .value => {},
+                _ => return error.CorruptArtifact,
+            }
         }
     }
 
@@ -37517,6 +37656,7 @@ pub fn publishFromTypedModule(
         inputs.available_artifacts,
         inputs.relation_artifacts,
     );
+    excludeProcedureReferencesFromPerSpecializationRoots(checked_bodies, &resolved_value_refs, compile_time_roots.roots);
     const rejected_bindings = checked_bodies.attachResolvedValueRefs(
         &resolved_value_refs,
         artifact_key,
@@ -37636,6 +37776,7 @@ pub fn publishFromTypedModule(
         .static_dispatch_plans = &static_dispatch_plans,
     }).publish(allocator);
     try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
+    excludeDivergentValuesFromPerSpecializationRoots(checked_bodies, compile_time_roots.roots);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
@@ -40360,8 +40501,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xE1, 0x33, 0x73, 0x03, 0xBB, 0xEF, 0xB9, 0xFE, 0xA6, 0x97, 0x21, 0xF2, 0x79, 0x8F, 0x0A, 0x22,
-        0x6E, 0x0C, 0x98, 0x77, 0x27, 0x89, 0x21, 0x6E, 0x3E, 0xDD, 0xEE, 0x9B, 0x15, 0x40, 0x89, 0xBC,
+        0xE0, 0x12, 0xA8, 0xA3, 0x5C, 0x8E, 0x1D, 0x4F, 0x7B, 0x66, 0x66, 0x3B, 0xDD, 0x96, 0xBB, 0x44,
+        0xEE, 0x92, 0x99, 0x1E, 0xEB, 0xBE, 0x8E, 0x76, 0x42, 0xA6, 0xC7, 0x39, 0x55, 0x27, 0x45, 0xE2,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -40680,6 +40821,23 @@ test "compile-time debug store validates root identities and message ranges" {
     try observations.validate(2);
     try std.testing.expectEqualStrings("second", observations.message(observations.entries[1]));
     try std.testing.expectError(error.CorruptArtifact, observations.validate(1));
+    try std.testing.expect(observations.entries[0].valueSite() == null);
+    const site: CompileTimeDebugStore.ValueSite = .{
+        .module = [_]u8{7} ** 32,
+        .specialization = [_]u8{9} ** 32,
+        .root = 1,
+        .region_start = 3,
+        .region_end = 8,
+    };
+    var sited = try CompileTimeDebugStore.init(allocator, &.{.{ .root = @enumFromInt(1), .message = "sited", .value_site = site }});
+    defer sited.deinit(allocator);
+    try sited.validate(2);
+    try std.testing.expect(sited.entries[0].valueSite().?.eql(site));
+    const unknown_kind: CompileTimeDebugStore = .{
+        .entries = &.{.{ .root = observations.entries[0].root, .message_start = 0, .message_len = 1, .value_site_kind = @enumFromInt(2) }},
+        .bytes = "abc",
+    };
+    try std.testing.expectError(error.CorruptArtifact, unknown_kind.validate(1));
     const malformed: CompileTimeDebugStore = .{
         .entries = &.{.{ .root = observations.entries[0].root, .message_start = 2, .message_len = std.math.maxInt(u32) }},
         .bytes = "abc",

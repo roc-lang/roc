@@ -529,15 +529,17 @@ pub const RootShape = struct {
     plan: ConstPlanId,
 };
 
-/// One literal root: a custom literal's conversion, at the concrete type one
-/// specialization gives it, evaluated at compile time. Its procedure returns
-/// the converted value and crashes at the literal's rejection when the
-/// conversion returns `Err`.
+/// One literal root: its subject—a custom literal's conversion, or a
+/// specialization-owned top-level value—at the concrete type one
+/// specialization gives it, evaluated at compile time. A conversion's
+/// procedure returns the converted value and crashes at the literal's
+/// rejection when the conversion returns `Err`; a value's procedure returns
+/// the value.
 pub const LiteralRootPlan = struct {
-    /// Checked module that owns the literal.
+    /// Checked module that owns the subject.
     module: checked.ModuleId,
     id: LIR.LiteralRootId,
-    site: LIR.LiteralRejectionSite,
+    subject: LIR.LiteralRootSubject,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
     plan: ConstPlanId,

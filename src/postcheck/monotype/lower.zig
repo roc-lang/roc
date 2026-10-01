@@ -11214,6 +11214,9 @@ const Builder = struct {
         ctx.evidence = boundary.context_evidence;
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
+        const saved_inlined_value_depth = body_draft.inlined_value_depth;
+        body_draft.inlined_value_depth = boundary.inlined_value_depth;
+        defer body_draft.inlined_value_depth = saved_inlined_value_depth;
 
         const restored = switch (boundary.provenance) {
             .declared => try ctx.restoreConstUseAtNode(
@@ -14752,15 +14755,35 @@ const DraftStaticDataId = enum(u32) { _ };
 /// Qualified by the owning BodyDraftStore, never by a worker Program.
 const DraftComptimeValueRootId = enum(u32) { _ };
 
-/// A literal root this draft registers: its definition, the literal it
-/// converts, and the compile-time value descriptor its read uses. The
-/// descriptor names the root by its position in the draft's list until the
-/// commit gives the root its program id.
+/// A literal root this draft registers: its definition, its subject (the
+/// literal it converts or the specialization-owned value it computes), and
+/// the compile-time value descriptor its read uses. The descriptor names the
+/// root by its position in the draft's list until the commit gives the root
+/// its program id.
 const DraftLiteralRoot = struct {
     def: DraftDefId,
     module: checked.ModuleId,
-    site: Common.LiteralRejectionSite,
+    subject: DraftLiteralRootSubject,
     read: DraftComptimeValueRootId,
+};
+
+/// A draft literal root's subject. A value root's specialization identity is
+/// its definition's sealed identity, which exists only once the definition
+/// commits, so the committed subject (`Common.LiteralRootSubject`) is built
+/// there (`committed`).
+const DraftLiteralRootSubject = union(enum) {
+    conversion: Common.LiteralRejectionSite,
+    value: struct {
+        owner: Common.LoweringModuleId,
+        root: checked.ComptimeRootId,
+    },
+
+    fn committed(self: DraftLiteralRootSubject, identity: names.TypeDigest) Common.LiteralRootSubject {
+        return switch (self) {
+            .conversion => |site| .{ .conversion = site },
+            .value => |value| .{ .value = .{ .owner = value.owner, .root = value.root, .specialization = identity } },
+        };
+    }
 };
 
 fn DraftSpan(comptime _: type) type {
@@ -15901,6 +15924,9 @@ const DraftDeferredConstUse = struct {
     /// deferred expansion must restore this chain so a delayed recursive edge
     /// resolves to its already-reserved local.
     active_const_binding: ?ActiveConstBindingId,
+    /// `BodyDraftStore.inlined_value_depth` at the use site: a use deferred
+    /// from inside a value body stays part of that value's computation.
+    inlined_value_depth: u32,
     lexical: DraftCodecLexicalContext,
     /// Stable proof node stored with the reservation expression. Parents
     /// may reference it before const restoration expands this boundary.
@@ -16962,6 +16988,13 @@ const BodyDraftStore = struct {
     /// the first closed direct call in this draft.
     closed_direct_specializations: std.AutoHashMap(ClosedDirectCallIdentity, ClosedDirectDraftSpecialization),
     active_callable_eval_bindings: std.ArrayList(ActiveCallableEvalBinding),
+    /// How many top-level value bodies are being lowered inline around the
+    /// current expression. A use inside one belongs to that enclosing
+    /// computation (design.md "Specialization-Owned Top-Level Values"), so
+    /// only a use at depth zero becomes a value literal root; a nested use
+    /// stays inline, where the enclosing value's recursive bindings are in
+    /// scope.
+    inlined_value_depth: u32 = 0,
     active_const_node_bindings: std.ArrayList(ActiveConstNodeBinding),
     active_const_node_binding_indices: std.AutoHashMap(ActiveConstNodeAddress, u32),
     materialized_const_nodes: std.ArrayList(MaterializedConstNode),
@@ -17466,11 +17499,11 @@ const BodyDraftStore = struct {
         self: *BodyDraftStore,
         def: DraftDefId,
         module: checked.ModuleId,
-        site: Common.LiteralRejectionSite,
+        subject: DraftLiteralRootSubject,
     ) Allocator.Error!DraftComptimeValueRootId {
         const position: Common.LiteralRootId = @enumFromInt(@as(u32, @intCast(self.literal_roots.items.len)));
         const read = try self.addComptimeValueRoot(.{ .module = module, .root = .{ .literal = position }, .const_locator = null });
-        try self.literal_roots.append(self.allocator, .{ .def = def, .module = module, .site = site, .read = read });
+        try self.literal_roots.append(self.allocator, .{ .def = def, .module = module, .subject = subject, .read = read });
         return read;
     }
 
@@ -18129,6 +18162,7 @@ const BodyDraftStore = struct {
 
         self.active_callable_eval_bindings.deinit(self.allocator);
         self.active_callable_eval_bindings = .empty;
+        self.inlined_value_depth = 0;
         self.active_const_node_bindings.deinit(self.allocator);
         self.active_const_node_bindings = .empty;
         self.active_const_node_binding_indices.deinit();
@@ -18425,7 +18459,13 @@ const BodyDraftStore = struct {
         // its program id. The same literal at the same type is one literal
         // root however many specializations convert it: its definition's
         // content identity names the conversion, so a later one reads the
-        // first one's root.
+        // first one's root. Its read's representation evidence then cites
+        // that first root's definition too: a definition whose body names a
+        // nested function that reads a recursive-binding local has no merge
+        // identity for that function, so this draft's own definition may name
+        // a different function specialization than the root evaluates.
+        var literal_def_redirects = collections.DenseMap(DraftDefId, Ast.DefId).init(program.allocator);
+        defer literal_def_redirects.deinit();
         for (self.literal_roots.items) |root| {
             if (emit_defs) |emit| if (!emit[@intFromEnum(root.def)]) continue;
             const def = self.defs.items[@intFromEnum(root.def)];
@@ -18433,7 +18473,10 @@ const BodyDraftStore = struct {
             const identity = try sealedDefIdentity(program, committed_types, seed, ids.typedLocalSpan(def.args), try def.ret.sealCommitted(committed_types));
             const entry = try program.literal_root_by_identity.getOrPut(program.allocator, identity);
             if (!entry.found_existing) {
-                entry.value_ptr.* = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site });
+                entry.value_ptr.* = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .subject = root.subject.committed(identity) });
+            } else {
+                const root_def = program.literal_roots.get(@intFromEnum(entry.value_ptr.*)).def;
+                if (root_def != ids.def(root.def)) try literal_def_redirects.put(root.def, root_def);
             }
             var descriptor = self.comptime_value_roots.items[@intFromEnum(root.read)];
             descriptor.root = .{ .literal = entry.value_ptr.* };
@@ -18460,6 +18503,7 @@ const BodyDraftStore = struct {
                 committed_types,
                 static_data_ids,
                 &comptime_roots,
+                &literal_def_redirects,
                 expr.data,
             );
             const loc = ids.sourceLoc(self.expr_locs.items[index]);
@@ -18879,6 +18923,10 @@ const BodyDraftStore = struct {
         committed_types: *CommittedGraphTypes,
         static_data_ids: []const Common.StaticDataId,
         comptime_roots: *collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId),
+        /// A literal root definition deduplicated into an earlier literal
+        /// root's definition (see the literal-root commit loop); a reference
+        /// to it names that definition.
+        literal_def_redirects: *const collections.DenseMap(DraftDefId, Ast.DefId),
         data: DraftExprData,
     ) Allocator.Error!Ast.ExprData {
         return switch (data) {
@@ -18933,7 +18981,10 @@ const BodyDraftStore = struct {
                 .args = ids.typedLocalSpan(lambda.args),
                 .body = ids.expr(lambda.body),
             } },
-            .def_ref => |def| .{ .def_ref = ids.defTarget(def) },
+            .def_ref => |def| .{ .def_ref = switch (def) {
+                .draft => |draft| literal_def_redirects.get(draft) orelse ids.defTarget(def),
+                .final => ids.defTarget(def),
+            } },
             .fn_def => |fn_def| .{ .fn_def = .{
                 .fn_id = ids.fnTarget(fn_def.fn_id),
                 .captures = ids.fnDefCaptureSpan(fn_def.captures),
@@ -25617,9 +25668,12 @@ const BodyContext = struct {
                 // The canonical evaluator owns its recursive closure binding.
                 // Reads inside its construction must refer to this binding,
                 // before the completed value can be published to a root slot.
-                const local = try self.reserveCallableEvalBinding(self.view, wrapper.root, try ret_cell.toGraphNode(self.graph));
-                const lowered = try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell);
-                break :blk try self.finishCallableEvalBinding(self.view, wrapper.root, ret_cell, local, lowered);
+                break :blk try self.lowerCallableEvalBindingBody(
+                    self.view,
+                    wrapper.root,
+                    wrapper.body_expr,
+                    ret_cell,
+                );
             },
             .numeral_conversion,
             .quote_conversion,
@@ -34446,8 +34500,34 @@ const BodyContext = struct {
         if (self.builder.comptimeValueReadDeclared(view, root_id)) {
             return self.declaredComptimeValueRead(view, root_id, request_cell, null);
         }
-        const local = try self.reserveCallableEvalBinding(view, root_id, request_fn_node);
-        const lowered = try self.lowerComptimeRootExprAtCell(body_expr, request_cell);
+        const enclosed = self.draft.inlined_value_depth != 0;
+        const value = try self.lowerCallableEvalBindingBody(view, root_id, body_expr, request_cell);
+        if (!enclosed and self.usesSpecializedValueRoot(view, root_id)) {
+            return try self.specializedValueRootRead(view, root_id, value, request_fn_node);
+        }
+        return value;
+    }
+
+    /// Lower a callable-eval binding's body under its reserved recursive
+    /// binding local. The body is an enclosing value body for every use it
+    /// lowers: while the binding is active, a use inside it is part of this
+    /// computation and must stay inline, never becoming a separate literal
+    /// root that would name this binding's local. Both a module-evaluated
+    /// callable root's own entry wrapper and an inlined pending callable value
+    /// go through here.
+    fn lowerCallableEvalBindingBody(
+        self: *BodyContext,
+        view: ModuleView,
+        root_id: checked.ComptimeRootId,
+        body_expr: checked.CheckedExprId,
+        request_cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        const local = try self.reserveCallableEvalBinding(view, root_id, try request_cell.toGraphNode(self.graph));
+        self.draft.inlined_value_depth += 1;
+        const lowered = lowered: {
+            defer self.draft.inlined_value_depth -= 1;
+            break :lowered try self.lowerComptimeRootExprAtCell(body_expr, request_cell);
+        };
         return try self.finishCallableEvalBinding(view, root_id, request_cell, local, lowered);
     }
 
@@ -43526,6 +43606,7 @@ const BodyContext = struct {
             .use_evidence = use_evidence,
             .current_fn_key = self.current_fn_key,
             .active_const_binding = self.active_const_binding,
+            .inlined_value_depth = self.draft.inlined_value_depth,
             .lexical = lexical,
             .proof_reservation = proof_reservation,
         });
@@ -44078,12 +44159,23 @@ const BodyContext = struct {
         );
         try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
-        const restored = try body_ctx.lowerComptimeRootExprAtCell(
-            body.body_expr,
-            DraftTypeCell.fromGraphNode(request_node),
-        );
-        if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
-        return restored;
+        const enclosed = self.draft.inlined_value_depth != 0;
+        self.draft.inlined_value_depth += 1;
+        const restored = restored: {
+            defer self.draft.inlined_value_depth -= 1;
+            break :restored try body_ctx.lowerComptimeRootExprAtCell(
+                body.body_expr,
+                DraftTypeCell.fromGraphNode(request_node),
+            );
+        };
+        const value = if (has_active_const_binding)
+            try body_ctx.finishActiveConstBinding(active_const_scope.active, restored)
+        else
+            restored;
+        if (!enclosed and self.usesSpecializedValueRoot(store_view, body.root)) {
+            return try self.specializedValueRootRead(store_view, body.root, value, request_node);
+        }
+        return value;
     }
 
     fn restoreConstNode(
@@ -48624,18 +48716,65 @@ const BodyContext = struct {
         value: DraftExprId,
         value_node: NodeId,
     ) Allocator.Error!DraftExprId {
+        return try self.literalRootReadOf(
+            self.view.key,
+            .{ .kind = "literal-root", .extra = literalRootIdentity(self.view.key, expr_id) },
+            .{ .conversion = site },
+            value,
+            value_node,
+        );
+    }
+
+    /// A program whose compile-time roots are evaluated with it evaluates a
+    /// specialization-owned top-level value (design.md "Specialization-Owned
+    /// Top-Level Values") at compile time too, once per concrete type: the
+    /// value's body, lowered at this use's type, becomes the body of a
+    /// literal root, and the use reads the root's completed value. Uses at
+    /// the same type share one root.
+    fn specializedValueRootRead(
+        self: *BodyContext,
+        view: ModuleView,
+        root_id: checked.ComptimeRootId,
+        value: DraftExprId,
+        value_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        return try self.literalRootReadOf(
+            view.key,
+            .{ .kind = "value-root", .extra = specializedValueRootIdentity(view.key, root_id) },
+            .{ .value = .{ .owner = self.builder.loweringModuleId(view.key), .root = root_id } },
+            value,
+            value_node,
+        );
+    }
+
+    /// Whether this program evaluates a use of `root_id` as a literal root.
+    /// Checking decides which values are evaluated per specialization; the
+    /// program only decides whether it evaluates compile-time work with it.
+    fn usesSpecializedValueRoot(self: *const BodyContext, view: ModuleView, root_id: checked.ComptimeRootId) bool {
+        if (!self.builder.literal_roots) return false;
+        return view.compile_time_roots.root(root_id).request_eligibility == .per_specialization;
+    }
+
+    fn literalRootReadOf(
+        self: *BodyContext,
+        module: checked.ModuleId,
+        identity_seed: IdentitySeed,
+        subject: DraftLiteralRootSubject,
+        value: DraftExprId,
+        value_node: NodeId,
+    ) Allocator.Error!DraftExprId {
         const value_cell = DraftTypeCell.fromGraphNode(value_node);
         const def_id = try self.draft.reserveDef(self.draft.current_owner);
         self.draft.setDef(def_id, .{
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
             .fn_id = null,
-            .identity_seed = .{ .kind = "literal-root", .extra = literalRootIdentity(self.view.key, expr_id) },
+            .identity_seed = identity_seed,
             .args = try self.addTypedLocalSpan(&.{}),
             .body = .{ .roc = value },
             .ret = value_cell,
         });
-        const read = try self.draft.addLiteralRoot(def_id, self.view.key, site);
+        const read = try self.draft.addLiteralRoot(def_id, module, subject);
         // The call is representation evidence for the read; the read never
         // runs it.
         const callee = try self.addExprWithTypeCell(
@@ -66536,6 +66675,16 @@ fn literalRootIdentity(module: checked.ModuleId, expr_id: checked.CheckedExprId)
     return hasher.finalResult();
 }
 
+/// The specialization-owned value a value root computes; its return type
+/// joins the definition's identity when the definition seals.
+fn specializedValueRootIdentity(module: checked.ModuleId, root_id: checked.ComptimeRootId) [32]u8 {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.value-root.v1");
+    hasher.update(&module.bytes);
+    hashU32(&hasher, @intFromEnum(root_id));
+    return hasher.finalResult();
+}
+
 fn procedureUseRootIdentity(request: checked.RootRequest, procedure: checked.ProcedureUseTemplate, source_module: checked.ModuleId) [32]u8 {
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.monotype.procedure-use-root.v1");
@@ -68307,12 +68456,15 @@ test "body draft static data candidates use ordered commit ids" {
     const committed_static: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(17)));
     var comptime_roots = collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId).init(allocator);
     defer comptime_roots.deinit();
+    var literal_def_redirects = collections.DenseMap(DraftDefId, Ast.DefId).init(allocator);
+    defer literal_def_redirects.deinit();
     const sealed = try draft.sealCoreExprData(
         &program,
         BodyDraftStore.finalIdOffsets(&program),
         &committed_types,
         &.{committed_static},
         &comptime_roots,
+        &literal_def_redirects,
         .{ .static_data_candidate = .{
             .storage = .{ .string_backing = 23 },
             .static_data = draft_static,
