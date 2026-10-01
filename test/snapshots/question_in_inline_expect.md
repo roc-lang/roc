@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=? directly inside an inline expect in a function body is a compile error, because optimized builds remove inline expects
+description=? directly inside an inline expect in a function body keeps normal early-return semantics (propagates the Err out of the enclosing function)
 type=snippet
 ~~~
 # SOURCE
@@ -17,34 +17,9 @@ g = |x| {
 }
 ~~~
 # EXPECTED
-TRY OPERATOR IN EXPECT - question_in_inline_expect.md:8:9:8:14
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Try Operator In Expect")
-		(region (start 8 9) (end 8 14))
-		(headline
-			(reflow "The ")
-			(annotated code "?")
-			(reflow " operator cannot be used directly inside an inline ")
-			(annotated code "expect")
-			(reflow "."))
-		(document
-			(source-region (file "question_in_inline_expect.md") (start 8 9) (end 8 14) (annotation error) (line-text "\texpect f(x)? == x"))
-			(line-break)
-			(reflow "Optimized builds remove inline ")
-			(annotated code "expect")
-			(reflow "s, so an ")
-			(annotated code "expect")
-			(reflow " must not move control flow outside of itself, or the program would behave differently in optimized builds.")
-			(reflow " Handle the ")
-			(annotated code "Err")
-			(reflow " case explicitly instead, for example with a ")
-			(annotated code "match")
-			(reflow "."))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
@@ -149,7 +124,7 @@ g = |x| {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 297)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 305)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -184,7 +159,7 @@ g = |x| {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 330)
+										(e-call (constraint-fn-var 338)
 											(e-lookup-local
 												(p-assign (ident "f")))
 											(e-lookup-local
@@ -204,7 +179,13 @@ g = |x| {
 													(p-nominal-external (builtin)
 														(p-applied-tag))))
 											(value
-												(e-runtime-error (tag "control_flow_in_expect"))))))))
+												(e-return
+													(e-nominal-external
+														(builtin)
+														(e-tag (name "Err")
+															(args
+																(e-lookup-local
+																	(p-assign (ident "#err")))))))))))))
 						(rhs
 							(e-lookup-local
 								(p-assign (ident "x"))))))

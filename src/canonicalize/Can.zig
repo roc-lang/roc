@@ -1101,6 +1101,42 @@ fn externalTypeBindingRef(
     };
 }
 
+/// The declaration a type name bound to an external type denotes.
+const ExternalTypeBindingTarget = union(enum) {
+    /// The binding already carries its declaration.
+    external: struct {
+        import_idx: Import.Idx,
+        target_node_idx: u32,
+    },
+    /// The declaration is settled when the deferred import worklist drains,
+    /// which reports the name if the import exposes no such type.
+    deferred: DeferredRef,
+    malformed: Diagnostic,
+};
+
+/// Resolve a type name bound to an external type. Every position that names a
+/// type through a scope binding resolves it here, so the same name denotes the
+/// same declaration, or reports the same diagnostic, in every position.
+fn resolveExternalTypeBinding(
+    external: Scope.ExternalTypeBinding,
+    item_name: Ident.Idx,
+    kind: ModuleEnv.DeferredRefKind,
+    region: Region,
+) ExternalTypeBindingTarget {
+    const import_idx = external.import_idx orelse return .{ .malformed = .{ .module_not_imported = .{
+        .module_name = external.module_ident,
+        .region = region,
+    } } };
+    if (external.target_node_idx) |target_node_idx| return .{ .external = .{
+        .import_idx = import_idx,
+        .target_node_idx = target_node_idx,
+    } };
+    // The compiler's baked Builtin module takes no part in deferred import
+    // resolution, so its bindings are installed with their declarations.
+    if (external.is_compiler_builtin) std.debug.panic("compiler invariant violated: compiler builtin type binding has no declaration", .{});
+    return .{ .deferred = externalTypeBindingRef(external, import_idx, item_name, kind, region) };
+}
+
 /// A value reference through an import, resolved when the worklist drains.
 fn deferredValueExpr(self: *Self, ref: DeferredRef, region: Region) std.mem.Allocator.Error!CanonicalizedExpr {
     const idx = try self.pushDeferredRef(ref);
@@ -1572,9 +1608,6 @@ fn populateBuiltinAutoImportedTypes(
             .import_identity = .compiler_builtin,
         });
     }
-
-    try putBuiltinAutoImportedContainerUnmanaged(gpa, &self.builtin_auto_imported_types, calling_module_env, builtin_module_env, "Encoding", "Builtin.Encoding");
-    try putBuiltinAutoImportedContainerUnmanaged(gpa, &self.builtin_auto_imported_types, calling_module_env, builtin_module_env, "Json", "Builtin.Encoding.Json");
 }
 
 /// Legacy helper for caller-owned import maps.
@@ -1602,48 +1635,12 @@ pub fn populateModuleEnvs(
             .import_identity = .compiler_builtin,
         });
     }
-
-    try putBuiltinAutoImportedContainerManaged(module_envs_map, calling_module_env, builtin_module_env, "Encoding", "Builtin.Encoding");
-    try putBuiltinAutoImportedContainerManaged(module_envs_map, calling_module_env, builtin_module_env, "Json", "Builtin.Encoding.Json");
 }
 
-fn putBuiltinAutoImportedContainerUnmanaged(
-    gpa: std.mem.Allocator,
-    map: *std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType),
-    calling_module_env: *ModuleEnv,
-    builtin_module_env: *const ModuleEnv,
-    display_name: []const u8,
-    qualified_name: []const u8,
-) Allocator.Error!void {
-    const display_ident = try calling_module_env.insertIdent(base.Ident.for_text(display_name));
-    const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_name));
-    try map.put(gpa, display_ident, .{
-        .env = builtin_module_env,
-        .statement_idx = null,
-        .qualified_type_ident = qualified_ident,
-        .import_identity = .compiler_builtin,
-    });
-}
-
-fn putBuiltinAutoImportedContainerManaged(
-    map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
-    calling_module_env: *ModuleEnv,
-    builtin_module_env: *const ModuleEnv,
-    display_name: []const u8,
-    qualified_name: []const u8,
-) Allocator.Error!void {
-    const display_ident = try calling_module_env.insertIdent(base.Ident.for_text(display_name));
-    const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_name));
-    try map.put(display_ident, .{
-        .env = builtin_module_env,
-        .statement_idx = null,
-        .qualified_type_ident = qualified_ident,
-        .import_identity = .compiler_builtin,
-    });
-}
-
-/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, Iter, and numeric types) from the Builtin module.
-/// Used for all modules EXCEPT Builtin itself.
+/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, Iter, List, Box, and numeric types) from the Builtin module.
+/// Used for all modules EXCEPT Builtin itself. Each binding carries its
+/// declaration, because the compiler's baked Builtin module takes no part in
+/// deferred import resolution.
 pub fn setupAutoImportedBuiltinTypes(
     self: *Self,
     env: *ModuleEnv,
@@ -1665,14 +1662,13 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "Range", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
+    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "List", "Box", "Range", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
-            const target_node_idx = if (type_entry.statement_idx) |stmt_idx|
-                type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx)
-            else
-                null;
+            const stmt_idx = type_entry.statement_idx orelse
+                std.debug.panic("compiler invariant violated: auto-imported builtin type {s} has no declaration", .{type_name_text});
+            const target_node_idx = type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx);
 
             // Compiler-owned builtin seed data is installed before any source
             // declaration can exist in this module scope, so this is not a
@@ -1689,25 +1685,6 @@ pub fn setupAutoImportedBuiltinTypes(
                 },
             });
         }
-    }
-
-    const primitive_builtins = [_][]const u8{ "List", "Box" };
-    for (primitive_builtins) |type_name_text| {
-        const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
-
-        // Primitive builtins are compiler-owned seed bindings installed before
-        // source declarations, so collision policy is not involved here.
-        try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
-            .external_nominal = .{
-                .module_ident = builtin_ident,
-                .original_ident = type_ident,
-                .target_node_idx = null,
-                .import_idx = builtin_import_idx,
-                .origin_region = zero_region,
-                .module_not_found = false,
-                .is_compiler_builtin = true,
-            },
-        });
     }
 }
 
@@ -6795,9 +6772,7 @@ const LiteralTypeSuffixResolution = union(enum) {
 };
 
 /// Resolve a literal's type suffix once, while the canonicalizer still owns
-/// scope information. `region` is the region of the whole literal. A resolved
-/// `.invalid` target names an incomplete external binding already diagnosed by
-/// import canonicalization.
+/// scope information. `region` is the region of the whole literal.
 fn resolveLiteralTypeSuffix(
     self: *Self,
     suffix: AST.LiteralTypeSuffix,
@@ -6867,31 +6842,21 @@ fn resolveUnqualifiedLiteralTypeSuffix(
     const target: LiteralSuffixTarget = switch (binding_location.binding.*) {
         .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt_idx| .{ .resolved = .{ .local = stmt_idx } },
         .external_nominal => |external| blk: {
-            const import_idx = external.import_idx orelse break :blk .{ .resolved = .invalid };
-            if (self.importIsCompilerBuiltin(import_idx)) {
-                if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-                    break :blk .{ .resolved = .{ .builtin = num_kind } };
+            if (external.import_idx) |import_idx| {
+                if (self.importIsCompilerBuiltin(import_idx)) {
+                    if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+                        break :blk .{ .resolved = .{ .builtin = num_kind } };
+                    }
                 }
             }
-            if (!self.importIsCompilerBuiltin(import_idx)) {
-                break :blk .{ .deferred = .{
-                    .import_idx = import_idx,
-                    .kind = .numeric_suffix,
-                    .path = external.original_ident,
-                    .module_name = external.module_ident,
-                    .item_name = type_ident,
-                    .parent_name = external.original_ident,
-                    .qualified_name = type_ident,
-                    .names_import_main_type = external.names_import_main_type,
-                    .missing_module_failure = .type_from_missing_module,
-                    .not_found_failure = .type_not_exposed,
-                } };
-            }
-            const target_node_idx = external.target_node_idx orelse break :blk .{ .resolved = .invalid };
-            break :blk .{ .resolved = .{ .external = .{
-                .import_idx = import_idx,
-                .target_node_idx = target_node_idx,
-            } } };
+            break :blk switch (resolveExternalTypeBinding(external, type_ident, .numeric_suffix, region)) {
+                .external => |found| .{ .resolved = .{ .external = .{
+                    .import_idx = found.import_idx,
+                    .target_node_idx = found.target_node_idx,
+                } } },
+                .deferred => |ref| .{ .deferred = ref },
+                .malformed => |diagnostic| return .{ .malformed = diagnostic },
+            };
         },
     };
     return .{ .resolved = .{ .name = type_ident, .target = target } };
@@ -20213,29 +20178,23 @@ fn resolveTypePath(
                     .local_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
                     .local_alias, .local_where_alias => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
                     .associated_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
-                    .external_nominal => |external| blk: {
-                        const import_idx = external.import_idx orelse {
-                            break :blk .{ .name = type_name_ident, .target = .{ .malformed = .{ .module_not_imported = .{
-                                .module_name = external.module_ident,
-                                .region = type_name_region,
-                            } } } };
-                        };
-
-                        // A binding the compiler installed for its own baked
-                        // Builtin module already carries its target.
-                        if (external.target_node_idx) |target_node_idx| {
-                            const builtin_type = self.lookupBuiltinAutoImportedType(external.module_ident) orelse
-                                self.lookupBuiltinAutoImportedType(external.original_ident);
-                            break :blk .{ .name = type_name_ident, .target = .{ .external = .{
-                                .import_idx = import_idx,
-                                .target_node_idx = target_node_idx,
-                                .env = if (builtin_type) |info| info.env else null,
-                            } } };
-                        }
-
-                        break :blk .{ .name = type_name_ident, .target = .{
-                            .deferred = externalTypeBindingRef(external, import_idx, type_name_ident, .type_anno_lookup, type_name_region),
-                        } };
+                    .external_nominal => |external| .{
+                        .name = type_name_ident,
+                        .target = switch (resolveExternalTypeBinding(external, type_name_ident, .type_anno_lookup, type_name_region)) {
+                            // A binding the compiler installed for its own baked
+                            // Builtin module already carries its target.
+                            .external => |found| ext: {
+                                const builtin_type = self.lookupBuiltinAutoImportedType(external.module_ident) orelse
+                                    self.lookupBuiltinAutoImportedType(external.original_ident);
+                                break :ext .{ .external = .{
+                                    .import_idx = found.import_idx,
+                                    .target_node_idx = found.target_node_idx,
+                                    .env = if (builtin_type) |info| info.env else null,
+                                } };
+                            },
+                            .deferred => |ref| .{ .deferred = ref },
+                            .malformed => |diagnostic| .{ .malformed = diagnostic },
+                        },
                     },
                 };
             }

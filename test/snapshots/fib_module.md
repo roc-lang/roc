@@ -58,7 +58,7 @@ NO CHANGE
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_lte") (constraint-fn-var 226)
+						(e-dispatch-call (method "is_lte") (constraint-fn-var 233)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -67,22 +67,22 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "n")))))
 				(if-else
-					(e-dispatch-call (method "plus") (constraint-fn-var 252)
+					(e-dispatch-call (method "plus") (constraint-fn-var 259)
 						(receiver
-							(e-call (constraint-fn-var 241)
+							(e-call (constraint-fn-var 248)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 239)
+								(e-dispatch-call (method "minus") (constraint-fn-var 246)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(args
 										(e-num (value "1"))))))
 						(args
-							(e-call (constraint-fn-var 251)
+							(e-call (constraint-fn-var 258)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 249)
+								(e-dispatch-call (method "minus") (constraint-fn-var 256)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))

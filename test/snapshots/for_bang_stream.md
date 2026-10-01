@@ -45,6 +45,7 @@ top_level = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - for_bang_stream.md:14:12:14:15
+EFFECTFUL FUNCTION NAME - for_bang_stream.md:14:1:14:9
 MISSING METHOD - for_bang_stream.md:25:14:25:15
 EFFECTFUL TOP LEVEL VALUE - for_bang_stream.md:31:13:37:2
 # PROBLEMS
@@ -80,6 +81,21 @@ EFFECTFUL TOP LEVEL VALUE - for_bang_stream.md:31:13:37:2
 			(annotated emphasis "Hint:")
 			(reflow " ")
 			(reflow "This function is effectful, but a pure function is expected.")))
+	(report
+		(severity warning)
+		(title "Effectful Function Name")
+		(region (start 14 1) (end 14 9))
+		(headline
+			(reflow "This function performs an effect, so its name must end in `!`."))
+		(document
+			(source-region (file "for_bang_stream.md") (start 14 1) (end 14 9) (annotation warning) (line-text "pure_sum = |s| {"))
+			(line-break)
+			(line-break)
+			(reflow "Add a trailing")
+			(reflow " ")
+			(annotated code "!")
+			(reflow " ")
+			(reflow "to this function name.")))
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
@@ -358,7 +374,7 @@ top_level = {
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$total"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 385)
+							(e-dispatch-call (method "plus") (constraint-fn-var 392)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$total"))))
@@ -415,7 +431,7 @@ top_level = {
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$total"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 519)
+							(e-dispatch-call (method "plus") (constraint-fn-var 531)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$total"))))
@@ -432,7 +448,29 @@ top_level = {
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "top_level"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-block
+			(s-var
+				(p-var-assign (ident "$total"))
+				(e-num (value "0")))
+			(s-for-bang
+				(p-assign (ident "n"))
+				(e-dispatch-call (method "iter") (constraint-fn-var 558)
+					(receiver
+						(e-list
+							(elems
+								(e-typed-int (value "1") (type "U64"))
+								(e-num (value "2")))))
+					(args))
+				(e-block
+					(s-reassign
+						(p-var-assign (ident "$total"))
+						(e-dispatch-call (method "plus") (constraint-fn-var 601)
+							(receiver
+								(e-runtime-error (tag "erroneous_value_use")))
+							(args
+								(e-runtime-error (tag "erroneous_value_use")))))
+					(e-empty_record)))
+			(e-runtime-error (tag "erroneous_value_use")))))
 ~~~
 # TYPES
 ~~~clojure

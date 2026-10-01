@@ -71,7 +71,7 @@ NO CHANGE
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
 			(e-block
-				(e-dispatch-call (method "plus") (constraint-fn-var 212)
+				(e-dispatch-call (method "plus") (constraint-fn-var 219)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "a"))))
@@ -83,7 +83,7 @@ NO CHANGE
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
 			(e-block
-				(e-dispatch-call (method "minus") (constraint-fn-var 218)
+				(e-dispatch-call (method "minus") (constraint-fn-var 225)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "a"))))
