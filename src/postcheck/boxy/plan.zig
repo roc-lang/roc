@@ -14388,7 +14388,10 @@ const Builder = struct {
             .const_node => |node| {
                 const store = view.const_store orelse
                     boxyPlanInvariant("finalized from_quote conversion module had no ConstStore");
-                if (store.get(node) == .crash) return;
+                switch (store.get(node)) {
+                    .crash, .checked_error => return,
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => {},
+                }
                 const expr = view.checked_bodies.expr(expr_id);
                 const rep = try self.analyzeType(view, expr.ty);
                 var visited = std.AutoHashMap(StaticConstVisit, void).init(self.allocator);
@@ -14444,7 +14447,10 @@ const Builder = struct {
             .const_node => |node| {
                 const store = view.const_store orelse
                     boxyPlanInvariant("finalized from_numeral conversion module had no ConstStore");
-                if (store.get(node) == .crash) return;
+                switch (store.get(node)) {
+                    .crash, .checked_error => return,
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => {},
+                }
                 const expr = view.checked_bodies.expr(expr_id);
                 const rep = try self.analyzeType(view, expr.ty);
                 var visited = std.AutoHashMap(StaticConstVisit, void).init(self.allocator);

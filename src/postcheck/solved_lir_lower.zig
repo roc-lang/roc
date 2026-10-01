@@ -5172,7 +5172,7 @@ const Lowerer = struct {
         if (!self.worker_callback or self.parallel_metrics == null) return;
         if (data == .call_value) self.worker_features.indirect_call = true;
         if (data == .match_) self.worker_features.match_ = true;
-        if (data == .str_lit or data == .bytes_lit or data == .crash) self.worker_features.literal = true;
+        if (data == .str_lit or data == .bytes_lit or data == .crash or data == .checked_error) self.worker_features.literal = true;
         if (data == .loop_ or data == .join_point) self.worker_features.loop = true;
     }
 

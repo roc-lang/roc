@@ -1081,7 +1081,7 @@ const Solver = struct {
     fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId) Allocator.Error!void {
         const data = self.lifted.exprs[@intFromEnum(value)].data;
         const tag = std.meta.activeTag(data);
-        if (tag == .crash or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
+        if (tag == .crash or tag == .checked_error or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
         if (tag == .block and self.lifted.exprs[@intFromEnum(data.block.final_expr)].data == .@"unreachable") return;
         try self.relateReturn(self.inferredExpr(value), target);
     }
