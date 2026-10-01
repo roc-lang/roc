@@ -1538,6 +1538,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         .local => |local| .{ .local = try self.mapLocal(local) },
                     },
                     .literal_rejection = s.literal_rejection,
+                    .checked_error = s.checked_error,
                 } }, origin),
             };
 

@@ -23131,7 +23131,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .crash => |crash| {
                             switch (crash.msg) {
-                                .literal => |literal| try self.emitRocCrash(self.store.getString(literal)),
+                                .literal => |literal| if (crash.checked_error)
+                                    try self.emitCheckedErrorCrash(self.store.getString(literal))
+                                else
+                                    try self.emitRocCrash(self.store.getString(literal)),
                                 .local => |message| {
                                     const msg_loc = try self.emitValueLocal(message);
                                     const msg_offset = switch (msg_loc) {
@@ -23152,7 +23155,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                             .{@intFromEnum(message)},
                                         ),
                                     };
-                                    try self.emitRocCrashFromStackStr(msg_offset);
+                                    if (crash.checked_error)
+                                        try self.emitCheckedErrorCrashFromStackStr(msg_offset)
+                                    else
+                                        try self.emitRocCrashFromStackStr(msg_offset);
                                 },
                             }
                             try self.emitTrap();
@@ -24024,6 +24030,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, .crash_str);
         }
 
+        fn emitCheckedErrorCrashFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
+            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, str_offset);
+            try self.callBuiltin(&builder, .checked_error_crash_str);
+        }
+
         fn emitRocExpectErrFromStackStr(self: *Self, str_offset: i32, region: base.Region) Allocator.Error!void {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(frame_ptr, str_offset);
@@ -24127,6 +24140,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.emitRocStaticMessageCall(.roc_crashed, msg);
+        }
+
+        /// Crash at code checking rejected, through the builtin that records
+        /// the fact before crashing.
+        fn emitCheckedErrorCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
+            try self.spillAllVectorLocals();
+            const msg_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(msg_reg);
+            try self.emitPendingMessageAddress(msg, msg_reg);
+            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(msg_reg);
+            try builder.addImmArg(msg_len_val);
+            try self.callBuiltin(&builder, .checked_error_crashed);
         }
 
         fn emitTrap(self: *Self) Allocator.Error!void {

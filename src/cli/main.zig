@@ -11736,6 +11736,9 @@ const CliTestResultItem = struct {
     transcript: []const CliTestTranscriptEvent = &.{},
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility = .always,
+    /// Whether the result follows from the module alone, so a later run of the
+    /// same module can replay it. A test backend failing to run is not.
+    cacheable: bool = true,
 };
 
 const CliModuleTestResult = struct {
@@ -11998,7 +12001,7 @@ fn deinitCliTestPlanEntries(allocator: Allocator, entries: []const CliTestPlanEn
     allocator.free(@constCast(entries));
 }
 
-const cli_test_cache_magic = "ROC_TEST_RESULTS_V8";
+const cli_test_cache_magic = "ROC_TEST_RESULTS_V9";
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) Allocator.Error!void {
     var buf: [4]u8 = undefined;
@@ -12082,7 +12085,7 @@ fn storeCliTestResultsInCache(
 ) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
     for (results) |result| {
-        if (result.result == .compiler_error) return;
+        if (!result.cacheable) return;
     }
 
     var bytes = std.ArrayList(u8).empty;
@@ -12257,7 +12260,7 @@ fn loadCachedCliTestResults(
         const result: CliTestResult = switch (result_tag) {
             0 => .passed,
             1 => .failed,
-            2 => return null,
+            2 => .compiler_error,
             else => return null,
         };
         if (inline_expect and (result == .failed) != (inline_failed != 0)) return null;
@@ -12371,22 +12374,19 @@ fn buildCliTestPlan(
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
 
-        // Root requests deliberately exclude roots reaching checked errors.
-        // The checked roots retain their identities and the checker's diagnostic
-        // facts, so rejected tests can participate in result aggregation
-        // without being lowered, executed, or stored in the execution cache.
+        // An expect's condition is a `Bool`, so its root is ineligible only
+        // when checking rejected code in the condition itself and left it no
+        // type to evaluate at. Such an expect counts as a compiler error, and
+        // the checker's diagnostic is its only report.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots) |root| {
-            if (root.kind != .expect) continue;
-            if (!artifact.compileTimeRootReachesCheckedError(root)) continue;
-            std.debug.assert(root.request_eligibility == .ineligible);
+            if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
+            std.debug.assert(artifact.checked_bodies.exprContainsDiagnosticError(root.expr));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
                 .order = @intFromEnum(root.id),
                 .region = testRootRegion(module.semantic.env, root.source),
-                // Checking renders the original diagnostic once. A second
-                // generic test failure would only duplicate that report.
                 .failure_detail = null,
             });
         }
@@ -13347,6 +13347,30 @@ fn runInterpreterTestRoots(
         }) catch |err| {
             var transcript: []const CliTestTranscriptEvent = try host_env.takeTranscript();
             errdefer deinitCliTestTranscriptEvents(ctx.gpa, transcript);
+            // The expect reached code checking rejected; that problem is
+            // already reported, so the expect counts as a compiler error.
+            const reached_checked_error = switch (err) {
+                error.Crash => eval.CompileTimeFinalization.failedAtCheckedError(&lowered.lir_result, interpreter.getFailedCrashStmt()),
+                error.ComptimeExhaustiveness,
+                error.DivisionByZero,
+                error.ExpectErr,
+                error.InvalidHostedFunctionSignature,
+                error.OutOfMemory,
+                error.RuntimeError,
+                error.UnsupportedHostedFunction,
+                => false,
+            };
+            if (reached_checked_error) {
+                summary.compiler_errors += 1;
+                try results.append(ctx.gpa, .{
+                    .result = .compiler_error,
+                    .order = run.root.order,
+                    .region = run.region,
+                    .transcript = transcript,
+                    .failure_detail = null,
+                });
+                continue;
+            }
             summary.failed += 1;
             // When a `?` operator failed the expect, point the report's
             // source snippet at the `?` itself.
@@ -13503,6 +13527,7 @@ fn appendCompilerErrorsForRuns(
             try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
             .always,
         );
+        results.items[results.items.len - 1].cacheable = false;
     }
 }
 
@@ -13563,6 +13588,15 @@ fn cliTestResultItemFromEval(
                 .failure_detail = message,
                 .failure_detail_visibility = .always,
             };
+        },
+        // The expect reached code checking rejected; that problem is already
+        // reported, so the expect counts as a compiler error.
+        .checked_error => return .{
+            .result = .compiler_error,
+            .order = run.root.order,
+            .region = run.region,
+            .transcript = transcript,
+            .failure_detail = null,
         },
     }
 }
@@ -14213,9 +14247,7 @@ fn runCompiledTestPlan(
 
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
-        if (summaries[lowered_module.planned_index].compiler_errors == 0) {
-            try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, fresh_results[lowered_module.planned_index].?);
-        }
+        try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, fresh_results[lowered_module.planned_index].?);
     }
 
     for (test_plan.modules, 0..) |*planned, planned_index| {

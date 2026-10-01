@@ -1089,7 +1089,7 @@ pub const Program = struct {
                     self.shapes.loop_tuple_result = true;
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 
@@ -1155,7 +1155,7 @@ pub const Program = struct {
     pub fn noteStmtShapes(self: *Program, stmt_: Stmt) void {
         switch (stmt_) {
             .return_ => self.shapes.contains_return = true,
-            .uninitialized, .let_, .expr, .expect, .dbg, .crash => {},
+            .uninitialized, .let_, .expr, .expect, .dbg, .crash, .checked_error => {},
         }
     }
 

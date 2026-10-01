@@ -3493,8 +3493,14 @@ pub const MonoLlvmCodeGen = struct {
             .jump => |jump_stmt| try self.emitJump(jump_stmt),
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
             .crash => |crash_stmt| switch (crash_stmt.msg) {
-                .literal => |literal| try self.emitCrashBytes(self.store.getString(literal)),
-                .local => |local| try self.emitCrashLocal(local),
+                .literal => |literal| if (crash_stmt.checked_error)
+                    try self.emitCheckedErrorCrashBytes(self.store.getString(literal))
+                else
+                    try self.emitCrashBytes(self.store.getString(literal)),
+                .local => |local| if (crash_stmt.checked_error)
+                    try self.emitCheckedErrorCrashLocal(local)
+                else
+                    try self.emitCrashLocal(local),
             },
             .expect_err => |expect_err_stmt| {
                 try self.materializeLocalIfDeferred(expect_err_stmt.message);
@@ -8357,6 +8363,37 @@ pub const MonoLlvmCodeGen = struct {
             builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
         )) {
             try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        }
+        try self.emitCrashTerminator();
+    }
+
+    /// Crash at code checking rejected, through the builtin that records the
+    /// fact before crashing.
+    fn emitCheckedErrorCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const msg_ptr = try self.staticBytes(msg);
+        const msg_len = builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory;
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg_ptr, msg_len)) {
+            try self.callBuiltinVoid(
+                builtinSymbol(.checked_error_crashed),
+                &.{ try self.ptrType(), self.ptrSizedIntType() },
+                &.{ msg_ptr, msg_len },
+            );
+        }
+        try self.emitCrashTerminator();
+    }
+
+    /// Crash at code checking rejected with a runtime message, through the
+    /// builtin that records the fact before crashing.
+    fn emitCheckedErrorCrashLocal(self: *MonoLlvmCodeGen, message: LocalId) Error!void {
+        try self.materializeLocalIfDeferred(message);
+        const msg = try self.emitStrMatchSourceShape(self.slot(message).ptr);
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg.bytes, msg.len)) {
+            try self.callBuiltinVoid(
+                builtinSymbol(.checked_error_crash_str),
+                &.{try self.ptrType()},
+                &.{self.slot(message).ptr},
+            );
         }
         try self.emitCrashTerminator();
     }

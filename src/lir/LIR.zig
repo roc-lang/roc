@@ -1483,6 +1483,10 @@ pub const CFStmt = union(enum) {
         /// compile-time evaluation reports the literal's own diagnostic with
         /// `msg`, the conversion's error message.
         literal_rejection: ?LiteralRejectionSite = null,
+        /// Set when this crash is code checking rejected and already
+        /// reported: compile-time evaluation that reaches it discards the
+        /// result instead of reporting the problem a second time.
+        checked_error: bool = false,
     },
 };
 

@@ -578,6 +578,15 @@ pub const StaticDataValue = struct {
     } = null,
 };
 
+/// The `failed` byte of a compile-time root's failure record.
+pub const ComptimeFailureKind = enum(u8) {
+    none = 0,
+    crash = 1,
+    /// The root's evaluation reached code checking rejected; a read of its
+    /// value crashes as that code does.
+    checked_error = 2,
+};
+
 /// Exact post-ARC guard identity consumed by successful-root completion.
 pub const ComptimeValueGuard = struct {
     next_for_slot: ?u32 = null,
@@ -585,6 +594,9 @@ pub const ComptimeValueGuard = struct {
     owner: LIR.LirProcSpecId,
     completed: bool = false,
     crash: LIR.CFStmtId,
+    /// The failure path for a value whose evaluation reached code checking
+    /// rejected.
+    checked_crash: LIR.CFStmtId,
     entry: LIR.CFStmtId,
     success: LIR.CFStmtId,
     value_slot: LIR.StaticDataId,

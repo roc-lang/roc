@@ -241,7 +241,7 @@ pub const Inventory = struct {
                     try self.collect(seq.ok_body);
                 },
                 .lambda, .def_ref, .fn_def => Common.invariant("pre-lift expression in loop exit demand"),
-                .unit, .@"unreachable", .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized => {},
+                .unit, .@"unreachable", .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .bytes_lit, .crash, .checked_error, .comptime_exhaustiveness_failed, .uninitialized => {},
             }
             return;
         }
@@ -256,7 +256,7 @@ pub const Inventory = struct {
             },
             .expr, .expect, .dbg => |expr| try self.collect(expr),
             .return_ => |ret| try self.collect(ret.value),
-            .uninitialized, .crash => {},
+            .uninitialized, .crash, .checked_error => {},
         };
     }
 

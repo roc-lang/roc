@@ -1900,7 +1900,7 @@ fn evalInterpreterProgramRoots(
                         error.Crash => {
                             const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                             failed_message = message;
-                            break :blk .{ .const_node = try appendCrashConst(module, message) };
+                            break :blk .{ .const_node = try appendFailureConst(module, message, RootFailure.of(&lowered.lir_result, interpreter.getFailedCrashStmt())) };
                         },
                         error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
                         error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
@@ -1943,7 +1943,7 @@ fn evalInterpreterProgramRoots(
             const message = failed_message orelse finalizationInvariant("failed interpreter root omitted its explicit failure message");
             const origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = interpreter.getFailedSourceLoc(), .region = interpreter.getFailedCheckedRegion() };
             program.slotEnvironment().publishFailureOrigin(lowered, root.owner, .{ .checked = root_id }, origin);
-            try program.slotEnvironment().publishFailure(lowered, root.owner, .{ .checked = root_id }, message, .{ .resolve = InterpreterProgram.resolveFunction });
+            try program.slotEnvironment().publishFailure(lowered, root.owner, .{ .checked = root_id }, .{ .message = message, .kind = RootFailure.ofPayload(module, payload) }, .{ .resolve = InterpreterProgram.resolveFunction });
             try program.refreshCallableMetadata();
         }
 
@@ -2159,7 +2159,7 @@ fn testLiteralRootFailureOwnership(allocator: Allocator) (Allocator.Error || err
 fn guardProducer(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?lir.LIR.ComptimeProducer {
     const stmt = failed_stmt orelse return null;
     for (lir_result.comptime_value_guards.items) |guard| {
-        if (guard.crash != stmt) continue;
+        if (guard.crash != stmt and guard.checked_crash != stmt) continue;
         const root = lir_result.static_data_values.items[@intFromEnum(guard.value_slot)].compile_time_root orelse
             finalizationInvariant("value guard slot lost its compile-time producer");
         return root.root;
@@ -2194,6 +2194,9 @@ fn reportEmbeddedFailure(
     failed_region: ?base.Region,
     failed_loc: ?base.SourceLoc,
 ) FinalizeError!EmbeddedReport {
+    // Code checking rejected owns its diagnostic; reaching it discards the
+    // root's result without reporting the problem a second time.
+    if (failedAtCheckedError(lir_result, failed_stmt)) return .reported_elsewhere;
     const Embedded = struct { kind: ?lir.LIR.LiteralRejectionKind, message: []const u8, region: ?base.Region, loc: ?base.SourceLoc };
     const embedded: Embedded = if (guardProducer(lir_result, failed_stmt)) |producer| switch (producer) {
         .checked => return .reported_elsewhere,
@@ -2303,7 +2306,7 @@ fn evalInterpreterLiteralRoot(
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
     if (options.publish_shared_slots) {
         program.slotEnvironment().publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
-        try program.slotEnvironment().publishFailure(lowered, plan.site.owner, producer, failed.message, .{ .resolve = InterpreterProgram.resolveFunction });
+        try program.slotEnvironment().publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
         try program.refreshCallableMetadata();
     }
 }
@@ -2372,7 +2375,7 @@ fn evalDevLiteralRoot(
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
     if (options.publish_shared_slots) {
         native.slots.publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
-        try native.publishFailure(lowered, plan.site.owner, producer, failed.message);
+        try native.publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash });
     }
 }
 
@@ -3192,6 +3195,7 @@ const StaticSlotEnvironment = struct {
             while (guard_index) |index| {
                 const guard = lowered.lir_result.comptime_value_guards.items[index];
                 self.failure_origins[@intFromEnum(guard.crash)] = origin;
+                self.failure_origins[@intFromEnum(guard.checked_crash)] = origin;
                 guard_index = guard.next_for_slot;
             }
         }
@@ -3202,7 +3206,7 @@ const StaticSlotEnvironment = struct {
         lowered: *const lir.CheckedPipeline.LoweredProgram,
         module: lir.LIR.LoweringModuleId,
         producer: lir.LIR.ComptimeProducer,
-        message: ?[]const u8,
+        failure: ?SlotFailure,
         functions: backend.StaticDataImageFunctionResolver,
     ) FinalizeError!void {
         const allocator = self.allocator;
@@ -3215,7 +3219,7 @@ const StaticSlotEnvironment = struct {
             if (root.role != .failure_message) continue;
             const metadata = root.role.failure_message;
             const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(entry.layout_idx));
-            const text = message orelse "";
+            const text = if (failure) |failed| failed.message else "";
             const large = !builtins.str.RocStr.fitsInSmallStr(text.len);
             const exports = try allocator.alloc(static_data_exports.StaticDataExport, if (large) 2 else 1);
             var count: usize = 0;
@@ -3236,7 +3240,7 @@ const StaticSlotEnvironment = struct {
             @memset(bytes, 0);
             exports[0] = .{ .symbol_name = name, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false };
             count = 1;
-            bytes[metadata.failed_offset] = @intFromBool(message != null);
+            bytes[metadata.failed_offset] = @intFromEnum(if (failure) |failed| failed.kind.recordKind() else lir.Program.ComptimeFailureKind.none);
             if (large) {
                 const backing_name = try LirProgram.staticDataNodeSymbolName(allocator, @intFromEnum(slot), 1);
                 const backing = allocator.alloc(u8, @sizeOf(usize) + text.len) catch |err| {
@@ -3506,8 +3510,8 @@ const DevProgram = struct {
     fn publishRootWithRuntime(self: *DevProgram, lowered: *lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, shape: LirProgram.RootShape, value: @import("value.zig").Value, runtime: ?*const @import("boxy_runtime.zig").BoxyRuntime) FinalizeError!void {
         try self.slots.publishRoot(lowered, module, producer, shape, value, .{ .context = self, .resolve = resolveCallable, .runtime = runtime }, .{ .context = self, .resolve = resolveFrozenFunction });
     }
-    fn publishFailure(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, message: ?[]const u8) FinalizeError!void {
-        try self.slots.publishFailure(lowered, module, producer, message, .{ .context = self, .resolve = resolveFrozenFunction });
+    fn publishFailure(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, failure: ?SlotFailure) FinalizeError!void {
+        try self.slots.publishFailure(lowered, module, producer, failure, .{ .context = self, .resolve = resolveFrozenFunction });
     }
     fn freezeCompleted(self: *DevProgram) Allocator.Error!LirProgram.FrozenStaticData {
         return self.slots.freezeCompleted();
@@ -3802,7 +3806,7 @@ fn evalDevProgramRoots(
         const failure_origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = job.host.failed_loc, .region = job.host.failed_region };
         if (options.publish_shared_slots and failure_message == null) try native.publishRoot(lowered, job.root.owner, .{ .checked = job.root_id }, job.root.shape(), .{ .ptr = job.ret_buf.ptr });
         if (options.publish_shared_slots and failure_message != null) native.slots.publishFailureOrigin(lowered, job.root.owner, .{ .checked = job.root_id }, failure_origin);
-        if (options.publish_shared_slots) try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, failure_message);
+        if (options.publish_shared_slots) try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, if (failure_message) |message| .{ .message = message, .kind = RootFailure.ofPayload(module, payload) } else null);
 
         try recordComptimeSiteHits(problem_store, coverage, owners, job.root.owner, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
 
@@ -3976,7 +3980,7 @@ fn devComptimeExhaustivenessRootPayload(
     };
     try appendCompileTimeExhaustivenessProblem(allocator, owners, root_owner, root, lir_result, root_proc, site_id);
     had_problem.* = true;
-    return try failedRootPayload(module, root, "compile-time exhaustiveness failure");
+    return try failedRootPayload(module, root, "compile-time exhaustiveness failure", .crash);
 }
 
 fn devCrashedRootPayload(
@@ -3997,9 +4001,9 @@ fn devCrashedRootPayload(
     switch (try reportEmbeddedFailure(allocator, problem_store, module, devRootSourceRegion(module, root), owners, lir_result, failed_stmt, message, failed_region, failed_loc)) {
         .reported => {
             had_problem.* = true;
-            return try failedRootPayload(module, root, message);
+            return try failedRootPayload(module, root, message, RootFailure.of(lir_result, failed_stmt));
         },
-        .reported_elsewhere => return try failedRootPayload(module, root, message),
+        .reported_elsewhere => return try failedRootPayload(module, root, message, RootFailure.of(lir_result, failed_stmt)),
         .none => {},
     }
     if (request.kind == .compile_time_constant and problem_store == null) {
@@ -4022,7 +4026,7 @@ fn devCrashedRootPayload(
         .origin = try comptimeFailureOrigin(store, site),
     } });
     had_problem.* = true;
-    return try failedRootPayload(module, root, message);
+    return try failedRootPayload(module, root, message, RootFailure.of(lir_result, failed_stmt));
 }
 
 fn reportDevHostEvents(
@@ -4087,6 +4091,13 @@ fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, messa
     }
 }
 
+/// Whether a root failed at code checking rejected and already reported.
+pub fn failedAtCheckedError(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) bool {
+    const stmt = failed_stmt orelse return false;
+    const data = lir_result.store.getCFStmt(stmt);
+    return data == .crash and data.crash.checked_error;
+}
+
 /// The literal a root's failing crash rejected, when that crash is a literal
 /// conversion rejecting its literal.
 fn failedLiteralRejection(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?lir.LIR.LiteralRejectionSite {
@@ -4146,6 +4157,18 @@ fn appendCrashConst(
 ) Allocator.Error!checked.ConstNodeId {
     const data = try module.const_store.addBlobData(message);
     return try module.const_store.append(.{ .crash = .{
+        .data = data,
+        .offset = 0,
+        .len = @intCast(message.len),
+    } });
+}
+
+fn appendCheckedErrorConst(
+    module: *checked.CheckedModuleArtifact,
+    message: []const u8,
+) Allocator.Error!checked.ConstNodeId {
+    const data = try module.const_store.addBlobData(message);
+    return try module.const_store.append(.{ .checked_error = .{
         .data = data,
         .offset = 0,
         .len = @intCast(message.len),
@@ -4304,7 +4327,7 @@ fn reportCompileTimeExhaustiveness(
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
     try appendCompileTimeExhaustivenessProblem(allocator, owners, root_owner, root, lir_result, root_proc, site_id);
-    return try failedRootPayload(module, root, "compile-time exhaustiveness failure");
+    return try failedRootPayload(module, root, "compile-time exhaustiveness failure", .crash);
 }
 
 fn appendCompileTimeExhaustivenessProblem(
@@ -4451,7 +4474,7 @@ fn reportCompileTimeCrash(
         interpreter.getFailedCheckedRegion(),
         interpreter.getFailedSourceLoc(),
     )) {
-        .reported, .reported_elsewhere => return try failedRootPayload(module, root, message),
+        .reported, .reported_elsewhere => return try failedRootPayload(module, root, message, RootFailure.of(lir_result, interpreter.getFailedCrashStmt())),
         .none => {},
     }
     const problem_store = maybe_problem_store orelse {
@@ -4464,13 +4487,14 @@ fn reportCompileTimeCrash(
         .region = site.region,
         .origin = try comptimeFailureOrigin(problem_store, site),
     } });
-    return try failedRootPayload(module, root, message);
+    return try failedRootPayload(module, root, message, RootFailure.of(lir_result, interpreter.getFailedCrashStmt()));
 }
 
 fn failedRootPayload(
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     message: []const u8,
+    failure: RootFailure,
 ) Allocator.Error!checked.CompileTimeRootPayload {
     return switch (root.kind) {
         .expect => .expect,
@@ -4481,7 +4505,53 @@ fn failedRootPayload(
         .numeral_conversion,
         .quote_conversion,
         .repl_expr,
-        => .{ .const_node = try appendCrashConst(module, message) },
+        => .{ .const_node = try appendFailureConst(module, message, failure) },
+    };
+}
+
+/// A compile-time root's failure as its failure record carries it.
+const SlotFailure = struct {
+    message: []const u8,
+    kind: RootFailure,
+};
+
+/// Whether a root's evaluation failed at code checking rejected, which keeps
+/// that fact in the value it stores for the root and in its failure record.
+const RootFailure = enum {
+    crash,
+    checked_error,
+
+    fn of(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) RootFailure {
+        return if (failedAtCheckedError(lir_result, failed_stmt)) .checked_error else .crash;
+    }
+
+    /// The failure a failed root's stored payload records.
+    fn ofPayload(module: *const checked.CheckedModuleArtifact, payload: checked.CompileTimeRootPayload) RootFailure {
+        return switch (payload) {
+            .const_node => |node| switch (module.const_store.get(node)) {
+                .checked_error => .checked_error,
+                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value => .crash,
+            },
+            .pending, .fn_value, .discarded, .expect => .crash,
+        };
+    }
+
+    fn recordKind(self: RootFailure) lir.Program.ComptimeFailureKind {
+        return switch (self) {
+            .crash => .crash,
+            .checked_error => .checked_error,
+        };
+    }
+};
+
+fn appendFailureConst(
+    module: *checked.CheckedModuleArtifact,
+    message: []const u8,
+    failure: RootFailure,
+) Allocator.Error!checked.ConstNodeId {
+    return switch (failure) {
+        .crash => try appendCrashConst(module, message),
+        .checked_error => try appendCheckedErrorConst(module, message),
     };
 }
 
@@ -5134,7 +5204,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                         .loc = .{ .file = 0, .line = 7, .column = 3 },
                         .region = base.Region.from_raw_offsets(40, 51),
                     });
-                    try child.slotEnvironment().publishFailure(self.lowered, self.module_id, .{ .checked = self.root_id }, message, .{ .resolve = InterpreterProgram.resolveFunction });
+                    try child.slotEnvironment().publishFailure(self.lowered, self.module_id, .{ .checked = self.root_id }, .{ .message = message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
                 } else {
                     const value = child.interpreter.eval(.{ .proc_id = self.proc, .ret_layout = .str }) catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,

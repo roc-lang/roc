@@ -139,6 +139,11 @@ If a [`crash`](statements#crash) is encountered during compile-time evaluation,
 it will be reported at compile time just like any other compilation error (such as
 syntax errors, naming errors, and type mismatches).
 
+If evaluating an expression at compile time reaches code that has a compilation error (for
+example, a function whose body has a type mismatch), the original error is reported once, and is
+not reported a second time as a compile-time crash. Using that expression's value at runtime
+crashes. See [Code With Errors](compile-time#code-with-errors).
+
 Note that functions are values! If you define a top-level function by calling other
 top-level functions, all of that work will be done at compile time:
 

@@ -473,12 +473,14 @@ pub const BoolRootEvent = union(enum) {
 };
 
 /// Outcome of evaluating a bool-returning test root: passed (bool), crashed
-/// (message), or failed because a `?` operator evaluated an Err inside the
-/// expect (message plus the source region of the `?` expression).
+/// (message), failed because a `?` operator evaluated an Err inside the
+/// expect (message plus the source region of the `?` expression), or stopped
+/// at code checking rejected, whose problem checking already reported.
 pub const BoolRootEvalOutcome = union(enum) {
     passed: bool,
     crashed: []const u8,
     expect_err: ExpectErrFailure,
+    checked_error,
 };
 
 /// Complete result for one bool-returning test root. `events` is a structured,
@@ -564,6 +566,7 @@ fn deinitBoolRootEvalOutcome(allocator: Allocator, outcome: BoolRootEvalOutcome)
         .passed => {},
         .crashed => |message| allocator.free(message),
         .expect_err => |failure| allocator.free(failure.message),
+        .checked_error => {},
     }
 }
 
@@ -1404,6 +1407,7 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
                 .tuple,
                 .record,
                 .crash,
+                .checked_error,
                 .tag,
                 .fn_value,
                 => return error.Internal,
@@ -3082,6 +3086,9 @@ fn callBoolRoot(
     const ret_buf = try boolRootRetBuffer(allocator, layouts, root.ret_layout);
     defer allocator.free(ret_buf);
 
+    // Both backends record a crash at code checking rejected through the
+    // in-process host; clear any stale record first.
+    _ = builtins.in_process_host.takeCheckedErrorReached();
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), RuntimeHostEnv.rocExpectObserved);
@@ -3111,6 +3118,9 @@ fn callBoolRoot(
     const outcome: BoolRootEvalOutcome = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
         .crashed => blk: {
+            // Both backends record a crash at code checking rejected through
+            // the in-process host's `roc_checked_error_reached`.
+            if (builtins.in_process_host.takeCheckedErrorReached()) break :blk .checked_error;
             // Both backends record the `?` region through the in-process
             // host's `roc_expect_err_region` before crashing.
             const expect_err_region: ?struct { start: u32, end: u32 } = if (builtins.in_process_host.takeExpectErrRegion()) |region|

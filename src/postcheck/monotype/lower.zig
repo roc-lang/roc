@@ -3520,7 +3520,7 @@ fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.St
         .str => |str| .{ .string_backing = constStringBackingLength(view, str) },
         .nominal => |nominal| constStaticDataStorage(view, nominal.backing),
         .pending => Common.invariant("pending const reached static storage metadata production"),
-        .zst, .scalar, .fn_value, .list, .box, .tuple, .record, .tag, .crash => .aggregate,
+        .zst, .scalar, .fn_value, .list, .box, .tuple, .record, .tag, .crash, .checked_error => .aggregate,
     };
 }
 
@@ -5311,7 +5311,7 @@ const Builder = struct {
             },
             .checked_error => try self.program.addExpr(.{
                 .ty = fn_data.ret,
-                .data = .{ .crash = try self.program.addStringLiteral("runtime error") },
+                .data = .{ .checked_error = try self.program.addStringLiteral("runtime error") },
             }),
             .callable_eval_template => blk: {
                 const callee = try self.lowerProcedureBindingValue(view, binding, fn_ty);
@@ -9055,6 +9055,7 @@ const Builder = struct {
             .scalar,
             .str,
             .crash,
+            .checked_error,
             => true,
             .box => |child| try self.constNodeHasStableStaticDataRepresentation(view, child),
             .list => |list| switch (list) {
@@ -9092,6 +9093,7 @@ const Builder = struct {
             .zst,
             .scalar,
             .crash,
+            .checked_error,
             => false,
             .str => |str| constStringBackingLength(view, str) != 0,
             .fn_value => bare_fn == .allow,
@@ -13158,7 +13160,7 @@ const Builder = struct {
                 if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
                 return expr;
             },
-            .pending, .zst, .scalar, .str, .list, .box, .crash => {},
+            .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error => {},
         }
         const data = try constRestoreData(self, store_view, type_view, value, ty, static_data_const_locator);
         const expr = try self.program.addExpr(.{ .ty = ty, .data = data });
@@ -14212,6 +14214,10 @@ const DraftExprData = union(enum(u8)) {
     jump: DraftJumpExpr,
     return_: DraftReturn,
     crash: DraftStringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: DraftStringLiteralId,
     comptime_branch_taken: DraftComptimeBranchTaken,
     comptime_exhaustiveness_failed: DraftComptimeSiteId,
     dbg: DraftExprId,
@@ -14306,6 +14312,10 @@ const DraftStmt = union(enum(u8)) {
     dbg: DraftExprId,
     return_: DraftReturn,
     crash: DraftStringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: DraftStringLiteralId,
 };
 
 const DraftFnBody = union(enum(u8)) {
@@ -17671,6 +17681,7 @@ const BodyDraftStore = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -17776,6 +17787,7 @@ const BodyDraftStore = struct {
                 .jump,
                 .return_,
                 .crash,
+                .checked_error,
                 .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
@@ -17965,6 +17977,7 @@ const BodyDraftStore = struct {
             } },
             .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
+            .checked_error => |literal| .{ .checked_error = ids.stringLiteral(literal) },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = ids.comptimeSite(taken.site),
                 .branch_index = taken.branch_index,
@@ -17998,6 +18011,7 @@ const BodyDraftStore = struct {
             .dbg => |expr| .{ .dbg = ids.expr(expr) },
             .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
+            .checked_error => |literal| .{ .checked_error = ids.stringLiteral(literal) },
         };
     }
 
@@ -20085,6 +20099,7 @@ const BodyContext = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => try self.alwaysImpossibilityProof(),
             .list, .tuple => |span| try self.anyExprSpanImpossibilityProof(span),
@@ -20223,7 +20238,7 @@ const BodyContext = struct {
             }),
             .expr, .dbg => |expr| self.exprImpossibilityProof(expr),
             .expect => |expr| if (self.builder.inline_expects == .shared) null else self.exprImpossibilityProof(expr),
-            .return_, .crash => try self.alwaysImpossibilityProof(),
+            .return_, .crash, .checked_error => try self.alwaysImpossibilityProof(),
         };
     }
 
@@ -21865,6 +21880,7 @@ const BodyContext = struct {
             .continue_,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -21940,6 +21956,7 @@ const BodyContext = struct {
             .bytes_lit,
             .uninitialized,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .def_ref,
             .fn_ref,
@@ -22196,7 +22213,7 @@ const BodyContext = struct {
             .dbg,
             => |expr| return try self.exprDependsOnFreeLocalInner(expr, target, bound),
             .return_ => |ret| return try self.exprDependsOnFreeLocalInner(ret.value, target, bound),
-            .crash => return false,
+            .crash, .checked_error => return false,
         }
     }
 
@@ -25368,7 +25385,7 @@ const BodyContext = struct {
             .pending,
             .anno_only,
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
-            .runtime_error => return try self.runtimeCrashExpr(ty, "runtime error"),
+            .runtime_error => return try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("runtime error") } }),
             .numeral => |numeral| {
                 if (numeral.conversion_root) |root_id| return try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty));
                 return try self.lowerNumeralExpr(expr_id, numeral, ty);
@@ -35784,7 +35801,7 @@ const BodyContext = struct {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
-            .platform_required_checked_error => return try self.runtimeCrashExpr(ty, "platform requirement failed checking"),
+            .platform_required_checked_error => return try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("platform requirement failed checking") } }),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
         }
         switch (record.ref) {
@@ -35944,7 +35961,7 @@ const BodyContext = struct {
             .platform_required_const,
             => unreachable,
             .platform_required_declaration => Common.invariant("platform required declaration reached Monotype without a binding"),
-            .platform_required_checked_error => return try self.runtimeCrashExpr(ty, "platform requirement failed checking"),
+            .platform_required_checked_error => return try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("platform requirement failed checking") } }),
         };
     }
 
@@ -36176,10 +36193,7 @@ const BodyContext = struct {
             ),
             // The required def failed checking, so its type never resolves;
             // crash at the use site instead of materializing the expected node.
-            .platform_required_checked_error => return try self.runtimeCrashExprAtCell(
-                DraftTypeCell.fromGraphNode(expected_node),
-                "platform requirement failed checking",
-            ),
+            .platform_required_checked_error => return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(expected_node), .{ .checked_error = try self.addStringLiteral("platform requirement failed checking") }),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration => {},
         }
         const ty = try self.activeTypeFromNode(expected_node);
@@ -36848,7 +36862,7 @@ const BodyContext = struct {
                 try self.cacheMaterializedConstNode(store_view, node, representation, materialized, static_data_const_locator);
                 return materialized;
             },
-            .pending, .zst, .scalar, .str, .list, .box, .crash => {},
+            .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error => {},
         }
 
         if (try self.activeConstNodeBindingExpr(store_view, node, representation, cell)) |active| return active;
@@ -36856,7 +36870,7 @@ const BodyContext = struct {
         try self.reserveConstNodeBinding(store_view, node, representation, cell);
         const lowered = switch (value) {
             .fn_value => |fn_id| try self.restoreConstFn(store_view, fn_id, ty, static_data_const_locator),
-            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal => try self.addExpr(.{
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal => try self.addExpr(.{
                 .ty = ty,
                 .data = try constRestoreData(self, store_view, type_view, value, ty, static_data_const_locator),
             }),
@@ -37016,7 +37030,7 @@ const BodyContext = struct {
                     .{ .nominal = backing_expr },
                 );
             },
-            .pending, .zst, .scalar, .str, .list, .box, .crash => try self.addExprWithTypeCell(
+            .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error => try self.addExprWithTypeCell(
                 DraftTypeCell.fromGraphNode(request_node),
                 try self.restoreConstDataAtNode(
                     store_view,
@@ -37050,6 +37064,11 @@ const BodyContext = struct {
                 str.len,
             ) },
             .crash => |str| .{ .crash = try self.addStringView(
+                store_view.const_store.blobData(str.data),
+                str.offset,
+                str.len,
+            ) },
+            .checked_error => |str| .{ .checked_error = try self.addStringView(
                 store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
@@ -39703,17 +39722,17 @@ const BodyContext = struct {
                     .block => |block| break :blk try self.lowerBlockAtTypeCell(block, cell),
                     .match_ => |match| break :blk try self.lowerMatchExprAtTypeCell(checked_expr, match, cell),
                     .if_ => |if_| break :blk try self.lowerIfExprAtTypeCell(checked_expr, if_, cell),
-                    .runtime_error => break :blk try self.runtimeCrashExprAtCell(cell, "runtime error"),
+                    .runtime_error => break :blk try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") }),
                     .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
                     .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                 }
                 switch (expr.data) {
                     .tuple_access => |access| {
                         if (try self.checkedTypeContainsError(expr.ty)) {
-                            break :blk try self.runtimeCrashExprAtCell(cell, "runtime error");
+                            break :blk try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") });
                         }
                         if (try self.checkedTypeContainsError(self.view.bodies.expr(access.tuple).ty)) {
-                            break :blk try self.runtimeCrashExprAtCell(cell, "runtime error");
+                            break :blk try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") });
                         }
                     },
                     .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
@@ -41944,10 +41963,7 @@ const BodyContext = struct {
         }
         const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
             .callable => |value| value,
-            .crash => |reason| {
-                const message = dispatchCrashMessage(reason);
-                return try self.addExprWithTypeCell(expected_ret_cell, .{ .crash = try self.addStringLiteral(message) });
-            },
+            .crash => |reason| return try self.addExprWithTypeCell(expected_ret_cell, try self.dispatchCrashData(reason)),
         };
         const plan_args = callable_plan.operands;
         const expected_ret_ty: ?Type.TypeId = switch (expected_ret_cell) {
@@ -45103,10 +45119,12 @@ const BodyContext = struct {
 
     const DispatchCrashReason = enum { unreachable_value, checked_error };
 
-    fn dispatchCrashMessage(reason: DispatchCrashReason) []const u8 {
+    /// The crash a dispatch that cannot run lowers to. A rejected dispatch is
+    /// checked-error code; an unreachable one is an ordinary crash.
+    fn dispatchCrashData(self: *BodyContext, reason: DispatchCrashReason) Allocator.Error!BodyExprData {
         return switch (reason) {
-            .unreachable_value => "dispatch on a value that can never exist",
-            .checked_error => "method dispatch failed to check",
+            .unreachable_value => .{ .crash = try self.addStringLiteral("dispatch on a value that can never exist") },
+            .checked_error => .{ .checked_error = try self.addStringLiteral("method dispatch failed to check") },
         };
     }
 
@@ -56000,7 +56018,7 @@ const BodyContext = struct {
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         switch (self.dispatchRuntimePlan(plan)) {
             .callable => {},
-            .crash => |reason| return .{ .crash = try self.addStringLiteral(dispatchCrashMessage(reason)) },
+            .crash => |reason| return try self.dispatchCrashData(reason),
         }
         for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
             .checked_expr => |expr| if (self.checkedExprDivergesInLoweredRuntime(expr)) {
@@ -56026,7 +56044,7 @@ const BodyContext = struct {
         const checked_expr = self.view.bodies.expr(checked_expr_id);
         return switch (checked_expr.data) {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
-            .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
+            .runtime_error => .{ .checked_error = try self.addStringLiteral("runtime error") },
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| .{ .return_ = try self.lowerReturn(ret, ret.context) },
@@ -56223,8 +56241,7 @@ const BodyContext = struct {
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
 
         if (self.dispatchCrashReason(plan.iter.resolution) orelse self.dispatchCrashReason(plan.next.resolution)) |reason| {
-            const message = dispatchCrashMessage(reason);
-            return .{ .crash = try self.addStringLiteral(message) };
+            return try self.dispatchCrashData(reason);
         }
 
         const initial_iterator = try self.lowerIteratorDispatch(plan.iter, null, null);
@@ -57343,7 +57360,7 @@ const BodyContext = struct {
             .type_var_alias,
             .promoted_proc,
             => Common.invariant("non-runtime checked statement reached Monotype lowering"),
-            .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
+            .runtime_error => .{ .checked_error = try self.addStringLiteral("runtime error") },
             .decl => |decl| blk: {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
                     const binder = self.localProcBinder(decl.pattern);
@@ -60473,6 +60490,11 @@ fn constRestoreData(
             str.offset,
             str.len,
         ) },
+        .checked_error => |str| .{ .checked_error = try emit.addStringView(
+            store_view.const_store.blobData(str.data),
+            str.offset,
+            str.len,
+        ) },
         .box => |node| blk: {
             const child = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, restorer.constBoxPayloadType(ty), static_data_const_locator);
             break :blk .{ .low_level = .{
@@ -60927,14 +60949,14 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
         .str => |str| str.len,
-        .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
+        .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
 }
 
 fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
         .str => |str| view.const_store.strBytes(str),
-        .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
+        .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
 }
 

@@ -3599,7 +3599,7 @@ const Builder = struct {
                     const backing = requiredSingleChildOf(&self.plan, rep_id, .nominal_backing).rep;
                     const backing_node = switch (store.get(node)) {
                         .nominal => |nominal| nominal.backing,
-                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .fn_value => node,
+                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => node,
                     };
                     const backing_type = if (const_type) |stored_type| switch (store.type_store.get(stored_type)) {
                         .named => |named| (named.backing orelse
@@ -3628,7 +3628,7 @@ const Builder = struct {
         }
         switch (store.get(node)) {
             .pending => boxyPlanInvariant("pending ConstStore node reached static data planning"),
-            .zst, .scalar, .str, .crash => {},
+            .zst, .scalar, .str, .crash, .checked_error => {},
             .box => |child| try self.analyzeStaticConstNode(
                 store_view,
                 child,

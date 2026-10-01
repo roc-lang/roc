@@ -571,22 +571,21 @@ problem. It propagates only through explicit checked dependencies, such as a
 lookup of an erroneous local or top-level value, or a call whose callee's body
 contains code checking replaced with a runtime error: the post-solve walk that
 confirms a hoisted root's dependencies already follows each callee's body, and a
-root whose evaluation can reach such code is not kept, so the crash that code
-lowers to is never reported a second time as a compile-time crash. Top-level
-roots get the same guarantee from CheckedModule construction, which records in
-`checked_error_templates` every procedure template whose evaluation can reach a
-checked runtime error. It follows each template's explicit procedure
-references, constant references, direct dispatch targets, the method calls
-recorded in generated codec derivations, and the checked evidence carried by
-each instantiation site and direct target to a fixpoint,
-reads an imported template's answer from the importing CheckedModule's view of
-that module's `checked_error_templates` list, and never requests a compile-time
-root whose entry wrapper is in the list. This includes expect roots: a checked
-error in a callee or referenced constant blocks execution and counts as a
-compiler-error test result, with the original checking diagnostic reported once.
-A CheckedModule whose bodies and imports contain no checked runtime error
-records an empty list and does no traversal. It must never become a module,
-package, or program flag. A checked module or checked program may contain
+root whose evaluation can reach such code is not kept.
+
+Top-level roots are requested and evaluated whether or not their evaluation can
+reach code checking replaced with a runtime error, and the decision is made by
+the evaluation itself. Post-check lowering marks every crash it emits for such
+code (Monotype's `checked_error` expression, `LIR.CFStmt.crash.checked_error`),
+so an evaluation that stops at one knows its problem is already reported: it
+stores a `checked_error` value for the root (`ConstValue.checked_error`) and
+reports nothing further. A read of that value crashes exactly as the rejected
+code does, and the root's failure record carries the same kind
+(`ComptimeFailureKind.checked_error`), so a dependent root that reads it stops
+the same way. A root whose evaluation never reaches the rejected code completes
+normally, whatever its callees contain elsewhere. A top-level expect that
+reaches a checked error counts as a compiler-error test result, with the
+original checking diagnostic reported once. A checked module or checked program may contain
 user-facing diagnostics and still produce hoisted roots for every independent
 expression whose own dependency region is resolved and otherwise eligible. This
 is required for Roc's recover-and-continue behavior: `roc check`, tests, and
@@ -3782,19 +3781,22 @@ The CheckedModule data must therefore be able to contain both diagnostics and
 successful compile-time root requests. The presence of diagnostics is not an
 module-level root-selection failure.
 
-`roc test` counts each diagnostic-blocked top-level expect from the existing
-compile-time root table and the recorded checked-error reachability of its body
-and referenced procedures and constants. A type error inside a called function,
-including an inline expect condition, blocks the calling expect just like a
-type error in that expect's own body; it never becomes a runtime test failure.
-`runtime_entrypoint` root requests intentionally exclude these expects; their
-absence is not a test inventory. Blocked expects produce one compiler-error test result each, even
-when several diagnostics belong to one expect or one diagnostic blocks several
-expects. Independent roots still execute and may reuse cached results. Checking
-diagnostics are rendered once and are counted separately from test outcomes;
-errors outside tests also prevent an unqualified success summary. This consumes
-existing checked data only during test planning, without another checker pass
-or serialized inventory. Inline expects remain execution observations.
+`roc test` runs every top-level expect it can evaluate. An expect whose
+evaluation stops at code checking rejected counts as a compiler-error test
+result: the interpreter recognizes the marked crash it stopped at, and compiled
+code records the crash through the in-process host's
+`roc_checked_error_reached` just before it happens. An expect whose own
+condition checking rejected outright, leaving the root no type to evaluate at,
+is counted the same way during test planning. A type error inside a called
+function, including an inline expect condition, blocks the calling expect only
+when the expect's evaluation reaches it, and it never becomes a runtime test
+failure. Each blocked expect produces one compiler-error test result, even when
+several diagnostics belong to one expect or one diagnostic blocks several
+expects. These results follow from the checked module alone, so they are cached
+and replayed with the module's passes and failures; a test backend failing to
+run is never cached. Checking diagnostics are rendered once and are counted
+separately from test outcomes; errors outside tests also prevent an unqualified
+success summary. Inline expects remain execution observations.
 
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
@@ -11959,10 +11961,9 @@ ordinary computation: a generic-codec requirement forwarded through the
 enclosing templates' evidence chains takes precedence over a rejected concrete
 target, and those chains come from sealing, which consumes the ordinary column.
 Once all plans are resolved, checked-module construction propagates these seeds through the existing body
-diagnostic analysis and updates `CompileTimeRoot.request_eligibility` before
-creating compile-time root requests. Both the conversion root and any enclosing
-constant roots are
-ineligible; independent roots still evaluate. `unreachable` is not a diagnostic
+diagnostic analysis before creating compile-time root requests. The conversion
+root and any enclosing constant root evaluate to the checked error they reach;
+independent roots evaluate normally. `unreachable` is not a diagnostic
 seed. The existing `contains_diagnostic_error` field carries this state through serialization;
 the resolution pass merely records whether recovery propagation is needed, so
 successful modules allocate no new index and perform no additional traversal.
@@ -12009,8 +12010,8 @@ a checked `runtime_error` there. A call whose callee is an immediate checked
 error becomes the same error: the callee evaluates before its arguments.
 An error-path worklist propagates this outcome along explicit callee and
 callable-binding alias edges, visiting each edge once. Aliases discovered here
-also record `checked_error`; their already-assigned evaluation roots become
-ineligible, and runtime uses never consume their wrappers. Checked-module
+also record `checked_error`; their already-assigned evaluation roots evaluate to
+that checked error, and runtime uses never consume their wrappers. Checked-module
 construction refreshes diagnostic, divergence, and inspection-elision metadata
 before collecting specialization relations. Recovery scratch is allocated only
 when checked-module construction consumes a rejected binding or an immediately

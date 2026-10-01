@@ -1970,7 +1970,7 @@ const Lowerer = struct {
                             },
                             .expr, .expect, .dbg => |expr| try self.add(.{ .expr = expr }),
                             .return_ => |ret| try self.add(.{ .expr = ret.value }),
-                            .crash => {},
+                            .crash, .checked_error => {},
                         }
                     },
                     .local => |id| {
@@ -2159,6 +2159,7 @@ const Lowerer = struct {
                 .bytes_lit,
                 .uninitialized,
                 .crash,
+                .checked_error,
                 .inline_expects_enabled,
                 => {},
             }
@@ -3220,6 +3221,7 @@ const Lowerer = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -3288,6 +3290,7 @@ const Lowerer = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -5272,6 +5275,10 @@ const Lowerer = struct {
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
             } }, where.source()),
+            .checked_error => |msg| try self.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
+                .checked_error = true,
+            } }, where.source()),
             .comptime_branch_taken => |taken| try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
                 .site = try self.lowerComptimeSite(taken.site),
                 .branch_index = taken.branch_index,
@@ -5390,6 +5397,7 @@ const Lowerer = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -8187,6 +8195,10 @@ const Lowerer = struct {
             .return_ => |ret| try self.lowerReturn(where, ret),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
+            } }, where.source()),
+            .checked_error => |msg| try self.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
+                .checked_error = true,
             } }, where.source()),
         };
     }

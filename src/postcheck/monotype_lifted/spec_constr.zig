@@ -1538,6 +1538,7 @@ const Pass = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -1913,6 +1914,7 @@ const Pass = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -2181,6 +2183,7 @@ const Pass = struct {
             .str_lit,
             .bytes_lit,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .uninitialized,
             .uninitialized_payload,
@@ -2361,7 +2364,7 @@ const Pass = struct {
             .dbg,
             => |expr| try self.markArgUsesInExpr(fn_id, expr, changed),
             .return_ => |ret| try self.markArgUsesInExpr(fn_id, ret.value, changed),
-            .uninitialized, .crash => {},
+            .uninitialized, .crash, .checked_error => {},
         }
     }
 
@@ -2394,6 +2397,7 @@ const Pass = struct {
             .str_lit,
             .bytes_lit,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .uninitialized,
             .uninitialized_payload,
@@ -2552,7 +2556,7 @@ const Pass = struct {
             .dbg,
             => |expr| try self.collectCallPatternsInExpr(owner, expr),
             .return_ => |ret| try self.collectCallPatternsInExpr(owner, ret.value),
-            .uninitialized, .crash => {},
+            .uninitialized, .crash, .checked_error => {},
         }
     }
 
@@ -2902,7 +2906,7 @@ const Pass = struct {
                     loop_stmt_index = index;
                     loop_expr_id = e;
                 },
-                .uninitialized, .expect, .dbg, .return_, .crash => continue,
+                .uninitialized, .expect, .dbg, .return_, .crash, .checked_error => continue,
             }
             if (loop_stmt_index != null) break;
         }
@@ -3364,6 +3368,7 @@ const Pass = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -3390,7 +3395,7 @@ const Pass = struct {
             const stmt_proof = switch (self.program.getStmt(GuardedList.at(statements, index))) {
                 .let_ => |let_| if (let_.recursive) .disproven else self.exprIsStructurallyWorkFree(let_.value, budget),
                 .uninitialized => .proven,
-                .expr, .expect, .dbg, .return_, .crash => .disproven,
+                .expr, .expect, .dbg, .return_, .crash, .checked_error => .disproven,
             };
             proof = proofAnd(proof, stmt_proof);
             if (proof == .disproven) return .disproven;
@@ -3906,6 +3911,7 @@ const Pass = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -3932,7 +3938,7 @@ const Pass = struct {
                 const cloned = (try self.cloneExprFresh(e, renames)) orelse return null;
                 return try self.program.addStmt(.{ .expr = cloned });
             },
-            .uninitialized, .expect, .dbg, .return_, .crash => return null,
+            .uninitialized, .expect, .dbg, .return_, .crash, .checked_error => return null,
         }
     }
 
@@ -3951,6 +3957,7 @@ const Pass = struct {
             .str_lit => |v| .{ .str_lit = v },
             .bytes_lit => |v| .{ .bytes_lit = v },
             .crash => |v| .{ .crash = v },
+            .checked_error => |v| .{ .checked_error = v },
             .list => |items| .{ .list = (try self.cloneExprSpanFresh(items, renames)) orelse return null },
             .tuple => |items| .{ .tuple = (try self.cloneExprSpanFresh(items, renames)) orelse return null },
             .record => |fields| .{ .record = (try self.cloneFieldSpanFresh(fields, renames)) orelse return null },
@@ -4364,6 +4371,7 @@ const Pass = struct {
             .str_lit,
             .bytes_lit,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .uninitialized,
             .uninitialized_payload,
@@ -4519,7 +4527,7 @@ const Pass = struct {
             .dbg,
             => |expr| try self.rewriteCallsInExpr(expr, done),
             .return_ => |ret| try self.rewriteCallsInExpr(ret.value, done),
-            .uninitialized, .crash => {},
+            .uninitialized, .crash, .checked_error => {},
         }
     }
 
@@ -4792,6 +4800,7 @@ const Pass = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -5498,6 +5507,7 @@ const Cloner = struct {
             .str_lit,
             .bytes_lit,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .uninitialized,
             .uninitialized_payload,
@@ -5719,7 +5729,7 @@ const Cloner = struct {
             => |expr| try self.collectCallPatternsInExpr(owner, expr),
             .return_ => |ret| try self.collectCallPatternsInExpr(owner, ret.value),
             .uninitialized => |pat| try self.shadowPatLocals(pat),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -6239,6 +6249,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -6347,6 +6358,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -6452,6 +6464,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .dbg,
             .expect_err,
             .literal_rejected,
@@ -6583,6 +6596,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -6660,6 +6674,7 @@ const Cloner = struct {
                 .str_lit,
                 .bytes_lit,
                 .crash,
+                .checked_error,
                 .comptime_exhaustiveness_failed,
                 => if (self.canReuseOriginalExpr(expr_id)) return expr_id,
                 .uninitialized_payload => |payload| {
@@ -6864,6 +6879,7 @@ const Cloner = struct {
                 .target = ret.target,
             } },
             .crash => |msg| .{ .crash = msg },
+            .checked_error => |msg| .{ .checked_error = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = taken.site,
                 .branch_index = taken.branch_index,
@@ -7027,6 +7043,7 @@ const Cloner = struct {
             .try_sequence,
             .try_record_sequence,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => false,
         };
@@ -7583,6 +7600,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -7746,6 +7764,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -7996,6 +8015,7 @@ const Cloner = struct {
                     .jump,
                     .return_,
                     .crash,
+                    .checked_error,
                     .comptime_branch_taken,
                     .comptime_exhaustiveness_failed,
                     .dbg,
@@ -8081,6 +8101,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -8117,6 +8138,7 @@ const Cloner = struct {
         return switch (expr.data) {
             .@"unreachable" => try self.addExpr(.{ .ty = ty, .data = .@"unreachable" }),
             .crash => |msg| try self.addExpr(.{ .ty = ty, .data = .{ .crash = msg } }),
+            .checked_error => |msg| try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = msg } }),
             .comptime_exhaustiveness_failed => |site| try self.addExpr(.{ .ty = ty, .data = .{ .comptime_exhaustiveness_failed = site } }),
             .return_ => |ret| try self.addExpr(.{ .ty = ty, .data = .{ .return_ = .{
                 .value = switch (origin) {
@@ -8845,7 +8867,7 @@ const Cloner = struct {
                     _ = try self.makeReusableForMatch(discarded, &block_bindings);
                     continue;
                 },
-                .uninitialized, .expect, .dbg, .return_, .crash => {},
+                .uninitialized, .expect, .dbg, .return_, .crash, .checked_error => {},
             }
             const cloned = try self.cloneStmt(stmt_id);
             block_bindings.appendChain(cloned.bindings);
@@ -9901,6 +9923,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -10159,6 +10182,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -10287,6 +10311,7 @@ const Cloner = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -10986,7 +11011,7 @@ const Cloner = struct {
             switch (self.pass.program.getStmt(GuardedList.at(statements, index))) {
                 .let_ => |let_| try self.shadowPatLocals(let_.pat),
                 .uninitialized => |pat| try self.shadowPatLocals(pat),
-                .expr, .expect, .dbg, .return_, .crash => {},
+                .expr, .expect, .dbg, .return_, .crash, .checked_error => {},
             }
         }
     }
@@ -11614,6 +11639,7 @@ const Cloner = struct {
                 .target = ret.target,
             } },
             .crash => |msg| .{ .crash = msg },
+            .checked_error => |msg| .{ .checked_error = msg },
         };
         return .{
             .bindings = bindings,
@@ -12368,7 +12394,7 @@ const BodyLocalScope = struct {
             .dbg,
             => |expr| try self.walkExpr(expr),
             .return_ => |ret| try self.walkExpr(ret.value),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -12385,6 +12411,7 @@ const BodyLocalScope = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .@"unreachable",
             => {},
@@ -12613,7 +12640,7 @@ const BodySizeCounter = struct {
             .dbg,
             => |expr| self.countExpr(expr),
             .return_ => |ret| self.countExpr(ret.value),
-            .uninitialized, .crash => {},
+            .uninitialized, .crash, .checked_error => {},
         }
     }
 
@@ -12630,6 +12657,7 @@ const BodySizeCounter = struct {
             .str_lit,
             .bytes_lit,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             .uninitialized,
             .uninitialized_payload,
@@ -12823,6 +12851,7 @@ fn collectAllFnUsesInExpr(
         .str_lit,
         .bytes_lit,
         .crash,
+        .checked_error,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
@@ -12969,7 +12998,7 @@ fn collectAllFnUsesInStmt(program: *const Ast.Program, stmt_id: Ast.StmtId, owne
         .let_ => |let_| collectAllFnUsesInExpr(program, let_.value, owner, uses),
         .expr, .expect, .dbg => |expr| collectAllFnUsesInExpr(program, expr, owner, uses),
         .return_ => |ret| collectAllFnUsesInExpr(program, ret.value, owner, uses),
-        .uninitialized, .crash => {},
+        .uninitialized, .crash, .checked_error => {},
     }
 }
 
@@ -13099,6 +13128,7 @@ fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target:
         .jump,
         .return_,
         .crash,
+        .checked_error,
         .comptime_exhaustiveness_failed,
         .dbg,
         .expect_err,
@@ -13114,7 +13144,7 @@ fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target:
 /// phase itself selects bodies by the `iterator_producer` flag alone.
 fn exprContainsIteratorProducer(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
     return switch (program.getExpr(expr_id).data) {
-        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
+        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .checked_error, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
         .fn_ref => |fn_ref| captureOperandSpanContainsIteratorProducer(program, fn_ref.captures),
         .list, .tuple => |items| exprSpanContainsIteratorProducer(program, items),
         .record => |fields| blk: {
@@ -13225,13 +13255,13 @@ fn stmtContainsIteratorProducer(program: *const Ast.Program, stmt_id: Ast.StmtId
         .let_ => |let_| exprContainsIteratorProducer(program, let_.value),
         .expr, .expect, .dbg => |expr| exprContainsIteratorProducer(program, expr),
         .return_ => |ret| exprContainsIteratorProducer(program, ret.value),
-        .uninitialized, .crash => false,
+        .uninitialized, .crash, .checked_error => false,
     };
 }
 
 fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId) bool {
     return switch (program.getExpr(expr_id).data) {
-        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
+        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .checked_error, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
         .fn_ref => |fn_ref| captureOperandSpanCallsFn(program, fn_ref.captures, fn_id),
         .list, .tuple => |items| exprSpanCallsFn(program, items, fn_id),
         .record => |fields| blk: {
@@ -13338,7 +13368,7 @@ fn stmtCallsFn(program: *const Ast.Program, stmt_id: Ast.StmtId, fn_id: Ast.FnId
         .let_ => |let_| exprCallsFn(program, let_.value, fn_id),
         .expr, .expect, .dbg => |expr| exprCallsFn(program, expr, fn_id),
         .return_ => |ret| exprCallsFn(program, ret.value, fn_id),
-        .uninitialized, .crash => false,
+        .uninitialized, .crash, .checked_error => false,
     };
 }
 
@@ -13354,6 +13384,7 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .str_lit,
         .bytes_lit,
         .crash,
+        .checked_error,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
@@ -13478,6 +13509,7 @@ fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
         => |expr| exprContainsReturn(program, expr),
         .uninitialized,
         .crash,
+        .checked_error,
         => false,
     };
 }
@@ -13498,6 +13530,7 @@ fn exprReferencesLocal(program: *const Ast.Program, expr_id: Ast.ExprId, local: 
         .str_lit,
         .bytes_lit,
         .crash,
+        .checked_error,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .lambda,
@@ -13632,6 +13665,7 @@ fn stmtReferencesLocal(program: *const Ast.Program, stmt_id: Ast.StmtId, local: 
         => |expr| exprReferencesLocal(program, expr, local),
         .uninitialized,
         .crash,
+        .checked_error,
         => false,
     };
 }
@@ -13652,6 +13686,7 @@ fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId,
         .str_lit,
         .bytes_lit,
         .crash,
+        .checked_error,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
@@ -13779,6 +13814,7 @@ fn stmtContainsFreeLoopControl(program: *const Ast.Program, stmt_id: Ast.StmtId,
         => |expr| exprContainsFreeLoopControl(program, expr, loop_depth),
         .uninitialized,
         .crash,
+        .checked_error,
         => false,
     };
 }
@@ -13804,6 +13840,7 @@ fn collectTupleLocalDemandInExpr(
         .str_lit,
         .bytes_lit,
         .crash,
+        .checked_error,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
@@ -13970,6 +14007,7 @@ fn collectTupleLocalDemandInStmt(
         .return_ => |ret| collectTupleLocalDemandInExpr(program, local, ret.value, used),
         .uninitialized,
         .crash,
+        .checked_error,
         => true,
     };
 }
@@ -13986,6 +14024,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .str_lit,
         .bytes_lit,
         .crash,
+        .checked_error,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
@@ -14129,7 +14168,7 @@ fn localUseCountInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id:
         .dbg,
         => |expr| localUseCountInExpr(program, local, expr),
         .return_ => |ret| localUseCountInExpr(program, local, ret.value),
-        .crash => 0,
+        .crash, .checked_error => 0,
     };
 }
 

@@ -384,6 +384,7 @@ const InlineAnalyzer = struct {
             .dec_lit,
             .str_lit,
             .crash,
+            .checked_error,
             .bytes_lit,
             .def_ref,
             => true,
@@ -538,6 +539,7 @@ const InlineAnalyzer = struct {
             => self.isInlineableWrapperBody(expr_id),
             .@"unreachable",
             .crash,
+            .checked_error,
             .def_ref,
             .fn_ref,
             .list,
@@ -589,7 +591,7 @@ const InlineAnalyzer = struct {
     fn isLiteralCrash(self: *const InlineAnalyzer, expr_id: Lifted.ExprId) bool {
         const expr = self.solved.lifted.getExpr(expr_id);
         return switch (expr.data) {
-            .crash => true,
+            .crash, .checked_error => true,
             .low_level => |call| blk: {
                 if (call.op != .crash) break :blk false;
                 const args = self.solved.lifted.exprSpan(call.args);
@@ -603,7 +605,7 @@ const InlineAnalyzer = struct {
                 // followed by unreachable. No preceding work is admitted.
                 if (stmts.len != 1 or self.solved.lifted.getExpr(block.final_expr).data != .@"unreachable") break :blk false;
                 break :blk switch (self.solved.lifted.getStmt(GuardedList.at(stmts, 0))) {
-                    .crash => true,
+                    .crash, .checked_error => true,
                     .expr => |child| self.isLiteralCrash(child),
                     .uninitialized, .let_, .expect, .dbg, .return_ => false,
                 };
@@ -709,6 +711,7 @@ const InlineAnalyzer = struct {
             .jump,
             .return_,
             .crash,
+            .checked_error,
             .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
@@ -858,6 +861,7 @@ const InlineAnalyzer = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => true,
         };
@@ -884,6 +888,7 @@ const InlineAnalyzer = struct {
                 .return_ => false,
                 .uninitialized,
                 .crash,
+                .checked_error,
                 => true,
             };
             if (!closed) return false;

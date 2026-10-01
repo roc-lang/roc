@@ -787,6 +787,7 @@ const Lowerer = struct {
             } },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
             .crash => |msg| .{ .crash = msg },
+            .checked_error => |msg| .{ .checked_error = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = try self.lowerComptimeSite(taken.site),
                 .branch_index = taken.branch_index,
@@ -1126,6 +1127,7 @@ const Lowerer = struct {
             .dbg => |expr| .{ .dbg = try self.lowerExpr(expr) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
             .crash => |msg| .{ .crash = msg },
+            .checked_error => |msg| .{ .checked_error = msg },
         };
         const lowered = try self.program.addStmt(lowered_stmt);
         self.stmt_map[index] = lowered;

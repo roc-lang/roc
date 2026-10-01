@@ -596,7 +596,7 @@ const Lifter = struct {
             .dbg,
             => |expr| try self.rewriteExpr(expr),
             .return_ => |ret| try self.rewriteExpr(ret.value),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -664,6 +664,7 @@ const Lifter = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .fn_ref => |fn_ref| {
@@ -1300,6 +1301,7 @@ const CaptureSet = struct {
             .uninitialized_payload,
             .def_ref,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .fn_ref => |fn_ref| {
@@ -1591,7 +1593,7 @@ const CaptureSet = struct {
             .dbg,
             => |expr| try self.collectExpr(expr, bound),
             .return_ => |ret| try self.collectExpr(ret.value, bound),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 };
@@ -2163,7 +2165,7 @@ const CaptureGraphBuilder = struct {
             .dbg,
             => |expr| try self.collectExpr(expr, node),
             .return_ => |ret| try self.collectExpr(ret.value, node),
-            .crash => {},
+            .crash, .checked_error => {},
         }
     }
 
@@ -2183,6 +2185,7 @@ const CaptureGraphBuilder = struct {
             .uninitialized,
             .uninitialized_payload,
             .crash,
+            .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
             .def_ref => if (self.graph.lifter == null) Common.invariant("post-lift capture graph saw a definition reference"),
