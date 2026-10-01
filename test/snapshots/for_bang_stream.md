@@ -82,21 +82,6 @@ EFFECTFUL TOP LEVEL VALUE - for_bang_stream.md:31:13:37:2
 			(reflow " ")
 			(reflow "This function is effectful, but a pure function is expected.")))
 	(report
-		(severity warning)
-		(title "Effectful Function Name")
-		(region (start 14 1) (end 14 9))
-		(headline
-			(reflow "This function performs an effect, so its name must end in `!`."))
-		(document
-			(source-region (file "for_bang_stream.md") (start 14 1) (end 14 9) (annotation warning) (line-text "pure_sum = |s| {"))
-			(line-break)
-			(line-break)
-			(reflow "Add a trailing")
-			(reflow " ")
-			(annotated code "!")
-			(reflow " ")
-			(reflow "to this function name.")))
-	(report
 		(severity runtime_error)
 		(title "Missing Method")
 		(region (start 25 14) (end 25 15))
