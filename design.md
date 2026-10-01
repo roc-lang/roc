@@ -1621,6 +1621,14 @@ name performs the ordinary nested-member lookup. Ordinary modules without a
 selected main declaration keep their existing member bindings. Formatting
 preserves exposing items because it does not resolve imports.
 
+Record separator recovery reports `=` used in place of `:` and outputs the
+record field's complete value under its normal field identity. The formatter
+may consume that explicit recovery diagnostic and replace the separator; any
+other parse error still prevents rewriting the file. A brace expression that
+starts with an assignment remains a block unless a comma outside nested
+expressions and lambda parameters identifies record syntax. Spread-record
+syntax is already unambiguous. This recovery never rewrites block assignments.
+
 The parser is a direct token-dispatch machine. Hot parser code is organized as
 grammar kernels that walk the token buffer with local token dispatch and ordinary
 lexical control flow. The hot path must not route grammar progress through a

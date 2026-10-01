@@ -82,7 +82,7 @@ fn tokenizationPermitsFormatting(ast: AST) bool {
 /// a malformed file is never overwritten from a lossy recovery tree.
 fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
     for (diagnostics) |diagnostic| {
-        if (diagnostic.tag != .optional_field_mark_after_colon) return false;
+        if (diagnostic.tag != .optional_field_mark_after_colon and diagnostic.tag != .record_field_assignment) return false;
     }
     return true;
 }
@@ -309,7 +309,12 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
-    const migrates_optional_field_syntax = parse_ast.parse_diagnostics.items.len != 0;
+    var migrates_optional_field_syntax = false;
+    var migrates_record_assignments = false;
+    for (parse_ast.parse_diagnostics.items) |diagnostic| {
+        migrates_optional_field_syntax = migrates_optional_field_syntax or diagnostic.tag == .optional_field_mark_after_colon;
+        migrates_record_assignments = migrates_record_assignments or diagnostic.tag == .record_field_assignment;
+    }
 
     // Check if the file is formatted without actually formatting it
     if (unformatted_files != null) {
@@ -328,6 +333,9 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         var output_buffer: [4096]u8 = undefined;
         var output_writer = output_file.writer(io, &output_buffer);
         try formatAstWithOptions(parse_ast.*, &output_writer.interface, options);
+        if (migrates_record_assignments) {
+            try stderr.print("Corrected record field separators `=` to `:` in {f}.\n", .{base.bidi.Display{ .bytes = path }});
+        }
         if (migrates_optional_field_syntax) {
             try stderr.print("Migrated legacy optional field syntax `:?` to `?:` in {f}.\n", .{base.bidi.Display{ .bytes = path }});
         }
@@ -365,7 +373,12 @@ pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: 
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
-    const migrates_optional_field_syntax = parse_ast.parse_diagnostics.items.len != 0;
+    var migrates_optional_field_syntax = false;
+    var migrates_record_assignments = false;
+    for (parse_ast.parse_diagnostics.items) |diagnostic| {
+        migrates_optional_field_syntax = migrates_optional_field_syntax or diagnostic.tag == .optional_field_mark_after_colon;
+        migrates_record_assignments = migrates_record_assignments or diagnostic.tag == .record_field_assignment;
+    }
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = stdout.writer(io, &stdout_buffer);
@@ -7044,5 +7057,20 @@ test "issue 11926: trailing comments survive without a source comma" {
         const result = try moduleFmtsStable(std.testing.allocator, input, false);
         defer std.testing.allocator.free(result);
         try std.testing.expect(std.mem.count(u8, result, "# Last item.") == 1);
+    }
+}
+
+test "issue 4140: mistaken record assignment separators format to colons" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "record = { x = 1, y: 2 }", .expected = "record = { x: 1, y: 2 }\n" },
+        .{ .input = "record = { ..old, x = 1 }", .expected = "record = { ..old, x: 1 }\n" },
+        .{ .input = "record = { x: 1, y = 2 }", .expected = "record = { x: 1, y: 2 }\n" },
+    };
+    for (cases) |case| {
+        const result = try parseAndFmtCountingDiags(std.testing.allocator, case.input, 1);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+        const stable = try moduleFmtsStable(std.testing.allocator, result, false);
+        defer std.testing.allocator.free(stable);
     }
 }
