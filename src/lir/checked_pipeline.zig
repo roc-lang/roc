@@ -1566,6 +1566,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .spec_cache = target.spec_cache,
         .comptime_closure_hits = target.comptime_closure_hits,
         .inline_plan = prepared.inline_plan.view(),
+        .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,

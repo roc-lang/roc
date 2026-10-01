@@ -410,6 +410,7 @@ const CustomCase = enum {
     issue_11678_recursive_callback_cache,
     issue_11710_shared_object_cache,
     issue_11826_cache_ownership_variants,
+    cache_fingerprints_agree,
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
@@ -1879,6 +1880,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11826: a warm dev build keeps the ARC ownership variants of the cold build", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11826_cache_ownership_variants } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
@@ -3558,6 +3560,7 @@ fn runCustomCase(
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
+        .cache_fingerprints_agree => customCacheFingerprintsAgree(io, allocator, &env, &timer, timeout_ms),
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
@@ -6743,6 +6746,148 @@ fn customIssue11826CacheOwnershipVariants(
             return failureFromRun(allocator, timer, run, "object-cache build allocates differently from the cold build");
         }
     }
+    return null;
+}
+
+// A warm dev build links object-cache procedures compiled by other programs
+// (here, the app before an edit, and the pack programs of its modules) and
+// lowers the rest itself. It runs as the cold build of the same source only
+// if every program compiles a procedure the cache offers to the same LIR: the
+// same ownership signature, uniqueness facts, inline decisions, and refcount
+// atomicity. `ROC_PACK_TRACE` prints a program-independent LIR fingerprint
+// for each procedure a pack offers and each one a build lowers; across the
+// app's build, its edited warm build, and the edited app's cold build, every
+// offered identity must have one fingerprint.
+fn customCacheFingerprintsAgree(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "cache_fingerprints",
+        .platform = "test/fx-open/platform/main.roc",
+        .platform_spelling = "../../fx-open/platform/main.roc",
+        .sources = &.{ "test/cli/cache_fingerprints/Helpers.roc", "test/cli/cache_fingerprints/main.roc", "test/cli/cache_fingerprints/edited.roc" },
+        .app_name = "main.roc",
+    }, &app)) |failure| return failure;
+    const edited = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "edited.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the edited app path: {}", .{err});
+
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the trace environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    var fresh_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the fresh-cache environment: {}", .{err}),
+    };
+    defer fresh_env.env_map.deinit();
+    const fresh_cache = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "fresh_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the fresh cache path: {}", .{err});
+    for ([_]*CaseEnv{ &trace_env, &fresh_env }) |case_env| {
+        for ([_][]const u8{ "ROC_PACK_TRACE", "ROC_PACK_STATS" }) |key| {
+            case_env.env_map.put(key, "1") catch |err|
+                return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+        }
+    }
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        fresh_env.env_map.put(key, fresh_cache) catch |err|
+            return customInfraFailure(allocator, timer, "failed to point a build at a fresh cache: {}", .{err});
+    }
+
+    const Build = struct { name: []const u8, case_env: *const CaseEnv, edit_first: bool, require_hits: bool };
+    const builds = [_]Build{
+        .{ .name = "before_edit", .case_env = &trace_env, .edit_first = false, .require_hits = false },
+        .{ .name = "edited_warm", .case_env = &trace_env, .edit_first = true, .require_hits = true },
+        .{ .name = "edited_cold", .case_env = &fresh_env, .edit_first = false, .require_hits = false },
+    };
+    var traces: [builds.len][]const u8 = undefined;
+    var outputs: [builds.len][]const u8 = undefined;
+    for (builds, 0..) |build, index| {
+        if (build.edit_first) {
+            const source = std.Io.Dir.cwd().readFileAlloc(io, edited, allocator, .limited(1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ edited, err });
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = source }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app, err });
+        }
+        const exe = std.fmt.allocPrint(allocator, "{s}/cache_fingerprints_{s}", .{ env.dirs.work_dir, build.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, build.case_env, &.{ "build", "--opt=dev", out_arg }, app, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build with the object cache did not succeed");
+        }
+        if (build.require_hits) {
+            const hits_marker = "pack hits: ";
+            const hits_at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "the edited app's warm build did not report pack hits");
+            if (countAfterMarker(built.stderr[hits_at + hits_marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "the edited app's warm build linked nothing from the cache");
+            }
+        }
+        traces[index] = built.stderr;
+        const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before running a build");
+        const run = runRawInEnv(io, allocator, env, &.{ exe, "an", "argument" }, env.dirs.work_dir, "", exe_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "program spawn error: {}", .{err});
+        if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "a cached build's program failed");
+        outputs[index] = run.stdout;
+    }
+    if (!std.mem.eql(u8, outputs[1], outputs[2])) {
+        return customFailure(allocator, timer, "the edited app printed {s} warm but {s} cold", .{ outputs[1], outputs[2] });
+    }
+
+    // identity -> first fingerprint seen, and whether a second build saw it.
+    const Seen = struct { fingerprint: []const u8, build: usize, shared: bool };
+    var seen = std.StringHashMap(Seen).init(allocator);
+    defer seen.deinit();
+    var offered = std.StringHashMap(void).init(allocator);
+    defer offered.deinit();
+    for (traces, 0..) |trace, build_index| {
+        var lines = std.mem.splitScalar(u8, trace, '\n');
+        while (lines.next()) |line| {
+            var fields = std.mem.tokenizeScalar(u8, line, ' ');
+            const kind = fields.next() orelse continue;
+            const is_offer = std.mem.eql(u8, kind, "offer");
+            if (!is_offer and !std.mem.eql(u8, kind, "compiled")) continue;
+            const identity = fields.next() orelse continue;
+            const fingerprint = fields.next() orelse continue;
+            if (is_offer) offered.put(identity, {}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to record an offer: {}", .{err});
+            const entry = seen.getOrPut(identity) catch |err|
+                return customInfraFailure(allocator, timer, "failed to record a fingerprint: {}", .{err});
+            if (!entry.found_existing) {
+                entry.value_ptr.* = .{ .fingerprint = fingerprint, .build = build_index, .shared = false };
+                continue;
+            }
+            if (entry.value_ptr.build != build_index) entry.value_ptr.shared = true;
+            if (!std.mem.eql(u8, entry.value_ptr.fingerprint, fingerprint)) {
+                // Only an identity a pack offers can be linked into another
+                // program; an unkeyed root may change with its source.
+                entry.value_ptr.fingerprint = "conflict";
+            }
+        }
+    }
+    var compared: usize = 0;
+    var iter = offered.keyIterator();
+    while (iter.next()) |identity| {
+        const entry = seen.get(identity.*).?;
+        if (std.mem.eql(u8, entry.fingerprint, "conflict")) {
+            return customFailure(allocator, timer, "procedure {s} is offered by the object cache but compiles to different LIR in different programs", .{identity.*});
+        }
+        if (entry.shared) compared += 1;
+    }
+    if (compared == 0) return customFailure(allocator, timer, "no offered procedure was compiled or offered by more than one build", .{});
     return null;
 }
 

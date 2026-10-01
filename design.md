@@ -15713,6 +15713,18 @@ linking program's ARC adopts them as fixed: settlement keeps a pinned
 procedure's facts rather than inferring them, so callers of a cached
 procedure prove exactly the uniqueness they would against its body.
 
+Every program must lower a procedure an entry offers to the same LIR, since
+any of them may link it. A pack program therefore makes the inline decisions
+any program makes: it keeps a keyed specialization's procedure, and withholds
+single-use inlining only where the single caller is one of its own export
+wrappers, a call no other program makes. Generated code names nothing a
+program numbers: a Debug invariant check names its procedure by content
+identity and its local by position in the procedure's frame. Under
+`ROC_PACK_TRACE`, every offered and every compiled procedure prints a LIR
+fingerprint with program numbering canonicalized, and the CLI suite checks
+that each offered identity has one fingerprint across a build, an edited
+warm build, and the edited source's cold build.
+
 ### Outcome-Conditioned Argument Restitution
 
 An owned direct-call argument may be returned to its caller as an ownership

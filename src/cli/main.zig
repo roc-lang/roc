@@ -8871,6 +8871,17 @@ fn writePacksToStore(
     args: cli_args.BuildArgs,
     target: RocTarget,
 ) CliMainError!void {
+    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+        // What this program lowered from source, for comparison with what
+        // the packs it read and wrote offer under the same identities.
+        const program_store = &app_lowered.lir_result.store;
+        for (program_store.getProcSpecs(), 0..) |proc, index| {
+            if (proc.body == null) continue;
+            const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+            const fingerprint = try procFingerprint(ctx.gpa, app_lowered, proc_id);
+            std.debug.print("compiled {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, program_store.procDebugName(proc_id) orelse "" });
+        }
+    }
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
@@ -8923,6 +8934,7 @@ fn packFileBytes(
     defer specs.deinit(allocator);
     var conditions_arena = std.heap.ArenaAllocator.init(allocator);
     defer conditions_arena.deinit();
+    const trace = std.c.getenv("ROC_PACK_TRACE") != null;
     var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
     const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
@@ -8953,6 +8965,12 @@ fn packFileBytes(
             withheld += 1;
             continue;
         }
+        // An entry this program spliced from a pack is offered again with
+        // its producer's code; only a body lowered here has a fingerprint.
+        if (trace and proc.body != null) {
+            const fingerprint = try procFingerprint(allocator, lowered, spec_proc.proc);
+            std.debug.print("offer {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
+        }
         try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
@@ -8965,10 +8983,18 @@ fn packFileBytes(
             .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
         });
     }
-    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+    if (trace) {
         std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
     }
     return try backend.dev.PackFile.write(allocator, set, specs.items);
+}
+
+/// The LIR fingerprint of one procedure of `lowered`, which is the same in
+/// every program that lowers that procedure identically.
+fn procFingerprint(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram, proc: lir.LIR.LirProcSpecId) Allocator.Error!u64 {
+    return lir.DebugPrint.procFingerprint(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, proc) catch |err| switch (err) {
+        error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+    };
 }
 
 /// The artifacts a splice of one entry places (`ProcArtifact.splice`): the
