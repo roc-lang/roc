@@ -833,6 +833,10 @@ const Lowerer = struct {
     /// selected erased-callable result slot. A later lexical producer uses
     /// this explicit provenance to inherit the return destination.
     return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
+    /// Erased-result demands already classified, valid while the type
+    /// store has had `erased_demands_sets` contents replaced.
+    erased_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
+    erased_demands_sets: u32 = 0,
     tail_call_scratch: lir_core.TailCallBuilder,
     /// Multiple distinct eager producers can feed one later runtime choice,
     /// but the hidden reuse owner is affine and cannot be offered to all of
@@ -877,6 +881,10 @@ const Lowerer = struct {
         loop_stack: std.ArrayList(LoopContext),
         join_stack: std.ArrayList(JoinContext),
         return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
+        /// Erased-result demands already classified, valid while the type
+        /// store has had `erased_demands_sets` contents replaced.
+        erased_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
+        erased_demands_sets: u32 = 0,
         tail_call_scratch: lir_core.TailCallBuilder,
         erased_owner_states: std.ArrayList(ErasedOwnerState),
         erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
@@ -893,6 +901,7 @@ const Lowerer = struct {
                 .loop_stack = .empty,
                 .join_stack = .empty,
                 .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
+                .erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
                 .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
                 .erased_owner_states = .empty,
                 .erased_call_owner_uses = .empty,
@@ -903,6 +912,7 @@ const Lowerer = struct {
             self.erased_call_owner_uses.deinit(self.allocator);
             self.erased_owner_states.deinit(self.allocator);
             self.return_forwarding_locals.deinit();
+            self.erased_demands.deinit();
             self.tail_call_scratch.deinit();
             self.join_stack.deinit(self.allocator);
             self.loop_stack.deinit(self.allocator);
@@ -1071,6 +1081,7 @@ const Lowerer = struct {
             .loop_stack = .empty,
             .join_stack = .empty,
             .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
+            .erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
             .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
             .erased_owner_state_prefix = &.{},
             .erased_owner_states = .empty,
@@ -1154,6 +1165,7 @@ const Lowerer = struct {
         self.inline_scope_rebases.deinit();
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
+        self.erased_demands.deinit();
         self.tail_call_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
@@ -1236,6 +1248,7 @@ const Lowerer = struct {
         self.inline_scope_rebases.deinit();
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
+        self.erased_demands.deinit();
         self.tail_call_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
@@ -1309,6 +1322,8 @@ const Lowerer = struct {
         self.loop_stack = .empty;
         self.join_stack = .empty;
         self.return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(self.allocator);
+        self.erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(self.allocator);
+        self.erased_demands_sets = 0;
         self.tail_call_scratch = lir_core.TailCallBuilder.initScratch(self.allocator);
         self.return_forwarding_ambiguous = false;
         self.return_forwarding_repeatable_depth = 0;
@@ -1604,6 +1619,8 @@ const Lowerer = struct {
         worker.current_erased_reuse = null;
         worker.current_return_target = null;
         worker.return_forwarding_locals = workspace.return_forwarding_locals;
+        worker.erased_demands = workspace.erased_demands;
+        worker.erased_demands_sets = workspace.erased_demands_sets;
         worker.tail_call_scratch = workspace.tail_call_scratch;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
@@ -1647,6 +1664,8 @@ const Lowerer = struct {
         workspace.loop_stack = self.loop_stack;
         workspace.join_stack = self.join_stack;
         workspace.return_forwarding_locals = self.return_forwarding_locals;
+        workspace.erased_demands = self.erased_demands;
+        workspace.erased_demands_sets = self.erased_demands_sets;
         workspace.tail_call_scratch = self.tail_call_scratch;
         workspace.erased_owner_states = self.erased_owner_states;
         workspace.erased_call_owner_uses = self.erased_call_owner_uses;
@@ -9213,6 +9232,17 @@ const Lowerer = struct {
     /// store's type count must revisit a type. Types wait on an explicit
     /// stack, so type nesting never becomes native call depth.
     fn erasedResultDemand(self: *Lowerer, ty: Type.TypeId) Common.LowerError!ErasedResultDemand {
+        if (self.erased_demands_sets != self.types.sets) {
+            self.erased_demands.clearRetainingCapacity();
+            self.erased_demands_sets = self.types.sets;
+        }
+        if (self.erased_demands.get(ty)) |known| return known;
+        const demand = try self.classifyErasedResultDemand(ty);
+        try self.erased_demands.put(ty, demand);
+        return demand;
+    }
+
+    fn classifyErasedResultDemand(self: *Lowerer, ty: Type.TypeId) Common.LowerError!ErasedResultDemand {
         const Frame = struct {
             ty: Type.TypeId,
             remaining: usize,

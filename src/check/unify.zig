@@ -661,8 +661,8 @@ const Unifier = struct {
     };
 
     fn scheduleGuardedPair(self: *Self, a_var: Var, b_var: Var, on_mismatch: MismatchHandling) std.mem.Allocator.Error!void {
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .mismatch_handler = on_mismatch });
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .guarded_pair = .{
+        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
+        try self.pushWorkFrame(.{ .guarded_pair = .{
             .a = a_var,
             .b = b_var,
         } });
@@ -675,8 +675,8 @@ const Unifier = struct {
         relation: RootRelation,
         on_mismatch: MismatchHandling,
     ) std.mem.Allocator.Error!void {
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .mismatch_handler = on_mismatch });
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .root_pair = .{
+        try self.pushWorkFrame(.{ .mismatch_handler = on_mismatch });
+        try self.pushWorkFrame(.{ .root_pair = .{
             .a = a_var,
             .b = b_var,
             .relation = relation,
@@ -684,7 +684,7 @@ const Unifier = struct {
     }
 
     fn scheduleMerge(self: *Self, vars: ResolvedVarDescs, content: Content) std.mem.Allocator.Error!void {
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge = .{
+        try self.pushWorkFrame(.{ .merge = .{
             .vars = vars,
             .content = content,
         } });
@@ -696,8 +696,29 @@ const Unifier = struct {
         return flag_idx;
     }
 
+    /// Push a frame, writing only its active variant: the union is as
+    /// large as its largest variant, and most frames are small.
+    fn pushWorkFrame(self: *Self, frame: WorkFrame) std.mem.Allocator.Error!void {
+        const slot = try self.scratch.unify_work_stack.items.addOne(self.scratch.gpa);
+        switch (frame) {
+            inline else => |payload, tag| slot.* = @unionInit(WorkFrame, @tagName(tag), payload),
+        }
+    }
+
+    /// Pop the top frame into `out`, reading only its active variant.
+    fn popWorkFrame(self: *Self, out: *WorkFrame) bool {
+        const items = &self.scratch.unify_work_stack.items.items;
+        if (items.len == 0) return false;
+        switch (items.*[items.len - 1]) {
+            inline else => |payload, tag| out.* = @unionInit(WorkFrame, @tagName(tag), payload),
+        }
+        items.len -= 1;
+        return true;
+    }
+
     fn runWorkLoop(self: *Self) Error!void {
-        while (self.scratch.unify_work_stack.items.pop()) |frame| {
+        var frame: WorkFrame = undefined;
+        while (self.popWorkFrame(&frame)) {
             self.processFrame(frame) catch |err| switch (err) {
                 error.ErroneousType => return error.ErroneousType,
                 error.TypeMismatch => try self.handleTypeMismatch(),
@@ -762,18 +783,19 @@ const Unifier = struct {
                 self.unresolved_a = a_var;
                 self.unresolved_b = b_var;
 
-                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .guard_handler = .{
+                try self.pushWorkFrame(.{ .guard_handler = .{
                     .visited_vars_len = visited_vars_len,
                     .saved_unresolved_a = saved_unresolved_a,
                     .saved_unresolved_b = saved_unresolved_b,
                 } });
-                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .unify_vars = vars });
+                try self.pushWorkFrame(.{ .unify_vars = vars });
             },
         }
     }
 
     fn handleTypeMismatch(self: *Self) Error!void {
-        while (self.scratch.unify_work_stack.items.pop()) |frame| {
+        var frame: WorkFrame = undefined;
+        while (self.popWorkFrame(&frame)) {
             const frame_tag = std.meta.activeTag(frame);
             if (frame_tag == .guard_handler) {
                 const handler = frame.guard_handler;
@@ -1053,7 +1075,7 @@ const Unifier = struct {
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
         const a_backing_var = self.types_store.getAliasBackingVar(a_alias);
         const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .same_alias_after_args = .{
+        try self.pushWorkFrame(.{ .same_alias_after_args = .{
             .vars = vars.*,
             .a_backing_var = a_backing_var,
             .b_backing_var = b_backing_var,
@@ -2009,7 +2031,7 @@ const Unifier = struct {
             // The anon_tag_union should also be empty for unification to succeed
             if (anon_tag_union.tags.len() == 0) {
                 // Both are empty - unify the extension variables
-                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+                try self.pushWorkFrame(.{ .merge_to_nominal = .{
                     .vars = vars.*,
                     .direction = direction,
                 } });
@@ -2059,7 +2081,7 @@ const Unifier = struct {
         }
 
         // Unification succeeded—the nominal type wins.
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+        try self.pushWorkFrame(.{ .merge_to_nominal = .{
             .vars = vars.*,
             .direction = direction,
         } });
@@ -2128,7 +2150,7 @@ const Unifier = struct {
         const nominal_backing_record = nominal_backing_flat.record;
 
         // Unification succeeded—the nominal type wins.
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+        try self.pushWorkFrame(.{ .merge_to_nominal = .{
             .vars = vars.*,
             .direction = direction,
         } });
@@ -2165,8 +2187,7 @@ const Unifier = struct {
             .expected => .{ .expected = opened_backing, .actual = anonymous_var },
             .actual => .{ .expected = anonymous_var, .actual = opened_backing },
         };
-        _ = try self.scratch.unify_work_stack.append(
-            self.scratch.gpa,
+        try self.pushWorkFrame(
             .{ .mismatch_handler = .{ .record_then_propagate = evidence } },
         );
     }
@@ -2344,7 +2365,7 @@ const Unifier = struct {
     ) Error!void {
         if (fields.len() == 0) {
             if (nominal_direction) |direction| {
-                _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+                try self.pushWorkFrame(.{ .merge_to_nominal = .{
                     .vars = vars.*,
                     .direction = direction,
                 } });
@@ -2362,7 +2383,7 @@ const Unifier = struct {
 
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
         if (nominal_direction) |direction| {
-            _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .merge_to_nominal = .{
+            try self.pushWorkFrame(.{ .merge_to_nominal = .{
                 .vars = vars.*,
                 .direction = direction,
             } });
@@ -2381,8 +2402,7 @@ const Unifier = struct {
     fn enterRecordRelation(self: *Self, vars: *const ResolvedVarDescs) std.mem.Allocator.Error!void {
         // Pushed before any child work so it pops once that work has drained;
         // a plain `defer` would restore while the children are still queued.
-        _ = try self.scratch.unify_work_stack.append(
-            self.scratch.gpa,
+        try self.pushWorkFrame(
             .{ .restore_enclosing_records = self.enclosing_records },
         );
         self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
@@ -2960,7 +2980,7 @@ const Unifier = struct {
         defer trace.end();
 
         const did_field_error_flag = try self.newMismatchFlag();
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .shared_fields_after_children = .{
+        try self.pushWorkFrame(.{ .shared_fields_after_children = .{
             .vars = vars.*,
             .shared_fields_range = shared_fields_range,
             .mb_a_extended_fields = mb_a_extended_fields,
@@ -3473,7 +3493,7 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .shared_tags_after_children = .{
+        try self.pushWorkFrame(.{ .shared_tags_after_children = .{
             .vars = vars.*,
             .shared_tags_range = shared_tags_range,
             .mb_a_extended_tags = mb_a_extended_tags,

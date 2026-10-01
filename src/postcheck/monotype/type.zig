@@ -350,6 +350,9 @@ pub const Store = struct {
     /// Query-only stores borrow their graph and completed caches. Their owner
     /// must remain alive and must not mutate any storage until all readers end.
     borrowed_read_only: bool = false,
+    /// The digest engine's lists between runs, kept for their capacity. A
+    /// borrowed store never computes a digest, so it never touches these.
+    digest_storage: DigestEngine.Storage = .{},
     read_sharing_prepared: bool = false,
     read_sharing_coverage: ReadSharingQueries = .{},
 
@@ -474,6 +477,7 @@ pub const Store = struct {
         result.allocator = allocator;
         result.digest_stats = null;
         result.borrowed_read_only = true;
+        result.digest_storage = .{};
         result.iterator_interface_pending = .empty;
         result.iterator_interface_visited = .empty;
         result.iterator_interface_visit_epochs = .empty;
@@ -485,6 +489,7 @@ pub const Store = struct {
             self.* = undefined;
             return;
         }
+        self.digest_storage.deinit(self.allocator);
         self.declared_fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
@@ -3240,11 +3245,38 @@ pub const Store = struct {
         scalar_bytes: std.ArrayList(u8),
         render_buf: std.ArrayList(u8),
 
+        /// Whether this engine runs on the store's kept lists and returns
+        /// them; an engine started while another is running owns its own.
+        uses_store_storage: bool,
+
         const no_scc_position = std.math.maxInt(u32);
         const unvisited = std.math.maxInt(u32);
 
+        const Storage = struct {
+            nodes: std.ArrayList(DigestNode) = .empty,
+            node_lookup: ?std.AutoHashMap(u64, u32) = null,
+            link_pool: std.ArrayList(ChildLink) = .empty,
+            child_offsets: std.ArrayList(usize) = .empty,
+            scalar_bytes: std.ArrayList(u8) = .empty,
+            render_buf: std.ArrayList(u8) = .empty,
+            in_use: bool = false,
+
+            const retained_lookup_capacity = 64;
+
+            fn deinit(self: *Storage, allocator: std.mem.Allocator) void {
+                self.nodes.deinit(allocator);
+                if (self.node_lookup) |*lookup| lookup.deinit();
+                self.link_pool.deinit(allocator);
+                self.child_offsets.deinit(allocator);
+                self.scalar_bytes.deinit(allocator);
+                self.render_buf.deinit(allocator);
+                self.* = .{};
+            }
+        };
+
         fn init(store: *Store, name_store: *const names.NameStore, stats: ?*DigestStats) DigestEngine {
-            return .{
+            const kept = &store.digest_storage;
+            if (kept.in_use) return .{
                 .store = store,
                 .name_store = name_store,
                 .gpa = store.allocator,
@@ -3255,16 +3287,57 @@ pub const Store = struct {
                 .child_offsets = .empty,
                 .scalar_bytes = .empty,
                 .render_buf = .empty,
+                .uses_store_storage = false,
             };
+            kept.in_use = true;
+            const engine: DigestEngine = .{
+                .store = store,
+                .name_store = name_store,
+                .gpa = store.allocator,
+                .stats = stats,
+                .nodes = kept.nodes,
+                .node_lookup = kept.node_lookup orelse std.AutoHashMap(u64, u32).init(store.allocator),
+                .link_pool = kept.link_pool,
+                .child_offsets = kept.child_offsets,
+                .scalar_bytes = kept.scalar_bytes,
+                .render_buf = kept.render_buf,
+                .uses_store_storage = true,
+            };
+            kept.* = .{ .in_use = true };
+            return engine;
         }
 
         fn deinit(self: *DigestEngine) void {
-            self.render_buf.deinit(self.gpa);
-            self.link_pool.deinit(self.gpa);
-            self.child_offsets.deinit(self.gpa);
-            self.scalar_bytes.deinit(self.gpa);
-            self.node_lookup.deinit();
-            self.nodes.deinit(self.gpa);
+            if (!self.uses_store_storage) {
+                self.render_buf.deinit(self.gpa);
+                self.link_pool.deinit(self.gpa);
+                self.child_offsets.deinit(self.gpa);
+                self.scalar_bytes.deinit(self.gpa);
+                self.node_lookup.deinit();
+                self.nodes.deinit(self.gpa);
+                return;
+            }
+            self.nodes.clearRetainingCapacity();
+            // Clearing a map touches its whole capacity, so one that a large
+            // type grew is released instead of being cleared before every
+            // later run.
+            if (self.node_lookup.capacity() > Storage.retained_lookup_capacity) {
+                self.node_lookup.clearAndFree();
+            } else {
+                self.node_lookup.clearRetainingCapacity();
+            }
+            self.link_pool.clearRetainingCapacity();
+            self.child_offsets.clearRetainingCapacity();
+            self.scalar_bytes.clearRetainingCapacity();
+            self.render_buf.clearRetainingCapacity();
+            self.store.digest_storage = .{
+                .nodes = self.nodes,
+                .node_lookup = self.node_lookup,
+                .link_pool = self.link_pool,
+                .child_offsets = self.child_offsets,
+                .scalar_bytes = self.scalar_bytes,
+                .render_buf = self.render_buf,
+            };
         }
 
         fn run(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!names.TypeDigest {

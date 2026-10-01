@@ -23660,23 +23660,33 @@ const BodyContext = struct {
             const frame = &frames.items[frames.items.len - 1];
             switch (try self.stepInst(frame, input)) {
                 .call => |called| {
-                    var task = called;
-                    // Most checked types are already instantiated in their
-                    // scope; such a request answers without a frame.
-                    if (task == .node) {
-                        if (try self.probeInstNode(&task.node)) |existing| {
-                            input = .{ .node = existing };
-                            continue;
-                        }
-                    }
-                    frames.append(self.allocator, .{ .task = task }) catch |err| {
-                        self.destroyInstTaskBox(task);
+                    const pushed = frames.addOne(self.allocator) catch |err| {
+                        self.destroyInstTaskBox(called);
                         return err;
                     };
+                    // A frame is written in place, one variant's worth.
+                    pushed.cursor = 0;
+                    pushed.index = 0;
+                    switch (called) {
+                        inline else => |payload, tag| pushed.task = @unionInit(InstTask, @tagName(tag), payload),
+                    }
                     input = null;
+                    // Most checked types are already instantiated in their
+                    // scope; such a request answers without keeping a frame.
+                    if (pushed.task == .node) {
+                        const probed = self.probeInstNode(&pushed.task.node) catch |err| {
+                            frames.items.len -= 1;
+                            return err;
+                        };
+                        if (probed) |existing| {
+                            frames.items.len -= 1;
+                            input = .{ .node = existing };
+                        }
+                    }
                 },
                 .ret => |result| {
-                    self.destroyInstTaskBox(frames.pop().?.task);
+                    self.destroyInstTaskBox(frames.items[frames.items.len - 1].task);
+                    frames.items.len -= 1;
                     if (frames.items.len == 0) return result;
                     input = result;
                 },
@@ -23684,7 +23694,7 @@ const BodyContext = struct {
         }
     }
 
-    fn boxInstTask(self: *BodyContext, comptime T: type, task: T) Allocator.Error!*T {
+    inline fn boxInstTask(self: *BodyContext, comptime T: type, task: T) Allocator.Error!*T {
         const boxed = try self.allocator.create(T);
         boxed.* = task;
         return boxed;
