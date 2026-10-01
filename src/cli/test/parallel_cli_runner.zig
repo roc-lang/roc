@@ -28,6 +28,7 @@ const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
 const collections = @import("collections");
+const base = @import("base");
 const bytebox = @import("bytebox");
 const builtins = @import("builtins");
 const BuiltinFn = builtins.builtin_registry.BuiltinFn;
@@ -56,6 +57,7 @@ const CliRunnerError = util.RocRunError ||
     std.Io.Dir.SelectiveWalker.Error ||
     std.Io.Dir.StatFileError ||
     std.Io.Dir.WriteFileError ||
+    std.Io.Dir.ReadFileAllocError ||
     std.Io.File.OpenError ||
     std.Io.File.Reader.Error ||
     std.Io.File.Writer.Error ||
@@ -71,6 +73,7 @@ const Suite = enum(u8) {
     subcommands,
     echo,
     glue,
+    snapshot_programs,
 
     fn cliName(self: Suite) []const u8 {
         return switch (self) {
@@ -78,6 +81,7 @@ const Suite = enum(u8) {
             .subcommands => "subcommands",
             .echo => "echo",
             .glue => "glue",
+            .snapshot_programs => "snapshot-programs",
         };
     }
 
@@ -87,12 +91,13 @@ const Suite = enum(u8) {
             .subcommands => "subcommands",
             .echo => "echo",
             .glue => "glue",
+            .snapshot_programs => "snapshot programs",
         };
     }
 };
 
 const suite_count = @typeInfo(Suite).@"enum".fields.len;
-const all_suites = [_]Suite{ .platforms, .subcommands, .echo, .glue };
+const all_suites = [_]Suite{ .platforms, .subcommands, .echo, .glue, .snapshot_programs };
 
 const SuiteSelection = struct {
     enabled: [suite_count]bool = [_]bool{false} ** suite_count,
@@ -410,6 +415,7 @@ const CustomCase = enum {
     issue_11678_recursive_callback_cache,
     issue_11710_shared_object_cache,
     issue_11826_cache_ownership_variants,
+    cache_fingerprints_agree,
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
@@ -427,6 +433,7 @@ const CustomCase = enum {
     default_platform_stack_overflow_arm64mac,
     default_platform_stack_overflow_x64win,
     default_platform_stack_overflow_arm64win,
+    bidi_source_security,
     fmt_reformats_file,
     fmt_does_not_change_file,
     fmt_stdin_formats,
@@ -468,6 +475,7 @@ const CustomCase = enum {
     build_issue_9435_hosted_nominal_return,
     bundle_complex_package,
     bundle_entrypoint_subdirectory,
+    bundle_file_imports,
     bundle_issue_11608_output_dir_cross_device,
     install_run_roundtrip,
     install_hash_mismatch,
@@ -537,12 +545,28 @@ const CliCase = struct {
         command: CommandCase,
         custom: CustomCase,
         glue_runtime: GlueRuntimeCase,
+        snapshot_program: SnapshotProgramCase,
     };
 };
+
+/// A snapshot's source, checked as a program. Most snapshot sources are
+/// rejected programs, and `roc check` lowers every program it checks, so the
+/// snapshot corpus doubles as a corpus of erroneous programs that checking
+/// must report without the compiler crashing.
+const SnapshotProgramCase = struct {
+    snapshot_path: []const u8,
+    /// The snapshot's source as a file `roc check` accepts: a `file` source
+    /// as written, a `snippet` given a `main!` when it has none, and an
+    /// `expr` bound to a top-level value that `main!` inspects.
+    source: []const u8,
+};
+
+const snapshots_dir = "test/snapshots";
 
 // Spec generation
 
 fn buildCases(
+    io: std.Io,
     allocator: Allocator,
     filters: []const []const u8,
     include_llvm: bool,
@@ -581,8 +605,93 @@ fn buildCases(
     if (suites.includes(.subcommands)) {
         try appendStaticCases(allocator, &cases, &subcommand_cases, filters, include_llvm);
     }
+    if (suites.includes(.snapshot_programs)) {
+        try appendSnapshotProgramCases(io, allocator, &cases, filters);
+    }
 
     return try cases.toOwnedSlice(allocator);
+}
+
+fn appendSnapshotProgramCases(
+    io: std.Io,
+    allocator: Allocator,
+    cases: *std.ArrayListUnmanaged(CliCase),
+    filters: []const []const u8,
+) CliRunnerError!void {
+    var dir = try std.Io.Dir.cwd().openDir(io, snapshots_dir, .{ .iterate = true });
+    defer dir.close(io);
+
+    // Sorted, so every worker process rebuilds the same case order.
+    var paths: std.ArrayListUnmanaged([]const u8) = .empty;
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".md")) continue;
+        try paths.append(allocator, try std.fs.path.join(allocator, &.{ snapshots_dir, entry.path }));
+    }
+    std.mem.sort([]const u8, paths.items, {}, stringLessThan);
+
+    for (paths.items) |path| {
+        const contents = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(16 * 1024 * 1024));
+        const source = try snapshotProgramSource(allocator, contents) orelse continue;
+        const case = CliCase{
+            .id = cases.items.len,
+            .suite = .snapshot_programs,
+            .name = try std.fmt.allocPrint(allocator, "snapshot program: {s}", .{path}),
+            .body = .{ .snapshot_program = .{ .snapshot_path = path, .source = source } },
+        };
+        if (matchesFilters(case, filters)) try cases.append(allocator, case);
+    }
+}
+
+fn stringLessThan(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+/// The program `roc check` compiles for a snapshot, or null for a snapshot
+/// kind that is not source text (REPL sessions, docs, headers, and the rest).
+fn snapshotProgramSource(allocator: Allocator, contents: []const u8) Allocator.Error!?[]const u8 {
+    const meta = snapshotSection(contents, "# META\n~~~ini\n", "~~~") orelse return null;
+    const kind = snapshotMetaType(meta) orelse return null;
+    const written_source = snapshotSection(contents, "# SOURCE\n~~~roc\n", "\n~~~\n") orelse return null;
+    // An escaped source writes each carriage return as `\r`.
+    const source = if (std.mem.find(u8, meta, "source_escapes=true") != null)
+        try std.mem.replaceOwned(u8, allocator, written_source, "\\r", "\r")
+    else
+        written_source;
+
+    if (std.mem.eql(u8, kind, "file")) return source;
+    if (std.mem.eql(u8, kind, "snippet")) {
+        if (std.mem.find(u8, source, "main!") != null) return source;
+        return try std.fmt.allocPrint(allocator, "{s}\n\nmain! = |_| Ok({{}})\n", .{source});
+    }
+    if (std.mem.eql(u8, kind, "expr")) {
+        var program: std.ArrayListUnmanaged(u8) = .empty;
+        try program.appendSlice(allocator, "snapshot_value =\n");
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        while (lines.next()) |line| {
+            try program.appendSlice(allocator, "    ");
+            try program.appendSlice(allocator, line);
+            try program.append(allocator, '\n');
+        }
+        try program.appendSlice(allocator, "\nmain! = |_| {\n    echo!(Str.inspect(snapshot_value))\n    Ok({})\n}\n");
+        return try program.toOwnedSlice(allocator);
+    }
+    return null;
+}
+
+fn snapshotSection(contents: []const u8, open: []const u8, close: []const u8) ?[]const u8 {
+    const start = (std.mem.find(u8, contents, open) orelse return null) + open.len;
+    const end = std.mem.findPos(u8, contents, start, close) orelse return null;
+    return contents[start..end];
+}
+
+fn snapshotMetaType(meta: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, meta, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "type=")) return std.mem.trim(u8, line["type=".len..], " \r");
+    }
+    return null;
 }
 
 fn appendGlueRuntimeCases(
@@ -805,6 +914,7 @@ fn caseRocFile(case: CliCase) ?[]const u8 {
         .command => |command| command.roc_file,
         .custom => null,
         .glue_runtime => |runtime| runtime.platform.dir_path,
+        .snapshot_program => |program| program.snapshot_path,
     };
 }
 
@@ -959,6 +1069,8 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: cmd-test OOM repro compiles and runs (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/repro_oom_cmd_test.roc", .stdout_exact = "" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: crash reports its message and exits (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/crash.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Roc application crashed with this message:" }, .{ .stream = .stderr, .text = "boom" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack memory" }, .{ .stream = .stderr, .text = "SIGSEGV" } } } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: crash reports its message and exits (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/crash.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Roc application crashed with this message:" }, .{ .stream = .stderr, .text = "boom" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack memory" }, .{ .stream = .stderr, .text = "SIGSEGV" } } } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: guarded compile-time roots crash only on the taken branch (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/guarded_root_runtime_failures.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "validated 2" }, .{ .stream = .stderr, .text = "taken branch" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "after the crash" }, .{ .stream = .stderr, .text = "untaken branch" } } } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: guarded compile-time roots crash only on the taken branch (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/guarded_root_runtime_failures.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "validated 2" }, .{ .stream = .stderr, .text = "taken branch" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "after the crash" }, .{ .stream = .stderr, .text = "untaken branch" } } } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: recursion that overflows the stack reports it and exits (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/stack_overflow.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "overflowed its stack memory" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "Segmentation fault" } } } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: recursion that overflows the stack reports it and exits (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/stack_overflow.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "overflowed its stack memory" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "Segmentation fault" } } } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: app header with no platform (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/platformless_app.roc", .stdout_exact = "Hello, World!" } } },
@@ -1233,6 +1345,10 @@ const invalid_llvm_debug_info_needles = [_]OutputNeedle{
 };
 
 const subcommand_cases = [_]CliCase{
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (specialized, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (specialized, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
@@ -1314,6 +1430,8 @@ const subcommand_cases = [_]CliCase{
     // substitution must pair it, in its own module and through an import.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11765: default-closed value row in a generic function's scheme (defining module)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_11765_default_closed_value_row/Reply.roc", .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11765: default-closed value row in a generic function's scheme (importing module)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_11765_default_closed_value_row/Uses.roc", .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11946: nested package defaults build", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11946_nested_defaults/app.roc", .exit = .success } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11946: repeated nested package defaults run", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11946_nested_defaults/runtime.roc", .exit = .success, .contains = &.{.{ .stream = .stderr, .text = "18000" }} } } },
     // Repro for https://github.com/roc-lang/roc/issues/10705: two public names
     // that resolve to one source module must contribute one type-check
     // environment, not one per import name.
@@ -1715,6 +1833,7 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/11530: two independent
     // callable relations share one static-dispatch target and its nested evidence.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11530: repeated static dispatch to Json.parse runs", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11530RepeatedStaticDispatchJsonParse.roc", .exit = .success, .stdout_exact = "(Ok(0), Ok(0))", .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11853: repeated static dispatch to a derived parser runs", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11853RepeatedStaticDispatchDerivedParser.roc", .exit = .success, .stdout_exact = "({ n: 1 }, { c: 2 })", .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/11439: an expect that
     // fails to type check never runs, so the summary must account for it
     // instead of reporting that every test in the module passed.
@@ -1891,6 +2010,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11826: a warm dev build keeps the ARC ownership variants of the cold build", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11826_cache_ownership_variants } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
@@ -1961,6 +2081,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check fails on unformatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/needs_formatting.roc", .exit = .failure, .contains_any = &.{.{ .needles = &format_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on well-formatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/well_formatted.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on expression break", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/BreakExpressionInLoop.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "bidi source controls are rejected without formatting or execution", .body = .{ .custom = .bidi_source_security } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt reformats file in place", .body = .{ .custom = .fmt_reformats_file } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt does not change well-formatted file", .body = .{ .custom = .fmt_does_not_change_file } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --stdin formats unformatted input", .body = .{ .custom = .fmt_stdin_formats } },
@@ -2152,6 +2273,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11822: records from if/match values keep list fields unique (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_try_unique_payload.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths: 2048 2048 2048, allocations: 11 11 11" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11822: records from if/match values keep list fields unique (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_try_unique_payload.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths: 2048 2048 2048, allocations: 11 11 11" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11822: records from if/match values keep list fields unique (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_try_unique_payload.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths: 2048 2048 2048, allocations: 11 11 11" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11933: a var appended after an if whose branch ends in a nested if stays unique (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_if_branch_nested_if_state.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths: 500 500, loop allocations: 0" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11933: a var appended after an if whose branch ends in a nested if stays unique (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_if_branch_nested_if_state.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths: 500 500, loop allocations: 0" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11933: a var appended after an if whose branch ends in a nested if stays unique (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_if_branch_nested_if_state.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths: 500 500, loop allocations: 0" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11934: clear/refill preserves parameter capacity (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_list_clear.roc", .contains = &.{.{ .stream = .stderr, .text = "refill length: 5000, refill allocations: 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11934: clear/refill preserves parameter capacity (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_list_clear.roc", .contains = &.{.{ .stream = .stderr, .text = "refill length: 5000, refill allocations: 1" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11247: nested fold accumulator lists stay unique (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_nested_fold_title.roc", .contains = &.{.{ .stream = .stderr, .text = "title bytes: 288 4608, text: ok, facts: ok, allocations: 2 2" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11823: a var reassigned in a branch stays unique through a consuming tail call (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_branch_state_tail.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths: 2048 2048 2048 2048 2048, allocations: 1 1 1 1 1" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11823: a var reassigned in a branch stays unique through a consuming tail call (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_branch_state_tail.roc", .contains = &.{.{ .stream = .stderr, .text = "lengths: 2048 2048 2048 2048 2048, allocations: 1 1 1 1 1" }} } } },
@@ -2162,9 +2288,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "test/box-model-uniqueness/app.roc: boxed host model updates stay in place", .backend = .speed, .skip = .{ .windows = "test platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/box-model-uniqueness/app.roc", .contains = &.{.{ .stream = .stderr, .text = "box model updates stayed in place" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app_allocates.roc: allocation counter positive control (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_allocates.roc", .contains = &.{.{ .stream = .stderr, .text = "byte count: 16" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app_module_list.roc: module-level list access performs zero allocations (default dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/alloc-count/app_module_list.roc", .contains = &.{.{ .stream = .stderr, .text = "value: 2, read allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 11825: test/alloc-count/app_concat_accumulate.roc: List.concat onto an accumulator grows geometrically (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_concat_accumulate.roc", .contains = &.{.{ .stream = .stderr, .text = "items: 2048 2048, concat amortized: True" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 11825: test/alloc-count/app_concat_accumulate.roc: List.concat onto an accumulator grows geometrically (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_concat_accumulate.roc", .contains = &.{.{ .stream = .stderr, .text = "items: 2048 2048, concat amortized: True" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 11825: test/alloc-count/app_concat_accumulate.roc: List.concat onto an accumulator grows geometrically (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_concat_accumulate.roc", .contains = &.{.{ .stream = .stderr, .text = "items: 2048 2048, concat amortized: True" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11825: test/alloc-count/app_concat_accumulate.roc: List.concat onto an accumulator grows geometrically (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_concat_accumulate.roc", .contains = &.{.{ .stream = .stderr, .text = "items: 2048 2048, concat amortized: True, append amortized: True" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11825: test/alloc-count/app_concat_accumulate.roc: List.concat onto an accumulator grows geometrically (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_concat_accumulate.roc", .contains = &.{.{ .stream = .stderr, .text = "items: 2048 2048, concat amortized: True, append amortized: True" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11825: test/alloc-count/app_concat_accumulate.roc: List.concat onto an accumulator grows geometrically (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_concat_accumulate.roc", .contains = &.{.{ .stream = .stderr, .text = "items: 2048 2048, concat amortized: True, append amortized: True" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11824: failure-state loops do not copy the list passed to a fallible call (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_error_state_loop.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11824: failure-state loops do not copy the list passed to a fallible call (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_error_state_loop.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11824: failure-state loops do not copy the list passed to a fallible call (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_error_state_loop.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
@@ -2608,6 +2734,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc docs Builtin.roc succeeds", .body = .{ .command = .{ .args = &.{ "docs", "--no-cache" }, .roc_file = "src/build/roc/Builtin.roc", .contains = &.{.{ .stream = .stdout, .text = "Generated docs for" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test complex_package --verbose passes all tests", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--verbose" }, .roc_file = "test/complex_package/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "tests passed" }, .{ .stream = .stdout, .text = "PASS" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle complex_package includes all transitively imported modules", .body = .{ .custom = .bundle_complex_package } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11907 includes file imports and rejects missing files", .body = .{ .custom = .bundle_file_imports } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 10845 entry point in a subdirectory bundles relative to it", .body = .{ .custom = .bundle_entrypoint_subdirectory } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11608 succeeds when --output-dir is on a different filesystem", .body = .{ .custom = .bundle_issue_11608_output_dir_cross_device } },
     .{ .id = 0, .suite = .subcommands, .name = "a destructure whose pattern rejects its value crashes at runtime instead of panicking the compiler", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/destructure_pattern_mismatch.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stdout, .text = "before" }, .{ .stream = .stderr, .text = "crashed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
@@ -2845,7 +2972,78 @@ fn runSingleTest(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u6
         .command => |command| runCommandCase(io, allocator, command, case_timeout_ms),
         .custom => |custom| runCustomCase(io, allocator, spec, custom, case_timeout_ms),
         .glue_runtime => |runtime| runGlueRuntimeCase(io, allocator, runtime, case_timeout_ms),
+        .snapshot_program => |program| runSnapshotProgramCase(io, allocator, program, case_timeout_ms),
     };
+}
+
+fn runSnapshotProgramCase(
+    io: std.Io,
+    allocator: Allocator,
+    program: SnapshotProgramCase,
+    timeout_ms: u64,
+) TestResult {
+    var timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .setup, .message = "no clock" };
+    var env = buildCaseEnv(io, allocator) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to create test environment" };
+    defer env.deinit(allocator);
+
+    const main_path = writeSnapshotProgram(io, allocator, env.dirs.work_dir, program.source) catch
+        return addPreservedWorkDirMessage(allocator, .{
+            .status = .infra_error,
+            .phase = .setup,
+            .duration_ns = timer.read(),
+            .message = "failed to write snapshot program",
+        }, env.dirs.work_dir);
+
+    // Whether checking accepts or rejects the program, it must finish
+    // without the compiler crashing.
+    const command: CommandCase = .{
+        .args = &.{ "check", "--no-cache" },
+        .roc_file = main_path,
+        .file_path_mode = .relative,
+        .exit = .not_panic,
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "invariant violated" },
+            .{ .stream = .stderr, .text = "panic" },
+        },
+    };
+
+    var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
+    const child_timeout_ms = childCommandTimeoutMs(&timer, timeout_ms) orelse
+        return addPreservedWorkDirMessage(allocator, timeoutFailure(allocator, &timer, .run, "case timeout exhausted before command started"), env.dirs.work_dir);
+    const result = runRocInEnv(io, allocator, &env, command.args, command.roc_file, command.file_path_mode, command.app_args, command.stdin, child_timeout_ms) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "run spawn error: {}", .{err}) catch "run spawn error";
+        return addPreservedWorkDirMessage(allocator, .{
+            .status = .infra_error,
+            .phase = .run,
+            .duration_ns = timer.read(),
+            .run_ns = run_timer.read(),
+            .message = msg,
+        }, env.dirs.work_dir);
+    };
+    const run_ns = run_timer.read();
+
+    if (checkCommandExpectation(allocator, result, command)) |message| {
+        return addPreservedWorkDirMessage(allocator, .{
+            .status = if (processTimedOut(result.stderr)) .timeout else .run_failed,
+            .phase = .run,
+            .duration_ns = timer.read(),
+            .run_ns = run_ns,
+            .exit_code = exitCode(result.term),
+            .stderr_capture = result.stderr,
+            .stdout_capture = result.stdout,
+            .message = message,
+        }, env.dirs.work_dir);
+    }
+
+    util.cleanupTestWorkDir(io, env.dirs.work_dir);
+    return .{ .status = .pass, .phase = .run, .duration_ns = timer.read(), .run_ns = run_ns };
+}
+
+fn writeSnapshotProgram(io: std.Io, allocator: Allocator, work_dir: []const u8, source: []const u8) CliRunnerError![]const u8 {
+    const main_path = try std.fs.path.join(allocator, &.{ work_dir, "main.roc" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = main_path, .data = source });
+    return main_path;
 }
 
 fn runPlatformCase(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u64) TestResult {
@@ -3608,6 +3806,7 @@ fn runCustomCase(
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
+        .cache_fingerprints_agree => customCacheFingerprintsAgree(io, allocator, &env, &timer, timeout_ms),
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
@@ -3627,6 +3826,7 @@ fn runCustomCase(
         .default_platform_stack_overflow_arm64mac => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64mac, .stack_overflow),
         .default_platform_stack_overflow_x64win => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64win, .stack_overflow),
         .default_platform_stack_overflow_arm64win => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64win, .stack_overflow),
+        .bidi_source_security => customBidiSourceSecurity(io, allocator, &env, &timer, timeout_ms),
         .fmt_reformats_file => customFmtReformatsFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_does_not_change_file => customFmtDoesNotChangeFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_stdin_formats => customFmtStdin(io, allocator, &env, &timer, timeout_ms, false),
@@ -3677,6 +3877,7 @@ fn runCustomCase(
         .docs_main_platform_url_package => customDocsMainPlatformUrlPackage(io, allocator, &env, &timer, timeout_ms),
         .build_issue_9435_hosted_nominal_return => customBuildIssue9435(io, allocator, &env, &timer, timeout_ms),
         .bundle_complex_package => customBundleComplexPackage(io, allocator, &env, &timer, timeout_ms),
+        .bundle_file_imports => customBundleFileImports(io, allocator, &env, &timer, timeout_ms),
         .bundle_entrypoint_subdirectory => customBundleEntrypointSubdirectory(io, allocator, &env, &timer, timeout_ms),
         .bundle_issue_11608_output_dir_cross_device => customBundleIssue11608OutputDirCrossDevice(io, allocator, &env, &timer, timeout_ms),
         .install_run_roundtrip => customInstallRunRoundtrip(io, allocator, &env, &timer, timeout_ms),
@@ -6796,6 +6997,148 @@ fn customIssue11826CacheOwnershipVariants(
     return null;
 }
 
+// A warm dev build links object-cache procedures compiled by other programs
+// (here, the app before an edit, and the pack programs of its modules) and
+// lowers the rest itself. It runs as the cold build of the same source only
+// if every program compiles a procedure the cache offers to the same LIR: the
+// same ownership signature, uniqueness facts, inline decisions, and refcount
+// atomicity. `ROC_PACK_TRACE` prints a program-independent LIR fingerprint
+// for each procedure a pack offers and each one a build lowers; across the
+// app's build, its edited warm build, and the edited app's cold build, every
+// offered identity must have one fingerprint.
+fn customCacheFingerprintsAgree(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "cache_fingerprints",
+        .platform = "test/fx-open/platform/main.roc",
+        .platform_spelling = "../../fx-open/platform/main.roc",
+        .sources = &.{ "test/cli/cache_fingerprints/Helpers.roc", "test/cli/cache_fingerprints/main.roc", "test/cli/cache_fingerprints/edited.roc" },
+        .app_name = "main.roc",
+    }, &app)) |failure| return failure;
+    const edited = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "edited.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the edited app path: {}", .{err});
+
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the trace environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    var fresh_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the fresh-cache environment: {}", .{err}),
+    };
+    defer fresh_env.env_map.deinit();
+    const fresh_cache = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "fresh_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the fresh cache path: {}", .{err});
+    for ([_]*CaseEnv{ &trace_env, &fresh_env }) |case_env| {
+        for ([_][]const u8{ "ROC_PACK_TRACE", "ROC_PACK_STATS" }) |key| {
+            case_env.env_map.put(key, "1") catch |err|
+                return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+        }
+    }
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        fresh_env.env_map.put(key, fresh_cache) catch |err|
+            return customInfraFailure(allocator, timer, "failed to point a build at a fresh cache: {}", .{err});
+    }
+
+    const Build = struct { name: []const u8, case_env: *const CaseEnv, edit_first: bool, require_hits: bool };
+    const builds = [_]Build{
+        .{ .name = "before_edit", .case_env = &trace_env, .edit_first = false, .require_hits = false },
+        .{ .name = "edited_warm", .case_env = &trace_env, .edit_first = true, .require_hits = true },
+        .{ .name = "edited_cold", .case_env = &fresh_env, .edit_first = false, .require_hits = false },
+    };
+    var traces: [builds.len][]const u8 = undefined;
+    var outputs: [builds.len][]const u8 = undefined;
+    for (builds, 0..) |build, index| {
+        if (build.edit_first) {
+            const source = std.Io.Dir.cwd().readFileAlloc(io, edited, allocator, .limited(1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ edited, err });
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = source }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app, err });
+        }
+        const exe = std.fmt.allocPrint(allocator, "{s}/cache_fingerprints_{s}", .{ env.dirs.work_dir, build.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, build.case_env, &.{ "build", "--opt=dev", out_arg }, app, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build with the object cache did not succeed");
+        }
+        if (build.require_hits) {
+            const hits_marker = "pack hits: ";
+            const hits_at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "the edited app's warm build did not report pack hits");
+            if (countAfterMarker(built.stderr[hits_at + hits_marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "the edited app's warm build linked nothing from the cache");
+            }
+        }
+        traces[index] = built.stderr;
+        const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before running a build");
+        const run = runRawInEnv(io, allocator, env, &.{ exe, "an", "argument" }, env.dirs.work_dir, "", exe_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "program spawn error: {}", .{err});
+        if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "a cached build's program failed");
+        outputs[index] = run.stdout;
+    }
+    if (!std.mem.eql(u8, outputs[1], outputs[2])) {
+        return customFailure(allocator, timer, "the edited app printed {s} warm but {s} cold", .{ outputs[1], outputs[2] });
+    }
+
+    // identity -> first fingerprint seen, and whether a second build saw it.
+    const Seen = struct { fingerprint: []const u8, build: usize, shared: bool };
+    var seen = std.StringHashMap(Seen).init(allocator);
+    defer seen.deinit();
+    var offered = std.StringHashMap(void).init(allocator);
+    defer offered.deinit();
+    for (traces, 0..) |trace, build_index| {
+        var lines = std.mem.splitScalar(u8, trace, '\n');
+        while (lines.next()) |line| {
+            var fields = std.mem.tokenizeScalar(u8, line, ' ');
+            const kind = fields.next() orelse continue;
+            const is_offer = std.mem.eql(u8, kind, "offer");
+            if (!is_offer and !std.mem.eql(u8, kind, "compiled")) continue;
+            const identity = fields.next() orelse continue;
+            const fingerprint = fields.next() orelse continue;
+            if (is_offer) offered.put(identity, {}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to record an offer: {}", .{err});
+            const entry = seen.getOrPut(identity) catch |err|
+                return customInfraFailure(allocator, timer, "failed to record a fingerprint: {}", .{err});
+            if (!entry.found_existing) {
+                entry.value_ptr.* = .{ .fingerprint = fingerprint, .build = build_index, .shared = false };
+                continue;
+            }
+            if (entry.value_ptr.build != build_index) entry.value_ptr.shared = true;
+            if (!std.mem.eql(u8, entry.value_ptr.fingerprint, fingerprint)) {
+                // Only an identity a pack offers can be linked into another
+                // program; an unkeyed root may change with its source.
+                entry.value_ptr.fingerprint = "conflict";
+            }
+        }
+    }
+    var compared: usize = 0;
+    var iter = offered.keyIterator();
+    while (iter.next()) |identity| {
+        const entry = seen.get(identity.*).?;
+        if (std.mem.eql(u8, entry.fingerprint, "conflict")) {
+            return customFailure(allocator, timer, "procedure {s} is offered by the object cache but compiles to different LIR in different programs", .{identity.*});
+        }
+        if (entry.shared) compared += 1;
+    }
+    if (compared == 0) return customFailure(allocator, timer, "no offered procedure was compiled or offered by more than one build", .{});
+    return null;
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/11627: the cold build
 // caches Lib.wrap with the accessor that reads Lib.constant and that
 // constant's data. Editing the app makes the warm build check and lower it
@@ -9807,6 +10150,150 @@ fn customBundleEntrypointSubdirectory(io: std.Io, allocator: Allocator, env: *co
     }
     if (std.mem.find(u8, outside_result.stderr, "outside the entry point directory") == null) {
         return failureFromRun(allocator, timer, outside_result, "roc bundle did not explain the outside-root file error");
+    }
+
+    return null;
+}
+
+/// Repro for https://github.com/roc-lang/roc/issues/11907
+fn customBundleFileImports(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const package_dir = createWorkSubdir(io, allocator, env, "bundle-files") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create package dir: {}", .{err});
+    const src_dir = std.fs.path.join(allocator, &.{ package_dir, "src" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate src dir: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, src_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create src dir: {}", .{err});
+
+    const nested_dir = std.fs.path.join(allocator, &.{ src_dir, "Nested" }) catch |err|
+        return customInfraFailure(allocator, timer, "nested path: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, nested_dir) catch |err|
+        return customInfraFailure(allocator, timer, "create nested dir: {}", .{err});
+    const files = [_]struct { path: []const u8, contents: []const u8 }{
+        .{ .path = "main.roc", .contents = "package [Helper] { nested: \"Nested/main.roc\" }\n" },
+        .{ .path = "Helper.roc", .contents = "import nested.Data\nimport \"bytes.bin\" as bytes : List(U8)\nHelper :: [].{\n    size : {} -> U64\n    size = |_| bytes.len() + Data.size({})\n}\n" },
+        .{ .path = "Nested/main.roc", .contents = "package [Data] {}\n" },
+        .{ .path = "Nested/Data.roc", .contents = "import \"../bytes.bin\" as bytes : List(U8)\nimport \"text.txt\" as text : Str\nData :: [].{\n    size : {} -> U64\n    size = |_| bytes.len() + text.count_utf8_bytes()\n}\n" },
+        .{ .path = "bytes.bin", .contents = "\x00\xff\x80\x01" },
+        .{ .path = "Nested/text.txt", .contents = "bundled text\n" },
+    };
+    for (files) |file| {
+        const path = std.fs.path.join(allocator, &.{ src_dir, file.path }) catch |err|
+            return customInfraFailure(allocator, timer, "fixture path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = file.contents }) catch |err|
+            return customInfraFailure(allocator, timer, "write fixture: {}", .{err});
+    }
+
+    const out_dir = createWorkSubdir(io, allocator, env, "bundle-files-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create bundle output dir: {}", .{err});
+    const extract_dir = createWorkSubdir(io, allocator, env, "bundle-files-extract") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create extract dir: {}", .{err});
+
+    const roc_abs = if (std.fs.path.isAbsolute(roc_binary_path))
+        roc_binary_path
+    else
+        std.fs.path.join(allocator, &.{ project_root_path, roc_binary_path }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc path: {}", .{err});
+
+    const bundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before bundling");
+    const bundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "src/main.roc" }, package_dir, null, bundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "bundle spawn error: {}", .{err});
+    if (exitCode(bundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle failed");
+    }
+    const created_prefix = "Created: ";
+    const created_idx = std.mem.find(u8, bundle_result.stdout, created_prefix) orelse
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
+    const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
+    const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
+    const bundle_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    const bundle_filename = std.fs.path.basename(bundle_path);
+    if (!std.mem.endsWith(u8, bundle_filename, ".tar.zst")) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not create a .tar.zst archive");
+    }
+    const extracted_name = bundle_filename[0 .. bundle_filename.len - ".tar.zst".len];
+
+    const checked_entries = countCheckedModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
+        return customInfraFailure(allocator, timer, "count checked cache entries: {}", .{err});
+    if (checked_entries == 0) {
+        return customFailure(allocator, timer, "bundle did not populate the checked-module cache", .{});
+    }
+
+    // A second build uses the checked cache; both bundles must have the
+    // same content hash, including dependencies shared by two modules.
+    const warm_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "timeout before warm bundle");
+    const warm_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "src/main.roc", "src/Helper.roc", "src/bytes.bin" }, package_dir, null, warm_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "warm bundle: {}", .{err});
+    if (exitCode(warm_result.term) != 0 or std.mem.find(u8, warm_result.stdout, bundle_filename) == null) {
+        return failureFromRun(allocator, timer, warm_result, "warm bundle with explicit duplicate changed the archive");
+    }
+
+    const unbundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before unbundling");
+    const unbundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "unbundle", bundle_path }, extract_dir, null, unbundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "unbundle spawn error: {}", .{err});
+    if (exitCode(unbundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, unbundle_result, "roc unbundle failed");
+    }
+
+    const extracted_root = std.fs.path.join(allocator, &.{ extract_dir, extracted_name }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate extracted root path: {}", .{err});
+
+    for (files) |file| {
+        const path = std.fs.path.join(allocator, &.{ extracted_root, file.path }) catch |err|
+            return customInfraFailure(allocator, timer, "extracted path: {}", .{err});
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4096)) catch |err|
+            return customFailure(allocator, timer, "missing extracted {s}: {}", .{ file.path, err });
+        if (!std.mem.eql(u8, contents, file.contents)) {
+            return customFailure(allocator, timer, "extracted {s} contents differ", .{file.path});
+        }
+    }
+    const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "timeout before extracted package check");
+    const check_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "check", "--no-cache", "main.roc" }, extracted_root, null, check_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "check extracted package: {}", .{err});
+    if (exitCode(check_result.term) != 0) {
+        return failureFromRun(allocator, timer, check_result, "extracted package failed to check");
+    }
+
+    const bytes_path = std.fs.path.join(allocator, &.{ src_dir, "bytes.bin" }) catch |err|
+        return customInfraFailure(allocator, timer, "bytes path: {}", .{err});
+    std.Io.Dir.cwd().deleteFile(io, bytes_path) catch |err|
+        return customInfraFailure(allocator, timer, "remove imported file: {}", .{err});
+    const missing_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "timeout before missing file check");
+    const missing_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "src/main.roc" }, package_dir, null, missing_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "missing file bundle: {}", .{err});
+    if (exitCode(missing_result.term) == 0 or
+        std.mem.find(u8, missing_result.stderr, "bytes.bin") == null or
+        std.mem.find(u8, missing_result.stdout, "Created: ") != null)
+    {
+        return failureFromRun(allocator, timer, missing_result, "missing imported file must fail bundling with a diagnostic");
+    }
+
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = bytes_path, .data = "\x00\xff\x80\x01" }) catch |err|
+        return customInfraFailure(allocator, timer, "restore imported file: {}", .{err});
+
+    // An imported file outside the entry directory cannot retain its relative
+    // path in a portable archive. Reject it rather than silently omitting it.
+    const helper_path = std.fs.path.join(allocator, &.{ src_dir, "Helper.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "helper path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = helper_path, .data = "import \"../outside.txt\" as text : Str\nHelper :: [].{\n    size : {} -> U64\n    size = |_| text.count_utf8_bytes()\n}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "write outside import: {}", .{err});
+    const outside_path = std.fs.path.join(allocator, &.{ package_dir, "outside.txt" }) catch |err|
+        return customInfraFailure(allocator, timer, "outside path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = outside_path, .data = "outside" }) catch |err|
+        return customInfraFailure(allocator, timer, "write outside file: {}", .{err});
+    const outside_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "timeout before outside import check");
+    const outside_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "src/main.roc" }, package_dir, null, outside_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "outside import bundle: {}", .{err});
+    if (exitCode(outside_result.term) == 0 or
+        std.mem.find(u8, outside_result.stderr, "outside the entry point directory") == null or
+        std.mem.find(u8, outside_result.stdout, "Created: ") != null)
+    {
+        return failureFromRun(allocator, timer, outside_result, "outside import must fail bundling with a diagnostic");
     }
 
     return null;
@@ -12854,7 +13341,7 @@ fn printResults(
     var build_durations: std.ArrayListUnmanaged(u64) = .empty;
     var run_durations: std.ArrayListUnmanaged(u64) = .empty;
     var opt_durations = [_]std.ArrayListUnmanaged(u64){ .empty, .empty, .empty, .empty };
-    var suite_durations = [_]std.ArrayListUnmanaged(u64){ .empty, .empty, .empty, .empty };
+    var suite_durations = [_]std.ArrayListUnmanaged(u64){.empty} ** suite_count;
     defer durations.deinit(gpa);
     defer build_durations.deinit(gpa);
     defer run_durations.deinit(gpa);
@@ -13356,6 +13843,7 @@ test "cross target builds one build-only case per matching platform spec" {
     var suites = SuiteSelection{};
     suites.add(.platforms);
     const cases = try buildCases(
+        std.testing.io,
         arena.allocator(),
         &.{"test/fx/"},
         false,
@@ -13416,7 +13904,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     glue_execution_mode = parsed.glue_options.execution_mode;
     platform_specialization_arg = parsed.specialization_arg;
 
-    const tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options, parsed.cross_target);
+    const tests = try buildCases(init.io, spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options, parsed.cross_target);
     if (tests.len == 0) return;
     const timeout_ms = effectiveTimeoutMs(args, parsed.suites);
 
@@ -13510,7 +13998,7 @@ test "static CLI cases honor LLVM availability before name filters" {
     var suites = SuiteSelection{};
     suites.add(.subcommands);
     for ([_]bool{ false, true }) |include_llvm| {
-        const cases = try buildCases(arena.allocator(), &.{"issue 11563:"}, include_llvm, suites, .{}, null);
+        const cases = try buildCases(std.testing.io, arena.allocator(), &.{"issue 11563:"}, include_llvm, suites, .{}, null);
         var speed_count: usize = 0;
         var other_count: usize = 0;
         for (cases) |case| {
@@ -13523,4 +14011,43 @@ test "static CLI cases honor LLVM availability before name filters" {
         try std.testing.expectEqual(@as(usize, @intFromBool(include_llvm)), speed_count);
         try std.testing.expectEqual(@as(usize, 3), other_count);
     }
+}
+
+fn customBidiSourceSecurity(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "Bidi\u{202e}.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "bidi path allocation: {}", .{err});
+    for (base.bidi.controls, 0..) |control, index| {
+        // Exercise both headerless modules and app headers. The missing
+        // platform must never be resolved before the source-policy error.
+        const prefix = if (index % 2 == 0)
+            "main! = || { 1 } # "
+        else
+            "app [main!] { pf: platform \"missing-platform/main.roc\" }\nmain! = || { 1 } # ";
+        const source = std.mem.concat(allocator, u8, &.{ prefix, control.utf8, "\n" }) catch |err|
+            return customInfraFailure(allocator, timer, "bidi fixture allocation: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = source }) catch |err|
+            return customInfraFailure(allocator, timer, "bidi fixture write: {}", .{err});
+        const commands = [_][]const []const u8{ &.{ "check", "--no-cache" }, &.{"check"}, &.{"check"}, &.{ "run", "--no-cache" }, &.{ "build", "--no-cache" }, &.{ "test", "--no-cache" }, &.{"fmt"}, &.{ "fmt", "--check" }, &.{ "fmt", "--stdin" } };
+        for (commands) |args| {
+            const stdin = std.mem.eql(u8, args[args.len - 1], "--stdin");
+            const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "bidi source checks timed out");
+            const result = runRocInEnv(io, allocator, env, args, if (stdin) null else path, .absolute, &.{}, if (stdin) source else null, remaining) catch |err|
+                return customInfraFailure(allocator, timer, "bidi command: {}", .{err});
+            if (checkCommandExpectation(allocator, result, .{
+                .args = args,
+                .exit = .{ .code = 1 },
+                .contains = &.{.{ .stream = .stderr, .text = "bidirectional control" }},
+            })) |message| return failureFromRun(allocator, timer, result, message);
+            for ([_][]const u8{ result.stdout, result.stderr }) |output| {
+                var iter = base.bidi.Iterator{ .bytes = output };
+                if (iter.next() != null) return customFailure(allocator, timer, "bidi control leaked into diagnostics", .{});
+            }
+            if (stdin and result.stdout.len != 0) return customFailure(allocator, timer, "unsafe formatted source emitted on stdout", .{});
+            const after = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4096)) catch |err|
+                return customInfraFailure(allocator, timer, "bidi fixture read: {}", .{err});
+            if (!std.mem.eql(u8, after, source)) return customFailure(allocator, timer, "unsafe file changed by formatter", .{});
+        }
+    }
+    return null;
 }

@@ -12,6 +12,7 @@ pub const FormatStdinError = fmt.FormatStdinError;
 pub const FormatParseError = fmt.FormatParseError;
 pub const FormatTestError = fmt.FormatTestError;
 pub const Options = fmt.Options;
+pub const BuiltinFacts = fmt.BuiltinFacts;
 pub const formatPath = fmt.formatPath;
 pub const formatFilePath = fmt.formatFilePath;
 pub const formatStdin = fmt.formatStdin;

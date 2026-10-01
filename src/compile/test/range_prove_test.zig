@@ -306,7 +306,7 @@ fn countFillShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
         fill_shape = .{
             .found = true,
             .unsafe_appends = std.mem.count(u8, text, "list_append_unsafe"),
-            .reserves = std.mem.count(u8, text, "list_reserve("),
+            .reserves = std.mem.count(u8, text, "list_reserve_for_append("),
             .fits_checks = std.mem.count(u8, text, "num_is_gte("),
         };
         if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== fill proc =====\n{s}\n", .{text});

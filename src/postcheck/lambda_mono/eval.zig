@@ -134,9 +134,8 @@ pub const ComptimeProducer = struct {
     root_index: usize,
 };
 
-/// Consumer policy and exact root declarations supplied by the harness.
+/// Exact root declarations supplied by the harness.
 pub const Inputs = struct {
-    inline_expects_enabled: bool,
     comptime_producers: []const ComptimeProducer,
 };
 
@@ -149,7 +148,6 @@ pub const Evaluator = struct {
     arena: std.heap.ArenaAllocator,
     inputs: Inputs,
     root_states: []RootState,
-    executing_comptime: bool,
 
     /// Rendered dbg messages in execution order (arena-owned bytes).
     dbg_events: std.ArrayList([]const u8),
@@ -190,7 +188,6 @@ pub const Evaluator = struct {
         return .{
             .inputs = inputs,
             .root_states = states,
-            .executing_comptime = false,
             .gpa = gpa,
             .program = program,
             .arena = std.heap.ArenaAllocator.init(gpa),
@@ -241,9 +238,6 @@ pub const Evaluator = struct {
         }
         self.root_states[index] = .active;
         errdefer self.root_states[index] = .pending;
-        const saved_comptime = self.executing_comptime;
-        self.executing_comptime = true;
-        defer self.executing_comptime = saved_comptime;
         const outcome = try self.runRootBody(index);
         self.root_states[index] = .{ .completed = outcome };
         return outcome;
@@ -383,7 +377,6 @@ pub const Evaluator = struct {
                 return frame.get(local_id) orelse self.unsupported_("unbound local");
             },
             .unit => return .unit,
-            .inline_expects_enabled => return .{ .bool_ = self.executing_comptime or self.inputs.inline_expects_enabled },
             .comptime_value => |value| return self.readComptimeValue(self.program.getComptimeValueRoot(value.root)),
             .@"unreachable" => return self.unsupported_("unreachable marker escaped its terminated block-final position"),
             .int_lit => |int_value| {
@@ -1591,6 +1584,7 @@ pub const Evaluator = struct {
             .list_take_last,
             .list_reverse,
             .list_reserve,
+            .list_reserve_for_append,
             .list_release_excess_capacity,
             .list_clear,
             .list_split_first,
@@ -2825,6 +2819,7 @@ pub const Evaluator = struct {
             list_concat,
             list_with_capacity,
             list_reserve,
+            list_reserve_for_append,
             list_release_excess_capacity,
             list_clear,
             list_reverse,
@@ -2878,7 +2873,7 @@ pub const Evaluator = struct {
                 return .{ .list = out };
             },
             .list_with_capacity => return .{ .list = &.{} },
-            .list_reserve, .list_release_excess_capacity => return .{ .list = args[0].list },
+            .list_reserve, .list_reserve_for_append, .list_release_excess_capacity => return .{ .list = args[0].list },
             .list_clear => return .{ .list = &.{} },
             .list_reverse => {
                 const list = args[0].list;
@@ -3605,13 +3600,13 @@ test "oracle demands declared roots once without executing representation witnes
     var program = Ast.Program.init(allocator, check.CheckedNames.NameStore.init(allocator), .empty, .empty, .empty);
     defer program.deinit();
     const bool_ty = try program.types.add(.{ .primitive = .bool });
-    const policy = try program.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
+    const produced = try program.addExpr(.{ .ty = bool_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } } });
     const witness = try program.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const producer_index = program.rootCount();
     const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
     // Neither checked identity nor descriptor-table ordinal is a producer index.
     _ = try program.addComptimeValueRoot(.{ .module = .{ .bytes = @splat(1) }, .root = root.root, .const_locator = null });
-    const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
+    const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = produced }, .ret = bool_ty });
     // Oracle execution consumes fn_id; source requests and linker symbols are unread.
     try program.roots.append(allocator, .{ .fn_id = producer_fn, .request = undefined, .owner = .first });
     const root_id = try program.addComptimeValueRoot(root);
@@ -3619,13 +3614,9 @@ test "oracle demands declared roots once without executing representation witnes
     const consumer_index = program.rootCount();
     const consumer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = read }, .ret = bool_ty });
     try program.roots.append(allocator, .{ .fn_id = consumer_fn, .request = undefined, .owner = .first });
-    const policy_index = program.rootCount();
-    const policy_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
-    try program.roots.append(allocator, .{ .fn_id = policy_fn, .request = undefined, .owner = .first });
-    for ([_]bool{ false, true }) |enabled| {
-        var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = enabled, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
+    {
+        var evaluator = try Evaluator.init(allocator, &program, .{ .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
         defer evaluator.deinit();
-        try std.testing.expectEqual(enabled, (try evaluator.runRoot(policy_index)).value.bool_);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
         try std.testing.expect(evaluator.root_states[producer_index] == .completed);
@@ -3634,18 +3625,18 @@ test "oracle demands declared roots once without executing representation witnes
         changed.body = .{ .roc = witness };
         program.setFn(producer_fn, changed);
         try std.testing.expect((try evaluator.runRoot(consumer_index)).value.bool_);
-        changed.body = .{ .roc = policy };
+        changed.body = .{ .roc = produced };
         program.setFn(producer_fn, changed);
     }
     var cyclic = program.getFn(producer_fn);
     cyclic.body = .{ .roc = read };
     program.setFn(producer_fn, cyclic);
-    var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = false, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
+    var evaluator = try Evaluator.init(allocator, &program, .{ .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
     defer evaluator.deinit();
     const failure = (try evaluator.runRoot(consumer_index)).aborted;
     try std.testing.expectEqual(AbortKind.crash, failure.kind);
     try std.testing.expectEqualStrings("cyclic compile-time value dependency", failure.message);
-    cyclic.body = .{ .roc = policy };
+    cyclic.body = .{ .roc = produced };
     program.setFn(producer_fn, cyclic);
     try std.testing.expectEqualStrings(failure.message, (try evaluator.runRoot(consumer_index)).aborted.message);
 }

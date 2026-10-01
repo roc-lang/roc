@@ -259,10 +259,14 @@ parse_ir: *AST,
 /// Statement position: if without else is OK (default)
 /// Expression position: if without else is ERROR (explicitly set in assignments, etc.)
 in_statement_position: bool = true,
-/// Track whether we're directly inside a top-level expect (and not inside a
-/// lambda body within it). When true, the ? operator desugars to e_expect_err
-/// on Err, which fails the enclosing expect instead of returning early.
-in_expect: bool = false,
+/// The kind of `expect` body being canonicalized, if any. Lambda bodies reset
+/// this to `.none`, because control flow inside a lambda cannot escape the
+/// enclosing `expect`.
+expect_context: ExpectContext = .none,
+/// The number of scopes open when the innermost enclosing `expect` body began
+/// (zero outside any `expect`). A var whose declaring scope's index is below
+/// this was declared outside that `expect`, so the body cannot reassign it.
+expect_scope_floor: u32 = 0,
 scopes: std.ArrayList(Scope) = .empty,
 /// Set when a scope-exit (run from a `defer`, which cannot propagate an error)
 /// fails to allocate. `canonicalizeFile` re-raises it as `error.OutOfMemory`,
@@ -461,6 +465,14 @@ interp_tmp_counter: u32 = 0,
 /// Whether the current declaration-pattern canonicalization should reuse
 /// existing mutable binders when it encounters `$name` patterns.
 allow_pattern_var_reuse: bool = false,
+/// Names bound by the open pattern binder groups, innermost group last. A
+/// group is one pattern, every argument pattern of one lambda, or every part of
+/// one split destructuring declaration; a name may be bound at most once per
+/// group. Groups nest because a pattern group can enclose expressions, such as
+/// a destructured part's value, that canonicalize patterns of their own.
+pattern_binders: std.ArrayList(PatternBinder) = .empty,
+/// Start of the innermost open pattern binder group within `pattern_binders`.
+pattern_binder_group_start: usize = 0,
 /// Whether the current declaration-pattern canonicalization reused any
 /// existing mutable binder. `canonicalizeBlockDecl` uses this explicit fact to
 /// emit `s_reassign` instead of `s_decl` for mixed structural reassignments
@@ -819,6 +831,7 @@ pub fn deinit(
     self.scratch_defining_bound_vars.deinit();
     self.scratch_reassign_targets.deinit();
     self.scratch_local_function_patterns.deinit();
+    self.pattern_binders.deinit(gpa);
     self.scratch_block_local_defs.deinit();
     self.scratch_local_type_decls.deinit(gpa);
     self.scratch_global_value_defs.deinit(gpa);
@@ -4101,6 +4114,69 @@ fn reportInvalidAssociatedStatement(
     });
 }
 
+/// Which kind of `expect` body is currently being canonicalized (outside any
+/// lambda nested within it).
+///
+/// Optimized builds remove inline `expect`s, so their bodies must never move
+/// control flow out of the `expect`: `return`, `break`, and `?` are compile
+/// errors there. Top-level `expect`s only run as tests, so `?` in them fails the
+/// test (via `e_expect_err`) instead of returning; `return` and `break` are
+/// still compile errors.
+const ExpectContext = enum(u8) {
+    none,
+    top_level,
+    @"inline",
+};
+
+/// What `enterExpect` replaced, for `exitExpect` to restore.
+const SavedExpectState = struct {
+    expect_context: ExpectContext,
+    loop_depth: u32,
+    expect_scope_floor: u32,
+};
+
+/// Begin canonicalizing an `expect` body. Loops enclosing the `expect` are not
+/// reachable from its body, so `loop_depth` restarts at zero; a `break` inside
+/// a loop written within the `expect` stays valid. Every scope the body opens
+/// sits at or above `expect_scope_floor`, so a var found below it was declared
+/// outside the `expect`.
+fn enterExpect(self: *Self, context: ExpectContext) SavedExpectState {
+    const saved = SavedExpectState{
+        .expect_context = self.expect_context,
+        .loop_depth = self.loop_depth,
+        .expect_scope_floor = self.expect_scope_floor,
+    };
+    self.expect_context = context;
+    self.loop_depth = 0;
+    self.expect_scope_floor = @intCast(self.scopes.items.len);
+    return saved;
+}
+
+fn exitExpect(self: *Self, saved: SavedExpectState) void {
+    self.expect_context = saved.expect_context;
+    self.loop_depth = saved.loop_depth;
+    self.expect_scope_floor = saved.expect_scope_floor;
+}
+
+/// The diagnostic for reassigning `pattern_idx`, a var declared outside the
+/// innermost enclosing `expect`.
+fn varReassignedInExpectDiagnostic(self: *Self, ident: Ident.Idx, pattern_idx: Pattern.Idx, region: Region) Diagnostic {
+    return Diagnostic{ .var_reassigned_in_expect = .{
+        .ident = ident,
+        .region = region,
+        .declaration_region = self.env.store.getPatternRegion(pattern_idx),
+    } };
+}
+
+/// The diagnostic for a `break` with no loop to exit. Directly inside an
+/// `expect`, loops enclosing the `expect` are unreachable (see `enterExpect`).
+fn breakWithoutLoopDiagnostic(self: *const Self, region: Region) Diagnostic {
+    return if (self.expect_context != .none)
+        Diagnostic{ .control_flow_in_expect = .{ .region = region, .kind = .break_keyword } }
+    else
+        Diagnostic{ .break_outside_loop = .{ .region = region } };
+}
+
 /// Canonicalize an `expect` written directly inside an associated block.
 ///
 /// A module-visible type's associated block is part of the module's top-level
@@ -4110,11 +4186,8 @@ fn reportInvalidAssociatedStatement(
 /// block instead, so its expects become statements of the enclosing block and
 /// run inline wherever the block runs.
 fn canonicalizeAssociatedExpectNow(self: *Self, work: AssociatedExpectWork) std.mem.Allocator.Error!void {
-    // Track that we're inside an expect so the ? operator fails the expect on
-    // Err instead of returning early.
-    const was_in_expect = self.in_expect;
-    self.in_expect = true;
-    defer self.in_expect = was_in_expect;
+    const saved_expect = self.enterExpect(if (work.owner_is_module_visible) .top_level else .@"inline");
+    defer self.exitExpect(saved_expect);
 
     const body = try self.canonicalizeExpr(work.expect.body);
     try self.finishAssociatedExpect(work, body);
@@ -4744,11 +4817,8 @@ pub fn canonicalizeFile(
                 // Top-level expect statement
                 const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-                // Track that we're inside a top-level expect so the ? operator
-                // fails the expect on Err instead of returning early
-                const was_in_expect = self.in_expect;
-                self.in_expect = true;
-                defer self.in_expect = was_in_expect;
+                const saved_expect = self.enterExpect(.top_level);
+                defer self.exitExpect(saved_expect);
 
                 // Canonicalize the expect expression
                 const can_expect = try self.canonicalizeExpr(e.body);
@@ -5389,7 +5459,7 @@ fn createAnnotationPattern(
                 .original_region = original_region,
             } });
         },
-        .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {},
+        .top_level_var_error, .var_across_function_boundary, .var_reassigned_in_expect, .var_reassignment_ok => {},
     }
     return new_pattern_idx;
 }
@@ -5515,6 +5585,9 @@ fn canonicalizeDestructuredLiteralDecl(
     var pending: std.ArrayList(PendingDestructuredLiteralPart) = .empty;
     defer pending.deinit(self.env.gpa);
     try self.pushDestructuredLiteralParts(&pending, decl.pattern, decl.body);
+    // The split parts form one binder group, so `(x, x) = (1, 2)` is rejected.
+    const enclosing_binder_group = self.beginPatternBinderGroup();
+    defer self.endPatternBinderGroup(enclosing_binder_group);
     while (pending.pop()) |item| {
         if (item.part == .pattern and self.destructuredLiteralShapesMatch(item.part.pattern, item.value_expr)) {
             try self.pushDestructuredLiteralParts(&pending, item.part.pattern, item.value_expr);
@@ -5710,7 +5783,8 @@ fn canonicalizeDestructuredLiteralDef(
         self.adopting_forward_decl = parser_decl_idx;
         defer self.adopting_forward_decl = saved_adopting_forward_decl;
         break :blk switch (item.part) {
-            .pattern => |sub_pattern| try self.canonicalizePatternOrMalformed(sub_pattern),
+            .pattern => |sub_pattern| try self.canonicalizePatternInGroup(sub_pattern) orelse
+                try self.pushPatternNotCanonicalized(sub_pattern),
             .name => |name| try self.bindDestructuredName(name.ident, name.region),
         };
     };
@@ -5810,6 +5884,7 @@ fn destructuredLiteralPatternBindsName(self: *Self, root: AST.Pattern.Idx, name:
 /// of a reference ahead of the declaration when there is one, otherwise a new
 /// binder introduced into scope like a punned record field's.
 fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    if (try self.claimPatternBinder(ident, region)) |duplicate| return duplicate;
     if (self.adoptForwardBinder(ident, region)) |placeholder| {
         try self.warnAboutBindingName(ident, region, .immutable);
         return placeholder;
@@ -5828,7 +5903,7 @@ fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.A
         // is_var=false
         .top_level_var_error => unreachable,
         // is_declaration=true
-        .var_across_function_boundary, .var_reassignment_ok => unreachable,
+        .var_across_function_boundary, .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
     }
     return pattern_idx;
 }
@@ -7733,7 +7808,7 @@ fn createFileImportDef(
                     .original_region = original_region,
                 } });
             },
-            .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {},
+            .top_level_var_error, .var_across_function_boundary, .var_reassigned_in_expect, .var_reassignment_ok => {},
         }
         break :blk new_pattern_idx;
     };
@@ -9029,6 +9104,31 @@ fn addTryReturnErr(
         } });
 }
 
+/// The value of a `?` operator's Err branch, given the Err payload it reports.
+/// Directly inside a top-level `expect` it fails the expect, reporting the
+/// payload. Directly inside an inline `expect` it is a compile error, because
+/// returning early would make the program behave differently when optimized
+/// builds remove the `expect`. Everywhere else it returns the payload as an
+/// `Err` from the enclosing function.
+fn addTryErrBranchValue(
+    self: *Self,
+    target: TryNominalTarget,
+    payload_expr: Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Expr.Idx {
+    return switch (self.expect_context) {
+        .top_level => try self.env.addExpr(CIR.Expr{ .e_expect_err = .{
+            .expr = payload_expr,
+            .snippet = try self.env.insertString(self.env.getSource(region)),
+        } }, region),
+        .@"inline" => try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
+            .region = region,
+            .kind = .try_suffix,
+        } }),
+        .none => try self.addTryReturnErr(target, payload_expr, region),
+    };
+}
+
 /// Warn about every `?` that produces the value a function returns. `expr_idx`
 /// is a function body or a `return` operand; its tail positions are followed
 /// through blocks and through `if` and `match` branches, and each `?` reached
@@ -9178,12 +9278,7 @@ fn finishSuffixSingleQuestionExpr(
         } }, region);
         try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-        const branch_value_idx = if (self.in_expect) blk: {
-            break :blk try self.env.addExpr(CIR.Expr{ .e_expect_err = .{
-                .expr = err_lookup_idx,
-                .snippet = try self.env.insertString(self.env.getSource(region)),
-            } }, region);
-        } else try self.addTryReturnErr(try_target, err_lookup_idx, region);
+        const branch_value_idx = try self.addTryErrBranchValue(try_target, err_lookup_idx, region);
 
         try self.appendTryMatchBranch(err_branch_pat_span, branch_value_idx, region);
     }
@@ -9265,16 +9360,7 @@ fn finishSingleQuestionBinop(
             }, region);
         };
 
-        // Build the branch body
-        const branch_value_idx = if (self.in_expect) blk: {
-            // Inside a top-level expect: there is no enclosing function to
-            // return from, so fail the entire expect at runtime, reporting the
-            // mapped err payload.
-            break :blk try self.env.addExpr(CIR.Expr{ .e_expect_err = .{
-                .expr = transformed_err_idx,
-                .snippet = try self.env.insertString(self.env.getSource(region)),
-            } }, region);
-        } else try self.addTryReturnErr(try_target, transformed_err_idx, region);
+        const branch_value_idx = try self.addTryErrBranchValue(try_target, transformed_err_idx, region);
 
         try self.appendTryMatchBranch(err_branch_pat_span, branch_value_idx, region);
     }
@@ -10129,6 +10215,20 @@ fn scheduleBlockDeclContinuation(
                         try stacks.pushBlockNext(frame_allocator, .{ .block = block, .next = next });
                         return;
                     }
+                    if (existing_binding.scope_idx < self.expect_scope_floor) {
+                        if (type_var_scope) |scope_idx| {
+                            self.scopeExitTypeVar(scope_idx);
+                        }
+                        // No `s_reassign`: the rejected write must not appear
+                        // in CIR as a write to a var outside the `expect`.
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, self.varReassignedInExpectDiagnostic(ident_idx, existing_pattern_idx, ident_region));
+                        const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
+                            .expr = malformed_idx,
+                        } }, ident_region);
+                        try self.addBlockStatement(blockContextFromState(block), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() });
+                        try stacks.pushBlockNext(frame_allocator, .{ .block = block, .next = next });
+                        return;
+                    }
 
                     try stacks.pushFinishBlockReassignStmt(frame_allocator, .{
                         .block = block,
@@ -10464,9 +10564,8 @@ fn canonicalizeStandaloneBlockStatement(
         },
         .expect => |expect_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(expect_stmt.region);
-            const was_in_expect = self.in_expect;
-            self.in_expect = true;
-            defer self.in_expect = was_in_expect;
+            const saved_expect = self.enterExpect(.@"inline");
+            defer self.exitExpect(saved_expect);
 
             const expr = try self.canonicalizeExpr(expect_stmt.body);
             const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
@@ -10484,7 +10583,12 @@ fn canonicalizeStandaloneBlockStatement(
             const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
             const expr = try self.canonicalizeExpr(return_stmt.expr);
             try self.warnTrailingTrySuffix(expr.idx);
-            const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
+            const stmt_idx = if (self.expect_context != .none)
+                try self.env.pushMalformed(Statement.Idx, Diagnostic{ .control_flow_in_expect = .{
+                    .region = region,
+                    .kind = .return_keyword,
+                } })
+            else if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addStatement(Statement{ .s_return = .{
                     .expr = expr.idx,
                     .lambda = lambda_idx,
@@ -10527,9 +10631,7 @@ fn canonicalizeStandaloneBlockStatement(
         .@"break" => |break_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
             if (self.loop_depth == 0) {
-                const stmt_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
-                    .region = region,
-                } });
+                const stmt_idx = try self.env.pushMalformed(Statement.Idx, self.breakWithoutLoopDiagnostic(region));
                 return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
             }
 
@@ -10581,6 +10683,15 @@ fn canonicalizeStandaloneBlockDecl(
                             .expr = malformed_idx,
                         } }, ident_region);
                         return CanonicalizedStatement{ .idx = reassign_idx, .free_vars = DataSpan.empty() };
+                    }
+                    if (existing_binding.scope_idx < self.expect_scope_floor) {
+                        // No `s_reassign`: the rejected write must not appear
+                        // in CIR as a write to a var outside the `expect`.
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, self.varReassignedInExpectDiagnostic(ident_idx, existing_pattern_idx, ident_region));
+                        const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
+                            .expr = malformed_idx,
+                        } }, ident_region);
+                        return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
                     }
 
                     const expr = try self.canonicalizeExpr(decl.body);
@@ -11520,9 +11631,7 @@ fn runExprKernel(
                 .@"break" => |b| {
                     const region = self.parse_ir.tokenizedRegionToRegion(b.region);
                     const break_expr = if (self.loop_depth == 0)
-                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .break_outside_loop = .{
-                            .region = region,
-                        } })
+                        try self.env.pushMalformed(Expr.Idx, self.breakWithoutLoopDiagnostic(region))
                     else
                         try self.env.addExpr(Expr{ .e_break = .{} }, region);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = break_expr, .free_vars = DataSpan.empty() });
@@ -11789,16 +11898,21 @@ fn runExprKernel(
                     errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                     const args_start = self.env.store.scratch.?.patterns.top();
-                    for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
-                        if (try self.canonicalizePattern(arg_pattern_idx)) |pattern_idx| {
-                            try self.env.store.scratch.?.patterns.append(pattern_idx);
-                        } else {
-                            const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
-                            const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
-                            const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
-                                .region = arg_region,
-                            } });
-                            try self.env.store.scratch.?.patterns.append(malformed_idx);
+                    {
+                        // The arguments form one binder group, so `|x, x|` is rejected.
+                        const enclosing_binder_group = self.beginPatternBinderGroup();
+                        defer self.endPatternBinderGroup(enclosing_binder_group);
+                        for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
+                            if (try self.canonicalizePatternInGroup(arg_pattern_idx)) |pattern_idx| {
+                                try self.env.store.scratch.?.patterns.append(pattern_idx);
+                            } else {
+                                const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
+                                const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
+                                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
+                                    .region = arg_region,
+                                } });
+                                try self.env.store.scratch.?.patterns.append(malformed_idx);
+                            }
                         }
                     }
                     const args_span = try self.env.store.patternSpanFrom(args_start);
@@ -11811,11 +11925,11 @@ fn runExprKernel(
                     const saved_enclosing_lambda = self.enclosing_lambda;
                     self.enclosing_lambda = lambda_idx;
 
-                    // A `?` inside a lambda body always has normal early-return
-                    // semantics, even when the lambda appears inside a
-                    // top-level expect.
-                    const saved_in_expect = self.in_expect;
-                    self.in_expect = false;
+                    // Control flow inside a lambda body cannot escape an
+                    // enclosing expect, so `return` and `?` have their normal
+                    // early-return semantics there.
+                    const saved_expect_context = self.expect_context;
+                    self.expect_context = .none;
 
                     const saved_loop_depth = self.loop_depth;
                     self.loop_depth = 0;
@@ -11830,7 +11944,7 @@ fn runExprKernel(
                         .body_free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
                         .saved_enclosing_lambda = saved_enclosing_lambda,
-                        .saved_in_expect = saved_in_expect,
+                        .saved_expect_context = saved_expect_context,
                         .saved_loop_depth = saved_loop_depth,
                         .saved_defining_bound_vars = saved_defining_bound_vars,
                     });
@@ -12287,14 +12401,11 @@ fn runExprKernel(
                     try stacks.pushParse(frame_allocator, .{ .idx = decl_work.ast_body, .target = .scratch });
                 },
                 .expect_body => |expect_work| {
-                    // Track that we're inside an expect so the ? operator
-                    // fails the expect on Err instead of returning early.
-                    const was_in_expect = self.in_expect;
-                    self.in_expect = true;
-                    errdefer self.in_expect = was_in_expect;
+                    const saved_expect = self.enterExpect(if (expect_work.owner_is_module_visible) .top_level else .@"inline");
+                    errdefer self.exitExpect(saved_expect);
                     try stacks.pushFinishAssociatedExpect(frame_allocator, .{
                         .work = expect_work,
-                        .was_in_expect = was_in_expect,
+                        .saved_expect = saved_expect,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = expect_work.expect.body, .target = .scratch });
                 },
@@ -12309,7 +12420,7 @@ fn runExprKernel(
         },
         .finish_associated_expect => {
             const state = stacks.takeFinishAssociatedExpect();
-            self.in_expect = state.was_in_expect;
+            self.exitExpect(state.saved_expect);
 
             const result_start = child_slots.items.len - 1;
             const body = child_slots.items[result_start].expr;
@@ -12455,6 +12566,7 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(e_.region),
+                        .saved_expect = self.enterExpect(.@"inline"),
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = e_.body, .target = .scratch });
                 },
@@ -12648,9 +12760,7 @@ fn runExprKernel(
                 .@"break" => |break_stmt| {
                     const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
                     if (self.loop_depth == 0) {
-                        const stmt_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
-                            .region = region,
-                        } });
+                        const stmt_idx = try self.env.pushMalformed(Statement.Idx, self.breakWithoutLoopDiagnostic(region));
                         try self.addBlockStatement(blockContextFromState(work), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() });
                         try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
                         continue :expr_kernel_loop .dispatch;
@@ -12751,6 +12861,7 @@ fn runExprKernel(
         },
         .finish_block_expect_stmt => {
             const state = stacks.takeFinishBlockExpectStmt();
+            self.exitExpect(state.saved_expect);
             const result_start = child_slots.items.len - 1;
             const expr = child_slots.items[result_start].expr;
             const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
@@ -12769,7 +12880,12 @@ fn runExprKernel(
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try self.warnTrailingTrySuffix(expr.idx);
             if (state.final_expr) {
-                const return_expr_idx = if (self.enclosing_lambda) |lambda_idx|
+                const return_expr_idx = if (self.expect_context != .none)
+                    try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
+                        .region = state.region,
+                        .kind = .return_keyword,
+                    } })
+                else if (self.enclosing_lambda) |lambda_idx|
                     try self.env.addExpr(Expr{ .e_return = .{
                         .expr = expr.idx,
                         .lambda = lambda_idx,
@@ -12783,7 +12899,12 @@ fn runExprKernel(
                 const block_expr = try self.finishBlockState(state.block, CanonicalizedExpr{ .idx = return_expr_idx, .free_vars = expr.free_vars });
                 try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
             } else {
-                const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
+                const stmt_idx = if (self.expect_context != .none)
+                    try self.env.pushMalformed(Statement.Idx, Diagnostic{ .control_flow_in_expect = .{
+                        .region = state.region,
+                        .kind = .return_keyword,
+                    } })
+                else if (self.enclosing_lambda) |lambda_idx|
                     try self.env.addStatement(Statement{ .s_return = .{
                         .expr = expr.idx,
                         .lambda = lambda_idx,
@@ -13179,7 +13300,12 @@ fn runExprKernel(
             const can_inner = child_slots.items[result_start].expr;
 
             try self.warnTrailingTrySuffix(can_inner.idx);
-            const return_expr = if (self.enclosing_lambda) |lambda_idx|
+            const return_expr = if (self.expect_context != .none)
+                try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
+                    .region = state.region,
+                    .kind = .return_keyword,
+                } })
+            else if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addExpr(Expr{ .e_return = .{
                     .expr = can_inner.idx,
                     .lambda = lambda_idx,
@@ -13817,7 +13943,7 @@ fn runExprKernel(
             const state = stacks.takeFinishLambda();
             defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.enclosing_lambda = state.saved_enclosing_lambda;
-            defer self.in_expect = state.saved_in_expect;
+            defer self.expect_context = state.saved_expect_context;
             defer self.loop_depth = state.saved_loop_depth;
             defer self.endDefiningBoundVars(state.saved_defining_bound_vars);
             defer self.scratch_captures.clearFrom(state.captures_top);
@@ -15697,7 +15823,7 @@ fn introduceStringPatternCapture(
                 .region = region,
             } });
         },
-        .var_reassignment_ok => unreachable,
+        .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
     }
 
     return pattern_idx;
@@ -15928,15 +16054,15 @@ fn canonicalizePatternOrMalformed(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!Pattern.Idx {
-    if (try self.canonicalizePattern(ast_pattern_idx)) |idx| {
-        return idx;
-    } else {
-        const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(ast_pattern_idx).to_tokenized_region());
-        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
-            .region = pattern_region,
-        } });
-        return malformed_idx;
-    }
+    return try self.canonicalizePattern(ast_pattern_idx) orelse
+        try self.pushPatternNotCanonicalized(ast_pattern_idx);
+}
+
+fn pushPatternNotCanonicalized(self: *Self, ast_pattern_idx: AST.Pattern.Idx) std.mem.Allocator.Error!Pattern.Idx {
+    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(ast_pattern_idx).to_tokenized_region());
+    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
+        .region = pattern_region,
+    } });
 }
 
 /// A declaration binding a name that was referenced ahead of it. A plainly
@@ -16587,7 +16713,7 @@ fn storeExprKernelOutput(
 
 const ExprFinishAssociatedExpectWork = struct {
     work: AssociatedExpectWork,
-    was_in_expect: bool,
+    saved_expect: SavedExpectState,
 };
 
 const ExprFinishAssociatedDeclBodyWork = struct {
@@ -16634,6 +16760,7 @@ const ExprFinishBlockExpectStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
+    saved_expect: SavedExpectState,
 };
 
 const ExprFinishBlockReturnStmtWork = struct {
@@ -16858,7 +16985,7 @@ const ExprFinishLambdaWork = struct {
     body_free_vars_start: u32,
     captures_top: u32,
     saved_enclosing_lambda: ?Expr.Idx,
-    saved_in_expect: bool,
+    saved_expect_context: ExpectContext,
     saved_loop_depth: u32,
     saved_defining_bound_vars: ?DataSpan,
 };
@@ -17111,7 +17238,7 @@ const ExprKernelWork = struct {
                     continue;
                 },
                 .finish_associated_expect => {
-                    can.in_expect = self.takeFinishAssociatedExpect().was_in_expect;
+                    can.exitExpect(self.takeFinishAssociatedExpect().saved_expect);
                     continue;
                 },
                 .parse,
@@ -17883,6 +18010,16 @@ pub fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!?Pattern.Idx {
+    const enclosing_binder_group = self.beginPatternBinderGroup();
+    defer self.endPatternBinderGroup(enclosing_binder_group);
+    return self.canonicalizePatternInGroup(ast_pattern_idx);
+}
+
+/// Canonicalizes a pattern whose binders join the current pattern binder group.
+fn canonicalizePatternInGroup(
+    self: *Self,
+    ast_pattern_idx: AST.Pattern.Idx,
+) std.mem.Allocator.Error!?Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -17906,6 +18043,10 @@ pub fn canonicalizePattern(
                 .ident => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                        if (try self.claimPatternBinder(ident_idx, region)) |duplicate| {
+                            last_pattern = duplicate;
+                            continue :patternkernel_loop .dispatch;
+                        }
                         if (self.adoptForwardBinder(ident_idx, region)) |placeholder| {
                             try self.warnAboutBindingName(ident_idx, region, .immutable);
                             last_pattern = placeholder;
@@ -17942,6 +18083,10 @@ pub fn canonicalizePattern(
                                 last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
                                     .region = region,
                                 } });
+                                continue :patternkernel_loop .dispatch;
+                            },
+                            .var_reassigned_in_expect => |existing_pattern_idx| {
+                                last_pattern = try self.env.pushMalformed(Pattern.Idx, self.varReassignedInExpectDiagnostic(ident_idx, existing_pattern_idx, region));
                                 continue :patternkernel_loop .dispatch;
                             },
                             .var_reassignment_ok => |existing_pattern_idx| {
@@ -17987,6 +18132,10 @@ pub fn canonicalizePattern(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const name_region = self.parse_ir.tokens.resolve(e.ident_tok);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                        if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                            last_pattern = duplicate;
+                            continue :patternkernel_loop .dispatch;
+                        }
                         // Create a Pattern node for our mutable identifier
                         const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{
                             .ident = ident_idx,
@@ -18274,8 +18423,9 @@ pub fn canonicalizePattern(
                 try stacks.pushParse(frame_allocator, sub_pattern_idx);
             } else {
                 // Simple case: Create the RecordDestruct for this field
-                const adopted_binder = self.adoptForwardBinder(field_name_ident, field_region);
-                const assign_pattern_idx = adopted_binder orelse
+                const duplicate_binder = try self.claimPatternBinder(field_name_ident, field_region);
+                const adopted_binder = if (duplicate_binder == null) self.adoptForwardBinder(field_name_ident, field_region) else null;
+                const assign_pattern_idx = duplicate_binder orelse adopted_binder orelse
                     try self.env.addPattern(Pattern{ .assign = .{ .ident = field_name_ident } }, field_region);
                 if (adopted_binder != null) {
                     try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable);
@@ -18294,8 +18444,8 @@ pub fn canonicalizePattern(
                 try self.env.store.addScratchRecordDestruct(destruct_idx);
 
                 // Introduce the identifier into scope (an adopted binder is
-                // already there)
-                if (adopted_binder == null) {
+                // already there, and a duplicate binder binds nothing)
+                if (duplicate_binder == null and adopted_binder == null) {
                     switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, field_name_ident, assign_pattern_idx, true)) {
                         .success => try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable),
                         .shadowing_warning => |shadowed_pattern_idx| {
@@ -18323,7 +18473,7 @@ pub fn canonicalizePattern(
                             } });
                             continue :patternkernel_loop .dispatch;
                         },
-                        .var_reassignment_ok => unreachable, // is_declaration=true
+                        .var_reassigned_in_expect, .var_reassignment_ok => unreachable, // is_declaration=true
                     }
                 }
 
@@ -18451,10 +18601,14 @@ pub fn canonicalizePattern(
                 // Handle named vs unnamed rest patterns
                 var current_rest_pattern: ?Pattern.Idx = null;
                 if (ast_pattern.list_rest.name) |name_tok| {
-                    if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| {
+                    if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| list_rest_name: {
                         // Create an assign pattern for the rest variable
                         // Use the region of just the identifier token, not the full rest pattern
                         const name_region = self.parse_ir.tokens.resolve(name_tok);
+                        if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                            current_rest_pattern = duplicate;
+                            break :list_rest_name;
+                        }
                         const adopted_binder = self.adoptForwardBinder(ident_idx, name_region);
                         const assign_idx = adopted_binder orelse try self.env.addPattern(Pattern{ .assign = .{
                             .ident = ident_idx,
@@ -18484,7 +18638,7 @@ pub fn canonicalizePattern(
                                     } });
                                 },
                                 // List rest patterns are always declarations, never reassignments
-                                .var_reassignment_ok => unreachable,
+                                .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
                             }
                         }
 
@@ -18565,6 +18719,10 @@ pub fn canonicalizePattern(
             // Resolve the identifier name
             if (self.parse_ir.tokens.resolveIdentifier(state.name)) |ident_idx| {
                 const name_region = self.parse_ir.tokens.resolve(state.name);
+                if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                    last_pattern = duplicate;
+                    continue :patternkernel_loop .dispatch;
+                }
                 // Create the as pattern
                 const adopted_binder = self.adoptForwardAsBinder(ident_idx, inner_pattern, state.region);
                 const pattern_idx = adopted_binder orelse try self.env.addPattern(Pattern{
@@ -18607,7 +18765,7 @@ pub fn canonicalizePattern(
                             continue :patternkernel_loop .dispatch;
                         },
                         // As patterns are always declarations, never reassignments
-                        .var_reassignment_ok => unreachable,
+                        .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
                     }
                 }
 
@@ -18624,6 +18782,41 @@ pub fn canonicalizePattern(
     }
 
     return last_pattern;
+}
+
+const PatternBinder = struct {
+    ident: Ident.Idx,
+    region: Region,
+};
+
+/// Opens a pattern binder group nested inside the current one. Returns the
+/// enclosing group's start, which the caller passes to `endPatternBinderGroup`.
+fn beginPatternBinderGroup(self: *Self) usize {
+    const enclosing_start = self.pattern_binder_group_start;
+    self.pattern_binder_group_start = self.pattern_binders.items.len;
+    return enclosing_start;
+}
+
+fn endPatternBinderGroup(self: *Self, enclosing_start: usize) void {
+    self.pattern_binders.shrinkRetainingCapacity(self.pattern_binder_group_start);
+    self.pattern_binder_group_start = enclosing_start;
+}
+
+/// Claims `ident` for the open pattern binder group. Returns null when the
+/// name is not yet bound in the group; otherwise reports the repetition and
+/// returns the malformed pattern that replaces the repeated binder.
+fn claimPatternBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!?Pattern.Idx {
+    for (self.pattern_binders.items[self.pattern_binder_group_start..]) |binder| {
+        if (binder.ident.eql(ident)) {
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .duplicate_pattern_binder = .{
+                .ident = ident,
+                .duplicate_region = region,
+                .original_region = binder.region,
+            } });
+        }
+    }
+    try self.pattern_binders.append(self.env.gpa, .{ .ident = ident, .region = region });
+    return null;
 }
 
 /// Check if a pattern is a var
@@ -18701,6 +18894,9 @@ fn scopeIntroduceVar(
             return try self.env.pushMalformed(T, Diagnostic{ .var_across_function_boundary = .{
                 .region = region,
             } });
+        },
+        .var_reassigned_in_expect => |existing_pattern_idx| {
+            return try self.env.pushMalformed(T, self.varReassignedInExpectDiagnostic(ident_idx, existing_pattern_idx, region));
         },
         .var_reassignment_ok => |existing_pattern_idx| {
             try self.env.store.recordWriteOccurrence(existing_pattern_idx, region);
@@ -20926,6 +21122,8 @@ fn currentScopeIdx(self: *Self) usize {
 const ScopeBindingLookup = struct {
     pattern_idx: Pattern.Idx,
     crosses_function_boundary: bool,
+    /// Index into `scopes` of the scope that declares the binding.
+    scope_idx: u32,
 };
 
 /// Find an identifier and report whether reaching its declaration crossed a
@@ -20946,6 +21144,7 @@ fn scopeFindBinding(
             return .{
                 .pattern_idx = pattern_idx,
                 .crosses_function_boundary = crosses_function_boundary,
+                .scope_idx = @intCast(scope_idx),
             };
         }
 
@@ -21028,6 +21227,11 @@ pub fn scopeIntroduceInternal(
         if (!is_declaration and self.isVarPattern(existing)) {
             if (existing_binding.crosses_function_boundary) {
                 return Scope.IntroduceResult{ .var_across_function_boundary = existing };
+            }
+            // Only a block declaration's pattern writes the var it reuses; a
+            // `for` or `match` binder that reuses one leaves its value alone.
+            if (self.allow_pattern_var_reuse and existing_binding.scope_idx < self.expect_scope_floor) {
+                return Scope.IntroduceResult{ .var_reassigned_in_expect = existing };
             }
 
             // Reuse the declaration's pattern so all references identify the

@@ -2,7 +2,6 @@
 //! package is a platform, and any files imported via `import` with `Str` or `List(U8)`.
 //!
 //! Future work:
-//! - Canonicalize to discover all the files we actually need to pull in, including non-.roc files.
 //! - Create a zstd dictionary for roc code (using ~1-10MB of representative roc source code, with the zstd cli;
 //!   adds about 110KB to our final binary) and use that. It's a backwards-compatible change, as we can keep decoding
 //!   dictionary-free .zst files even after we introduce the dictionary.

@@ -185,25 +185,17 @@ fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
 /// separately compiled objects share them; a Boxy capture-drop helper is named
 /// by its capture layout's digest and descriptor field offset.
 pub fn compiledRcHelperSymbolName(allocator: std.mem.Allocator, layout_store: *const layout.Store, cache_key: u64) std.mem.Allocator.Error![]u8 {
-    var digests = try layout.Digests.init(allocator, layout_store);
-    defer digests.deinit();
-    return compiledRcHelperSymbolNameWithDigests(allocator, &digests, cache_key);
-}
-
-/// `compiledRcHelperSymbolName` over caller-owned layout digests, so naming
-/// many helpers of one unchanging layout store digests each layout once.
-pub fn compiledRcHelperSymbolNameWithDigests(allocator: std.mem.Allocator, digests: *layout.Digests, cache_key: u64) std.mem.Allocator.Error![]u8 {
     if ((cache_key >> 63) != 0) {
         const capture_layout: layout.Idx = @enumFromInt(@as(u32, @intCast((cache_key >> 32) & 0x7fff_ffff)));
         const desc_field_offset: u32 = @truncate(cache_key);
-        const hex = layout.digestSymbolHex(try digests.get(capture_layout));
+        const hex = layout.digestSymbolHex(try layout_store.contentDigest(capture_layout));
         return std.fmt.allocPrint(allocator, "roc__rc_boxy_capture_drop_{s}_{d}", .{ &hex, desc_field_offset });
     }
     const variant = RcHelperVariant{
         .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
         .atomicity = @enumFromInt(@as(u1, @intCast((cache_key >> 34) & 1))),
     };
-    return layout.rc_helper.symbolNameForDigest(allocator, variant.key.op, try digests.get(variant.key.layout_idx), switch (variant.atomicity) {
+    return layout.rc_helper.symbolName(allocator, layout_store, variant.key, switch (variant.atomicity) {
         .atomic => .atomic,
         .single_thread => .single_thread,
     });
@@ -443,6 +435,7 @@ pub const BoxyBuiltinFn = enum {
     list_reverse,
     list_sort_with,
     list_reserve,
+    list_reserve_for_append,
     list_release_excess_capacity,
 
     /// Get the exported symbol name for shim relocation resolution. Each name
@@ -495,6 +488,7 @@ pub const BoxyBuiltinFn = enum {
             .list_reverse => "roc_boxy_list_reverse",
             .list_sort_with => "roc_boxy_list_sort_with",
             .list_reserve => "roc_boxy_list_reserve",
+            .list_reserve_for_append => "roc_boxy_list_reserve_for_append",
             .list_release_excess_capacity => "roc_boxy_list_release_excess_capacity",
         };
     }
@@ -524,7 +518,7 @@ pub const BoxyBuiltinFn = enum {
             .list_swap => &.{ p, p, p, p, 4, p, p, p, 4, p, 1 },
             .list_reverse => &.{ p, p, p, p, 4, p, 4, p, 1 },
             .list_sort_with => &.{ p, p, p, p, p, 4, p, 1, p, p, 4, p, 1 },
-            .list_reserve => &.{ p, p, p, p, 4, p, p, 4, p, 1 },
+            .list_reserve, .list_reserve_for_append => &.{ p, p, p, p, 4, p, p, 4, p, 1 },
             .list_release_excess_capacity => &.{ p, p, p, p, 4, p, 4, p, 1 },
             .static_desc,
             .static_dict,
@@ -1116,6 +1110,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Register where RocOps pointer is saved (for calling builtins that need it)
         /// Proc currently being compiled, for debug-time invariant reporting.
         current_proc_name: ?Symbol = null,
+
+        /// Content identity and frame inventory of the proc currently being
+        /// compiled, which name a failed Debug check in generated code
+        /// independently of the program the code is linked into.
+        current_proc_identity: ?LIR.ProcIdentity = null,
+        current_proc_frame_locals: LIR.LocalSpan = LIR.LocalSpan.empty(),
 
         /// Statement currently being generated, for debug-time invariant reporting.
         current_stmt_id: ?CFStmtId = null,
@@ -4760,7 +4760,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_local = GuardedList.at(args, 0);
                     const list_loc = try self.emitValueLocal(list_local);
                     const spare_loc = try self.emitValueLocal(GuardedList.at(args, 1));
-                    return try self.callListReserveOp(list_local, list_loc, spare_loc, ll);
+                    return try self.callListReserveOp(list_local, list_loc, spare_loc, ll, .list_reserve, LowLevelBuiltins.listOp(.list_reserve));
+                },
+                .list_reserve_for_append => {
+                    // list_reserve_for_append(list, spare) -> List
+                    if (args.len != 2) unreachable;
+                    const list_local = GuardedList.at(args, 0);
+                    const list_loc = try self.emitValueLocal(list_local);
+                    const spare_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    return try self.callListReserveOp(list_local, list_loc, spare_loc, ll, .list_reserve_for_append, LowLevelBuiltins.listOp(.list_reserve_for_append));
                 },
                 .list_release_excess_capacity => {
                     // list_release_excess_capacity(list) -> List
@@ -7542,6 +7550,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_clear,
                 .list_replace_unsafe,
                 .list_reserve,
+                .list_reserve_for_append,
                 .list_reverse,
                 .list_sort_with,
                 .list_owned_unique,
@@ -9052,6 +9061,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9068,6 +9078,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
                 defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addMemArg(frame_ptr, list_off);
                 try builder.addMemArg(frame_ptr, list_off + 8);
@@ -9534,8 +9545,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
-        /// Call list_reserve wrapper
-        fn callListReserveOp(self: *Self, list_local: LocalId, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
+        /// Call a list reserve wrapper: `boxy_fn` for descriptor-governed
+        /// elements, `builtin_fn` otherwise.
+        fn callListReserveOp(self: *Self, list_local: LocalId, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype, boxy_fn: BoxyBuiltinFn, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const list_abi = builtinInternalListAbi(ls, "dev.callListReserveOp.builtin_list_abi", ll.ret_layout);
 
@@ -9562,7 +9574,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
-                try self.callBoxyBuiltin(&builder, .list_reserve);
+                try self.callBoxyBuiltin(&builder, boxy_fn);
             } else {
                 const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                 defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
@@ -9584,7 +9596,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
-                try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_reserve));
+                try self.callBuiltin(&builder, builtin_fn);
             }
 
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -9932,7 +9944,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Report a failed Debug invariant check on `local` through the
         /// `debug_invalid_local` builtin, which formats the message from the
         /// check's identity, so the site carries five immediates rather than
-        /// message bytes.
+        /// message bytes. The proc is named by its content identity and the
+        /// local by its position in the proc's frame inventory: program-wide
+        /// symbol and local numbers would make a proc's code depend on the
+        /// program compiling it, and an object-cache entry's message wrong in
+        /// every program that links it.
         fn emitDebugCrashInvalidLocal(
             self: *Self,
             kind: builtins.dev_wrappers.InvalidLocalKind,
@@ -9940,15 +9956,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             local: LocalId,
         ) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
-            const proc: u64 = if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64);
-            const stmt: u32 = if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32);
+            const identity = self.current_proc_identity orelse
+                std.debug.panic("LIR/codegen invariant violated: Debug check on local {d} outside a proc", .{@intFromEnum(local)});
+            const frame = self.store.getLocalSpan(self.current_proc_frame_locals);
+            var frame_index: u32 = std.math.maxInt(u32);
+            var low: usize = 0;
+            var high: usize = GuardedList.borrowLen(frame);
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                const candidate = @intFromEnum(GuardedList.at(frame, middle));
+                if (candidate < @intFromEnum(local)) {
+                    low = middle + 1;
+                } else if (candidate > @intFromEnum(local)) {
+                    high = middle;
+                } else {
+                    frame_index = @intCast(middle);
+                    break;
+                }
+            }
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addImmArg(@intFromEnum(kind));
             try builder.addImmArg(@intFromEnum(reason));
-            try builder.addImmArg(@intFromEnum(local));
-            try builder.addImmArg(@bitCast(proc));
-            try builder.addImmArg(stmt);
+            try builder.addImmArg(frame_index);
+            try builder.addImmArg(@bitCast(std.mem.readInt(u64, identity.bytes[0..8], .big)));
+            try builder.addImmArg(@bitCast(std.mem.readInt(u64, identity.bytes[8..16], .big)));
             try self.callBuiltin(&builder, .debug_invalid_local);
             try self.emitTrap();
         }
@@ -10180,7 +10212,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 op != .list_swap and op != .list_drop_first and op != .list_drop_last and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
                 op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
-                op != .list_reserve and op != .list_release_excess_capacity and op != .list_clear) return null;
+                op != .list_reserve and op != .list_reserve_for_append and op != .list_release_excess_capacity and op != .list_clear) return null;
             const abi = builtinInternalListAbi(self.layout_store, "dev.stack_plan.list_abi", self.localLayout(s.target));
             if (abi.elem_size_align.size == 0) return null;
             const args = self.store.getLocalSpan(s.args);
@@ -18226,6 +18258,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const base_slot = self.codegen.allocStackSlot(8);
                 try self.emitStore(.w64, frame_ptr, base_slot, ret_reg_0);
                 var projection_builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer projection_builder.deinit();
                 try projection_builder.addMemArg(frame_ptr, base_slot);
                 if (assign.box_payload_layout) |box_layout| {
                     try projection_builder.addImmArg(@intFromEnum(box_layout));
@@ -20848,6 +20881,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_runtime_ret_desc_local = self.runtime_ret_desc_local;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
             const saved_current_proc_name = self.current_proc_name;
+            const saved_current_proc_identity = self.current_proc_identity;
+            const saved_current_proc_frame_locals = self.current_proc_frame_locals;
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
             const saved_vector_local_by_reg = self.vector_local_by_reg;
@@ -20886,6 +20921,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.runtime_ret_desc_local = proc.runtime_ret_desc;
             self.uses_caller_stack_arg_base = false;
             self.current_proc_name = proc.name;
+            self.current_proc_identity = proc.identity;
+            self.current_proc_frame_locals = proc.frame_locals;
             self.current_proc_args = proc.args;
             self.current_stmt_id = null;
 
@@ -20953,6 +20990,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
                 self.current_proc_name = saved_current_proc_name;
+                self.current_proc_identity = saved_current_proc_identity;
+                self.current_proc_frame_locals = saved_current_proc_frame_locals;
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
                 self.vector_local_by_reg = saved_vector_local_by_reg;
@@ -21202,6 +21241,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.runtime_ret_desc_ptr_slot = saved_runtime_ret_desc_ptr_slot;
             self.runtime_ret_desc_local = saved_runtime_ret_desc_local;
             self.current_proc_name = saved_current_proc_name;
+            self.current_proc_identity = saved_current_proc_identity;
+            self.current_proc_frame_locals = saved_current_proc_frame_locals;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
             std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &saved_local_locations);
@@ -25708,11 +25749,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// been placed. Missing symbols are a coordinator contract violation.
         pub fn resolveAssembledSymbolicRefs(self: *Self) Allocator.Error!void {
             if (self.assembled_symbolic_refs.items.len == 0) return;
-            var digests = try layout.Digests.init(self.allocator, self.layout_store);
-            defer digests.deinit();
             var helpers = self.compiled_rc_helpers.iterator();
             while (helpers.next()) |helper| {
-                const name = try compiledRcHelperSymbolNameWithDigests(self.allocator, &digests, helper.key_ptr.*);
+                const name = try compiledRcHelperSymbolName(self.allocator, self.layout_store, helper.key_ptr.*);
                 defer self.allocator.free(name);
                 try self.registerSplicedHelper(name, helper.value_ptr.*);
             }

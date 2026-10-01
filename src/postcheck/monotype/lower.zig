@@ -5840,7 +5840,7 @@ const Builder = struct {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
+            .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -13269,7 +13269,6 @@ const Builder = struct {
                 .crash,
                 .comptime_exhaustiveness_failed,
                 .def_ref,
-                .inline_expects_enabled,
                 => {},
                 .fn_ref => |fn_ref| for (program.captureOperandSpan(fn_ref.captures)) |operand| try search.push(.{ .expr = operand.value }),
                 .uninitialized_payload => |payload| return builder.localDependsOnTarget(payload.condition, search.target, search.bound()),
@@ -14778,7 +14777,8 @@ const CompletedDirectCallee = struct {
     fn_node: NodeId,
 };
 
-/// The graph request one direct call expression instantiated. A body asks
+/// The graph request one direct call expression instantiated in one scope.
+/// A body asks
 /// for a direct call's result type from several places (structural-equality
 /// operand sealing, argument evidence for an enclosing call, argument
 /// preparation) before it lowers the call itself, and every one of those
@@ -14979,7 +14979,6 @@ const DraftExprData = union(enum(u8)) {
     str_lit: DraftStringLiteralId,
     bytes_lit: DraftPackedListLiteral,
     static_data_candidate: DraftStaticDataCandidate,
-    inline_expects_enabled: void,
     comptime_value: struct { root: DraftComptimeValueRootId, initializer: DraftExprId },
     list: DraftSpan(DraftExprId),
     tuple: DraftSpan(DraftExprId),
@@ -18517,7 +18516,6 @@ const BodyDraftStore = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
-            .inline_expects_enabled,
             .comptime_value,
             .typed_boundary,
             .list,
@@ -18620,7 +18618,6 @@ const BodyDraftStore = struct {
                 .str_lit,
                 .bytes_lit,
                 .static_data_candidate,
-                .inline_expects_enabled,
                 .comptime_value,
                 .list,
                 .tuple,
@@ -18698,7 +18695,6 @@ const BodyDraftStore = struct {
                 .element = literal.element,
                 .product_width = literal.product_width,
             } },
-            .inline_expects_enabled => .{ .inline_expects_enabled = {} },
             .comptime_value => |value| .{ .comptime_value = .{
                 .root = try self.commitComptimeValueRoot(program, comptime_roots, value.root),
                 .initializer = ids.expr(value.initializer),
@@ -19586,6 +19582,10 @@ const TypeInstantiationContext = struct {
     module_bytes: [32]u8,
     node_map: InstantiatingNodeMap,
     field_kind_map: collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind),
+    /// A direct call's request belongs to the same instantiation as its checked
+    /// argument cells. Default materializations must not reuse a caller's or
+    /// another materialization's request, even for the same checked expression.
+    direct_call_requests: collections.DenseMap(checked.CheckedExprId, DirectCallRequest),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*InstantiatingNodeMap) = .empty,
@@ -19602,6 +19602,7 @@ const TypeInstantiationContext = struct {
             .module_bytes = module_bytes,
             .node_map = InstantiatingNodeMap.init(allocator),
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
+            .direct_call_requests = collections.DenseMap(checked.CheckedExprId, DirectCallRequest).init(allocator),
         };
     }
 
@@ -19610,6 +19611,7 @@ const TypeInstantiationContext = struct {
         self.field_kind_decl_scopes.deinit(self.allocator);
         self.node_map.deinit();
         self.field_kind_map.deinit();
+        self.direct_call_requests.deinit();
     }
 };
 
@@ -19684,9 +19686,6 @@ const BodyContext = struct {
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
     propagate_constructor_value_evidence: bool = false,
-    /// One shared request interface per direct call expression of this body;
-    /// see `DirectCallRequest`.
-    direct_call_requests: std.AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
     /// Result-type reads of dispatch expressions carrying no expected cell,
     /// shared by every later such read of the same expression (see
     /// `sharedDispatchTypeRead`).
@@ -19780,6 +19779,10 @@ const BodyContext = struct {
     /// sibling name bound by the same top-level destructure) is an ordinary
     /// constant use there, restored recursively like a top-level constant.
     in_deferred_body: bool = false,
+    /// An expression statement whose expression is a guarded hoisted root. Its
+    /// value is discarded, so the root has nothing to restore there; the
+    /// statement lowers its original expression, keeping its failure in place.
+    in_place_statement_expr: ?checked.CheckedExprId = null,
     /// Generated local for the top-level constant root currently being
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
@@ -20742,7 +20745,6 @@ const BodyContext = struct {
         self.deinitSpareInstFrames();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
-        self.direct_call_requests.deinit(self.allocator);
         self.dispatch_type_reads.deinit(self.allocator);
         self.related_constructors.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
@@ -20998,7 +21000,6 @@ const BodyContext = struct {
             .uninitialized_payload,
             => null,
             .static_data_candidate => |candidate| self.exprImpossibilityProof(candidate.runtime_expr),
-            .inline_expects_enabled => null,
             .comptime_value => |candidate| self.exprImpossibilityProof(candidate.initializer),
             .@"unreachable",
             .break_,
@@ -22957,7 +22958,6 @@ const BodyContext = struct {
                 .str_lit,
                 .bytes_lit,
                 .static_data_candidate,
-                .inline_expects_enabled,
                 .comptime_value,
                 .record_update,
                 .lambda,
@@ -23190,7 +23190,6 @@ const BodyContext = struct {
                 .comptime_exhaustiveness_failed,
                 .def_ref,
                 .fn_ref,
-                .inline_expects_enabled,
                 => {},
                 .uninitialized_payload => |payload| return try ctx.localDependsOnTarget(payload.condition, search.target, &search.bound),
                 .list,
@@ -25607,6 +25606,27 @@ const BodyContext = struct {
         produced: NodeId,
     };
 
+    /// Request-completion relations of the pairs one produced-value walk
+    /// enters. A pair's relation is a fact about its whole subtree, so a walk
+    /// that asks it of every container on a path would otherwise re-walk each
+    /// subtree once per enclosing container. Relations are recorded while the
+    /// first query walks the subtree and hold while the graph's
+    /// `structure_epoch` is unchanged; a relation decided by assuming a pair
+    /// still on the walked path is not recorded, since it holds only under
+    /// that assumption.
+    const CompletionMemo = struct {
+        epoch: u32,
+        relations: std.AutoHashMap(RequestCompletionPair, RequestCompletion),
+
+        fn init(allocator: Allocator) CompletionMemo {
+            return .{ .epoch = 0, .relations = std.AutoHashMap(RequestCompletionPair, RequestCompletion).init(allocator) };
+        }
+
+        fn deinit(self: *CompletionMemo) void {
+            self.relations.deinit();
+        }
+    };
+
     const ProducedValueRowKind = enum {
         record,
         tag_union,
@@ -25621,7 +25641,29 @@ const BodyContext = struct {
         defer timing_scope.end();
         var visiting = std.AutoHashMap(RequestCompletionPair, void).init(self.allocator);
         defer visiting.deinit();
-        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting)) == .completed;
+        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting, null)) == .completed;
+    }
+
+    /// `resultCompletesRequest` for a pair a produced-value walk enters,
+    /// answered from the walk's memo while the graph is unchanged.
+    fn producedPairCompletesRequest(
+        self: *BodyContext,
+        checked_root: NodeId,
+        produced_root: NodeId,
+        memo: *CompletionMemo,
+    ) Allocator.Error!bool {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
+        const pair = RequestCompletionPair{ .request = self.graph.rootNode(checked_root), .produced = self.graph.rootNode(produced_root) };
+        if (memo.epoch != self.graph.structure_epoch) {
+            memo.relations.clearRetainingCapacity();
+            memo.epoch = self.graph.structure_epoch;
+        } else if (memo.relations.get(pair)) |relation| {
+            return relation == .completed;
+        }
+        var visiting = std.AutoHashMap(RequestCompletionPair, void).init(self.allocator);
+        defer visiting.deinit();
+        return (try self.requestCompletionRelation(checked_root, produced_root, &visiting, memo)) == .completed;
     }
 
     fn relateCheckedNodeToProducedValue(
@@ -25631,7 +25673,9 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         var visiting = std.AutoHashMap(ProducedValuePair, void).init(self.allocator);
         defer visiting.deinit();
-        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting);
+        var completions = CompletionMemo.init(self.allocator);
+        defer completions.deinit();
+        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting, &completions);
     }
 
     /// One step of relating a matching container's children: a child pair
@@ -25665,6 +25709,7 @@ const BodyContext = struct {
         root_checked: NodeId,
         root_produced: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
+        completions: *CompletionMemo,
     ) Allocator.Error!NodeId {
         var frames: std.ArrayListUnmanaged(ProducedValueFrame) = .empty;
         defer frames.deinit(self.allocator);
@@ -25676,7 +25721,7 @@ const BodyContext = struct {
             _ = visiting.remove(frame.pair);
         };
 
-        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, &frames, &ops, &results);
+        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, completions, &frames, &ops, &results);
         while (true) {
             if (delivered) |node| {
                 if (frames.items.len == 0) return node;
@@ -25690,7 +25735,7 @@ const BodyContext = struct {
                 frames.items[frames.items.len - 1].next += 1;
                 switch (op) {
                     .child => |child| {
-                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, &frames, &ops, &results);
+                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, completions, &frames, &ops, &results);
                         continue;
                     },
                     .field_name => |field| failed = field.checked != field.produced,
@@ -25717,6 +25762,7 @@ const BodyContext = struct {
         checked_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
+        completions: *CompletionMemo,
         frames: *std.ArrayListUnmanaged(ProducedValueFrame),
         ops: *std.ArrayListUnmanaged(ProducedValueOp),
         results: *std.ArrayListUnmanaged(NodeId),
@@ -25755,7 +25801,7 @@ const BodyContext = struct {
             }
             return checked_node;
         }
-        if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
+        if (try self.producedPairCompletesRequest(checked_root, produced_root, completions)) return produced_node;
 
         const ops_start = ops.items.len;
         const matched: bool = matched: {
@@ -26103,18 +26149,22 @@ const BodyContext = struct {
     /// Whether a produced value's graph completes a request's. Composite
     /// relations are explicit frames over their child relations, so type
     /// depth never becomes native call depth; a pair already on the current
-    /// path is unchanged by assumption.
+    /// path is unchanged by assumption. With `memo`, every relation decided
+    /// without such an assumption is recorded for its pair.
     fn requestCompletionRelation(
         self: *BodyContext,
         request_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        memo: ?*CompletionMemo,
     ) Allocator.Error!RequestCompletion {
         const Frame = struct {
             pair: RequestCompletionPair,
             ops_start: usize,
             next: usize,
             relation: RequestCompletion,
+            /// Whether a relation below this frame assumed a pair on the path.
+            assumed: bool = false,
         };
         var frames: std.ArrayListUnmanaged(Frame) = .empty;
         defer frames.deinit(self.allocator);
@@ -26126,7 +26176,11 @@ const BodyContext = struct {
 
         var delivered: RequestCompletion = undefined;
         var has_delivery = false;
-        if (try self.enterRequestCompletion(request_node, produced_node, visiting, &ops)) |relation| return relation;
+        var assumed = false;
+        if (try self.enterRequestCompletion(request_node, produced_node, visiting, &ops, &assumed)) |relation| {
+            if (memo) |m| try m.relations.put(.{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) }, relation);
+            return relation;
+        }
         try frames.append(self.allocator, .{
             .pair = .{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) },
             .ops_start = 0,
@@ -26159,7 +26213,13 @@ const BodyContext = struct {
                     const op = ops.items[frame.next];
                     frame.next += 1;
                     const ops_start = ops.items.len;
-                    if (try self.enterRequestCompletion(op.request, op.produced, visiting, &ops)) |relation| {
+                    assumed = false;
+                    if (try self.enterRequestCompletion(op.request, op.produced, visiting, &ops, &assumed)) |relation| {
+                        if (assumed) {
+                            for (frames.items) |*open| open.assumed = true;
+                        } else if (memo) |m| {
+                            try m.relations.put(.{ .request = self.graph.rootNode(op.request), .produced = self.graph.rootNode(op.produced) }, relation);
+                        }
                         delivered = relation;
                         has_delivery = true;
                     } else {
@@ -26178,6 +26238,7 @@ const BodyContext = struct {
             const done = frames.pop().?;
             _ = visiting.remove(done.pair);
             ops.shrinkRetainingCapacity(done.ops_start);
+            if (memo) |m| if (!done.assumed) try m.relations.put(done.pair, finished.?);
             if (frames.items.len == 0) return finished.?;
             delivered = finished.?;
             has_delivery = true;
@@ -26192,6 +26253,7 @@ const BodyContext = struct {
         produced_node: NodeId,
         visiting: *std.AutoHashMap(RequestCompletionPair, void),
         ops: *std.ArrayListUnmanaged(RequestCompletionOp),
+        assumed: *bool,
     ) Allocator.Error!?RequestCompletion {
         const gpa = self.allocator;
         const request_root = self.graph.rootNode(request_node);
@@ -26205,7 +26267,10 @@ const BodyContext = struct {
 
         const pair = RequestCompletionPair{ .request = request_root, .produced = produced_root };
         const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return .unchanged;
+        if (entry.found_existing) {
+            assumed.* = true;
+            return .unchanged;
+        }
         const start = ops.items.len;
         const relation: ?RequestCompletion = relation: {
             if (self.checkedPublicInspectableBacking(produced_root)) |backing| {
@@ -27808,7 +27873,7 @@ const BodyContext = struct {
             1 => return .{ .ret = input.? },
             else => {
                 const fn_node = input.?.nodeValue();
-                try self.direct_call_requests.put(self.allocator, task.expr, .{ .fn_node = fn_node });
+                try self.instantiation.direct_call_requests.put(task.expr, .{ .fn_node = fn_node });
                 return .{ .ret = .{ .node = fn_node } };
             },
         }
@@ -27824,7 +27889,7 @@ const BodyContext = struct {
             frame.cursor = 1;
             return evidenceCall(self, type_task);
         }
-        if (self.direct_call_requests.get(task.expr)) |request| {
+        if (self.instantiation.direct_call_requests.get(task.expr)) |request| {
             self.builder.countBodyDiagnostic("direct_call_request_reuses");
             if (task.expected_ret_node) |expected| {
                 const fn_nodes = try self.graph.functionNodes(request.fn_node);
@@ -28162,7 +28227,7 @@ const BodyContext = struct {
         const call = task.call;
         const fn_node = task.fn_node;
         if (frame.cursor == 0) {
-            if (self.direct_call_requests.get(checked_expr)) |request| {
+            if (self.instantiation.direct_call_requests.get(checked_expr)) |request| {
                 if (request.fn_node == fn_node) {
                     if (request.completed) |completed| return .{ .ret = .{ .node = (try self.graph.functionNodes(completed.fn_node)).ret } };
                 }
@@ -28203,7 +28268,7 @@ const BodyContext = struct {
     fn stepPrepareArgs(self: *BodyContext, frame: *EvidenceFrame, task: *PrepareArgsTask, direct_call: bool) Allocator.Error!EvidenceStep {
         if (frame.cursor == 0) {
             if (direct_call) {
-                if (self.direct_call_requests.get(task.expr)) |request| {
+                if (self.instantiation.direct_call_requests.get(task.expr)) |request| {
                     if (request.fn_node == task.fn_node and request.args_prepared) return .{ .ret = .none };
                 }
             }
@@ -28229,7 +28294,7 @@ const BodyContext = struct {
             if (self.isNestedCallableExpr(expr)) return .{ .draft_nested = .{ .ctx = self, .expr = expr, .request_fn_node = request_fn_node } };
         }
         if (direct_call) {
-            if (self.direct_call_requests.getPtr(task.expr)) |request| {
+            if (self.instantiation.direct_call_requests.getPtr(task.expr)) |request| {
                 if (request.fn_node == task.fn_node) {
                     request.args_related = true;
                     request.args_prepared = true;
@@ -28240,7 +28305,7 @@ const BodyContext = struct {
     }
 
     fn directCallArgsRelated(self: *const BodyContext, checked_expr: checked.CheckedExprId, fn_node: NodeId) bool {
-        const request = self.direct_call_requests.get(checked_expr) orelse return false;
+        const request = self.instantiation.direct_call_requests.get(checked_expr) orelse return false;
         return request.fn_node == fn_node and request.args_related;
     }
 
@@ -28453,7 +28518,7 @@ const BodyContext = struct {
             return evidenceCall(self, .{ .relate = .{ .expr = call.args[task.index], .expected_node = task.child_nodes[task.index] } });
         }
         if (frame.cursor == 4) {
-            if (self.direct_call_requests.getPtr(task.expr)) |request| {
+            if (self.instantiation.direct_call_requests.getPtr(task.expr)) |request| {
                 if (request.fn_node == task.fn_node) request.args_related = true;
             }
         }
@@ -29136,7 +29201,7 @@ const BodyContext = struct {
         /// runtime representation from every branch unless `select` is false.
         output: ?BranchOutput = null,
         select: bool = true,
-        stage: enum { start, guard, body, scrutinee } = .start,
+        stage: enum { start, guard, body, scrutinee, divergent } = .start,
         comptime_site: ?DraftComptimeSiteId = null,
         selection: ControlFlowResultSelection = undefined,
         scrutinee_node: NodeId = undefined,
@@ -29176,6 +29241,16 @@ const BodyContext = struct {
         const match = task.match;
         switch (task.stage) {
             .start => {
+                // A divergent scrutinee never produces a value for a branch to
+                // inspect: no pattern is observed at runtime, and the match is
+                // exactly its scrutinee's divergence. Checking relates no branch
+                // pattern to a scrutinee that always crashes, so those patterns
+                // need not even agree with each other and must not be
+                // instantiated here.
+                if (try self.divergentExprInContextStep(match.cond, .{ .type_cell = task.result_cell })) |step| {
+                    task.stage = .divergent;
+                    return step;
+                }
                 task.comptime_site = try self.matchComptimeSite(task.expr_id, match);
                 if (task.output == null) {
                     task.output = try self.beginControlFlowValueOutput(
@@ -29201,6 +29276,7 @@ const BodyContext = struct {
             },
             .body => try self.finishMatchBranchBody(task, input.?.exprValue()),
             .scrutinee => return self.finishMatch(task, input.?.exprValue()),
+            .divergent => return .{ .ret = input.? },
         }
 
         // All checked pattern evidence must reach the shared scrutinee before
@@ -29639,16 +29715,14 @@ const BodyContext = struct {
         statement: checked.CheckedStatementId,
         diverges: bool,
         saved: ?SavedSourceLocation = null,
-        stage: enum { start, pattern_value, divergent_value, expr_value, state_only, dbg, expect, stateful_expect, loop, return_value } = .start,
+        /// `in_place_statement_expr` before an expression statement's value
+        /// lowered, restored once it has.
+        saved_in_place: ?checked.CheckedExprId = null,
+        stage: enum { start, pattern_value, divergent_value, expr_value, state_only, dbg, expect, loop, return_value } = .start,
         requested_cell: DraftTypeCell = undefined,
         /// The binders a stateful statement reassigns. Owned.
         merge_binders: []MergeBinder = &.{},
         state_cell: DraftTypeCell = undefined,
-        condition_cell: DraftTypeCell = undefined,
-        condition_state_cell: DraftTypeCell = undefined,
-        unit_cell: DraftTypeCell = undefined,
-        unit: DraftExprId = undefined,
-        omitted: ?DraftExprId = null,
     };
 
     fn releaseStatementTask(self: *BodyContext, task: *StatementTask) void {
@@ -29675,14 +29749,17 @@ const BodyContext = struct {
                 };
                 return self.finishStatement(task, stmt, lowered.termination);
             },
-            .divergent_value, .expr_value => return self.finishStatement(task, .{ .expr = input.?.exprValue() }, .none),
+            .divergent_value => return self.finishStatement(task, .{ .expr = input.?.exprValue() }, .none),
+            .expr_value => {
+                self.in_place_statement_expr = task.saved_in_place;
+                return self.finishStatement(task, .{ .expr = input.?.exprValue() }, .none);
+            },
             .state_only => return self.finishStatement(task, .{ .let_ = .{
                 .pat = try self.stateOnlyPatternAtTypeCell(task.state_cell, task.merge_binders),
                 .value = input.?.exprValue(),
             } }, .none),
             .dbg => return self.finishStatement(task, .{ .dbg = input.?.exprValue() }, .none),
             .expect => return self.finishStatement(task, .{ .expect = input.?.exprValue() }, .none),
-            .stateful_expect => return self.finishStatement(task, try self.finishStatefulExpectStatement(task, input.?.exprValue()), .none),
             .loop => {
                 const lowered = input.?.statementValue();
                 self.restoreSourceLocation(&task.saved);
@@ -29731,6 +29808,10 @@ const BodyContext = struct {
                 task.merge_binders = try self.stateMergeBinders(child);
                 if (task.merge_binders.len == 0) {
                     task.stage = .expr_value;
+                    task.saved_in_place = self.in_place_statement_expr;
+                    if (self.view.hoisted_constants.lookupByExpr(child)) |entry| {
+                        if (self.view.compile_time_roots.root(entry.root).guarded) self.in_place_statement_expr = child;
+                    }
                     return requestLowerTask(self, .{ .expr = .{ .expr = child } });
                 }
                 task.state_cell = try self.stateOnlyTypeCell(task.merge_binders);
@@ -29802,75 +29883,8 @@ const BodyContext = struct {
     }
 
     fn beginExpectStatement(self: *BodyContext, task: *StatementTask, child: checked.CheckedExprId) Allocator.Error!LowerStep {
-        task.merge_binders = try self.stateMergeBinders(child);
-        if (task.merge_binders.len == 0) {
-            task.stage = .expect;
-            return requestLowerTask(self, .{ .expr = .{ .expr = child } });
-        }
-        const merges = task.merge_binders;
-        task.unit_cell = .{ .sealed = try self.unitType() };
-        task.condition_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child));
-        task.state_cell = try self.stateResultTypeCell(merges, task.unit_cell);
-        task.condition_state_cell = try self.stateResultTypeCell(merges, task.condition_cell);
-        task.unit = try self.addExprWithTypeCell(task.unit_cell, .unit);
-        task.omitted = if (self.builder.inline_expects == .shared)
-            try self.stateResultTupleExprAtTypeCells(task.state_cell, merges, task.unit)
-        else
-            null;
-        task.stage = .stateful_expect;
-        return branchBodyStep(self, child, .{ .state_result = .{
-            .result_cell = task.condition_cell,
-            .state_cell = task.condition_state_cell,
-            .merge_binders = merges,
-        } });
-    }
-
-    fn finishStatefulExpectStatement(self: *BodyContext, task: *StatementTask, condition_state: DraftExprId) Allocator.Error!DraftStmt {
-        const merges = task.merge_binders;
-        const unit_cell = task.unit_cell;
-        const condition_cell = task.condition_cell;
-        const state_cell = task.state_cell;
-        const condition_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
-        defer self.allocator.free(condition_pattern);
-        for (merges, 0..) |merge, i| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
-            try self.bindLocalName(local, merge.binder);
-            try self.binders.put(merge.binder, local);
-            condition_pattern[i] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
-        }
-        const condition_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), condition_cell, null);
-        condition_pattern[merges.len] = try self.addPatWithTypeCell(condition_cell, .{ .bind = condition_local });
-        const run_statements = [_]DraftStmtId{
-            try self.addStmt(.{ .let_ = .{
-                .pat = try self.addPatWithTypeCell(task.condition_state_cell, .{ .tuple = try self.addPatSpan(condition_pattern) }),
-                .value = condition_state,
-            } }),
-            try self.addStmt(.{ .expect = try self.addExprWithTypeCell(condition_cell, .{ .local = condition_local }) }),
-        };
-        const executed = try self.addExprWithTypeCell(state_cell, .{ .block = .{
-            .statements = try self.addStmtSpan(&run_statements),
-            .final_expr = try self.stateResultTupleExprAtTypeCells(state_cell, merges, task.unit),
-        } });
-        const choice = if (task.omitted) |omitted_state| blk: {
-            const enabled = try self.addExpr(.{ .ty = try self.primitiveType(.bool), .data = .inline_expects_enabled });
-            break :blk try self.addExprWithTypeCell(state_cell, .{ .if_ = .{
-                .branches = try self.addIfBranchSpan(&.{.{ .cond = enabled, .body = executed }}),
-                .final_else = omitted_state,
-            } });
-        } else executed;
-        const output_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
-        defer self.allocator.free(output_pattern);
-        for (merges, 0..) |merge, i| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
-            try self.bindLocalName(local, merge.binder);
-            try self.binders.put(merge.binder, local);
-            output_pattern[i] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
-        }
-        output_pattern[merges.len] = try self.addPatWithTypeCell(unit_cell, .wildcard);
-        return .{ .let_ = .{
-            .pat = try self.addPatWithTypeCell(state_cell, .{ .tuple = try self.addPatSpan(output_pattern) }),
-            .value = choice,
-        } };
+        task.stage = .expect;
+        return requestLowerTask(self, .{ .expr = .{ .expr = child } });
     }
 
     /// A return's value lowered as a child task, producing the return's
@@ -32029,7 +32043,17 @@ const BodyContext = struct {
                 task.field_access_start = start;
                 return requestLowerChild(self, field.receiver, .{ .sealed = receiver_ty });
             },
-            .tuple_access => |access| return requestLowerTask(self, .{ .expr = .{ .expr = access.tuple } }),
+            .tuple_access => |access| {
+                // The receiver stays attached to the specialization graph
+                // through its tuple node: a receiver such as a `match` may
+                // still carry an open row that only the whole program settles,
+                // so it has no standalone Monotype to lower at yet.
+                const tuple_node = try self.lowerExprTypeNode(access.tuple);
+                const item_nodes = try self.graph.tupleItemNodes(tuple_node);
+                if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
+                try relateRequestComponent(self.graph, try self.graph.importMono(ty), item_nodes[access.elem_index]);
+                return requestLowerChild(self, access.tuple, DraftTypeCell.fromGraphNode(tuple_node));
+            },
             .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = .{ .sealed = ty } } }),
             .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } }),
             .block => |block| return requestLowerTask(self, .{ .block = .{
@@ -33417,7 +33441,18 @@ const BodyContext = struct {
     ) ?checked.HoistedConstEntry {
         const entry = self.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
+        if (hoistedConstRunsAtRuntime(self.view, entry)) return null;
+        // A guarded binding root's declaration stays in the runtime body with
+        // its original right-hand side; the binder's uses read that local.
+        if (entry.pattern != null and self.view.compile_time_roots.root(entry.root).guarded) return null;
+        if (self.in_place_statement_expr != null and self.in_place_statement_expr.? == expr_id) return null;
         return entry;
+    }
+
+    /// A guarded hoisted root whose compile-time evaluation failed has no
+    /// stored value. Its original expression and declaration lower in place.
+    fn hoistedConstRunsAtRuntime(view: ModuleView, entry: checked.HoistedConstEntry) bool {
+        return view.compile_time_roots.root(entry.root).payload == .runtime;
     }
 
     fn selectedHoistedConstEntry(
@@ -34008,7 +34043,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
+            .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -34081,7 +34116,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
-            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
+            .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -40469,7 +40504,7 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const u64_ty = try self.primitiveType(.u64);
-        const reserved = try self.lowLevelExpr(.list_reserve, &.{ list_expr, try self.intLiteralExpr(1, u64_ty) }, list_ty);
+        const reserved = try self.lowLevelExpr(.list_reserve_for_append, &.{ list_expr, try self.intLiteralExpr(1, u64_ty) }, list_ty);
         return try self.lowLevelExpr(.list_append_unsafe, &.{ reserved, elem_expr }, list_ty);
     }
 
@@ -41886,7 +41921,7 @@ const BodyContext = struct {
     }
 
     /// The request interface of a direct call expression, instantiated once
-    /// per body and shared by every later read of the same expression (see
+    /// per instantiation scope and shared by later reads of that expression (see
     /// `DirectCallRequest`). A later read that carries an expected result
     /// cell relates it to the shared request exactly as a fresh
     /// instantiation would. Requests whose interface depends on the read
@@ -41929,7 +41964,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         fn_node: NodeId,
     ) Allocator.Error!CompletedDirectCallee {
-        if (self.direct_call_requests.get(checked_expr)) |request| {
+        if (self.instantiation.direct_call_requests.get(checked_expr)) |request| {
             if (request.fn_node == fn_node) {
                 if (request.completed) |completed| return completed;
             }
@@ -41944,7 +41979,7 @@ const BodyContext = struct {
             .callee = callee,
             .fn_node = try self.draftFnSlotTypeNode(callee, fn_node),
         };
-        if (self.direct_call_requests.getPtr(checked_expr)) |request| {
+        if (self.instantiation.direct_call_requests.getPtr(checked_expr)) |request| {
             if (request.fn_node == fn_node) request.completed = completed;
         }
         return completed;
@@ -48408,7 +48443,7 @@ const BodyContext = struct {
         switch (root.payload) {
             .const_node => |node| return try self.restoreConstNodeAtNode(self.view, self.view, node, request_node),
             .pending => {},
-            .fn_value, .discarded, .expect => Common.invariant("literal conversion root stored a non-constant payload"),
+            .fn_value, .discarded, .expect, .runtime => Common.invariant("literal conversion root stored a non-constant payload"),
         }
         if (self.builder.comptimeValueReadDeclared(self.view, root_id)) {
             return try self.declaredComptimeValueRead(self.view, root_id, DraftTypeCell.fromGraphNode(request_node), null);
@@ -61416,6 +61451,15 @@ const BodyContext = struct {
         }
     }
 
+    /// Whether a declaration's binder is restored from its hoisted root rather
+    /// than bound by lowering the declaration. A guarded root's declaration
+    /// always stays and evaluates its original right-hand side, so a failure
+    /// surfaces at the declaration just as it does without the root.
+    fn hoistedBindingRestored(self: *const BodyContext, pattern: checked.CheckedPatternId) bool {
+        const entry = self.view.hoisted_constants.lookupByPattern(pattern) orelse return false;
+        return !self.view.compile_time_roots.root(entry.root).guarded;
+    }
+
     fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
@@ -61429,7 +61473,7 @@ const BodyContext = struct {
                 // information but has no runtime value to bind.
                 .anno_only => false,
                 .pending => Common.invariant("pending checked declaration reached Monotype runtime statement filter"),
-                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null and
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => !self.hoistedBindingRestored(decl.pattern) and
                     !self.view.compile_time_roots.validationResolvedByPattern(decl.pattern),
             },
             .var_,
@@ -61850,7 +61894,7 @@ const BodyContext = struct {
     fn prepareLoopCarries(self: *BodyContext, plan: ?checked.LoopMutationPlanId) Allocator.Error![]LoopCarry {
         var carries = std.ArrayList(LoopCarry).empty;
         errdefer carries.deinit(self.allocator);
-        for (self.loopMutationSpans(plan)) |binders| for (binders) |binder| {
+        for (self.loopMutationBinders(plan)) |binder| {
             const initial = self.binders.get(binder) orelse continue;
             const ty = self.localTypeCell(initial);
             // The loop parameter is an ordinary version of the binder's local:
@@ -61864,7 +61908,7 @@ const BodyContext = struct {
                 .param_local = param_local,
                 .ty = ty,
             });
-        };
+        }
         return try carries.toOwnedSlice(self.allocator);
     }
 
@@ -61958,9 +62002,9 @@ const BodyContext = struct {
             .unary_not,
             .dbg,
             => |child| try pending.append(gpa, .{ .expr = child }),
-            .expect => |child| if (self.builder.inline_expects.includesConditions()) {
-                try pending.append(gpa, .{ .expr = child });
-            },
+            // An expect body can only reassign vars declared inside it, so
+            // it never changes state an enclosing construct carries.
+            .expect => {},
             .expect_err => |expect_err| try pending.append(gpa, .{ .expr = expect_err.expr }),
             .field_access => |field| try pending.append(gpa, .{ .expr = field.receiver }),
             .structural_eq => |eq| {
@@ -62025,9 +62069,7 @@ const BodyContext = struct {
             .dbg,
             .expr,
             => |expr| try pending.append(gpa, .{ .expr = expr }),
-            .expect => |expr| if (self.builder.inline_expects.includesConditions()) {
-                try pending.append(gpa, .{ .expr = expr });
-            },
+            .expect => {},
             .for_ => |for_| {
                 try pending.append(gpa, .{ .expr = for_.expr });
                 try pending.append(gpa, .{ .loop_mutations = for_.mutations });
@@ -62053,18 +62095,13 @@ const BodyContext = struct {
         plan: ?checked.LoopMutationPlanId,
         out: *std.ArrayList(checked.PatternBinderId),
     ) Allocator.Error!void {
-        const spans = self.loopMutationSpans(plan);
-        for (spans) |binders| for (binders) |binder| try self.appendUniqueBinder(out, binder);
+        for (self.loopMutationBinders(plan)) |binder| try self.appendUniqueBinder(out, binder);
     }
 
-    /// The published binders a loop carries under this compilation's expect mode.
-    fn loopMutationSpans(self: *BodyContext, plan: ?checked.LoopMutationPlanId) [2][]const checked.PatternBinderId {
-        const mutations = self.view.bodies.loopMutations(plan orelse Common.invariant("checked loop omitted its mutation plan"));
-        const pool = self.view.bodies.patternBinderIdPool();
-        return .{
-            pool[mutations.always.start..][0..mutations.always.len],
-            if (self.builder.inline_expects.includesConditions()) pool[mutations.expect_only.start..][0..mutations.expect_only.len] else &.{},
-        };
+    /// The published binders a loop carries.
+    fn loopMutationBinders(self: *BodyContext, plan: ?checked.LoopMutationPlanId) []const checked.PatternBinderId {
+        const range = self.view.bodies.loopMutations(plan orelse Common.invariant("checked loop omitted its mutation plan")).binders;
+        return self.view.bodies.patternBinderIdPool()[range.start..][0..range.len];
     }
 
     fn appendUniqueBinder(

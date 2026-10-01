@@ -192,12 +192,6 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
-# FORMATTED
-~~~roc
-
-
-
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir (empty true))

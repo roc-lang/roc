@@ -663,3 +663,69 @@ test "instantiate - annotation tag closure authority belongs to the definition" 
     try std.testing.expect(faithful_copy != original);
     try std.testing.expect(env.types.resolveVar(faithful_copy).desc.flags.annotation_tag_ext);
 }
+
+test "instantiate - rejected nominal positions produce error and unwind partial copies" {
+    const Provider = struct {
+        fn position(_: *anyopaque, _: types_mod.NominalType, index: u32, _: types_mod.Polarity) std.mem.Allocator.Error!?types_mod.Polarity {
+            return if (index == 1) null else .pos;
+        }
+    };
+    for ([_]Instantiator.PolarityVarBehavior{ .close, .preserve, .resolve_by_polarity }) |behavior| {
+        const gpa = std.testing.allocator;
+        var env = try TestEnv.init(gpa);
+        defer env.deinit();
+        const first = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+        const second = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+        const content = try env.types.mkNominal(try env.mkTypeIdent("Rejected"), &.{ first, second }, .NONE, false);
+        const original = try env.types.freshFromContentWithRank(content, .generalized);
+        var instantiator = Instantiator{
+            .store = &env.types,
+            .idents = &env.idents,
+            .var_map = &env.var_map,
+            .rigid_behavior = .fresh_flex,
+            .current_rank = .outermost,
+            .polarity_var_behavior = behavior,
+            .polarity_var_ident = try env.idents.insert(gpa, .for_text(types_mod.polarity_var_text)),
+            .nominal_argument_position = .{ .context = &env, .resolve = Provider.position },
+        };
+        const result = try instantiator.instantiateVar(original);
+        try std.testing.expect(env.types.resolveVar(result).desc.content == .err);
+        try std.testing.expectEqualDeep(content, env.types.resolveVar(original).desc.content);
+        const independent = try instantiator.instantiateVar(first);
+        try std.testing.expect(env.types.resolveVar(independent).desc.content == .flex);
+    }
+}
+
+test "instantiate - effect formula and explicit requirement reuse one structural substitution" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const quantified = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    const ret = try env.types.freshFromContentWithRank(.{ .structure = .empty_record }, .outermost);
+    const callable = try env.types.freshFromContentWithRank(
+        try env.types.mkFuncUnbound(&.{quantified}, ret),
+        .outermost,
+    );
+    const scheme = try env.types.freshFromContentWithRank(
+        try env.types.mkFuncUnboundWithEffectDeps(&.{}, ret, &.{callable}),
+        .generalized,
+    );
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+    };
+    const fresh_scheme = try instantiator.instantiateTypeScheme(scheme);
+    const fresh_func = env.types.resolveVar(fresh_scheme).desc.content.structure.fn_unbound;
+    const fresh_callable = env.types.sliceVars(fresh_func.effect_deps)[0];
+    try std.testing.expect(fresh_callable != callable);
+    // Subsequent scheme requirements use the existing substitution even when
+    // their callable's original rank would ordinarily require sharing.
+    try std.testing.expectEqual(fresh_callable, try instantiator.instantiateVar(callable));
+    const fresh_arg = env.types.sliceVars(env.types.resolveVar(fresh_callable).desc.content.structure.fn_unbound.args)[0];
+    try std.testing.expect(fresh_arg != quantified);
+    try std.testing.expectEqual(ret, env.types.resolveVar(fresh_callable).desc.content.structure.fn_unbound.ret);
+}

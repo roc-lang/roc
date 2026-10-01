@@ -177,7 +177,6 @@ pub const Inventory = struct {
                             try Ast.appendChildren(self.allocator, self.program, expr_id, &stack);
                         },
                         .lambda, .def_ref, .fn_def => Common.invariant("pre-lift expression in loop exit demand"),
-                        .inline_expects_enabled,
                         .unit,
                         .@"unreachable",
                         .int_lit,

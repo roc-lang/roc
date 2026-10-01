@@ -6132,6 +6132,7 @@ const Builder = struct {
             .fn_value,
             .discarded,
             .expect,
+            .runtime,
             => boxyPlanInvariant("from_quote conversion root had a non-data payload"),
         }
     }
@@ -6183,6 +6184,7 @@ const Builder = struct {
             .fn_value,
             .discarded,
             .expect,
+            .runtime,
             => boxyPlanInvariant("from_numeral conversion root had a non-data payload"),
         }
     }
@@ -10951,7 +10953,12 @@ const Builder = struct {
                 .local_proc => |local| self.nestedExprEvidenceParams(view, self.nestedCallableSiteExprForExpr(view, local.expr) orelse local.expr),
                 .structural => null,
             };
-            try cursors.append(self.allocator, .{ .view = view, .entries = view.static_dispatch_plans.nestedEvidence(node), .schema = nested_schema });
+            switch (node.nested) {
+                .resolved => try cursors.append(self.allocator, .{ .view = view, .entries = view.static_dispatch_plans.nestedEvidence(node), .schema = nested_schema }),
+                // The target's nested evidence travels with the callable value
+                // and is observed through that callable's own use.
+                .from_callable => {},
+            }
         }
     }
 
@@ -17665,7 +17672,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .pending => .{ .module = view.key, .expr = root.expr },
-            .fn_value, .const_node, .discarded, .expect => null,
+            .fn_value, .const_node, .discarded, .expect, .runtime => null,
         };
     }
 
@@ -17761,6 +17768,7 @@ const Builder = struct {
             .const_node,
             .discarded,
             .expect,
+            .runtime,
             => boxyPlanInvariant("callable eval binding root did not output a callable value"),
         };
     }
@@ -18628,7 +18636,7 @@ const Builder = struct {
                             );
                         },
                         .pending => .{ .root_expr = .{ .view = view, .expr = root.expr } },
-                        .const_node, .discarded, .expect => return self.procedureUseFallback(fallback),
+                        .const_node, .discarded, .expect, .runtime => return self.procedureUseFallback(fallback),
                     };
                 },
             };
@@ -18737,7 +18745,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| .{ .module = view.key, .fn_id = fn_id },
-            .pending, .const_node, .discarded, .expect => null,
+            .pending, .const_node, .discarded, .expect, .runtime => null,
         };
     }
 

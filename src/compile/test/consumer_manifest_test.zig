@@ -279,8 +279,7 @@ test "one evaluated root has one completed-value slot however many places read i
         \\main! = |args| {
         \\    Echo.line!(Str.inspect(Helper.base_value))
         \\    Echo.line!(Str.inspect(Helper.doubled))
-        \\    # Depends on the arguments, so `offset` is read only at runtime.
-        \\    Echo.line!(Str.inspect(if args.is_empty() Helper.offset else Helper.offset))
+        \\    Echo.line!(Str.inspect((Helper.offset, args.len())))
         \\    Ok({})
         \\}
     });

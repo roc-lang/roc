@@ -189,6 +189,9 @@ pub const IntroduceResult = union(enum) {
     shadowing_warning: CIR.Pattern.Idx, // The pattern that was shadowed
     top_level_var_error: void,
     var_across_function_boundary: CIR.Pattern.Idx,
+    /// Reassigning a var declared outside the `expect` whose body is being
+    /// canonicalized.
+    var_reassigned_in_expect: CIR.Pattern.Idx,
     var_reassignment_ok: CIR.Pattern.Idx, // Var reassignment - return existing pattern
 };
 

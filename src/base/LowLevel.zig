@@ -86,6 +86,7 @@ pub const LowLevel = enum(u16) {
     list_reverse,
     list_sort_with,
     list_reserve,
+    list_reserve_for_append,
     list_release_excess_capacity,
     /// `List.clear`: the list with every item removed, keeping its
     /// allocation and capacity when it is uniquely owned. Every backend
@@ -896,6 +897,7 @@ pub const LowLevel = enum(u16) {
             .list_swap,
             .list_prepend,
             .list_reserve,
+            .list_reserve_for_append,
             .list_release_excess_capacity,
             .list_map_prepare_reuse,
             .list_map_cast_unsafe,
@@ -1497,6 +1499,7 @@ pub const LowLevel = enum(u16) {
             .list_reverse,
             .list_sort_with,
             .list_reserve,
+            .list_reserve_for_append,
             .list_release_excess_capacity,
             .list_clear,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),

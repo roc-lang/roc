@@ -56,7 +56,9 @@ const Candidate = struct {
 };
 
 /// Rewrite every eligible edge of one procedure. Layouts are not consulted:
-/// only statement structure and explicit tag discriminants decide.
+/// only statement structure and explicit tag discriminants decide, where a
+/// literal with the `bool` layout is a payload-free tag whose discriminant is
+/// its value.
 pub fn runProc(store: *LirStore, proc: LIR.LirProcSpecId, allocator: Allocator) ResourceError!void {
     const body = body_clone.rewritableProcBody(store, proc) orelse return;
     // Each rewrite deletes at least one join-parameter write, so the loop
@@ -105,6 +107,11 @@ const Analysis = struct {
                 const tag = stmt.assign_tag;
                 if (tag.payload == null and tag.target_desc == null and defs.get(tag.target) == 1) {
                     try self.tag_defs.put(tag.target, tag.discriminant);
+                }
+            } else if (stmt == .assign_literal) {
+                const literal = stmt.assign_literal;
+                if (boolLiteralDiscriminant(literal.value)) |discriminant| {
+                    if (defs.get(literal.target) == 1) try self.tag_defs.put(literal.target, discriminant);
                 }
             }
             successors.clearRetainingCapacity();
@@ -192,7 +199,10 @@ const Analysis = struct {
                     try changed.put(assign.target, {});
                     cursor = assign.next;
                 } else if (stmt == .assign_literal) {
-                    try env.put(stmt.assign_literal.target, .opaque_value);
+                    try env.put(stmt.assign_literal.target, if (boolLiteralDiscriminant(stmt.assign_literal.value)) |discriminant|
+                        .{ .tag = discriminant }
+                    else
+                        .opaque_value);
                     try changed.put(stmt.assign_literal.target, {});
                     cursor = stmt.assign_literal.next;
                 } else if (stmt == .join) {
@@ -256,6 +266,9 @@ const Analysis = struct {
     fn edgeValue(self: *Analysis, env: *const Env, stmt: LIR.CFStmt) ResourceError!Value {
         if (stmt == .assign_ref) return self.resolve(env, stmt.assign_ref.op.local);
         if (stmt == .assign_tag) return .{ .tag = stmt.assign_tag.discriminant };
+        if (stmt == .assign_literal) {
+            if (boolLiteralDiscriminant(stmt.assign_literal.value)) |discriminant| return .{ .tag = discriminant };
+        }
         if (stmt == .assign_struct) return .{ .fields = try self.resolveSpan(env, stmt.assign_struct.fields) };
         return .opaque_value;
     }
@@ -371,6 +384,26 @@ fn releaseRead(remaining: *collections.DenseMap(LocalId, u32), local: LocalId) v
     if (remaining.getPtr(local)) |count| count.* -= 1;
 }
 
+/// The discriminant of a payload-free two-variant tag written as a `bool`
+/// literal, whose value is its discriminant.
+fn boolLiteralDiscriminant(value: LIR.LiteralValue) ?u32 {
+    return switch (value) {
+        .i64_literal => |literal| if (literal.layout_idx == .bool) @intCast(literal.value) else null,
+        .i128_literal => |literal| if (literal.layout_idx == .bool) @intCast(literal.value) else null,
+        .f64_literal,
+        .f32_literal,
+        .dec_literal,
+        .str_literal,
+        .boxy_dynamic_num_literal,
+        .boxy_dynamic_frac_literal,
+        .static_data,
+        .bytes_literal,
+        .null_ptr,
+        .proc_ref,
+        => null,
+    };
+}
+
 /// Statements an edge may consist of before its jump: pure local aliases,
 /// payload-free tags, literals, structs, and join-parameter writes.
 fn edgeStatement(stmt: LIR.CFStmt) bool {
@@ -451,7 +484,7 @@ const FlagLoop = struct {
 
 /// `while !$done { match step($state) { Done => $done = True, Next(s) => { $state = s; $steps += 1 } } }`
 /// lowered with the loop exit reading either `$steps` or `$done`.
-fn flagLoop(exit_reads: enum { steps, done }) Allocator.Error!FlagLoop {
+fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_literal }) Allocator.Error!FlagLoop {
     var store = LirStore.init(testing.allocator);
     errdefer store.deinit();
     var joins = body_clone.JoinParamIndex.init(testing.allocator);
@@ -502,7 +535,10 @@ fn flagLoop(exit_reads: enum { steps, done }) Allocator.Error!FlagLoop {
     done_arm = try store.addCFStmt(.{ .set_local = .{ .target = merge_done, .value = true_tag, .mode = .initialize_join_param, .next = done_arm } }, .test_fixture);
     done_arm = try store.addCFStmt(.{ .assign_ref = .{ .target = same_steps, .op = .{ .local = steps }, .next = done_arm } }, .test_fixture);
     done_arm = try store.addCFStmt(.{ .assign_ref = .{ .target = same_state, .op = .{ .local = state }, .next = done_arm } }, .test_fixture);
-    done_arm = try store.addCFStmt(.{ .assign_tag = .{ .target = true_tag, .variant_index = 1, .discriminant = 1, .payload = null, .next = done_arm } }, .test_fixture);
+    done_arm = try store.addCFStmt(switch (true_flag) {
+        .tag => .{ .assign_tag = .{ .target = true_tag, .variant_index = 1, .discriminant = 1, .payload = null, .next = done_arm } },
+        .bool_literal => .{ .assign_literal = .{ .target = true_tag, .value = .{ .i128_literal = .{ .value = 1, .layout_idx = .bool } }, .next = done_arm } },
+    }, .test_fixture);
 
     // `Next`: the flag is unchanged and the state is replaced.
     const next_jump = try store.addCFStmt(.{ .jump = .{ .target = merge } }, .test_fixture);
@@ -573,7 +609,7 @@ fn flagLoop(exit_reads: enum { steps, done }) Allocator.Error!FlagLoop {
 }
 
 test "known tag jump sends a flag loop's exit edge straight to the exit" {
-    var fixture = try flagLoop(.steps);
+    var fixture = try flagLoop(.steps, .tag);
     defer fixture.deinit();
     try runProc(&fixture.store, fixture.proc, testing.allocator);
     const edge = fixture.doneEdge();
@@ -582,10 +618,19 @@ test "known tag jump sends a flag loop's exit edge straight to the exit" {
 }
 
 test "known tag jump keeps the edge when the exit reads the flag it sets" {
-    var fixture = try flagLoop(.done);
+    var fixture = try flagLoop(.done, .tag);
     defer fixture.deinit();
     try runProc(&fixture.store, fixture.proc, testing.allocator);
     const edge = fixture.doneEdge();
     try testing.expectEqual(fixture.merge, edge.target);
     try testing.expect(edge.writes_params);
+}
+
+test "known tag jump reads a bool literal flag as the tag it is" {
+    var fixture = try flagLoop(.steps, .bool_literal);
+    defer fixture.deinit();
+    try runProc(&fixture.store, fixture.proc, testing.allocator);
+    const edge = fixture.doneEdge();
+    try testing.expectEqual(fixture.exit, edge.target);
+    try testing.expect(!edge.writes_params);
 }

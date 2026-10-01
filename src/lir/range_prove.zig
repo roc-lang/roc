@@ -4232,7 +4232,7 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
-            .list_reserve => {
+            .list_reserve, .list_reserve_for_append => {
                 // Reserving capacity keeps every item, so the result shares
                 // the input's length term.
                 if (arg_count == 2) {

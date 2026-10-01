@@ -165,6 +165,7 @@ const jobs = [_]Job{
     .{ .name = "run-check-zig-format", .placement = .source },
     .{ .name = "run-check-zig-lints", .placement = .source },
     .{ .name = "run-check-tidy", .placement = .source },
+    .{ .name = "run-check-source-bidi", .placement = .source },
     .{ .name = "run-check-git-lints", .placement = .source },
     .{ .name = "run-check-type-checker-patterns", .placement = .source },
     .{ .name = "run-check-enum-from-int-zero", .placement = .source },

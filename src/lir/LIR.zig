@@ -701,6 +701,19 @@ pub const U32Span = extern struct {
     }
 };
 
+/// One conditionally unique part of a proc's returned value, as stored in a
+/// `LirProcSpec.rc_ret_conditions` span: the whole return when `field` is
+/// `whole_value`, otherwise original struct field `field` (or bit 0 for a
+/// tag union's single payload), unique whenever every argument position in
+/// `params` was passed a unique value as its caller's last use.
+pub const RcRetCondition = packed struct(u32) {
+    field: u8,
+    params: u16,
+    reserved: u8 = 0,
+
+    pub const whole_value: u8 = 255;
+};
+
 /// Identifier of one interned erased-call argument layout plan.
 pub const ErasedCallArgsPlanId = enum(u32) { _ };
 
@@ -1615,6 +1628,18 @@ pub const LirProcSpec = struct {
     rc_borrowed_params: u64 = 0,
     rc_ret_borrowed: bool = false,
     rc_ret_lenders: u64 = 0,
+    /// The uniqueness facts ARC solved for a base proc, which its callers'
+    /// uniqueness inference reads: borrowed positions the body only reads,
+    /// a return (or returned fields) whose allocation has count 1, and the
+    /// parts of the return that are unique when particular arguments were
+    /// passed unique dying values (each entry an `RcRetCondition`). An
+    /// object-cache entry carries them, and a body-less `external` proc gets
+    /// them back, so callers of a cached proc compile as they would against
+    /// its body.
+    rc_read_only_params: u64 = 0,
+    rc_ret_unique: bool = false,
+    rc_ret_unique_fields: u64 = 0,
+    rc_ret_conditions: U32Span = U32Span.empty(),
     /// Set by ARC on a solved base proc when a call to it may demand an
     /// ownership variant emitted from its body (an owned field take, outcome
     /// restitution, a same-SCC tail transfer, or, under mode specialization,

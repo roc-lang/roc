@@ -87,6 +87,9 @@ foo = 0
 foo = 1
 ```
 
+An [`expect`](#expect) cannot reassign a `var` declared outside of it. (See
+[control flow and variables inside `expect`](#expect-control-flow).)
+
 ## [`import`](#import) {#import}
 
 The `import` statement imports a [type](types) into scope from a [type module](modules#type-modules).
@@ -216,6 +219,54 @@ reported is up to the platform.
 Inline `expect`s are for catching bugs during development, so they are omitted from optimized
 builds (such as the default for `roc build`). As such, programs should never depend on
 an `expect` running.
+
+### [Control flow and variables inside `expect`](#expect-control-flow) {#expect-control-flow}
+
+Since programs should never depend on an `expect` running, an `expect` cannot change where
+the program goes next. These give a compile error when used directly inside an `expect`:
+
+- [`return`](#return), in both top-level and inline `expect`s
+- [`break`](#break) to exit a loop that's outside the `expect`, in both top-level and inline `expect`s
+- the [`?` operator](operators#-unwrap-if-ok-early-return-if-err), in inline `expect`s
+  (in top-level `expect`s, it makes the `expect` fail instead, as described above)
+
+These rules don't apply inside a function defined within the `expect`, since leaving that
+function doesn't leave the `expect`. Similarly, `break` is allowed inside a loop that's
+written within the `expect`:
+
+```roc
+expect {
+    parse = |str| {
+        n = U64.from_str(str)?  # Fine: returns early from `parse`, not from the `expect`
+        Ok(n * 2)
+    }
+
+    parse("21") == Ok(42)
+}
+```
+
+For the same reason, an `expect` cannot change a variable declared outside of it. Reassigning
+one inside an `expect` gives a compile error, but variables declared inside the `expect` can be
+reassigned freely:
+
+```roc
+withdraw = |balance, amount| {
+    var $remaining = balance
+
+    expect {
+        $remaining = $remaining - amount  # Error: `$remaining` was declared outside this `expect`
+        $remaining >= 0
+    }
+
+    expect {
+        var $left = balance
+        $left = $left - amount  # Fine: `$left` was declared inside this `expect`
+        $left >= 0
+    }
+
+    $remaining - amount
+}
+```
 
 ## [`return`](#return) {#return}
 

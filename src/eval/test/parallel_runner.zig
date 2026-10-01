@@ -1019,7 +1019,7 @@ fn runComptimeFloatBitsTest(
 
     const node = switch (roots[0].payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect => {
+        .pending, .fn_value, .discarded, .expect, .runtime => {
             return .{
                 .status = .fail,
                 .message = "compile-time float root did not produce a ConstStore node",
@@ -1132,7 +1132,7 @@ fn materializedComptimeFloatBitsMatch(
     };
     const const_node = switch (compile_time_root.payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect => return false,
+        .pending, .fn_value, .discarded, .expect, .runtime => return false,
     };
     const static_request = lir.CheckedPipeline.StaticDataRequest{
         .const_locator = const_locator,
@@ -1745,6 +1745,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .invalid_num_literal,
         .empty_tuple,
         .ident_already_in_scope,
+        .duplicate_pattern_binder,
         .ident_not_in_scope,
         .read_uninitialized_var,
         .self_referential_definition,
@@ -1815,6 +1816,8 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .break_outside_loop,
         .infinite_loop_never_exits,
         .return_outside_fn,
+        .control_flow_in_expect,
+        .var_reassigned_in_expect,
         .mutually_recursive_type_aliases,
         => true,
     };

@@ -209,6 +209,8 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
                 }
             },
             .closure => try pending.append(allocator, .{ .offset = member.offset, .idx = lay.getClosure().captures_layout_idx }),
+            // A zero-sized member occupies no bytes, so it contributes no eightbyte class.
+            .zst => {},
             // A leaf member combines its own eightbyte classes.
             .scalar,
             .box,
@@ -217,7 +219,6 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
             .list,
             .list_of_zst,
             .erased_callable,
-            .zst,
             .ptr,
             => {
                 const classes = try classifySystemV(allocator, store, member.idx, .other);
@@ -347,6 +348,23 @@ test "x86_64 SysV: unnamed padding classifies as integer bytes, not its declared
         .{ .index = 1, .layout = .f64, .is_padding = true },
     });
     try testing.expectEqual(Class.two_integers, try classifySystemV(testing.allocator, &store, padded, .arg));
+}
+
+test "x86_64 SysV: zero-sized members contribute no eightbyte class" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // { {}, U8 } -> the zero-sized field adds nothing; one INTEGER eightbyte.
+    const pair = try testStruct(&store, &.{ .zst, .u8 });
+    try testing.expectEqual(Class.one_integer, try classifySystemV(testing.allocator, &store, pair, .arg));
+
+    // [Pair({}, U8), Nothing] -> the payload struct nests a zero-sized field.
+    const union_idx = try store.putTagUnion(&.{ pair, .zst });
+    try testing.expectEqual(Class.one_integer, try classifySystemV(testing.allocator, &store, union_idx, .arg));
+
+    // { {}, F64 } -> the zero-sized field does not disturb the SSE eightbyte.
+    const float_pair = try testStruct(&store, &.{ .zst, .f64 });
+    try testing.expectEqual(Class.f64, try classifySystemV(testing.allocator, &store, float_pair, .arg));
 }
 
 test "x86_64 SysV: large aggregates go to memory" {

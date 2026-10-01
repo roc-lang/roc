@@ -1,7 +1,7 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
+import pf.Stdin
 import pf.Stdout
-import pf.Host
 
 # Repro for https://github.com/roc-lang/roc/issues/10368
 # Both maps must read the original parameter-derived padded list.
@@ -23,9 +23,8 @@ two_maps = |p| {
 }
 
 main! = || {
-    # The key's length comes from the host, so both maps run at runtime
-    # rather than as compile-time constants.
-    key = List.repeat(0x0b, 20 + Host.sum_str_bytes!([]))
+    # The key's length comes from stdin so both maps run at runtime.
+    key = List.repeat(0x0b, Stdin.line!().to_utf8().len())
     Stdout.line!("one map ${one_map(key)}")
     Stdout.line!("two maps ${two_maps(key)}")
 }

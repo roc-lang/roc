@@ -174,6 +174,9 @@ pub const Options = struct {
     /// waits for the evaluation to reach it (`CheckedPipeline` decides).
     comptime_closure_hits: bool = false,
     inline_plan: SolvedInline.Plan = .{},
+    /// Lower every keyed specialization's procedure body, even one whose every
+    /// call was inlined, so a pack program can offer it.
+    keep_specialization_procs: bool = false,
     /// Reuse checking workers for prepared procedure-body lowering.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     /// Whether inline `expect` is lowered into runtime statements. Compile-time
@@ -280,6 +283,7 @@ pub fn runBorrowed(
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.lowerReachableFns();
+    lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
     if (builtin.mode == .Debug) {
@@ -734,6 +738,11 @@ const Lowerer = struct {
     /// of the representative chosen to lower a shared procedure body.
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
+    /// Keyed specializations whose bodies `keep_specialization_procs` lowers
+    /// whether or not a reference reaches them, and how many are queued.
+    keep_specialization_procs: bool,
+    kept_spec_fns: std.ArrayList(Type.FnId),
+    kept_spec_index: usize,
     inline_plan: SolvedInline.Plan,
     inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
     inline_expects: InlineExpectMode,
@@ -1003,6 +1012,9 @@ const Lowerer = struct {
             .fn_written = .empty,
             .fn_reachable = .empty,
             .fn_reach_queue = .empty,
+            .keep_specialization_procs = options.keep_specialization_procs,
+            .kept_spec_fns = .empty,
+            .kept_spec_index = 0,
             .inline_plan = options.inline_plan,
             .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
@@ -1181,6 +1193,7 @@ const Lowerer = struct {
         self.identity_memo.deinit();
         if (self.layout_digests) |*digests| digests.deinit();
         self.fn_reach_queue.deinit(self.allocator);
+        self.kept_spec_fns.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
@@ -1193,6 +1206,22 @@ const Lowerer = struct {
         self.types.deinit();
         self.runtime_schemas.deinit();
         self.result.deinit();
+    }
+
+    /// A keyed specialization is offered to the object cache only when this
+    /// program has its code. Worker preparation creates a placeholder, key
+    /// included, for every procedure a prepared body names without making it
+    /// reachable; a placeholder no emitted reference reached has no body and
+    /// is not this program's to offer.
+    fn keepLoweredSpecProcs(self: *Lowerer) void {
+        var kept: usize = 0;
+        for (self.result.spec_procs.items) |spec_proc| {
+            const proc = self.result.store.getProcSpec(spec_proc.proc);
+            if (proc.body == null and proc.hosted == null and !proc.external) continue;
+            self.result.spec_procs.items[kept] = spec_proc;
+            kept += 1;
+        }
+        self.result.spec_procs.shrinkRetainingCapacity(kept);
     }
 
     fn finish(self: *Lowerer) Output {
@@ -1246,6 +1275,7 @@ const Lowerer = struct {
         self.identity_memo.deinit();
         if (self.layout_digests) |*digests| digests.deinit();
         self.fn_reach_queue.deinit(self.allocator);
+        self.kept_spec_fns.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
@@ -1707,7 +1737,18 @@ const Lowerer = struct {
             self.fn_queue_index = fn_queue_index;
             self.initializer_queue_index = initializer_queue_index;
         }
-        while (fn_queue_index < self.fn_reach_queue.items.len or initializer_queue_index < self.static_initializer_queue.items.len) {
+        while (fn_queue_index < self.fn_reach_queue.items.len or
+            initializer_queue_index < self.static_initializer_queue.items.len or
+            self.kept_spec_index < self.kept_spec_fns.items.len)
+        {
+            // A kept specialization whose calls were all inlined is reached
+            // here instead, between epochs, so the queue is never extended
+            // while an epoch is being prepared.
+            while (self.kept_spec_index < self.kept_spec_fns.items.len) {
+                const fn_id = self.kept_spec_fns.items[self.kept_spec_index];
+                self.kept_spec_index += 1;
+                _ = try self.markReachableFn(fn_id);
+            }
             while (fn_queue_index < self.fn_reach_queue.items.len) {
                 // Prepare the complete currently-reachable epoch before lowering
                 // any of its bodies. This keeps coordinator identity allocation
@@ -2184,7 +2225,6 @@ const Lowerer = struct {
                 .bytes_lit,
                 .uninitialized,
                 .crash,
-                .inline_expects_enabled,
                 => {},
             }
         }
@@ -2857,6 +2897,10 @@ const Lowerer = struct {
             else
                 null,
         };
+        const cached_ret_conditions = if (cached) |hit|
+            try self.result.store.addU32Span(hit.rc_ret_conditions)
+        else
+            LIR.U32Span.empty();
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .identity = identity,
@@ -2877,6 +2921,10 @@ const Lowerer = struct {
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
             .rc_ret_lenders = if (cached) |hit| hit.rc_ret_lenders else 0,
+            .rc_read_only_params = if (cached) |hit| hit.rc_read_only_params else 0,
+            .rc_ret_unique = if (cached) |hit| hit.rc_ret_unique else false,
+            .rc_ret_unique_fields = if (cached) |hit| hit.rc_ret_unique_fields else 0,
+            .rc_ret_conditions = cached_ret_conditions,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
         if (self.proc_debug_names) {
@@ -2887,8 +2935,13 @@ const Lowerer = struct {
         try self.procs_by_identity.putNoClobber(identity, fn_id);
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
-                if (plain_spec) {
+                // A program that keeps its keyed specializations lowers each
+                // one's body as a procedure, except a single-use body, which
+                // is lowered at its call site alone and so is not kept.
+                const kept = self.keep_specialization_procs and !self.inline_plan.isSingleUse(spec.source);
+                if (plain_spec and (kept or !self.keep_specialization_procs)) {
                     try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
+                    if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
                 }
             }
         }
@@ -3244,7 +3297,6 @@ const Lowerer = struct {
                 },
                 .local,
                 .@"unreachable",
-                .inline_expects_enabled,
                 .comptime_value,
                 .typed_boundary,
                 .record_update,
@@ -3325,7 +3377,6 @@ const Lowerer = struct {
             .tag,
             .local,
             .@"unreachable",
-            .inline_expects_enabled,
             .comptime_value,
             .typed_boundary,
             .record_update,
@@ -3596,7 +3647,7 @@ const Lowerer = struct {
                     try path.append(self.allocator, root);
                     root = access.tuple;
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
             }
         }
         var ty = try self.lowerExprTy(root);
@@ -3617,7 +3668,7 @@ const Lowerer = struct {
                     if (access.elem_index >= items.len) Common.invariant("tuple access index exceeded tuple type");
                     ty = GuardedList.at(items, @intCast(access.elem_index));
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             }
         }
         return ty;
@@ -5486,15 +5537,6 @@ const Lowerer = struct {
         return try self.lowerExprIntoAtType(where, ret_local, expr_id, ret_ty, ret_stmt);
     }
 
-    /// Internal failure protocol is an explicit U8 flag plus an immortal Str.
-    fn lowerInlineExpectsEnabledInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        return try self.result.store.addCFStmt(.{ .assign_literal = .{
-            .target = target,
-            .value = .{ .i64_literal = .{ .value = if (self.inline_expects == .run) 1 else 0, .layout_idx = self.result.store.getLocal(target).layout_idx } },
-            .next = next,
-        } }, where.source());
-    }
-
     /// The slot holding one evaluated root's completed value, created on its
     /// first demand. A root's value has one representation, so every read of
     /// it and the root's own completed-value materialization share one slot.
@@ -6561,7 +6603,6 @@ const Lowerer = struct {
                 .next = next,
             } } },
             .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, ty, next),
-            .inline_expects_enabled => .{ .ret = try self.lowerInlineExpectsEnabledInto(where, target, next) },
             .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, ty, next) },
             .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, ty, boundary, next),
             .field_access => |field| try self.fieldAccessStep(where, target, field.receiver, field.segments, next),
@@ -6670,7 +6711,6 @@ const Lowerer = struct {
             .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
             .uninitialized, .uninitialized_payload => .{ .ret = next },
             .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, expr_ty, next),
-            .inline_expects_enabled => .{ .ret = try self.lowerInlineExpectsEnabledInto(where, target, next) },
             .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, expr_ty, next) },
             .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, expr_ty, boundary, next),
             .list => |items| try self.listStep(where, target, expr_ty, items, next),
@@ -14968,10 +15008,10 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
     };
     for (roots) |root| _ = try solved.lifted.addComptimeValueRoot(root);
     const bool_ty = try solved.lifted.types.add(.{ .primitive = .bool });
-    const policy = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
+    const produced = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } } });
     const witness = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const read = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = @enumFromInt(1), .initializer = witness } } });
-    for ([_]Lifted.ExprId{ policy, read }, 0..) |body, index| {
+    for ([_]Lifted.ExprId{ produced, read }, 0..) |body, index| {
         const fn_id = try solved.lifted.addFn(.{
             .symbol = @enumFromInt(@as(u32, @intCast(index))),
             .args = .empty(),
@@ -15017,7 +15057,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             defer result.deinit();
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = policy, .body = read } });
+    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
     const Verify = struct {
         fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
             var lowerer = try Lowerer.init(failing, .u64, original, .{});
@@ -15079,7 +15119,6 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
     try std.testing.expectEqualDeep(roots[1], materialized.getComptimeValueRoot(lowered_read.root));
     try std.testing.expect(materialized.getExpr(lowered_read.initializer).data == .@"unreachable");
     var evaluator = try Eval.Evaluator.init(allocator, &materialized, .{
-        .inline_expects_enabled = false,
         .comptime_producers = &.{
             .{ .root = roots[0], .root_index = 1 },
             .{ .root = roots[1], .root_index = 0 },

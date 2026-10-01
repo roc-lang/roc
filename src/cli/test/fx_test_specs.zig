@@ -432,7 +432,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/issue_10368_list_map_reuse.roc",
-        .io_spec = "1>one map 0803c9e914002577bbfa01bae7cf9e32a7ef9d1c9e07d19542be4df2c190cbaf|1>two maps f0e5e7a2abe3428a08147f2fbb9eaad2261990945cbfbfcaf37149c6002e215d",
+        .io_spec = "0<aaaaaaaaaaaaaaaaaaaa|1>one map 0803c9e914002577bbfa01bae7cf9e32a7ef9d1c9e07d19542be4df2c190cbaf|1>two maps f0e5e7a2abe3428a08147f2fbb9eaad2261990945cbfbfcaf37149c6002e215d",
         .description = "Regression test: optimized List.map reuse preserves a shared parameter-derived input",
     },
     .{

@@ -429,36 +429,10 @@ pub const RocList = extern struct {
             return empty();
         }
 
-        const capacity = utils.calculateCapacity(0, length, element_width);
-        const data_bytes = capacity * element_width;
         return RocList{
             .bytes = utils.allocateWithRefcount(
-                data_bytes,
+                length * element_width,
                 elem_alignment,
-                elements_refcounted,
-                roc_ops,
-            ),
-            .length = length,
-            .capacity_or_alloc_ptr = encodeCapacity(capacity),
-        };
-    }
-
-    pub fn allocateExact(
-        alignment: u32,
-        length: usize,
-        element_width: usize,
-        elements_refcounted: bool,
-        roc_ops: *RocOps,
-    ) RocList {
-        if (length == 0) {
-            return empty();
-        }
-
-        const data_bytes = length * element_width;
-        return RocList{
-            .bytes = utils.allocateWithRefcount(
-                data_bytes,
-                alignment,
                 elements_refcounted,
                 roc_ops,
             ),
@@ -487,9 +461,8 @@ pub const RocList = extern struct {
                     const result = RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = self.capacity_or_alloc_ptr };
                     return result;
                 } else {
-                    const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
-                    const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width, elements_refcounted, roc_ops);
-                    const result = RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = encodeCapacity(new_capacity) };
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_length, element_width, elements_refcounted, roc_ops);
+                    const result = RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = encodeCapacity(new_length) };
                     return result;
                 }
             }
@@ -708,7 +681,7 @@ fn amortizedCapacity(list: RocList, needed: usize, element_width: usize, update_
 /// sizes the allocation exactly—growth here takes at least the geometric
 /// step, so a loop of appends stays amortized-linear instead of reallocating
 /// on every call once the list runs tight.
-fn listReserveForAppend(
+pub fn listReserveForAppend(
     list: RocList,
     alignment: u32,
     spare: u64,
@@ -720,7 +693,7 @@ fn listReserveForAppend(
     dec: Dec,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
-) RocList {
+) callconv(.c) RocList {
     const original_len = list.len();
     const cap = @as(u64, @intCast(list.getCapacity()));
 
@@ -1144,7 +1117,7 @@ pub fn listReleaseExcessCapacity(
         // If the list is unique, we can avoid incrementing and decrementing the live items.
         // We can just decrement the dead elements and free the old list.
         // This pattern is also like true in other locations like listConcat and listDropAt.
-        const output = RocList.allocateExact(alignment, old_length, element_width, elements_refcounted, roc_ops);
+        const output = RocList.list_allocate(alignment, old_length, element_width, elements_refcounted, roc_ops);
         if (list.bytes) |source_ptr| {
             const dest_ptr = output.bytes orelse unreachable;
 
@@ -1263,7 +1236,7 @@ pub fn listAppend(
     copy_fn: CopyFallbackFn,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    const with_capacity = listReserve(
+    const with_capacity = listReserveForAppend(
         list,
         alignment,
         1,
@@ -1318,9 +1291,9 @@ pub fn pushInPlace(
         // No overflow check needed: allocator will fail at isize::MAX before usize overflow
         const new_length = old_length + 1;
 
-        const resized_list = list.reallocate(
+        var resized_list = list.reallocate(
             alignment,
-            new_length,
+            amortizedCapacity(list, new_length, element_size, .Immutable, roc_ops),
             element_size,
             false,
             null,
@@ -1330,6 +1303,7 @@ pub fn pushInPlace(
             .Immutable,
             roc_ops,
         );
+        resized_list.length = new_length;
 
         if (resized_list.bytes) |bytes| {
             const target = bytes + old_length * element_size;
@@ -1365,16 +1339,15 @@ pub fn shallowClone(
     std.debug.assert(elem_alignment > 0);
 
     const len = old_list.len();
-    const capacity = utils.calculateCapacity(0, desired_capacity, elem_size);
     const new_list = RocList{
         .bytes = utils.allocateWithRefcount(
-            capacity * elem_size,
+            desired_capacity * elem_size,
             elem_alignment,
             elements_refcounted,
             roc_ops,
         ),
         .length = len,
-        .capacity_or_alloc_ptr = RocList.encodeCapacity(capacity),
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(desired_capacity),
     };
 
     // Only copy bytes over if the original list was nonempty.
@@ -1443,7 +1416,7 @@ pub fn listPrepend(
     }
 
     const old_length = list.len();
-    var with_capacity = listReserve(
+    var with_capacity = listReserveForAppend(
         list,
         alignment,
         1,
@@ -2367,7 +2340,8 @@ pub fn listConcatUtf8(
         const combined_length = list.len() + string.len();
 
         // List U8 has alignment 1 and element_width 1
-        const result = list.reallocate(1, combined_length, 1, false, null, &rcNone, null, &rcNone, .Immutable, roc_ops);
+        var result = list.reallocate(1, amortizedCapacity(list, combined_length, 1, .Immutable, roc_ops), 1, false, null, &rcNone, null, &rcNone, .Immutable, roc_ops);
+        result.length = combined_length;
         // We just allocated combined_length, which is > 0 because string.len() > 0
         var bytes = result.bytes orelse unreachable;
         @memcpy(bytes[list.len()..combined_length], string.asU8ptr()[0..string.len()]);
@@ -2834,6 +2808,52 @@ test "listReserve functionality" {
     try std.testing.expectEqual(@as(u8, 3), elements[2]);
 }
 
+test "listReserve is exact when the request is one past the capacity" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Length 3 and capacity 3: reserving 1 asks for capacity + 1.
+    const full = RocList.fromSlice(u64, ([_]u64{ 1, 2, 3 })[0..], false, test_env.getOps());
+    const reserved_one = listReserve(full, @alignOf(u64), 1, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 4), reserved_one.getCapacity());
+
+    // Length 2 and capacity 4: reserving 3 also lands on capacity + 1.
+    var partial = listReserve(
+        RocList.fromSlice(u64, ([_]u64{ 1, 2 })[0..], false, test_env.getOps()),
+        @alignOf(u64),
+        2,
+        @sizeOf(u64),
+        false,
+        null,
+        rcNone,
+        null,
+        rcNone,
+        .Immutable,
+        test_env.getOps(),
+    );
+    try std.testing.expectEqual(@as(usize, 4), partial.getCapacity());
+    partial = listReserve(partial, @alignOf(u64), 3, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, test_env.getOps());
+    defer partial.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 5), partial.getCapacity());
+
+    reserved_one.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, test_env.getOps());
+}
+
+test "listReserveForAppend takes a geometric growth step" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const empty_grown = listReserveForAppend(RocList.empty(), @alignOf(u64), 1, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, test_env.getOps());
+    defer empty_grown.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, test_env.getOps());
+    try std.testing.expectEqual(utils.geometricGrowth(0, @sizeOf(u64)), empty_grown.getCapacity());
+
+    const full = RocList.fromSlice(u64, ([_]u64{ 1, 2, 3 })[0..], false, test_env.getOps());
+    const grown = listReserveForAppend(full, @alignOf(u64), 2, @sizeOf(u64), false, null, rcNone, null, rcNone, .Immutable, test_env.getOps());
+    defer grown.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 3), grown.len());
+    try std.testing.expectEqual(utils.geometricGrowth(3, @sizeOf(u64)), grown.getCapacity());
+}
+
 test "listReserve refcounted seamless slice releases backing allocation when growing" {
     const Counter = struct {
         fn inc(ctx: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
@@ -3010,19 +3030,18 @@ test "listCapacity function" {
     try std.testing.expect(capacity >= list.len());
 }
 
-test "RocList allocateExact functionality" {
+test "RocList list_allocate sizes the allocation exactly" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    const exact_size: usize = 5;
-    const list = RocList.allocateExact(@alignOf(u64), exact_size, @sizeOf(u64), false, test_env.getOps());
-    defer list.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, test_env.getOps());
+    for ([_]usize{ 1, 5 }) |exact_size| {
+        const list = RocList.list_allocate(@alignOf(u64), exact_size, @sizeOf(u64), false, test_env.getOps());
+        defer list.decref(@alignOf(u64), @sizeOf(u64), false, null, rcNone, test_env.getOps());
 
-    // Should have exactly the requested capacity (or very close)
-    try std.testing.expectEqual(exact_size, list.getCapacity());
-    // Should have the requested length
-    try std.testing.expectEqual(exact_size, list.len());
-    try std.testing.expect(!list.isEmpty());
+        try std.testing.expectEqual(exact_size, list.getCapacity());
+        try std.testing.expectEqual(exact_size, list.len());
+        try std.testing.expect(!list.isEmpty());
+    }
 }
 
 test "listReleaseExcessCapacity functionality" {

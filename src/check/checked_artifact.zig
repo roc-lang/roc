@@ -10557,11 +10557,10 @@ pub const CheckedStrPatternStep = struct {
 };
 
 /// Ordered mutation identities for a loop body, published from checked
-/// assignments and explicit dispatch operands. Both ranges use the body's
-/// pattern-binder pool; expect-only identities are disjoint from always.
+/// assignments and explicit dispatch operands, as a range of the body's
+/// pattern-binder pool.
 pub const CheckedLoopMutations = struct {
-    always: CheckedBodyRange,
-    expect_only: CheckedBodyRange,
+    binders: CheckedBodyRange,
 };
 
 /// Dense identity in a checked body's loop mutation table.
@@ -12106,12 +12105,10 @@ const CheckedSourceNodes = struct {
 /// Publish loop mutation summaries once; nested loops reuse their published
 /// ranges instead of revisiting bodies for each enclosing loop.
 const CheckedLoopMutationPublisher = struct {
-    const Mutation = struct { binder: PatternBinderId, expect_only: bool };
-
     allocator: Allocator,
     store: *CheckedBodyStore,
     dispatch_operands: []const []const CheckedExprId,
-    scratch: std.ArrayList(Mutation) = .empty,
+    scratch: std.ArrayList(PatternBinderId) = .empty,
     work: std.ArrayList(Work) = .empty,
     positions: []usize = &.{},
 
@@ -12120,12 +12117,12 @@ const CheckedLoopMutationPublisher = struct {
         if (store.pattern_binder_id_pool.items.len == 0) {
             var empty_plan: ?LoopMutationPlanId = null;
             for (store.stored_exprs.items) |*expr| if (expr.data == .for_) {
-                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
                 expr.data.for_.mutations = empty_plan;
             };
             for (store.stored_statements.items) |*stmt| switch (stmt.data) {
                 inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| {
-                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
                     loop_.mutations = empty_plan;
                 },
                 .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
@@ -12165,15 +12162,15 @@ const CheckedLoopMutationPublisher = struct {
     /// becomes native call depth. Children are pushed in reverse so they are
     /// collected in source order.
     const Work = union(enum) {
-        expr: struct { id: CheckedExprId, expect_only: bool },
-        statement: struct { id: CheckedStatementId, expect_only: bool },
+        expr: CheckedExprId,
+        statement: CheckedStatementId,
         /// A loop reached from an enclosing loop's body.
-        nested_loop: struct { loop: LoopRef, expect_only: bool },
+        nested_loop: LoopRef,
         /// Deduplicate and publish a loop whose mutations were collected
         /// above `scratch_start`; a nested loop then contributes its plan to
         /// the enclosing loop.
-        finish_loop: struct { loop: LoopRef, scratch_start: usize, enclosing_expect_only: ?bool },
-        append_ranges: struct { mutations: CheckedLoopMutations, expect_only: bool },
+        finish_loop: struct { loop: LoopRef, scratch_start: usize, nested: bool },
+        append_binders: CheckedLoopMutations,
     };
 
     fn loopFields(self: *@This(), ref: LoopRef) LoopFields {
@@ -12196,49 +12193,49 @@ const CheckedLoopMutationPublisher = struct {
 
     fn publishLoop(self: *@This(), ref: LoopRef) Allocator.Error!void {
         if (self.loopFields(ref).mutations.* != null) return;
-        try self.beginLoop(ref, null);
+        try self.beginLoop(ref, false);
         while (self.work.pop()) |work| switch (work) {
-            .expr => |item| try self.visitExpr(item.id, item.expect_only),
-            .statement => |item| try self.visitStatement(item.id, item.expect_only),
-            .nested_loop => |item| {
-                const fields = self.loopFields(item.loop);
+            .expr => |id| try self.visitExpr(id),
+            .statement => |id| try self.visitStatement(id),
+            .nested_loop => |loop| {
+                const fields = self.loopFields(loop);
                 if (fields.mutations.*) |published| {
-                    try self.pushLoopContribution(self.store.loopMutations(published), fields.iterable, item.expect_only);
+                    try self.pushLoopContribution(self.store.loopMutations(published), fields.iterable);
                 } else {
-                    try self.beginLoop(item.loop, item.expect_only);
+                    try self.beginLoop(loop, true);
                 }
             },
             .finish_loop => |item| {
                 const mutations = try self.finishLoop(item.loop, item.scratch_start);
-                if (item.enclosing_expect_only) |expect_only| {
-                    try self.pushLoopContribution(mutations, self.loopFields(item.loop).iterable, expect_only);
+                if (item.nested) {
+                    try self.pushLoopContribution(mutations, self.loopFields(item.loop).iterable);
                 }
             },
-            .append_ranges => |item| {
-                try self.appendRange(item.mutations.always, item.expect_only);
-                try self.appendRange(item.mutations.expect_only, true);
+            .append_binders => |mutations| {
+                const range = mutations.binders;
+                try self.scratch.appendSlice(self.allocator, self.store.pattern_binder_id_pool.items[range.start..][0..range.len]);
             },
         };
     }
 
     /// Collect an unpublished loop's condition and body into a fresh scratch
     /// region, then finish it.
-    fn beginLoop(self: *@This(), ref: LoopRef, enclosing_expect_only: ?bool) Allocator.Error!void {
+    fn beginLoop(self: *@This(), ref: LoopRef, nested: bool) Allocator.Error!void {
         if (self.positions.len == 0) {
             self.positions = try self.allocator.alloc(usize, self.store.pattern_binders.items.len);
             @memset(self.positions, std.math.maxInt(usize));
         }
         const fields = self.loopFields(ref);
-        try self.push(.{ .finish_loop = .{ .loop = ref, .scratch_start = self.scratch.items.len, .enclosing_expect_only = enclosing_expect_only } });
-        try self.push(.{ .expr = .{ .id = fields.body, .expect_only = false } });
-        if (fields.cond) |cond| try self.push(.{ .expr = .{ .id = cond, .expect_only = false } });
+        try self.push(.{ .finish_loop = .{ .loop = ref, .scratch_start = self.scratch.items.len, .nested = nested } });
+        try self.push(.{ .expr = fields.body });
+        if (fields.cond) |cond| try self.push(.{ .expr = cond });
     }
 
     /// An enclosing loop sees a nested `for` loop's iterable in its own
     /// context, then the nested loop's published mutations.
-    fn pushLoopContribution(self: *@This(), mutations: CheckedLoopMutations, iterable: ?CheckedExprId, expect_only: bool) Allocator.Error!void {
-        try self.push(.{ .append_ranges = .{ .mutations = mutations, .expect_only = expect_only } });
-        if (iterable) |expr| try self.push(.{ .expr = .{ .id = expr, .expect_only = expect_only } });
+    fn pushLoopContribution(self: *@This(), mutations: CheckedLoopMutations, iterable: ?CheckedExprId) Allocator.Error!void {
+        try self.push(.{ .append_binders = mutations });
+        if (iterable) |expr| try self.push(.{ .expr = expr });
     }
 
     fn finishLoop(self: *@This(), ref: LoopRef, start: usize) Allocator.Error!CheckedLoopMutations {
@@ -12249,39 +12246,24 @@ const CheckedLoopMutationPublisher = struct {
         var end = start;
         const count = self.scratch.items.len;
         for (start..count) |i| {
-            const mutation = self.scratch.items[i];
-            const position = &self.positions[@intFromEnum(mutation.binder)];
+            const binder = self.scratch.items[i];
+            const position = &self.positions[@intFromEnum(binder)];
             if (position.* == std.math.maxInt(usize)) {
                 position.* = end;
-                self.scratch.items[end] = mutation;
+                self.scratch.items[end] = binder;
                 end += 1;
-            } else {
-                self.scratch.items[position.*].expect_only = self.scratch.items[position.*].expect_only and mutation.expect_only;
             }
         }
-        defer for (self.scratch.items[start..end]) |mutation| {
-            self.positions[@intFromEnum(mutation.binder)] = std.math.maxInt(usize);
+        defer for (self.scratch.items[start..end]) |binder| {
+            self.positions[@intFromEnum(binder)] = std.math.maxInt(usize);
         };
-        const always_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
-        for (self.scratch.items[start..end]) |mutation| if (!mutation.expect_only) {
-            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
-        };
-        const expect_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
-        for (self.scratch.items[start..end]) |mutation| if (mutation.expect_only) {
-            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
-        };
+        const binders_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
+        try self.store.pattern_binder_id_pool.appendSlice(self.allocator, self.scratch.items[start..end]);
         const result: CheckedLoopMutations = .{
-            .always = .{ .start = always_start, .len = expect_start - always_start },
-            .expect_only = .{ .start = expect_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - expect_start },
+            .binders = .{ .start = binders_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - binders_start },
         };
         self.loopFields(ref).mutations.* = try self.store.appendLoopMutations(self.allocator, result);
         return result;
-    }
-
-    fn appendRange(self: *@This(), range: CheckedBodyRange, expect_only: bool) Allocator.Error!void {
-        for (self.store.pattern_binder_id_pool.items[range.start..][0..range.len]) |binder| {
-            try self.scratch.append(self.allocator, .{ .binder = binder, .expect_only = expect_only });
-        }
     }
 
     /// Children are pushed in source order between `beginChildren` and
@@ -12294,71 +12276,74 @@ const CheckedLoopMutationPublisher = struct {
         std.mem.reverse(Work, self.work.items[start..]);
     }
 
-    fn pushExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
-        try self.push(.{ .expr = .{ .id = id, .expect_only = expect_only } });
+    fn pushExpr(self: *@This(), id: CheckedExprId) Allocator.Error!void {
+        try self.push(.{ .expr = id });
     }
 
-    fn visitExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
+    fn visitExpr(self: *@This(), id: CheckedExprId) Allocator.Error!void {
         const data = self.store.expr(id).data;
         const children = self.beginChildren();
         defer self.endChildren(children);
         switch (data) {
-            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item, expect_only),
+            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item),
             .match_ => |match| {
-                try self.pushExpr(match.cond, expect_only);
+                try self.pushExpr(match.cond);
                 for (match.branches) |branch| {
-                    if (branch.guard) |guard| try self.pushExpr(guard, expect_only);
-                    try self.pushExpr(branch.value, expect_only);
+                    if (branch.guard) |guard| try self.pushExpr(guard);
+                    try self.pushExpr(branch.value);
                 }
             },
             .if_ => |if_| {
                 for (if_.branches) |branch| {
-                    try self.pushExpr(branch.cond, expect_only);
-                    try self.pushExpr(branch.body, expect_only);
+                    try self.pushExpr(branch.cond);
+                    try self.pushExpr(branch.body);
                 }
-                try self.pushExpr(if_.final_else, expect_only);
+                try self.pushExpr(if_.final_else);
             },
             .call => |call| {
-                try self.pushExpr(call.func, expect_only);
-                for (call.args) |arg| try self.pushExpr(arg, expect_only);
+                try self.pushExpr(call.func);
+                for (call.args) |arg| try self.pushExpr(arg);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.pushExpr(ext, expect_only);
-                for (record.fields) |field| try self.pushExpr(field.value, expect_only);
+                if (record.ext) |ext| try self.pushExpr(ext);
+                for (record.fields) |field| try self.pushExpr(field.value);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.push(.{ .statement = .{ .id = statement, .expect_only = expect_only } });
-                try self.pushExpr(block.final_expr, expect_only);
+                for (block.statements) |statement| try self.push(.{ .statement = statement });
+                try self.pushExpr(block.final_expr);
             },
-            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg, expect_only),
-            .nominal => |nominal| try self.pushExpr(nominal.backing_expr, expect_only),
+            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg),
+            .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
             .binop => |binop| {
-                try self.pushExpr(binop.lhs, expect_only);
-                try self.pushExpr(binop.rhs, expect_only);
+                try self.pushExpr(binop.lhs);
+                try self.pushExpr(binop.rhs);
             },
-            .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child, expect_only),
-            .expect => |child| try self.pushExpr(child, true),
-            .expect_err => |child| try self.pushExpr(child.expr, expect_only),
-            .field_access => |field| try self.pushExpr(field.receiver, expect_only),
+            .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child),
+            // An expect body can only reassign vars declared inside it
+            // (canonicalization rejects the rest), so it carries no state
+            // through an enclosing loop.
+            .expect => {},
+            .expect_err => |child| try self.pushExpr(child.expr),
+            .field_access => |field| try self.pushExpr(field.receiver),
             .structural_eq => |eq| {
-                try self.pushExpr(eq.lhs, expect_only);
-                try self.pushExpr(eq.rhs, expect_only);
+                try self.pushExpr(eq.lhs);
+                try self.pushExpr(eq.rhs);
             },
             .structural_hash => |hash| {
-                try self.pushExpr(hash.value, expect_only);
-                try self.pushExpr(hash.hasher, expect_only);
+                try self.pushExpr(hash.value);
+                try self.pushExpr(hash.hasher);
             },
             .interpolation => |interpolation| {
-                try self.pushExpr(interpolation.first, expect_only);
+                try self.pushExpr(interpolation.first);
                 for (interpolation.parts) |part| {
-                    try self.pushExpr(part.value, expect_only);
-                    try self.pushExpr(part.following_segment, expect_only);
+                    try self.pushExpr(part.value);
+                    try self.pushExpr(part.following_segment);
                 }
             },
-            .tuple_access => |access| try self.pushExpr(access.tuple, expect_only),
-            .return_ => |ret| try self.pushExpr(ret.expr, expect_only),
-            .for_ => try self.push(.{ .nested_loop = .{ .loop = .{ .expr = id }, .expect_only = expect_only } }),
-            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg, expect_only),
+            .tuple_access => |access| try self.pushExpr(access.tuple),
+            .return_ => |ret| try self.pushExpr(ret.expr),
+            .for_ => try self.push(.{ .nested_loop = .{ .expr = id } }),
+            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg),
             // A lambda's body executes at invocation, not at this expression.
             .lambda,
             .closure,
@@ -12380,27 +12365,24 @@ const CheckedLoopMutationPublisher = struct {
             .break_,
             => {},
             .dispatch_call, .method_eq, .type_dispatch_call => {
-                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.pushExpr(operand, expect_only);
+                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.pushExpr(operand);
             },
             .pending => checkedArtifactInvariant("pending expression in loop mutation publication", .{}),
         }
     }
 
-    fn visitStatement(self: *@This(), id: CheckedStatementId, expect_only: bool) Allocator.Error!void {
+    fn visitStatement(self: *@This(), id: CheckedStatementId) Allocator.Error!void {
         switch (self.store.statement(id).data) {
-            .decl => |decl| try self.pushExpr(decl.expr, expect_only),
-            .var_ => |decl| try self.pushExpr(decl.expr, expect_only),
+            .decl => |decl| try self.pushExpr(decl.expr),
+            .var_ => |decl| try self.pushExpr(decl.expr),
             .reassign => |reassign| {
-                for (reassign.reassigned_binders) |binder| try self.scratch.append(self.allocator, .{
-                    .binder = binder,
-                    .expect_only = expect_only,
-                });
-                try self.pushExpr(reassign.expr, expect_only);
+                try self.scratch.appendSlice(self.allocator, reassign.reassigned_binders);
+                try self.pushExpr(reassign.expr);
             },
-            .dbg, .expr => |child| try self.pushExpr(child, expect_only),
-            .expect => |child| try self.pushExpr(child, true),
-            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested_loop = .{ .loop = .{ .statement = id }, .expect_only = expect_only } }),
-            .return_ => |ret| try self.pushExpr(ret.expr, expect_only),
+            .dbg, .expr => |child| try self.pushExpr(child),
+            .expect => {},
+            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested_loop = .{ .statement = id } }),
+            .return_ => |ret| try self.pushExpr(ret.expr),
             .promoted_proc, .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             .pending => checkedArtifactInvariant("pending statement in loop mutation publication", .{}),
         }
@@ -16294,10 +16276,8 @@ fn verifyCheckedExprDataComplete(
         .for_ => |for_| {
             std.debug.assert(for_.plan != null);
             std.debug.assert(for_.mutations != null);
-            const mutations = checked_bodies.loopMutations(for_.mutations.?);
-            for ([_]CheckedBodyRange{ mutations.always, mutations.expect_only }) |range| {
-                std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
-            }
+            const range = checked_bodies.loopMutations(for_.mutations.?).binders;
+            std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
         },
         .field_access => |field_access| {
             if (field_access.segments.len == 0) {
@@ -17042,6 +17022,8 @@ pub const ResolvedValueRefTable = struct {
         const module = modules.module(module_idx);
         var key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
         defer key_writer.deinit();
+        // The store is final here, as it is for publication's own writer.
+        key_writer.retainComposedKeys();
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
         var callable_aliases = std.ArrayList(ResolvedValueRefId).empty;
@@ -18267,6 +18249,17 @@ const TemplateIteratorRefs = struct {
     default_iterator_refs: artifact_serialize.Span = .{},
     default_scheme_uses: artifact_serialize.Span = .{},
     default_scope_sites: artifact_serialize.Span = .{},
+
+    /// Extend the per-template spans for `count` templates appended after
+    /// sealing whose bodies have no iterator plans, instantiation sites, or
+    /// nested-procedure construction sites.
+    fn appendEmptyTemplates(self: *TemplateIteratorRefs, allocator: Allocator, count: usize) Allocator.Error!void {
+        inline for (.{ "spans", "scheme_use_spans", "scope_site_spans" }) |field| {
+            const old_len = @field(self, field).len;
+            @field(self, field) = try allocator.realloc(@field(self, field), old_len + count);
+            @memset(@field(self, field)[old_len..], .{});
+        }
+    }
 
     fn deinit(self: *TemplateIteratorRefs, allocator: Allocator) void {
         allocator.free(self.spans);
@@ -20887,13 +20880,29 @@ const EvidencePass = struct {
         return switch (evidence.resolution) {
             .direct => |id| switch (self.evidence_nodes.items[@intFromEnum(id)].target.kind) {
                 .procedure => switch (self.procedureEvidenceSchema(self.evidence_nodes.items[@intFromEnum(id)].target)) {
-                    .none, .from_callable => false,
+                    .none => false,
+                    .from_callable => self.procedureHasCodecEvidenceParam(self.evidence_nodes.items[@intFromEnum(id)].target),
                     .from_target, .requires_record => true,
                 },
                 .local_proc, .structural => true,
             },
             .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => true,
         };
+    }
+
+    /// A callable-derived codec requirement resolves to a structural parser or
+    /// encoder only through a checked generated-codec derivation, which a
+    /// per-use callable cannot derive after checking.
+    fn procedureHasCodecEvidenceParam(self: *EvidencePass, target: static_dispatch.MethodTarget) bool {
+        const target_view = self.procedureEvidenceView(target);
+        for (target_view.table.evidenceParams(&target_view.template)) |param| {
+            const structural = param.structural orelse continue;
+            switch (structural) {
+                .parser, .encoder => return true,
+                .equality, .hash, .map, .map_effectful => {},
+            }
+        }
+        return false;
     }
 
     /// Intern only sparse side vectors. Children have already been interned,
@@ -25690,6 +25699,7 @@ fn publishLiteralConversionRoots(
     roots: *CompileTimeRootTable,
     wrappers: *EntryWrapperTable,
     templates: *CheckedProcedureTemplateTable,
+    template_refs: *TemplateIteratorRefs,
 ) Allocator.Error!void {
     const first_root = roots.roots.len;
     var root_list = std.ArrayList(CompileTimeRoot).empty;
@@ -25793,6 +25803,7 @@ fn publishLiteralConversionRoots(
     templates.specialization_interface_relations = try allocator.realloc(templates.specialization_interface_relations, first_relation + added.len);
     const root_evidence = try allocator.realloc(@constCast(plans.template_root_evidence), templates.templates.items.len);
     plans.template_root_evidence = root_evidence;
+    try template_refs.appendEmptyTemplates(allocator, added.len);
     for (added, templates.templates.items[first_template..], 0..) |root, *template, i| {
         const plan_id = switch (bodies.expr(root.expr).data) {
             .numeral => |numeral| numeral.plan.?,
@@ -28021,6 +28032,9 @@ pub const CompileTimeRootPayload = union(enum) {
     fn_value: ConstFnId,
     discarded,
     expect,
+    /// A guarded hoisted root whose compile-time evaluation failed. Runtime
+    /// lowering evaluates its original expression and declaration in place.
+    runtime,
 };
 
 /// Whether a selected compile-time root may become a root request.
@@ -28043,6 +28057,10 @@ pub const CompileTimeRoot = struct {
     checked_type: CheckedTypeId,
     request_eligibility: CompileTimeRootRequestEligibility,
     payload: CompileTimeRootPayload,
+    /// A hoisted root reached only through a branch, guard, loop body, or
+    /// expect body. Its evaluation failure is not a diagnostic; finalization
+    /// records the `runtime` payload instead.
+    guarded: bool = false,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
         return switch (self.kind) {
@@ -28194,6 +28212,7 @@ pub const CompileTimeRootTable = struct {
                 .expr = checked_root.expr,
                 .checked_type = checked_root.checked_type,
                 .payload = .pending,
+                .guarded = selected.guarded,
             });
         }
 
@@ -28256,7 +28275,7 @@ pub const CompileTimeRootTable = struct {
         if (index >= self.roots.len) {
             checkedArtifactInvariant("compile-time root id is out of range", .{});
         }
-        verifyCompileTimeRootPayloadMatchesKind(self.roots[index].kind, payload);
+        verifyCompileTimeRootPayloadMatchesKind(self.roots[index], payload);
         self.roots[index].payload = payload;
     }
 
@@ -28277,6 +28296,7 @@ pub const CompileTimeRootTable = struct {
         checked_type: CheckedTypeId,
         request_eligibility: CompileTimeRootRequestEligibility = .pending,
         payload: CompileTimeRootPayload,
+        guarded: bool = false,
     };
 
     /// Collect one top-level `expect` as a test root. Expects evaluated inside
@@ -28324,6 +28344,7 @@ pub const CompileTimeRootTable = struct {
             .checked_type = entry.checked_type,
             .request_eligibility = entry.request_eligibility,
             .payload = entry.payload,
+            .guarded = entry.guarded,
         }) catch |err| {
             if (entry.hoisted_body) |body| hoist_roots.deinitBody(allocator, body);
             return err;
@@ -28380,8 +28401,10 @@ fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, root
 /// with a runtime error would report that already-reported problem a second
 /// time as a compile-time crash, so it is not requested. This includes expect
 /// roots, which are counted as compiler errors without execution. Reachability
-/// follows each procedure template's explicit procedure references, constant
-/// references, and closed dispatch targets, local and imported. The result is
+/// follows every call edge checking recorded for a procedure template, local and
+/// imported: procedure and constant references, direct dispatch targets, the
+/// method calls inside generated codec derivations, and the evidence each
+/// instantiation site and direct target carries. The result is
 /// recorded per template so importing modules consume it directly; a module
 /// whose bodies and imports contain no checked error records nothing and
 /// performs no traversal.
@@ -28398,11 +28421,83 @@ const CheckedErrorReachability = struct {
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    template_refs: *const TemplateIteratorRefs,
 
     const Target = union(enum) {
         none,
         reaches,
         local: canonical.CheckedProcedureTemplateId,
+    };
+
+    /// The template whose outgoing edges are being recorded, with the shared
+    /// reachability state those edges feed.
+    const Recorder = struct {
+        allocator: Allocator,
+        reaches: []bool,
+        dependents: []std.ArrayList(canonical.CheckedProcedureTemplateId),
+        work: *std.ArrayList(canonical.CheckedProcedureTemplateId),
+        owner: canonical.CheckedProcedureTemplateId,
+
+        fn record(self: Recorder, target: Target) Allocator.Error!void {
+            try recordTarget(self.allocator, self.reaches, self.dependents, self.work, self.owner, target);
+        }
+    };
+
+    /// Evidence still to expand for the current owner, with the evidence nodes
+    /// and generated-codec derivations already queued for it. A recursive
+    /// type's codec derivation names itself, and a shared evidence node can
+    /// appear under several sites.
+    const EvidenceVisits = struct {
+        nodes: std.DynamicBitSetUnmanaged,
+        derivations: std.DynamicBitSetUnmanaged,
+        touched_nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
+        touched_derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
+        pending: std.ArrayList(Item) = .empty,
+
+        const Item = union(enum) {
+            /// Range into `StaticDispatchPlanTable.evidence_refs`.
+            evidence: artifact_serialize.Span,
+            node: static_dispatch.EvidenceNodeId,
+            derivation: static_dispatch.GeneratedCodecDerivationId,
+        };
+
+        fn init(allocator: Allocator, plans: *const static_dispatch.StaticDispatchPlanTable) Allocator.Error!EvidenceVisits {
+            var nodes = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.evidence_nodes.len);
+            errdefer nodes.deinit(allocator);
+            return .{
+                .nodes = nodes,
+                .derivations = try std.DynamicBitSetUnmanaged.initEmpty(allocator, plans.generated_codec_derivations.len),
+            };
+        }
+
+        fn deinit(self: *EvidenceVisits, allocator: Allocator) void {
+            self.nodes.deinit(allocator);
+            self.derivations.deinit(allocator);
+            self.touched_nodes.deinit(allocator);
+            self.touched_derivations.deinit(allocator);
+            self.pending.deinit(allocator);
+        }
+
+        fn reset(self: *EvidenceVisits) void {
+            for (self.touched_nodes.items) |id| self.nodes.unset(@intFromEnum(id));
+            for (self.touched_derivations.items) |id| self.derivations.unset(@intFromEnum(id));
+            self.touched_nodes.clearRetainingCapacity();
+            self.touched_derivations.clearRetainingCapacity();
+        }
+
+        fn pushNode(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.EvidenceNodeId) Allocator.Error!void {
+            if (self.nodes.isSet(@intFromEnum(id))) return;
+            self.nodes.set(@intFromEnum(id));
+            try self.touched_nodes.append(allocator, id);
+            try self.pending.append(allocator, .{ .node = id });
+        }
+
+        fn pushDerivation(self: *EvidenceVisits, allocator: Allocator, id: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!void {
+            if (self.derivations.isSet(@intFromEnum(id))) return;
+            self.derivations.set(@intFromEnum(id));
+            try self.touched_derivations.append(allocator, id);
+            try self.pending.append(allocator, .{ .derivation = id });
+        }
     };
 
     fn publish(
@@ -28425,21 +28520,45 @@ const CheckedErrorReachability = struct {
         }
         var work = std.ArrayList(canonical.CheckedProcedureTemplateId).empty;
         defer work.deinit(allocator);
+        var visits = try EvidenceVisits.init(allocator, self.static_dispatch_plans);
+        defer visits.deinit(allocator);
 
+        const plans = self.static_dispatch_plans;
+        const refs = self.template_refs;
         for (self.templates.templates.items, 0..) |template, raw| {
             const id: canonical.CheckedProcedureTemplateId = @enumFromInt(@as(u32, @intCast(raw)));
             if (self.bodyContainsDiagnosticError(template.body)) {
                 try markReached(allocator, reaches, &work, id);
             }
+            const recorder = Recorder{
+                .allocator = allocator,
+                .reaches = reaches,
+                .dependents = dependents,
+                .work = &work,
+                .owner = id,
+            };
+            visits.reset();
             const refs_end = template.resolved_value_refs.start + template.resolved_value_refs.len;
             for (self.resolved_value_refs.template_refs[template.resolved_value_refs.start..refs_end]) |ref_id| {
-                const target = self.resolvedRefTarget(self.resolved_value_refs.records[@intFromEnum(ref_id)].ref);
-                try recordTarget(allocator, reaches, dependents, &work, id, target);
+                const record = self.resolved_value_refs.records[@intFromEnum(ref_id)];
+                try recorder.record(self.resolvedRefTarget(record.ref));
+                try self.recordSiteEvidence(&visits, recorder, record.expr);
             }
-            const plans_end = template.direct_dispatch_plans.start + template.direct_dispatch_plans.len;
-            for (self.static_dispatch_plans.direct_template_refs[template.direct_dispatch_plans.start..plans_end]) |plan_id| {
-                const target = self.directDispatchTarget(self.static_dispatch_plans.plans[@intFromEnum(plan_id)]);
-                try recordTarget(allocator, reaches, dependents, &work, id, target);
+            const scheme_uses = refs.scheme_use_spans[raw];
+            for (refs.scheme_use_sites[scheme_uses.start..][0..scheme_uses.len]) |site| {
+                try self.recordSiteEvidence(&visits, recorder, site.checked_expr);
+            }
+            const scope_sites = refs.scope_site_spans[raw];
+            for (refs.scope_sites[scope_sites.start..][0..scope_sites.len]) |site| {
+                try self.recordSiteEvidence(&visits, recorder, site.checked_expr);
+            }
+            const direct = template.direct_dispatch_plans;
+            for (plans.direct_template_refs[direct.start..][0..direct.len]) |plan_id| {
+                try self.recordDispatchPlan(&visits, recorder, plans.plans[@intFromEnum(plan_id)]);
+            }
+            const relations = template.dispatch_relations;
+            for (plans.dispatch_relation_refs[relations.start..][0..relations.len]) |plan_id| {
+                try self.recordDispatchPlan(&visits, recorder, plans.plans[@intFromEnum(plan_id)]);
             }
         }
 
@@ -28620,23 +28739,100 @@ const CheckedErrorReachability = struct {
         return self.importedRootTarget(imported, root);
     }
 
-    fn directDispatchTarget(self: CheckedErrorReachability, plan: static_dispatch.StaticDispatchCallPlan) Target {
-        const direct = switch (plan.resolution) {
-            .direct_closed, .direct_parametric => |direct| direct,
-            .direct_pending,
-            .evidence_dependent,
-            .structural,
-            .@"unreachable",
-            .checked_error,
-            => checkedArtifactInvariant("checked-error reachability read a direct dispatch span entry without a direct target", .{}),
-        };
-        return switch (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind) {
-            .procedure => |procedure| switch (procedure.runtime_target) {
-                .procedure => self.templateTarget(procedure.template),
-                .low_level, .intrinsic, .graph_participating => .none,
+    fn recordDispatchPlan(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!void {
+        switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| {
+                if (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind == .structural) {
+                    checkedArtifactInvariant("direct checked call targeted a structural derivation", .{});
+                }
+                try visits.pushNode(recorder.allocator, direct.evidence);
             },
-            .local_proc => .none,
-            .structural => checkedArtifactInvariant("direct checked call targeted a structural derivation", .{}),
+            .structural => if (plan.generated_codec_derivation) |derivation| {
+                try visits.pushDerivation(recorder.allocator, derivation);
+            },
+            .checked_error => try recorder.record(.reaches),
+            // The enclosing callable's evidence supplies this target, so the
+            // edge belongs to the instantiation site that supplies it.
+            .evidence_dependent, .@"unreachable" => {},
+            .direct_pending => checkedArtifactInvariant("checked-error reachability read an unfinalized direct call", .{}),
+        }
+        try self.drainEvidence(visits, recorder);
+    }
+
+    fn recordSiteEvidence(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+        expr: CheckedExprId,
+    ) Allocator.Error!void {
+        const span = self.static_dispatch_plans.siteEvidenceSpan(expr) orelse return;
+        try visits.pending.append(recorder.allocator, .{ .evidence = span });
+        try self.drainEvidence(visits, recorder);
+    }
+
+    /// Record every template the pending evidence reaches. The traversal keeps
+    /// an explicit stack because nested evidence follows the depth of the
+    /// dispatched types.
+    fn drainEvidence(
+        self: CheckedErrorReachability,
+        visits: *EvidenceVisits,
+        recorder: Recorder,
+    ) Allocator.Error!void {
+        const plans = self.static_dispatch_plans;
+        while (visits.pending.pop()) |item| switch (item) {
+            .evidence => |span| for (plans.evidence_refs[span.start..][0..span.len]) |evidence| {
+                switch (evidence.resolution) {
+                    .direct => |node| try visits.pushNode(recorder.allocator, node),
+                    .structural => |structural| if (structural.generated_codec_derivation) |derivation| {
+                        try visits.pushDerivation(recorder.allocator, derivation);
+                    },
+                    .checked_error => try recorder.record(.reaches),
+                    // Forwarded obligations are supplied by an enclosing
+                    // instantiation site, and an unreachable obligation lowers
+                    // to a crash, never a call.
+                    .constraint, .from_callable, .from_scheme, .unreachable_value => {},
+                }
+                if (evidence.callable_contracts.len != 0) {
+                    try visits.pending.append(recorder.allocator, .{ .evidence = evidence.callable_contracts });
+                }
+            },
+            .node => |id| {
+                const node = plans.evidenceNode(id);
+                switch (node.target.kind) {
+                    .procedure => |procedure| switch (procedure.runtime_target) {
+                        .procedure => try recorder.record(self.templateTarget(procedure.template)),
+                        .low_level, .intrinsic, .graph_participating => {},
+                    },
+                    // A local procedure's body belongs to the template that declares it.
+                    .local_proc => {},
+                    // A structural target's body is the derivation it names below.
+                    .structural => {},
+                }
+                if (node.generated_codec_derivation) |derivation| {
+                    try visits.pushDerivation(recorder.allocator, derivation);
+                }
+                switch (node.nested) {
+                    .resolved => |nested| if (nested.len != 0) {
+                        try visits.pending.append(recorder.allocator, .{ .evidence = nested });
+                    },
+                    // Checking recorded no per-edge evidence entries for this target.
+                    .from_callable => {},
+                }
+            },
+            .derivation => |id| {
+                const derivation = plans.generated_codec_derivations[@intFromEnum(id)];
+                for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
+                    .callable => |node| try visits.pushNode(recorder.allocator, node),
+                    .structural => |nested| try visits.pushDerivation(recorder.allocator, nested),
+                    .checked_error => try recorder.record(.reaches),
+                    .pending => checkedArtifactInvariant("checked-error reachability read an unlinked generated codec call", .{}),
+                };
+            },
         };
     }
 };
@@ -28665,14 +28861,16 @@ fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) vo
     }
 }
 
-fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
-    const matches = switch (kind) {
+fn verifyCompileTimeRootPayloadMatchesKind(root: CompileTimeRoot, payload: CompileTimeRootPayload) void {
+    const matches = switch (root.kind) {
         .constant, .hoisted_constant, .repl_expr => switch (payload) {
             .const_node => true,
+            .runtime => root.guarded,
             .pending, .fn_value, .discarded, .expect => false,
         },
         .hoisted_validation => switch (payload) {
             .discarded => true,
+            .runtime => root.guarded,
             .pending, .const_node, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
@@ -28681,15 +28879,15 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             // node at the callable's expected type, so execution crashes at
             // the exact invalid binding while independent roots remain usable.
             .fn_value, .const_node => true,
-            .pending, .discarded, .expect => false,
+            .pending, .discarded, .expect, .runtime => false,
         },
         .expect => switch (payload) {
             .expect => true,
-            .pending, .const_node, .fn_value, .discarded => false,
+            .pending, .const_node, .fn_value, .discarded, .runtime => false,
         },
         .numeral_conversion, .quote_conversion => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .discarded, .expect => false,
+            .pending, .fn_value, .discarded, .expect, .runtime => false,
         },
     };
     if (matches) return;
@@ -34111,7 +34309,8 @@ pub const CheckedModuleArtifact = struct {
                     .fn_value,
                     .discarded,
                     .expect,
-                    => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
+                    .runtime,
+                    => verifyCompileTimeRootPayloadMatchesKind(root, root.payload),
                 },
                 .expect => switch (root.payload) {
                     .expect => {},
@@ -34119,6 +34318,7 @@ pub const CheckedModuleArtifact = struct {
                     .const_node,
                     .fn_value,
                     .discarded,
+                    .runtime,
                     => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
                 },
             }
@@ -35171,7 +35371,7 @@ pub const CheckedModuleArtifact = struct {
             if (root.kind == .expect) {
                 switch (root.payload) {
                     .expect => {},
-                    .pending, .const_node, .fn_value, .discarded => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
+                    .pending, .const_node, .fn_value, .discarded, .runtime => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
                 continue;
             }
@@ -35187,11 +35387,11 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
                     }
                 },
-                .const_node, .fn_value, .discarded, .expect => {
+                .const_node, .fn_value, .discarded, .expect, .runtime => {
                     if (!has_request) {
                         std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }
-                    verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload);
+                    verifyCompileTimeRootPayloadMatchesKind(root, root.payload);
                 },
             }
         }
@@ -36899,6 +37099,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_unused_variable,
             .diag_used_underscore_variable,
             .diag_duplicate_record_field,
+            .diag_duplicate_pattern_binder,
             .diag_duplicate_tag,
             .diag_crash_expects_string,
             .diag_f64_pattern_literal,
@@ -36912,6 +37113,8 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_infinite_loop_never_exits,
             .diag_trailing_try_suffix,
             .diag_return_outside_fn,
+            .diag_control_flow_in_expect,
+            .diag_var_reassigned_in_expect,
             .diag_mutually_recursive_type_aliases,
             .diag_deprecated_number_suffix,
             .diag_range_op_chained,
@@ -37430,6 +37633,7 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
         &entry_wrappers,
         &checked_procedure_templates,
+        &template_iterator_refs,
     );
     try classifyTemplateDispatchPlanRefs(
         allocator,
@@ -37458,6 +37662,7 @@ pub fn publishFromTypedModule(
         .hoisted_constants = &hoisted_constants,
         .const_templates = &const_templates,
         .static_dispatch_plans = &static_dispatch_plans,
+        .template_refs = &template_iterator_refs,
     }).publish(allocator, any_diagnostic_error, compile_time_roots.roots);
     try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     template_iterator_refs.deinit(allocator);
@@ -39742,8 +39947,8 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         };
         for (plans) |plan| {
             const pool = body.patternBinderIdPool();
-            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.always.start..][0..plan.always.len]);
-            try std.testing.expectEqualSlices(PatternBinderId, &.{b1}, pool[plan.expect_only.start..][0..plan.expect_only.len]);
+            // b1 is reassigned only inside an expect, which never carries loop state.
+            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.binders.start..][0..plan.binders.len]);
         }
         const condition_plans = [_]CheckedLoopMutations{
             body.loopMutations(body.statement(@enumFromInt(7)).data.while_.mutations.?),
@@ -39751,8 +39956,7 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         };
         for (condition_plans) |plan| {
             const pool = body.patternBinderIdPool();
-            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.always.start..][0..plan.always.len]);
-            try std.testing.expectEqual(@as(u32, 0), plan.expect_only.len);
+            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.binders.start..][0..plan.binders.len]);
         }
     }
 }
@@ -40193,8 +40397,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x45, 0x49, 0x7F, 0x75, 0x54, 0x5B, 0xC4, 0x37, 0x35, 0xA8, 0x54, 0x23, 0xEE, 0xAE, 0x83, 0xD9,
-        0xDA, 0x18, 0xE4, 0xC4, 0xB7, 0x8F, 0xF8, 0x8E, 0x95, 0x2B, 0xB1, 0x6D, 0xF5, 0xB7, 0xDC, 0x75,
+        0x63, 0x53, 0x6B, 0x25, 0x03, 0x14, 0x60, 0xCE, 0x23, 0x7C, 0x0A, 0xEE, 0x5B, 0x5A, 0x54, 0xDD,
+        0xB4, 0xDD, 0x5C, 0xCD, 0x84, 0x68, 0xB1, 0x4D, 0xC0, 0x74, 0x06, 0x3A, 0x36, 0xEA, 0xB5, 0xF6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -40922,4 +41126,48 @@ test "issue 11737: identical callable contract vectors share their checked stora
     var different = contract;
     different[0].resolution = .checked_error;
     try std.testing.expect(!std.meta.eql(first, try pass.internCallableContracts(&different)));
+}
+
+test "checked polarity alias publication erases hidden arguments and preserves backing" {
+    const allocator = std.testing.allocator;
+    const TestEnv = @import("test/TestEnv.zig");
+    var env = try TestEnv.init("HiddenAlias",
+        \\Result(a) : [Ok(a), Err]
+        \\value : {} -> Result({})
+        \\value = |_| crash "unused"
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    const source_modules = [_]TypedCIR.Modules.SourceModule{.{ .precompiled = env.module_env }};
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+    const defs = env.module_env.store.sliceDefs(env.module_env.all_defs);
+    const function = env.module_env.types.resolveVar(ModuleEnv.varFrom(defs[defs.len - 1])).desc.content.structure.fn_pure;
+    const raw_alias = env.module_env.types.resolveVar(function.ret).desc.content.alias;
+    try std.testing.expectEqual(@as(u32, 1), raw_alias.source_arg_count);
+    try std.testing.expectEqual(@as(usize, 1), env.module_env.types.sliceAliasHiddenArgs(raw_alias).len);
+    const raw_backing = env.module_env.types.resolveVar(env.module_env.types.getAliasBackingVar(raw_alias)).desc.content.structure.tag_union;
+    try std.testing.expectEqual(env.module_env.types.resolveVar(raw_backing.ext).var_, env.module_env.types.resolveVar(env.module_env.types.sliceAliasHiddenArgs(raw_alias)[0]).var_);
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    var active = try CheckedSourceTypeRoots.init(allocator, module);
+    defer active.deinit();
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    const root = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, function.ret);
+    const alias = store.payload(root).alias;
+    try std.testing.expectEqual(@as(usize, 1), alias.args.len);
+    const row = store.payload(alias.backing).tag_union;
+    try std.testing.expect(store.payload(row.ext) == .flex);
+    const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), function.ret);
+    try std.testing.expectEqualSlices(u8, &source_key.bytes, &store.roots.items[@intFromEnum(root)].key.bytes);
+
+    const roundtrip = try artifact_serialize.roundTripForTest(allocator, CheckedTypeStore, &store);
+    defer allocator.free(roundtrip.buffer);
+    const loaded_alias = roundtrip.loaded.payload(root).alias;
+    try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
+    try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
 }

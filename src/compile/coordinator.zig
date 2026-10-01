@@ -217,7 +217,7 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
 }
 
 const checked_module_cache_magic = "roc-mod-cache-v11";
-const checked_module_entry_version: u32 = 11;
+const checked_module_entry_version: u32 = 12;
 const checked_module_entry_version_hash: [32]u8 = computeCheckedModuleEntryVersionHash();
 
 // Header: magic, composite entry-version hash (32), artifact key (32), env-blob
@@ -396,7 +396,7 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
 }
 
 const canonicalized_module_cache_magic = "roc-can-cache-v1";
-const canonicalized_module_entry_version: u32 = 1;
+const canonicalized_module_entry_version: u32 = 2;
 const canonicalized_module_entry_version_hash: [32]u8 = computeCanonicalizedModuleEntryVersionHash();
 
 // Header: magic, composite entry-version hash (32), canonicalized-module cache
@@ -1264,6 +1264,9 @@ pub const Coordinator = struct {
     /// Set only after the frontend coordinator loop has drained every task and
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
+    /// Set by checked-program finalization: whether it published a program,
+    /// which requires a checked app root.
+    checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// The checked modules whose `expect`s are the developer's own tests, in
@@ -1692,6 +1695,8 @@ pub const Coordinator = struct {
         const ast = try parse.file(self.gpa, &common);
         defer ast.deinit();
 
+        if (ast.tokenize_had_errors or ast.tokenize_diagnostics.items.len != 0) return error.SourceTokenizationFailed;
+
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
         const exposes, const surface_kind: module_discovery.PublicSurfaceKind = if (header == .package)
@@ -1731,8 +1736,6 @@ pub const Coordinator = struct {
         arena: Allocator,
         opts: AppDiscoveryOptions,
     ) AppDiscoveryError!void {
-        const header_info = try app_header_mod.parseAppHeader(self.roc_ctx, self.gpa, arena, opts.entry_path);
-
         const app_dir = std.fs.path.dirname(opts.entry_path) orelse ".";
 
         const app_identity = try package_identity.packageIdentityFor(
@@ -1753,6 +1756,19 @@ pub const Coordinator = struct {
         app_pkg.modules.items[app_module_id].depth = 0;
         app_pkg.remaining_modules += 1;
         self.total_remaining += 1;
+
+        // Allocate the root report destination before parsing its header. No
+        // platform or import metadata is consumed until tokenization succeeds.
+        const header_info = app_header_mod.parseAppHeaderReporting(
+            self.roc_ctx,
+            self.gpa,
+            arena,
+            opts.entry_path,
+            &app_pkg.modules.items[app_module_id].reports,
+        ) catch |err| {
+            try self.completeModulesWithFailure(&.{.{ .pkg_name = app_pkg.name, .module_id = app_module_id }});
+            return err;
+        };
 
         switch (header_info.platform_ref) {
             .none => {},
@@ -2290,9 +2306,8 @@ pub const Coordinator = struct {
         var finalization_timer = startStageTimer(self.roc_ctx.std_io);
         defer self.program_finalization_ns += readStageTimer(self.roc_ctx.std_io, &finalization_timer);
         if (!self.frontend_complete) coordinatorInvariant("checked program finalization preceded frontend completion", .{});
-        if (mode == .executable_artifacts and self.findRootModule(.platform) != null and
-            (self.findRootModule(.app) != null or self.findRootModule(.default_app) != null))
-        {
+        self.checked_program = mode == .executable_artifacts and self.appRootChecked();
+        if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
             if (platform.evaluation_state == .prepared) {
@@ -2314,13 +2329,23 @@ pub const Coordinator = struct {
         } else {
             // Only a compilation that publishes executable artifacts has a
             // program: `roc check`, `roc build` and `roc run` all do.
-            const program_root = if (mode == .executable_artifacts and
-                (self.findRootModule(.app) != null or self.findRootModule(.default_app) != null))
-                self.executableRootCheckedArtifact()
-            else
-                null;
+            const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluatePreparedModules(true, null, null, program_root);
         }
+    }
+
+    /// Whether the last checked-program finalization published a program.
+    pub fn hasCheckedProgram(self: *const Coordinator) bool {
+        return self.checked_program;
+    }
+
+    /// Whether the app root finished checking. A root that failed (for
+    /// example as a dependent of an import cycle) has no checked artifact, so
+    /// the build has no program; every checked module still finishes its
+    /// independent compile-time work and every report is still emitted.
+    fn appRootChecked(self: *Coordinator) bool {
+        const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return false;
+        return app_root.mod.checkedArtifact() != null;
     }
 
     fn prepareExecutableArtifacts(self: *Coordinator) compile_package.PublishError!void {
@@ -4108,6 +4133,13 @@ pub const Coordinator = struct {
         // Update timing
         self.total_parse_ns += result.parse_ns;
         mod.compile_time_ns += result.parse_ns;
+
+        // A source-policy failure is stronger than ordinary recoverable syntax
+        // errors: no independent root or dependency metadata may be executed.
+        if (result.cached_ast.source_rejected) {
+            try self.completeModulesWithFailure(&.{.{ .pkg_name = result.package_name, .module_id = result.module_id }});
+            return;
+        }
 
         if (try self.registerDiscoveredImports(
             pkg,
@@ -6475,6 +6507,8 @@ const CompiledBuildFacts = struct {
     reports: []u8,
     /// Every published checked-artifact key, sorted.
     artifact_keys: [][32]u8,
+    rejected_modules: usize,
+    failed_modules: usize,
 
     fn deinit(self: *CompiledBuildFacts, allocator: Allocator) void {
         allocator.free(self.reports);
@@ -6554,11 +6588,21 @@ fn compileAppFacts(
     const owned_reports = try allocator.dupe(u8, reports.written());
     errdefer allocator.free(owned_reports);
 
+    var rejected_modules: usize = 0;
+    var failed_modules: usize = 0;
     var keys = std.ArrayList([32]u8).empty;
     errdefer keys.deinit(allocator);
     var pkg_it = coord.packages.iterator();
     while (pkg_it.next()) |pkg_entry| {
         for (pkg_entry.value_ptr.*.modules.items) |*mod| {
+            if (mod.completedWithFailure()) failed_modules += 1;
+            if (mod.cached_ast) |ast| {
+                if (ast.source_rejected) {
+                    rejected_modules += 1;
+                    try std.testing.expect(mod.completedWithFailure());
+                    try std.testing.expect(mod.checkedArtifact() == null);
+                }
+            }
             if (mod.checkedArtifact()) |artifact| {
                 try keys.append(allocator, artifact.key.bytes);
             }
@@ -6571,6 +6615,8 @@ fn compileAppFacts(
         .cache = cache_manager.stats,
         .reports = owned_reports,
         .artifact_keys = try keys.toOwnedSlice(allocator),
+        .rejected_modules = rejected_modules,
+        .failed_modules = failed_modules,
     };
 }
 
@@ -10394,5 +10440,78 @@ test "successful compile-time dbg replays from warm checked cache without evalua
             // Other modules may still need platform-related finalization.
             try std.testing.expectEqual(.finalized, artifact.evaluation_state);
         }
+    }
+}
+
+test "bidi rejected dependencies fail identically with cold warm and disabled caches" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+    const unsafe_helper = helper_module_source ++ "\n# \u{202e}\u{2066}\u{2069}\u{202c}\n";
+    try writeImporterFixture(&tmp, "bidi", helper_module_source);
+    const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "bidi/app/main.roc", allocator);
+    defer allocator.free(app_path);
+    // Prime successful entries, then change a dependency to forbidden source.
+    // A previously checked importer must not hide the new rejection.
+    var clean = try compileAppFacts(allocator, cache_dir, app_path);
+    defer clean.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), clean.failed_modules);
+    try writeImporterFixture(&tmp, "bidi", unsafe_helper);
+    var cold = try compileAppFacts(allocator, cache_dir, app_path);
+    defer cold.deinit(allocator);
+    var warm = try compileAppFacts(allocator, cache_dir, app_path);
+    defer warm.deinit(allocator);
+    var uncached = try compileAppFacts(allocator, null, app_path);
+    defer uncached.deinit(allocator);
+    try std.testing.expect(std.mem.find(u8, cold.reports, "Bidirectional") != null or std.mem.find(u8, cold.reports, "bidirectional") != null);
+    try std.testing.expectEqualStrings(cold.reports, warm.reports);
+    try std.testing.expectEqualStrings(cold.reports, uncached.reports);
+    var controls = base.bidi.Iterator{ .bytes = cold.reports };
+    try std.testing.expect(controls.next() == null);
+    // Rejected source must not acquire a successful checked identity.
+    for ([_]*const CompiledBuildFacts{ &cold, &warm, &uncached }) |facts| {
+        try std.testing.expectEqual(@as(usize, 1), facts.rejected_modules);
+        try std.testing.expect(facts.failed_modules >= 2);
+    }
+    try std.testing.expectEqualSlices([32]u8, cold.artifact_keys, warm.artifact_keys);
+    try std.testing.expectEqualSlices([32]u8, cold.artifact_keys, uncached.artifact_keys);
+}
+
+test "app discovery retains tokenizer rejection reports before platform resolution" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const ctx = CoreCtx.os(gpa, gpa, std.testing.io);
+    const builtin_modules = try sharedBuiltinModules();
+    for ([_][]const u8{ "42 # \u{202e}", "0X42" }, 0..) |expression, i| {
+        const source = try std.fmt.allocPrint(gpa, "app [main!] {{ pf: platform \"./missing/main.roc\" }}\nmain! = {s}\n", .{expression});
+        defer gpa.free(source);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "main.roc", .data = source });
+        const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+        defer gpa.free(app_path);
+        var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
+        var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_version, &cache_manager, ctx);
+        defer coord.deinit();
+        var arena = base.SingleThreadArena.init(gpa);
+        defer arena.deinit();
+        try std.testing.expectError(error.SourceTokenizationFailed, coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path }));
+        try std.testing.expect(coord.hasUserErrors());
+        try std.testing.expectEqual(@as(usize, 0), coord.total_remaining);
+        try std.testing.expectEqual(@as(u32, 1), coord.packages.count());
+        var reports = coord.iterReports();
+        const entry = reports.next().?;
+        try std.testing.expectEqualStrings("main", entry.module_name);
+        try std.testing.expectEqualStrings(if (i == 0) "Bidirectional Control in Source" else "Uppercase Base", entry.report.title);
+        var rendered = std.Io.Writer.Allocating.init(gpa);
+        defer rendered.deinit();
+        try reporting.renderReportToPlain(entry.report, &rendered.writer, reporting.ReportingConfig.initForTesting());
+        if (i == 0) {
+            try std.testing.expect(std.mem.find(u8, rendered.written(), "U+202E") != null);
+            try std.testing.expect(std.mem.find(u8, rendered.written(), "main.roc:2:") != null);
+        }
+        try std.testing.expect(reports.next() == null);
     }
 }

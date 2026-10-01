@@ -1329,6 +1329,7 @@ const ProcShape = struct {
     list_with_capacity_count: usize = 0,
     list_append_unsafe_count: usize = 0,
     list_reserve_count: usize = 0,
+    list_reserve_for_append_count: usize = 0,
     str_count_utf8_bytes_count: usize = 0,
     str_concat_count: usize = 0,
     box_box_count: usize = 0,
@@ -2176,11 +2177,11 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         // A template miss relates its open interface through a summarized
         // expansion, which instantiates the template's root on detached
         // copies of the request.
-        .nominal_backing_reuses = 13,
+        .nominal_backing_reuses = 10,
         // Each direct call instantiates its callee's checked type once per
         // body and shares that request across its result-type queries and
         // its own lowering.
-        .nominal_backing_instantiations = 29,
+        .nominal_backing_instantiations = 32,
     });
 }
 
@@ -2655,8 +2656,8 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .exact_type_checks = 0,
         // Each template miss also instantiates the template's root once for
         // its interface relations' summarized expansion.
-        .nominal_backing_reuses = 38,
-        .nominal_backing_instantiations = 79,
+        .nominal_backing_reuses = 31,
+        .nominal_backing_instantiations = 86,
     });
 }
 
@@ -4581,6 +4582,7 @@ fn collectLirResultProcShape(
                 if (stmt.op == .list_with_capacity) shape.list_with_capacity_count += 1;
                 if (stmt.op == .list_append_unsafe) shape.list_append_unsafe_count += 1;
                 if (stmt.op == .list_reserve) shape.list_reserve_count += 1;
+                if (stmt.op == .list_reserve_for_append) shape.list_reserve_for_append_count += 1;
                 if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
                 if (stmt.op == .str_concat) shape.str_concat_count += 1;
                 if (stmt.op == .box_box) shape.box_box_count += 1;
@@ -5018,13 +5020,15 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
             const loop_params = store.getLocalSpan(loop_join.params);
             try std.testing.expect(loop_params.len >= 2);
 
-            // Scalarized record fields preserve source order, so the second
-            // loop param is `state.b`. Slack versioning adds a self-looping
-            // unchecked copy with the same params. In both versions, this
-            // field must be released once on entry and never in the body.
-            const invariant_b = GuardedList.at(loop_params, 1);
-            try std.testing.expectEqual(@as(usize, 1), try countLocalDecrefs(store, root_body, invariant_b));
-            try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, invariant_b));
+            // The loop never reads `state.b`, so join-parameter pruning keeps
+            // it out of the loop's params and it is released before entry.
+            // Slack versioning adds a self-looping unchecked copy with the
+            // same params. In both versions no loop param is released in the
+            // body: `state.a` is loop-invariant and `acc` moves into the append.
+            for (0..GuardedList.borrowLen(loop_params)) |index| {
+                const param = GuardedList.at(loop_params, index);
+                try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, param));
+            }
         }
         try std.testing.expectEqual(@as(usize, if (promote_loop_appends) 2 else 1), loop_count);
     }
@@ -5278,9 +5282,11 @@ fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
     try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "packed_erased_fn_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_with_capacity_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_reserve_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_reserve_for_append_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_append_unsafe_count", 0);
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_with_capacity_count");
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_reserve_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_reserve_for_append_count");
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_append_unsafe_count");
     try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "box_box_count");
     try expectReachableProcShapeFieldNoGreaterBy(allocator, &iter_optimized.lowered, &list_optimized.lowered, "switch_count", 1);
@@ -6379,7 +6385,8 @@ fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_u
     try std.testing.expectEqual(@as(usize, 4), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_for_append_count"));
     try std.testing.expectEqual(expected_append_unsafe_count, try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_append_unsafe_count"));
 }
 
@@ -8452,9 +8459,10 @@ test "iterdiff: Stream.custom advance effects agree across inline modes" {
 //   * Consumer allocation strategy. `.collect()` on a bounded iterator knows
 //     the length up front, so it pre-sizes with `list_with_capacity` and writes
 //     each element with the unchecked append. A hand-written `for` + `.append`
-//     is `List.append`, which reserves incrementally (`list_reserve`) and stays
-//     a per-element call. This is a consumer difference, not an iterator one, so
-//     `list_with_capacity`/`list_reserve`/`list_append_unsafe`/`direct_call`
+//     is `List.append`, which reserves incrementally (`list_reserve_for_append`)
+//     and stays a per-element call. This is a consumer difference, not an
+//     iterator one, so
+//     `list_with_capacity`/`list_reserve_for_append`/`list_append_unsafe`/`direct_call`
 //     differ by design; the relation (collect pre-sizes, manual grows) is
 //     asserted instead.
 //   * Adapter carried box. `map` over a list carries a nested recursive-nominal
@@ -8514,8 +8522,8 @@ test "iterdiff: tier-one map collect matches hand-written loop shape" {
     // pre-sizes, the manual loop grows.
     try std.testing.expect(try reachableProcShapeFieldTotal(allocator, iter, "list_with_capacity_count") >= 1);
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, loop, "list_with_capacity_count"));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, iter, "list_reserve_count"));
-    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, loop, "list_reserve_count") >= 1);
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, iter, "list_reserve_for_append_count"));
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, loop, "list_reserve_for_append_count") >= 1);
 
     // The adapter and list loop both carry their state as scalar values, so no
     // boxed iterator state remains reachable.
@@ -8726,7 +8734,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
 
 fn bareListIterCollectLoopIsScalar(shape: ProcShape) bool {
     return shape.join_count >= 1 and
-        shape.max_join_param_count >= 5 and
+        shape.max_join_param_count >= 4 and
         shape.list_get_unsafe_count >= 1 and
         shape.list_append_unsafe_count >= 1 and
         shape.erased_call_count == 0 and
@@ -12270,15 +12278,15 @@ test "stored parser restore lowers a shape with an optional field" {
 test "stored encoder_for restore lowers a shape with an optional field" {
     // Stored encoder restoration retains each generated writer's codec plan.
     // The container and scalar format methods must share their List.append,
-    // List.reserve, list_append_unsafe, and list_reserve specializations;
+    // list_append_unsafe, and list_reserve_for_append specializations;
     // an enclosing codec contract must not split those ordinary helpers.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
-    try std.testing.expectEqual(@as(usize, 24), stats.functions);
-    try std.testing.expectEqual(@as(usize, 17), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 213), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 73), stats.locals);
-    try std.testing.expectEqual(@as(u64, 19), stats.template_misses);
+    try std.testing.expectEqual(@as(usize, 23), stats.functions);
+    try std.testing.expectEqual(@as(usize, 16), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 210), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 71), stats.locals);
+    try std.testing.expectEqual(@as(u64, 18), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
 }
 

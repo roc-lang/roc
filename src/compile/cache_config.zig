@@ -267,7 +267,9 @@ pub const Constants = struct {
     /// 120: Checking records each `to_inspect` method's use at result `Str`,
     ///      and a method registry entry carries that use's instance type and
     ///      evidence.
-    pub const CACHE_VERSION = 120;
+    /// 121: Raw alias types record the source argument boundary before their
+    ///      hidden polarity parameters.
+    pub const CACHE_VERSION = 121;
 };
 
 /// Configuration for the Roc cache system.
