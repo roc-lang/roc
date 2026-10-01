@@ -791,6 +791,14 @@ pub const InterfaceConstraints = struct {
             }
             self.bytes.appendSliceAssumeCapacity(bytes);
         }
+        /// One byte, which is what nearly every index, length and tag
+        /// encodes to; it needs no slice copy.
+        inline fn byte(self: *IdentityWriter, value: u8) Allocator.Error!void {
+            if (self.bytes.items.len == self.bytes.capacity) {
+                try self.bytes.ensureUnusedCapacity(self.graph.allocator, @max(1, self.bytes.capacity));
+            }
+            self.bytes.appendAssumeCapacity(value);
+        }
         fn text(self: *IdentityWriter, bytes: []const u8) Allocator.Error!void {
             try self.write(u64, @intCast(bytes.len));
             try self.raw(bytes);
@@ -847,9 +855,10 @@ pub const InterfaceConstraints = struct {
                 .int => {
                     // Local indices, lengths, and enum tags are predominantly
                     // small. A minimal varint keeps exact topology compact.
+                    var bits: u64 = @intCast(value);
+                    if (bits < 0x80) return self.byte(@intCast(bits));
                     var encoded: [10]u8 = undefined;
                     var len: usize = 0;
-                    var bits: u64 = @intCast(value);
                     while (bits >= 0x80) : (bits >>= 7) {
                         encoded[len] = @as(u8, @truncate(bits)) | 0x80;
                         len += 1;
@@ -857,7 +866,7 @@ pub const InterfaceConstraints = struct {
                     encoded[len] = @intCast(bits);
                     try self.raw(encoded[0 .. len + 1]);
                 },
-                .bool => try self.raw(&.{if (value) 1 else 0}),
+                .bool => try self.byte(if (value) 1 else 0),
                 .void => {},
                 .noreturn,
                 .float,
@@ -2010,6 +2019,9 @@ pub const InstGraph = struct {
     spare_seal_lists: std.ArrayList(GraphTypeFinals.SealLists) = .empty,
     /// The stack the uninhabitedness scans run on, kept between scans.
     uninhabited_scan_scratch: GraphUninhabitedScan.Eval.Scratch = .{},
+    /// Emptied arenas that keep their buffers, for work that needs a
+    /// short-lived arena many times over.
+    spare_arenas: std.ArrayList(std.heap.ArenaAllocator) = .empty,
     /// Roots whose every reachable node was found resolved, stamped with the
     /// `resolved_epoch` current at that walk. Resolvedness survives every
     /// union (a concrete class always wins over a variable), every content
@@ -2212,6 +2224,8 @@ pub const InstGraph = struct {
         self.containment_visit_epochs.deinit(allocator);
         self.current_durable.deinit();
         self.uninhabited_scan_scratch.deinit(allocator);
+        for (self.spare_arenas.items) |*spare| spare.deinit();
+        self.spare_arenas.deinit(allocator);
         for (self.spare_seal_stacks.items) |*stack| stack.deinit(allocator);
         self.spare_seal_stacks.deinit(allocator);
         for (self.spare_seal_lists.items) |*lists| lists.deinit(allocator);
@@ -3296,6 +3310,25 @@ pub const InstGraph = struct {
         defer self.node_set_pool.release(&visiting);
         return try self.mayFinalizeAsUninhabitedInner(self.find(raw_node), &visiting);
     }
+
+    /// An empty arena, reusing a released arena's buffers when one is spare.
+    pub fn acquireArena(self: *InstGraph) std.heap.ArenaAllocator {
+        return self.spare_arenas.pop() orelse std.heap.ArenaAllocator.init(self.allocator);
+    }
+
+    /// Empty an arena from `acquireArena` and keep its buffers for the next
+    /// one. An arena that grew large is freed instead, as is one the spare
+    /// list has no room for.
+    pub fn releaseArena(self: *InstGraph, used: std.heap.ArenaAllocator) void {
+        var released = used;
+        if (released.queryCapacity() > spare_arena_capacity or !released.reset(.retain_capacity)) {
+            released.deinit();
+            return;
+        }
+        self.spare_arenas.append(self.allocator, released) catch released.deinit();
+    }
+
+    const spare_arena_capacity = 256 * 1024;
 
     fn mayFinalizeAsUninhabitedInner(
         self: *InstGraph,
@@ -6430,9 +6463,13 @@ pub const InstGraph = struct {
         const root_content = self.nodes.items[@intFromEnum(root)];
         if (root_content != .record) Common.invariant("instantiation flattened a non-record row");
         const row = root_content.record;
+        // The row lists below live only for this call and are usually short,
+        // so they start in a buffer on this frame.
+        var stack_first = std.heap.stackFallback(2048, self.allocator);
+        const row_allocator = stack_first.get();
         var fields = std.ArrayList(InstField).empty;
-        defer fields.deinit(self.allocator);
-        try fields.appendSlice(self.allocator, row.fields);
+        defer fields.deinit(row_allocator);
+        try fields.appendSlice(row_allocator, row.fields);
 
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
@@ -6459,7 +6496,7 @@ pub const InstGraph = struct {
             try seen.put(ext, {});
             switch (self.nodes.items[@intFromEnum(ext)]) {
                 .record => |tail| {
-                    try fields.appendSlice(self.allocator, tail.fields);
+                    try fields.appendSlice(row_allocator, tail.fields);
                     ext = self.find(tail.ext);
                 },
                 .named => |named| {
@@ -6532,19 +6569,23 @@ pub const InstGraph = struct {
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
+        // The row lists below live only for this call and are usually short,
+        // so they start in a buffer on this frame.
+        var stack_first = std.heap.stackFallback(2048, self.allocator);
+        const row_allocator = stack_first.get();
         const flat_left = try self.flattenTagRow(left);
         const flat_right = try self.flattenTagRow(right);
 
         var merged = std.ArrayList(InstTag).empty;
-        defer merged.deinit(self.allocator);
+        defer merged.deinit(row_allocator);
         var only_left = std.ArrayList(InstTag).empty;
-        defer only_left.deinit(self.allocator);
+        defer only_left.deinit(row_allocator);
         var only_right = std.ArrayList(InstTag).empty;
-        defer only_right.deinit(self.allocator);
+        defer only_right.deinit(row_allocator);
 
         // Flattened rows are sorted and unique. Partition
         // both spans in one pass without building per-relation label indexes.
-        try merged.ensureTotalCapacity(self.allocator, flat_left.tags.len + flat_right.tags.len);
+        try merged.ensureTotalCapacity(row_allocator, flat_left.tags.len + flat_right.tags.len);
         var left_index: usize = 0;
         var right_index: usize = 0;
         while (left_index < flat_left.tags.len and right_index < flat_right.tags.len) {
@@ -6562,18 +6603,18 @@ pub const InstGraph = struct {
                 right_index += 1;
             } else if (instTagLessThan(self.name_store, left_tag, right_tag)) {
                 merged.appendAssumeCapacity(left_tag);
-                try only_left.append(self.allocator, left_tag);
+                try only_left.append(row_allocator, left_tag);
                 left_index += 1;
             } else {
                 merged.appendAssumeCapacity(right_tag);
-                try only_right.append(self.allocator, right_tag);
+                try only_right.append(row_allocator, right_tag);
                 right_index += 1;
             }
         }
         merged.appendSliceAssumeCapacity(flat_left.tags[left_index..]);
         merged.appendSliceAssumeCapacity(flat_right.tags[right_index..]);
-        try only_left.appendSlice(self.allocator, flat_left.tags[left_index..]);
-        try only_right.appendSlice(self.allocator, flat_right.tags[right_index..]);
+        try only_left.appendSlice(row_allocator, flat_left.tags[left_index..]);
+        try only_right.appendSlice(row_allocator, flat_right.tags[right_index..]);
 
         if (self.rowAdditionConflicts(flat_left.ext, only_right.items.len, .tag_union) or
             self.rowAdditionConflicts(flat_right.ext, only_left.items.len, .tag_union))
@@ -6598,9 +6639,9 @@ pub const InstGraph = struct {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_left.items);
-                try rest.appendSlice(self.allocator, only_right.items);
+                defer rest.deinit(row_allocator);
+                try rest.appendSlice(row_allocator, only_left.items);
+                try rest.appendSlice(row_allocator, only_right.items);
                 try self.writeOrQueueTagRest(flat_left.ext, rest.items, new_ext, row_width, pending);
             } else {
                 try self.writeOrQueueTagRest(flat_left.ext, only_right.items, new_ext, row_width, pending);
@@ -6657,15 +6698,19 @@ pub const InstGraph = struct {
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
+        // The row lists below live only for this call and are usually short,
+        // so they start in a buffer on this frame.
+        var stack_first = std.heap.stackFallback(2048, self.allocator);
+        const row_allocator = stack_first.get();
         const flat_left = try self.flattenRecordRow(left);
         const flat_right = try self.flattenRecordRow(right);
 
         var merged = std.ArrayList(InstField).empty;
-        defer merged.deinit(self.allocator);
+        defer merged.deinit(row_allocator);
         var only_left = std.ArrayList(InstField).empty;
-        defer only_left.deinit(self.allocator);
+        defer only_left.deinit(row_allocator);
         var only_right = std.ArrayList(InstField).empty;
-        defer only_right.deinit(self.allocator);
+        defer only_right.deinit(row_allocator);
 
         // Both rows indexed by label id so each side pairs with the other in
         // one pass; the first row position wins for a repeated label.
@@ -6701,7 +6746,7 @@ pub const InstGraph = struct {
                     resolved.defaultIdentity()
                 else
                     left_field.default orelse right_field.default;
-                try merged.append(self.allocator, .{
+                try merged.append(row_allocator, .{
                     .name = left_field.name,
                     .ty = left_field.ty,
                     .value_ty = left_field.value_ty orelse right_field.value_ty,
@@ -6711,14 +6756,14 @@ pub const InstGraph = struct {
                 shared = true;
             }
             if (!shared) {
-                try merged.append(self.allocator, left_field);
-                try only_left.append(self.allocator, left_field);
+                try merged.append(row_allocator, left_field);
+                try only_left.append(row_allocator, left_field);
             }
         }
         for (flat_right.fields) |right_field| {
             if (self.row_label_left_generation.items[@intFromEnum(right_field.name)] == generation) continue;
-            try merged.append(self.allocator, right_field);
-            try only_right.append(self.allocator, right_field);
+            try merged.append(row_allocator, right_field);
+            try only_right.append(row_allocator, right_field);
         }
 
         const left_absorbs_right = self.closedRecordAbsorbsFields(flat_left.ext, only_right.items, row_width);
@@ -6744,9 +6789,9 @@ pub const InstGraph = struct {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, add_to_left);
-                try rest.appendSlice(self.allocator, add_to_right);
+                defer rest.deinit(row_allocator);
+                try rest.appendSlice(row_allocator, add_to_left);
+                try rest.appendSlice(row_allocator, add_to_right);
                 try self.writeOrQueueRecordRest(flat_left.ext, rest.items, new_ext, row_width, pending);
             } else {
                 try self.writeOrQueueRecordRest(flat_left.ext, add_to_left, new_ext, row_width, pending);
