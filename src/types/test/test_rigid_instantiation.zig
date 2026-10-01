@@ -695,3 +695,130 @@ test "instantiate - rejected nominal positions produce error and unwind partial 
         try std.testing.expect(env.types.resolveVar(independent).desc.content == .flex);
     }
 }
+
+test "instantiate - markers in a constraint signature get their own choices" {
+    // The copy descends into a flex's static-dispatch constraints, so their
+    // markers are occurrences the choice walk decides: the signature's
+    // result opens and its argument closes.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const marker_ident = try env.idents.insert(gpa, .for_text(types_mod.polarity_var_text));
+    const arg_marker = try env.types.freshFromContentWithRank(.{ .rigid = Rigid.init(marker_ident) }, .generalized);
+    const ret_marker = try env.types.freshFromContentWithRank(.{ .rigid = Rigid.init(marker_ident) }, .generalized);
+    const arg_union = try env.types.freshFromContentWithRank((try env.mkTagUnion(&.{try env.mkTag("B", &.{})}, arg_marker)).content, .generalized);
+    const ret_union = try env.types.freshFromContentWithRank((try env.mkTagUnion(&.{try env.mkTag("A", &.{})}, ret_marker)).content, .generalized);
+    const method = try env.types.freshFromContentWithRank(try env.mkFuncPure(&.{arg_union}, ret_union), .generalized);
+    const constraints = try env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = try env.idents.insert(gpa, Ident.for_text("method")),
+        .fn_var = method,
+        .origin = .method_call,
+    }});
+    const source = try env.types.freshFromContentWithRank(.{ .flex = .{ .name = null, .constraints = constraints } }, .generalized);
+
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+        .polarity_var_behavior = .resolve_by_polarity,
+        .polarity_var_ident = marker_ident,
+    };
+    const copy = try instantiator.instantiateVar(source);
+    const copied_constraints = env.types.resolveVar(copy).desc.content.flex.constraints;
+    try std.testing.expectEqual(@as(usize, 1), copied_constraints.len());
+    const copied_method = env.types.static_dispatch_constraints.items.items[@intFromEnum(copied_constraints.start)].fn_var;
+    const func = env.types.resolveVar(copied_method).desc.content.structure.fn_pure;
+    const copied_arg = env.types.resolveVar(env.types.getVarAt(func.args, 0)).desc.content.structure.tag_union;
+    const copied_ret = env.types.resolveVar(func.ret).desc.content.structure.tag_union;
+    try std.testing.expect(env.types.resolveVar(copied_arg.ext).desc.content == .structure);
+    try std.testing.expect(env.types.resolveVar(copied_arg.ext).desc.content.structure == .empty_tag_union);
+    try std.testing.expect(env.types.resolveVar(copied_ret.ext).desc.content == .flex);
+}
+
+test "instantiate - markers in interpolation metadata get their own choices" {
+    // The copy descends into an interpolation constraint's parts and item
+    // var, so their markers are occurrences the choice walk decides.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const marker_ident = try env.idents.insert(gpa, .for_text(types_mod.polarity_var_text));
+    const part_marker = try env.types.freshFromContentWithRank(.{ .rigid = Rigid.init(marker_ident) }, .generalized);
+    const item_marker = try env.types.freshFromContentWithRank(.{ .rigid = Rigid.init(marker_ident) }, .generalized);
+    const part_union = try env.types.freshFromContentWithRank((try env.mkTagUnion(&.{try env.mkTag("P", &.{})}, part_marker)).content, .generalized);
+    const item_union = try env.types.freshFromContentWithRank((try env.mkTagUnion(&.{try env.mkTag("I", &.{})}, item_marker)).content, .generalized);
+    const method = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    const region = base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 1 } };
+    const parts = try env.types.appendInterpolationParts(&.{.{ .var_ = part_union, .region = region }});
+    const constraints = try env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = try env.idents.insert(gpa, Ident.for_text("from_interpolation")),
+        .fn_var = method,
+        .origin = .method_call,
+        .interpolation = .{
+            .expr_region = .some(region),
+            .item_var = item_union,
+            .interpolated_parts = parts,
+        },
+    }});
+    const source = try env.types.freshFromContentWithRank(.{ .flex = .{ .name = null, .constraints = constraints } }, .generalized);
+
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+        .polarity_var_behavior = .resolve_by_polarity,
+        .polarity_var_ident = marker_ident,
+    };
+    const copy = try instantiator.instantiateVar(source);
+    const copied_constraints = env.types.resolveVar(copy).desc.content.flex.constraints;
+    try std.testing.expectEqual(@as(usize, 1), copied_constraints.len());
+    const metadata = env.types.static_dispatch_constraints.items.items[@intFromEnum(copied_constraints.start)].interpolation;
+    try std.testing.expect(metadata.isPresent());
+    const copied_part = env.types.resolveVar(env.types.getInterpolationPartAt(metadata.interpolated_parts, 0).var_).desc.content.structure.tag_union;
+    const copied_item = env.types.resolveVar(metadata.item_var).desc.content.structure.tag_union;
+    try std.testing.expect(env.types.resolveVar(copied_part.ext).desc.content == .flex);
+    try std.testing.expect(env.types.resolveVar(copied_item.ext).desc.content == .flex);
+}
+
+test "instantiate - markers reached through a record presence var get their own choices" {
+    // The copy visits a kind-carrying field's presence var as well as its
+    // type var; a marker in a constraint on that presence var is an
+    // occurrence the choice walk decides.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const marker_ident = try env.idents.insert(gpa, .for_text(types_mod.polarity_var_text));
+    const ret_marker = try env.types.freshFromContentWithRank(.{ .rigid = Rigid.init(marker_ident) }, .generalized);
+    const ret_union = try env.types.freshFromContentWithRank((try env.mkTagUnion(&.{try env.mkTag("A", &.{})}, ret_marker)).content, .generalized);
+    const method = try env.types.freshFromContentWithRank(try env.mkFuncPure(&.{}, ret_union), .generalized);
+    const constraints = try env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = try env.idents.insert(gpa, Ident.for_text("method")),
+        .fn_var = method,
+        .origin = .method_call,
+    }});
+    const presence = try env.types.freshFromContentWithRank(.{ .flex = .{ .name = null, .constraints = constraints } }, .generalized);
+    const field_type = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    const field = RecordField{ .name = try env.idents.insert(gpa, Ident.for_text("x")), .presence = .unknown(presence, field_type) };
+    const source = try env.types.freshFromContentWithRank((try env.mkRecordClosed(&.{field})).content, .generalized);
+
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+        .polarity_var_behavior = .resolve_by_polarity,
+        .polarity_var_ident = marker_ident,
+    };
+    const copy = try instantiator.instantiateVar(source);
+    const record = env.types.resolveVar(copy).desc.content.structure.record;
+    const copied_presence = env.types.getRecordFieldAt(record.fields, 0).presence.presenceVar().?;
+    const copied_constraints = env.types.resolveVar(copied_presence).desc.content.flex.constraints;
+    try std.testing.expectEqual(@as(usize, 1), copied_constraints.len());
+    const copied_method = env.types.static_dispatch_constraints.items.items[@intFromEnum(copied_constraints.start)].fn_var;
+    const copied_ret = env.types.resolveVar(env.types.resolveVar(copied_method).desc.content.structure.fn_pure.ret).desc.content.structure.tag_union;
+    try std.testing.expect(env.types.resolveVar(copied_ret.ext).desc.content == .flex);
+}

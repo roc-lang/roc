@@ -436,6 +436,48 @@ test "open rows - annotation-only definition drops its `..` in an app" {
     );
 }
 
+test "open rows - destructured top-level value keeps its `..` in an app" {
+    // Can attaches the annotation to the def the destructured literal splits
+    // off for `e`: a value, not an annotation-only definition. (The
+    // formatter separates the two statements with a blank line, which does
+    // not change that attachment.)
+    try expectUnchanged(
+        \\app [main!] { pf: platform "platform/main.roc" }
+        \\
+        \\e : [Boom, ..]
+        \\
+        \\(e, n) = (Boom, 1)
+        \\
+        \\main! = |_| {}
+        \\
+    );
+}
+
+test "open rows - destructuring that does not bind the name leaves the annotation annotation-only" {
+    // Can attaches a top-level annotation to a destructured literal only when
+    // the pattern binds the annotated name; otherwise the annotation is
+    // annotation-only and its redundant `..` is removed like any other.
+    try expectFormatsTo(
+        \\app [main!] { pf: platform "platform/main.roc" }
+        \\
+        \\todo : Str -> [A, ..]
+        \\
+        \\(x, y) = (1, 2)
+        \\
+        \\main! = |_| {}
+        \\
+    ,
+        \\app [main!] { pf: platform "platform/main.roc" }
+        \\
+        \\todo : Str -> [A]
+        \\
+        \\(x, y) = (1, 2)
+        \\
+        \\main! = |_| {}
+        \\
+    );
+}
+
 test "open rows - platform provided definitions keep their `..`" {
     try expectFormatsTo(
         \\platform ""

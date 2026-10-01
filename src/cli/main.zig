@@ -8020,9 +8020,9 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 
 /// Use the Coordinator to discover every transitive module the entry point
 /// imports (directly, via re-exports, or via a `package [...]` header) and
-/// append the absolute path of any not already in `source_paths`. Also
+/// append module paths and their recorded file imports to `source_paths`. Also
 /// validates platform target binaries if a platform is found.
-fn discoverAndAddBundleModules(
+fn discoverAndAddBundleInputs(
     ctx: *CliCtx,
     abs_entry: []const u8,
     source_paths: *std.ArrayList([]const u8),
@@ -8036,24 +8036,11 @@ fn discoverAndAddBundleModules(
 
     // Run the build—the Coordinator discovers all transitive module dependencies
     build_env.build(abs_entry) catch |build_err| {
-        // Drain and display any errors from the build
-        const drained = try build_env.drainReports();
-        defer build_env.freeDrainedReportsPathsOnly(drained);
-
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => {
-                        try stderr.print("{f}: error in module\n", .{base.bidi.Display{ .bytes = mod.abs_path }});
-                    },
-                    .warning => {
-                        try stderr.print("{f}: warning in module\n", .{base.bidi.Display{ .bytes = mod.abs_path }});
-                    },
-                }
-            }
-        }
+        _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
         return build_err;
     };
+    const diagnostics = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
+    if (diagnostics.errors != 0) return error.CliError;
 
     // Detect platform from BuildEnv packages using the accessor
     const platform_root_file = build_env.getPlatformRootFile();
@@ -8074,14 +8061,39 @@ fn discoverAndAddBundleModules(
     if (build_env.coordinator) |coord| {
         var coord_pkg_it = coord.packages.iterator();
         while (coord_pkg_it.next()) |pkg_entry| {
-            for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
+            // Dependency headers are source inputs even when the coordinator
+            // does not check them as modules. Consumers need these headers to
+            // resolve the same local package aliases after extraction.
+            if (pkg_entry.value_ptr.*.root_file) |root_file| {
+                if (build_env.isBundleableModule(pkg_entry.key_ptr.*, root_file) and !bundled_set.contains(root_file)) {
+                    const owned_root_file = try ctx.arena.dupe(u8, root_file);
+                    try source_paths.append(ctx.arena, owned_root_file);
+                    try bundled_set.put(owned_root_file, {});
+                }
+            }
+
+            for (pkg_entry.value_ptr.*.modules.items) |*mod_state| {
                 const abs_path = mod_state.path;
                 if (!build_env.isBundleableModule(pkg_entry.key_ptr.*, abs_path)) continue;
-                if (bundled_set.contains(abs_path)) continue;
+                if (!bundled_set.contains(abs_path)) {
+                    const owned_abs_path = try ctx.arena.dupe(u8, abs_path);
+                    try source_paths.append(ctx.arena, owned_abs_path);
+                    try bundled_set.put(owned_abs_path, {});
+                }
 
-                const owned_abs_path = try ctx.arena.dupe(u8, abs_path);
-                try source_paths.append(ctx.arena, owned_abs_path);
-                try bundled_set.put(owned_abs_path, {});
+                // Checked environments retain source-relative file dependencies
+                // on both fresh builds and cache hits. Preserve their logical
+                // paths so extraction keeps each import relative to its module.
+                const env = mod_state.moduleEnv().?;
+                for (env.file_dependencies.items.items) |dep| {
+                    const dep_path = try std.fs.path.resolve(ctx.arena, &.{
+                        mod_state.canonicalSourceDir(),
+                        env.fileDependencyRelativePath(dep),
+                    });
+                    if (bundled_set.contains(dep_path)) continue;
+                    try source_paths.append(ctx.arena, dep_path);
+                    try bundled_set.put(dep_path, {});
+                }
             }
         }
     }
@@ -8195,11 +8207,10 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         return error.InvalidPath;
     };
 
-    // Use the Coordinator to discover all transitive module dependencies
-    // (explicit imports plus modules exposed by a `package [...]` header)
-    // and append any not already in the file list.
+    // Discover transitive modules and their recorded file imports, including
+    // modules exposed by a `package [...]` header, and add their source paths.
     if (first_roc_index != null) {
-        try discoverAndAddBundleModules(ctx, entry_source_path, &source_paths, stderr);
+        try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
     }
 
     var entries = std.ArrayList(bundle.Entry).empty;
