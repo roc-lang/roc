@@ -13000,6 +13000,7 @@ const Builder = struct {
             const binder = capture.id.binder();
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const local = try fn_ctx.addFreshLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
+            fn_ctx.draft.locals.items[@intFromEnum(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -13602,6 +13603,7 @@ const Builder = struct {
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@intFromEnum(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -14793,6 +14795,10 @@ const DraftLocal = struct {
     binder: ?checked.PatternBinderId = null,
     capture_id: ?checked.CaptureId = null,
     checked_capture_id: ?checked.CaptureId = null,
+    /// Whether this local, when captured, is a lexical value or the recursive
+    /// binding reserved for a top-level compile-time root. Set where the
+    /// binding is reserved and carried to the stored closure's captures.
+    capture_kind: checked.ConstCaptureKind = .lexical,
 };
 
 const DraftTypedLocal = struct {
@@ -17849,6 +17855,15 @@ const BodyDraftStore = struct {
         self.local_names.items[@intFromEnum(id)] = try self.addSourceText(name);
     }
 
+    /// Mark `id` as the recursive binding reserved for top-level root `root`
+    /// of `module`, so a closure capturing it stores that capture kind.
+    fn setLocalRecursiveBinding(self: *BodyDraftStore, id: DraftLocalId, module: checked.ModuleId, root: checked.ComptimeRootId) void {
+        self.locals.items[@intFromEnum(id)].capture_kind = .{ .recursive_binding = .{
+            .module = .{ .bytes = module.bytes },
+            .root = root,
+        } };
+    }
+
     fn setLocalCaptureId(self: *BodyDraftStore, id: DraftLocalId, capture_id: u32) void {
         const checked_id = checked.CaptureId.generatedCheck(capture_id);
         self.locals.items[@intFromEnum(id)].capture_id = checked_id;
@@ -18292,6 +18307,7 @@ const BodyDraftStore = struct {
                 .binder = local.binder,
                 .capture_id = durable_capture_id,
                 .checked_capture_id = local.checked_capture_id,
+                .capture_kind = local.capture_kind,
             });
             const local_name = self.sourceText(self.local_names.items[index]);
             program.local_names.appendAssumeCapacity(if (local_name.len == 0) "" else try program.allocator.dupe(u8, local_name));
@@ -21589,11 +21605,15 @@ const BodyContext = struct {
         }
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
-        const inherited_capture_id = if (binder) |source_binder| blk: {
-            const existing = self.binders.get(source_binder) orelse break :blk null;
-            break :blk self.draft.locals.items[@intFromEnum(existing)].capture_id;
-        } else null;
-        return try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
+        const existing = if (binder) |source_binder| self.binders.get(source_binder) else null;
+        const inherited_capture_id = if (existing) |local| self.draft.locals.items[@intFromEnum(local)].capture_id else null;
+        const id = try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
+        // A new version of a binding keeps that binding's capture identity,
+        // including whether it is a root's recursive binding.
+        if (existing) |local| {
+            self.draft.locals.items[@intFromEnum(id)].capture_kind = self.draft.locals.items[@intFromEnum(local)].capture_kind;
+        }
+        return id;
     }
 
     /// Materialize a new runtime binding from checked capture provenance even
@@ -34396,6 +34416,7 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(request_fn_node),
             binder,
         );
+        self.draft.setLocalRecursiveBinding(local, view.key, root_id);
         try self.draft.active_callable_eval_bindings.append(self.allocator, .{
             .module = view.key,
             .root = root_id,
@@ -42682,7 +42703,14 @@ const BodyContext = struct {
         }
     }
 
-    fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?checked.PatternBinderId {
+    /// The binder a top-level constant's recursive binding is keyed by, and the
+    /// compile-time root that binding belongs to.
+    const TopLevelConstBinding = struct {
+        binder: checked.PatternBinderId,
+        root: checked.ComptimeRootId,
+    };
+
+    fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?TopLevelConstBinding {
         const owner = switch (const_use.owner) {
             .top_level_binding => |owner| owner,
             // A hoisted extraction root binds its result pattern. A reference
@@ -42699,7 +42727,8 @@ const BodyContext = struct {
                 if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
                     Common.invariant("hoisted const result pattern was outside the binder index");
                 }
-                return store_view.bodies.pattern_binder_by_pattern[raw_pattern];
+                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern] orelse return null;
+                return .{ .binder = binder, .root = entry.root };
             },
         };
         if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
@@ -42720,7 +42749,7 @@ const BodyContext = struct {
             Common.invariant("top-level const template root had a mismatched checked pattern");
         }
         return switch (store_view.bodies.pattern(pattern).data) {
-            .assign => |binder| binder,
+            .assign => |binder| .{ .binder = binder, .root = root_id },
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("top-level const root pattern was not a binder"),
         };
     }
@@ -42754,12 +42783,14 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         scope: *ActiveConstBindingScope,
     ) Allocator.Error!bool {
-        const binder = topLevelConstBinderForUse(store_view, const_use) orelse return false;
+        const binding = topLevelConstBinderForUse(store_view, const_use) orelse return false;
+        const binder = binding.binder;
         const local = try self.addFreshLocalWithBinderCell(
             self.builder.symbols.fresh(),
             cell,
             binder,
         );
+        self.draft.setLocalRecursiveBinding(local, checked.constModuleId(const_use), binding.root);
         try self.bindLocalNameFromView(store_view, local, binder);
         const reservation = try self.addExprWithTypeCell(cell, .pending_deferred);
         const active_id: ActiveConstBindingId = @enumFromInt(@as(u32, @intCast(self.draft.active_const_bindings.items.len)));
@@ -45031,6 +45062,7 @@ const BodyContext = struct {
             const capture_node = try self.graph.importMono(lowered_ty);
             const capture_cell = DraftTypeCell.fromGraphNode(capture_node);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@intFromEnum(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -45223,6 +45255,7 @@ const BodyContext = struct {
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
+            fn_ctx.draft.locals.items[@intFromEnum(local)].capture_kind = capture.kind;
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);

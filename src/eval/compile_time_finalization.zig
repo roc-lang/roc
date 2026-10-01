@@ -5428,7 +5428,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     try program.const_plans.append(allocator, .{ .erased_fn = erased_set });
     const capture_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .str);
-    const captures = try allocator.dupe(LirProgram.CaptureSlot, &.{.{ .id = undefined, .slot = 0, .ty = undefined, .plan = capture_plan, .storage = .value }});
+    const captures = try allocator.dupe(LirProgram.CaptureSlot, &.{.{ .id = undefined, .kind = .lexical, .slot = 0, .ty = undefined, .plan = capture_plan, .storage = .value }});
     const entries = try allocator.dupe(LirProgram.ErasedFn, &.{.{
         .entry = worker,
         .capture_layout = .str,

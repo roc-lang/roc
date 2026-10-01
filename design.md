@@ -19015,8 +19015,14 @@ const CaptureId = union(enum) {
     generated: u32,
 };
 
+const ConstCaptureKind = union(enum) {
+    lexical,
+    recursive_binding: struct { module: CheckedModuleDigest, root: ComptimeRootId },
+};
+
 const ConstCapture = struct {
     id: CaptureId,
+    kind: ConstCaptureKind,
     ty: ConstTypeId,
     value: ConstNodeId,
 };
@@ -19036,7 +19042,19 @@ checked pattern binders. Compiler-generated functions whose captures have no
 source pattern, such as structural parser runtime functions, use explicit
 generated capture ids assigned by the generator. Capture identity selects the
 checked template binder; it is not a substitute for value identity and is never
-used to infer a graph back-edge. A stored function does not store a lambda set,
+used to infer a graph back-edge. `kind` records what the capture is where the
+captured local was bound: compile-time evaluation lowers a top-level value's
+body under a recursive binding local for that value's compile-time root (a
+callable-eval binding, or an active constant binding, including a hoisted
+extraction's result binding), and Monotype marks that local
+`recursive_binding` with the root's module and id when it reserves it. The
+mark travels with the local through every post-check stage to the LIR capture
+slot and into the stored capture. A closure whose body refers back to that
+root captures the local, but a restored worker reaches the root through its
+own top-level reference, so a `recursive_binding` capture fills no worker
+slot. Consumers read the kind; they never derive it from the capture's binder,
+whose index is relative to the root's module rather than the storing module.
+A stored function does not store a lambda set,
 callable-set descriptor, call specialization id, erased ABI, capture layout,
 runtime tag, or LIR proc id.
 

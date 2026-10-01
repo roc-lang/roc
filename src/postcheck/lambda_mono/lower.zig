@@ -520,6 +520,7 @@ const Lowerer = struct {
                 .binder = local.binder,
                 .capture_id = local.capture_id,
                 .checked_capture_id = local.checked_capture_id,
+                .capture_kind = local.capture_kind,
                 .ty = self.solved.local_tys[@intFromEnum(capture.local)],
             });
         }
@@ -1969,6 +1970,7 @@ const Lowerer = struct {
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
+                .capture_kind = capture.capture_kind,
                 .ty = capture_ty,
                 .storage_ty = capture_ty,
             });
