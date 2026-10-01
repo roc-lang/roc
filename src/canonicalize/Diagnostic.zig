@@ -451,6 +451,26 @@ pub const Diagnostic = union(enum) {
             try_suffix,
         };
     },
+    /// A `return`, `break`, or `?` that would move control flow out of an
+    /// `expect` body (outside any lambda nested within it). `?` is only reported
+    /// in inline `expect`s; in top-level `expect`s it fails the test instead.
+    control_flow_in_expect: struct {
+        region: Region,
+        kind: Kind,
+
+        pub const Kind = enum(u8) {
+            return_keyword,
+            break_keyword,
+            try_suffix,
+        };
+    },
+    /// Reassigning a var declared outside the `expect` whose body (outside any
+    /// lambda nested within it) contains the reassignment.
+    var_reassigned_in_expect: struct {
+        ident: Ident.Idx,
+        region: Region,
+        declaration_region: Region,
+    },
     /// Two or more type aliases form a cycle where each references another.
     /// This is not allowed because type aliases are transparent synonyms.
     /// Use nominal types (:=) for recursive types.
@@ -559,6 +579,8 @@ pub const Diagnostic = union(enum) {
             .infinite_loop_never_exits => |d| d.region,
             .trailing_try_suffix => |d| d.region,
             .return_outside_fn => |d| d.region,
+            .control_flow_in_expect => |d| d.region,
+            .var_reassigned_in_expect => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
             .deprecated_number_suffix => |d| d.region,
             .range_op_chained => |d| d.region,

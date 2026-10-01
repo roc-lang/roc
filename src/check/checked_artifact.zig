@@ -10513,11 +10513,10 @@ pub const CheckedStrPatternStep = struct {
 };
 
 /// Ordered mutation identities for a loop body, published from checked
-/// assignments and explicit dispatch operands. Both ranges use the body's
-/// pattern-binder pool; expect-only identities are disjoint from always.
+/// assignments and explicit dispatch operands, as a range of the body's
+/// pattern-binder pool.
 pub const CheckedLoopMutations = struct {
-    always: CheckedBodyRange,
-    expect_only: CheckedBodyRange,
+    binders: CheckedBodyRange,
 };
 
 /// Dense identity in a checked body's loop mutation table.
@@ -12062,12 +12061,10 @@ const CheckedSourceNodes = struct {
 /// Publish loop mutation summaries once; nested loops reuse their published
 /// ranges instead of revisiting bodies for each enclosing loop.
 const CheckedLoopMutationPublisher = struct {
-    const Mutation = struct { binder: PatternBinderId, expect_only: bool };
-
     allocator: Allocator,
     store: *CheckedBodyStore,
     dispatch_operands: []const []const CheckedExprId,
-    scratch: std.ArrayList(Mutation) = .empty,
+    scratch: std.ArrayList(PatternBinderId) = .empty,
     positions: []usize = &.{},
 
     fn publish(allocator: Allocator, store: *CheckedBodyStore, dispatch_operands: []const []const CheckedExprId) Allocator.Error!void {
@@ -12075,12 +12072,12 @@ const CheckedLoopMutationPublisher = struct {
         if (store.pattern_binder_id_pool.items.len == 0) {
             var empty_plan: ?LoopMutationPlanId = null;
             for (store.stored_exprs.items) |*expr| if (expr.data == .for_) {
-                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
                 expr.data.for_.mutations = empty_plan;
             };
             for (store.stored_statements.items) |*stmt| switch (stmt.data) {
                 inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| {
-                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
                     loop_.mutations = empty_plan;
                 },
                 .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
@@ -12109,115 +12106,103 @@ const CheckedLoopMutationPublisher = struct {
         }
         const start = self.scratch.items.len;
         defer self.scratch.shrinkRetainingCapacity(start);
-        if (@TypeOf(loop_.*) == CheckedConditionLoop) try self.collectExpr(loop_.cond, false);
-        try self.collectExpr(loop_.body, false);
+        if (@TypeOf(loop_.*) == CheckedConditionLoop) try self.collectExpr(loop_.cond);
+        try self.collectExpr(loop_.body);
 
         // Nested loops publish before this deduplication begins, so one dense
         // position table serves every loop without per-loop clearing or hashing.
         var end = start;
         const count = self.scratch.items.len;
         for (start..count) |i| {
-            const mutation = self.scratch.items[i];
-            const position = &self.positions[@intFromEnum(mutation.binder)];
+            const binder = self.scratch.items[i];
+            const position = &self.positions[@intFromEnum(binder)];
             if (position.* == std.math.maxInt(usize)) {
                 position.* = end;
-                self.scratch.items[end] = mutation;
+                self.scratch.items[end] = binder;
                 end += 1;
-            } else {
-                self.scratch.items[position.*].expect_only = self.scratch.items[position.*].expect_only and mutation.expect_only;
             }
         }
-        defer for (self.scratch.items[start..end]) |mutation| {
-            self.positions[@intFromEnum(mutation.binder)] = std.math.maxInt(usize);
+        defer for (self.scratch.items[start..end]) |binder| {
+            self.positions[@intFromEnum(binder)] = std.math.maxInt(usize);
         };
-        const always_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
-        for (self.scratch.items[start..end]) |mutation| if (!mutation.expect_only) {
-            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
-        };
-        const expect_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
-        for (self.scratch.items[start..end]) |mutation| if (mutation.expect_only) {
-            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
-        };
+        const binders_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
+        try self.store.pattern_binder_id_pool.appendSlice(self.allocator, self.scratch.items[start..end]);
         const result: CheckedLoopMutations = .{
-            .always = .{ .start = always_start, .len = expect_start - always_start },
-            .expect_only = .{ .start = expect_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - expect_start },
+            .binders = .{ .start = binders_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - binders_start },
         };
         loop_.mutations = try self.store.appendLoopMutations(self.allocator, result);
         return result;
     }
 
-    fn appendRange(self: *@This(), range: CheckedBodyRange, expect_only: bool) Allocator.Error!void {
-        for (self.store.pattern_binder_id_pool.items[range.start..][0..range.len]) |binder| {
-            try self.scratch.append(self.allocator, .{ .binder = binder, .expect_only = expect_only });
-        }
-    }
-
-    fn appendLoop(self: *@This(), loop_: anytype, expect_only: bool) Allocator.Error!void {
+    fn appendLoop(self: *@This(), loop_: anytype) Allocator.Error!void {
         const mutations = try self.loop(loop_);
-        if (@TypeOf(loop_.*) != CheckedConditionLoop) try self.collectExpr(loop_.expr, expect_only);
-        try self.appendRange(mutations.always, expect_only);
-        try self.appendRange(mutations.expect_only, true);
+        if (@TypeOf(loop_.*) != CheckedConditionLoop) try self.collectExpr(loop_.expr);
+        const range = mutations.binders;
+        try self.scratch.appendSlice(self.allocator, self.store.pattern_binder_id_pool.items[range.start..][0..range.len]);
     }
 
-    fn collectExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
+    fn collectExpr(self: *@This(), id: CheckedExprId) Allocator.Error!void {
         const data = self.store.expr(id).data;
         switch (data) {
-            .str, .list, .tuple => |items| for (items) |item| try self.collectExpr(item, expect_only),
+            .str, .list, .tuple => |items| for (items) |item| try self.collectExpr(item),
             .match_ => |match| {
-                try self.collectExpr(match.cond, expect_only);
+                try self.collectExpr(match.cond);
                 for (match.branches) |branch| {
-                    if (branch.guard) |guard| try self.collectExpr(guard, expect_only);
-                    try self.collectExpr(branch.value, expect_only);
+                    if (branch.guard) |guard| try self.collectExpr(guard);
+                    try self.collectExpr(branch.value);
                 }
             },
             .if_ => |if_| {
                 for (if_.branches) |branch| {
-                    try self.collectExpr(branch.cond, expect_only);
-                    try self.collectExpr(branch.body, expect_only);
+                    try self.collectExpr(branch.cond);
+                    try self.collectExpr(branch.body);
                 }
-                try self.collectExpr(if_.final_else, expect_only);
+                try self.collectExpr(if_.final_else);
             },
             .call => |call| {
-                try self.collectExpr(call.func, expect_only);
-                for (call.args) |arg| try self.collectExpr(arg, expect_only);
+                try self.collectExpr(call.func);
+                for (call.args) |arg| try self.collectExpr(arg);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.collectExpr(ext, expect_only);
-                for (record.fields) |field| try self.collectExpr(field.value, expect_only);
+                if (record.ext) |ext| try self.collectExpr(ext);
+                for (record.fields) |field| try self.collectExpr(field.value);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.collectStatement(statement, expect_only);
-                try self.collectExpr(block.final_expr, expect_only);
+                for (block.statements) |statement| try self.collectStatement(statement);
+                try self.collectExpr(block.final_expr);
             },
-            .tag => |tag| for (tag.args) |arg| try self.collectExpr(arg, expect_only),
-            .nominal => |nominal| try self.collectExpr(nominal.backing_expr, expect_only),
+            .tag => |tag| for (tag.args) |arg| try self.collectExpr(arg),
+            .nominal => |nominal| try self.collectExpr(nominal.backing_expr),
             .binop => |binop| {
-                try self.collectExpr(binop.lhs, expect_only);
-                try self.collectExpr(binop.rhs, expect_only);
+                try self.collectExpr(binop.lhs);
+                try self.collectExpr(binop.rhs);
             },
-            .unary_minus, .unary_not, .dbg => |child| try self.collectExpr(child, expect_only),
-            .expect => |child| try self.collectExpr(child, true),
-            .expect_err => |child| try self.collectExpr(child.expr, expect_only),
-            .field_access => |field| try self.collectExpr(field.receiver, expect_only),
+            .unary_minus, .unary_not, .dbg => |child| try self.collectExpr(child),
+            // An expect body can only reassign vars declared inside it
+            // (canonicalization rejects the rest), so it carries no state
+            // through an enclosing loop.
+            .expect => {},
+            .expect_err => |child| try self.collectExpr(child.expr),
+            .field_access => |field| try self.collectExpr(field.receiver),
             .structural_eq => |eq| {
-                try self.collectExpr(eq.lhs, expect_only);
-                try self.collectExpr(eq.rhs, expect_only);
+                try self.collectExpr(eq.lhs);
+                try self.collectExpr(eq.rhs);
             },
             .structural_hash => |hash| {
-                try self.collectExpr(hash.value, expect_only);
-                try self.collectExpr(hash.hasher, expect_only);
+                try self.collectExpr(hash.value);
+                try self.collectExpr(hash.hasher);
             },
             .interpolation => |interpolation| {
-                try self.collectExpr(interpolation.first, expect_only);
+                try self.collectExpr(interpolation.first);
                 for (interpolation.parts) |part| {
-                    try self.collectExpr(part.value, expect_only);
-                    try self.collectExpr(part.following_segment, expect_only);
+                    try self.collectExpr(part.value);
+                    try self.collectExpr(part.following_segment);
                 }
             },
-            .tuple_access => |access| try self.collectExpr(access.tuple, expect_only),
-            .return_ => |ret| try self.collectExpr(ret.expr, expect_only),
-            .for_ => try self.appendLoop(&self.store.stored_exprs.items[@intFromEnum(id)].data.for_, expect_only),
-            .run_low_level => |low| for (low.args) |arg| try self.collectExpr(arg, expect_only),
+            .tuple_access => |access| try self.collectExpr(access.tuple),
+            .return_ => |ret| try self.collectExpr(ret.expr),
+            .for_ => try self.appendLoop(&self.store.stored_exprs.items[@intFromEnum(id)].data.for_),
+            .run_low_level => |low| for (low.args) |arg| try self.collectExpr(arg),
             // A lambda's body executes at invocation, not at this expression.
             .lambda,
             .closure,
@@ -12239,30 +12224,26 @@ const CheckedLoopMutationPublisher = struct {
             .break_,
             => {},
             .dispatch_call, .method_eq, .type_dispatch_call => {
-                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.collectExpr(operand, expect_only);
+                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.collectExpr(operand);
             },
             .pending => checkedArtifactInvariant("pending expression in loop mutation publication", .{}),
         }
     }
 
-    fn collectStatement(self: *@This(), id: CheckedStatementId, expect_only: bool) Allocator.Error!void {
+    fn collectStatement(self: *@This(), id: CheckedStatementId) Allocator.Error!void {
         switch (self.store.statement(id).data) {
-            .decl => |decl| try self.collectExpr(decl.expr, expect_only),
-            .var_ => |decl| try self.collectExpr(decl.expr, expect_only),
+            .decl => |decl| try self.collectExpr(decl.expr),
+            .var_ => |decl| try self.collectExpr(decl.expr),
             .reassign => |reassign| {
-                for (reassign.reassigned_binders) |binder| try self.scratch.append(self.allocator, .{
-                    .binder = binder,
-                    .expect_only = expect_only,
-                });
-                try self.collectExpr(reassign.expr, expect_only);
+                try self.scratch.appendSlice(self.allocator, reassign.reassigned_binders);
+                try self.collectExpr(reassign.expr);
             },
-            .dbg, .expr => |child| try self.collectExpr(child, expect_only),
-            .expect => |child| try self.collectExpr(child, true),
+            .dbg, .expr => |child| try self.collectExpr(child),
+            .expect => {},
             inline .for_, .while_, .infinite_loop, .breakable_loop => |_, tag| try self.appendLoop(
                 &@field(self.store.stored_statements.items[@intFromEnum(id)].data, @tagName(tag)),
-                expect_only,
             ),
-            .return_ => |ret| try self.collectExpr(ret.expr, expect_only),
+            .return_ => |ret| try self.collectExpr(ret.expr),
             .promoted_proc, .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             .pending => checkedArtifactInvariant("pending statement in loop mutation publication", .{}),
         }
@@ -16051,10 +16032,8 @@ fn verifyCheckedExprDataComplete(
         .for_ => |for_| {
             std.debug.assert(for_.plan != null);
             std.debug.assert(for_.mutations != null);
-            const mutations = checked_bodies.loopMutations(for_.mutations.?);
-            for ([_]CheckedBodyRange{ mutations.always, mutations.expect_only }) |range| {
-                std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
-            }
+            const range = checked_bodies.loopMutations(for_.mutations.?).binders;
+            std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
         },
         .field_access => |field_access| {
             if (field_access.segments.len == 0) {
@@ -37324,6 +37303,8 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_infinite_loop_never_exits,
             .diag_trailing_try_suffix,
             .diag_return_outside_fn,
+            .diag_control_flow_in_expect,
+            .diag_var_reassigned_in_expect,
             .diag_mutually_recursive_type_aliases,
             .diag_deprecated_number_suffix,
             .diag_range_op_chained,
@@ -40163,8 +40144,8 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         };
         for (plans) |plan| {
             const pool = body.patternBinderIdPool();
-            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.always.start..][0..plan.always.len]);
-            try std.testing.expectEqualSlices(PatternBinderId, &.{b1}, pool[plan.expect_only.start..][0..plan.expect_only.len]);
+            // b1 is reassigned only inside an expect, which never carries loop state.
+            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.binders.start..][0..plan.binders.len]);
         }
         const condition_plans = [_]CheckedLoopMutations{
             body.loopMutations(body.statement(@enumFromInt(7)).data.while_.mutations.?),
@@ -40172,8 +40153,7 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         };
         for (condition_plans) |plan| {
             const pool = body.patternBinderIdPool();
-            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.always.start..][0..plan.always.len]);
-            try std.testing.expectEqual(@as(u32, 0), plan.expect_only.len);
+            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.binders.start..][0..plan.binders.len]);
         }
     }
 }
@@ -40614,8 +40594,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xB2, 0xDC, 0x12, 0xE2, 0x5D, 0x24, 0x46, 0x52, 0x6A, 0x83, 0xBA, 0xF7, 0xC8, 0x6D, 0x5A, 0xF4,
-        0xC0, 0xC1, 0x8D, 0x6D, 0xFD, 0x84, 0xE2, 0x08, 0x2F, 0x16, 0x2B, 0x6B, 0x6D, 0x67, 0x9E, 0x84,
+        0xF2, 0x5B, 0x07, 0x22, 0x34, 0xCA, 0x22, 0x91, 0xE6, 0xE4, 0xC5, 0x72, 0xB8, 0x48, 0xD2, 0xC3,
+        0xC4, 0xE7, 0x9C, 0xD4, 0xFB, 0xBF, 0x2A, 0x06, 0x42, 0xBF, 0x75, 0xFF, 0x4C, 0x64, 0x20, 0x4A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

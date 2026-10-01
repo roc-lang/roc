@@ -137,7 +137,6 @@ pub const Inventory = struct {
         while (true) {
             if (@import("builtin").is_test) self.expr_visits += 1;
             switch (self.program.getExpr(current).data) {
-                .inline_expects_enabled => {},
                 .local => |local| self.useLocal(local, null),
                 .tuple_access => |access| {
                     const receiver = self.program.getExpr(access.tuple);

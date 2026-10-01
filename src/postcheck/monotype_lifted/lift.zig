@@ -683,7 +683,6 @@ const Lifter = struct {
             },
             .tag => |tag| try self.rewriteExprSpan(tag.payloads),
             .static_data_candidate => |candidate| try self.rewriteExpr(candidate.runtime_expr),
-            .inline_expects_enabled => {},
             .comptime_value => |candidate| try self.rewriteExpr(candidate.initializer),
             .typed_boundary => |boundary| try self.rewriteExpr(boundary.value),
             .nominal,
@@ -1370,7 +1369,6 @@ const CaptureSet = struct {
                 for (0..payloads.len) |payload_index| try self.collectExpr(GuardedList.at(payloads, payload_index), bound);
             },
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, bound),
-            .inline_expects_enabled => {},
             .comptime_value => |candidate| try self.collectExpr(candidate.initializer, bound),
             .typed_boundary => |boundary| try self.collectExpr(boundary.value, bound),
             .nominal,
@@ -2216,7 +2214,6 @@ const CaptureGraphBuilder = struct {
             },
             .tag => |tag| try self.collectExprSpan(tag.payloads, node),
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, node),
-            .inline_expects_enabled => {},
             .comptime_value => |candidate| try self.collectExpr(candidate.initializer, node),
             .typed_boundary => |boundary| try self.collectExpr(boundary.value, node),
             .nominal,

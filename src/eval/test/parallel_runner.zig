@@ -1807,6 +1807,8 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .break_outside_loop,
         .infinite_loop_never_exits,
         .return_outside_fn,
+        .control_flow_in_expect,
+        .var_reassigned_in_expect,
         .mutually_recursive_type_aliases,
         => true,
     };

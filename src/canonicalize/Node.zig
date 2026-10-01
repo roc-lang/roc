@@ -285,6 +285,8 @@ pub const Tag = enum {
     diag_infinite_loop_never_exits,
     diag_trailing_try_suffix,
     diag_return_outside_fn,
+    diag_control_flow_in_expect,
+    diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,

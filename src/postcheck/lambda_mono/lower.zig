@@ -646,7 +646,6 @@ const Lowerer = struct {
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
             .bytes_lit => |value| .{ .bytes_lit = value },
-            .inline_expects_enabled => .{ .inline_expects_enabled = {} },
             .comptime_value => |value| .{ .comptime_value = .{
                 .root = value.root,
                 .initializer = try self.lowerExpr(value.initializer),

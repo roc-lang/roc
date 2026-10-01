@@ -2159,7 +2159,6 @@ const Lowerer = struct {
                 .bytes_lit,
                 .uninitialized,
                 .crash,
-                .inline_expects_enabled,
                 => {},
             }
         }
@@ -3190,7 +3189,6 @@ const Lowerer = struct {
             .static_data_candidate => |candidate| try self.constructionOfExpr(arena, candidate.runtime_expr, ty, layout_idx),
             .local,
             .@"unreachable",
-            .inline_expects_enabled,
             .comptime_value,
             .typed_boundary,
             .record_update,
@@ -3258,7 +3256,6 @@ const Lowerer = struct {
             .tag,
             .local,
             .@"unreachable",
-            .inline_expects_enabled,
             .comptime_value,
             .typed_boundary,
             .record_update,
@@ -4855,15 +4852,6 @@ const Lowerer = struct {
         return try self.lowerExprIntoAtType(where, ret_local, expr_id, ret_ty, ret_stmt);
     }
 
-    /// Internal failure protocol is an explicit U8 flag plus an immortal Str.
-    fn lowerInlineExpectsEnabledInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        return try self.result.store.addCFStmt(.{ .assign_literal = .{
-            .target = target,
-            .value = .{ .i64_literal = .{ .value = if (self.inline_expects == .run) 1 else 0, .layout_idx = self.result.store.getLocal(target).layout_idx } },
-            .next = next,
-        } }, where.source());
-    }
-
     /// The slot holding one evaluated root's completed value, created on its
     /// first demand. A root's value has one representation, so every read of
     /// it and the root's own completed-value materialization share one slot.
@@ -5226,7 +5214,6 @@ const Lowerer = struct {
             .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
             .uninitialized, .uninitialized_payload => next,
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(where, target, candidate, expr_ty, next),
-            .inline_expects_enabled => try self.lowerInlineExpectsEnabledInto(where, target, next),
             .comptime_value => |value| try self.lowerComptimeValueInto(where, target, value, expr_ty, next),
             .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(where, target, expr_ty, boundary, next),
             .list => |items| try self.lowerListIntoAtType(where, target, expr_ty, items, next),
@@ -5350,7 +5337,6 @@ const Lowerer = struct {
             .nominal => |backing| try self.lowerNominalInto(where, target, ty, backing, next),
             .let_ => |let_| try self.lowerLetIntoAtType(where, target, ty, let_, next),
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(where, target, candidate, ty, next),
-            .inline_expects_enabled => try self.lowerInlineExpectsEnabledInto(where, target, next),
             .comptime_value => |value| try self.lowerComptimeValueInto(where, target, value, ty, next),
             .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(where, target, ty, boundary, next),
             .field_access => |field| try self.lowerFieldAccessInto(where, target, field.receiver, field.segments, next),
@@ -13342,10 +13328,10 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
     };
     for (roots) |root| _ = try solved.lifted.addComptimeValueRoot(root);
     const bool_ty = try solved.lifted.types.add(.{ .primitive = .bool });
-    const policy = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
+    const produced = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } } });
     const witness = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const read = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = @enumFromInt(1), .initializer = witness } } });
-    for ([_]Lifted.ExprId{ policy, read }, 0..) |body, index| {
+    for ([_]Lifted.ExprId{ produced, read }, 0..) |body, index| {
         const fn_id = try solved.lifted.addFn(.{
             .symbol = @enumFromInt(@as(u32, @intCast(index))),
             .args = .empty(),
@@ -13391,7 +13377,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             defer result.deinit();
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = policy, .body = read } });
+    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
     const Verify = struct {
         fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
             var lowerer = try Lowerer.init(failing, .u64, original, .{});
@@ -13453,7 +13439,6 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
     try std.testing.expectEqualDeep(roots[1], materialized.getComptimeValueRoot(lowered_read.root));
     try std.testing.expect(materialized.getExpr(lowered_read.initializer).data == .@"unreachable");
     var evaluator = try Eval.Evaluator.init(allocator, &materialized, .{
-        .inline_expects_enabled = false,
         .comptime_producers = &.{
             .{ .root = roots[0], .root_index = 1 },
             .{ .root = roots[1], .root_index = 0 },
