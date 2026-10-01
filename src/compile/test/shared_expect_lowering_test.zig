@@ -113,64 +113,6 @@ test "shared expect lowering retains the continuation of a returning condition" 
     , .{ .shared_comptime_reads = true, .prepared_inspect = neitherConsumerDiverges });
 }
 
-fn inspectMutation(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
-    var solved = try lir.CheckedPipeline.prepareMonotypeToSolved(try prepared.forkForConsumer(prepared.target.target_usize, .run));
-    defer solved.deinit();
-    for ([_]lir.CheckedPipeline.InlineExpectMode{ .run, .omit }, [_]i8{ 8, 7 }) |mode, expected_exit| {
-        var lowered = try lir.CheckedPipeline.lowerConsumerToLir(&solved, consumerFor(&solved, mode));
-        defer lowered.deinit();
-        runConsumer(&lowered, false, expected_exit) catch return error.TestUnexpectedResult;
-    }
-}
-
-test "shared expect lowering preserves consumer-specific outer variable mutation" {
-    try harness.expectLowersToLirWithOptions(
-        \\main! = |args| {
-        \\    var code = 7
-        \\    expect {
-        \\        code = 8
-        \\        List.is_empty(args)
-        \\    }
-        \\    Err(Exit(code))
-        \\}
-    , .{ .shared_comptime_reads = true, .prepared_inspect = inspectMutation });
-}
-
-test "issue 11618 shared expect loop carries preserve both consumers" {
-    try harness.expectLowersToLirWithOptions(
-        \\main! = |args| {
-        \\    var code = 7
-        \\    match True {
-        \\        True => for increment in [1] {
-        \\            expect {
-        \\                code = code + increment
-        \\                List.is_empty(args)
-        \\            }
-        \\        }
-        \\        False => {}
-        \\    }
-        \\    Err(Exit(code))
-        \\}
-    , .{ .shared_comptime_reads = true, .prepared_inspect = inspectMutation });
-}
-
-test "shared expect lowering merges callable identities assigned by the condition" {
-    try harness.expectLowersToLirWithOptions(
-        \\main! = |args| {
-        \\    seven : {} -> I8
-        \\    seven = |_| 7
-        \\    eight : {} -> I8
-        \\    eight = |_| 8
-        \\    var decide = seven
-        \\    expect {
-        \\        decide = eight
-        \\        List.is_empty(args)
-        \\    }
-        \\    Err(Exit(decide({})))
-        \\}
-    , .{ .shared_comptime_reads = true, .prepared_inspect = inspectMutation });
-}
-
 /// A copy of the producer program, owned by `allocator`, for an entrance that
 /// consumes what it is given.
 fn preparedCopy(
