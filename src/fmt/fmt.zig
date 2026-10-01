@@ -1382,13 +1382,7 @@ const Formatter = struct {
     fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) FormatAstError!void {
         try fmt.pushAll("${");
         const part_region = fmt.nodeRegion(@intFromEnum(idx));
-        // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
-        // That means they won't include any of the newlines between them and the actual expr.
-        // So we'll widen the region by one token for calculating multliline.
-        // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
-        // we'll leave it as is for now
-        const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
-            fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
+        const part_is_multiline = fmt.interpolationWillBeMultiline(idx);
 
         if (part_is_multiline) {
             try fmt.flushCommentsBeforeDiscard(part_region.start);
@@ -1404,6 +1398,19 @@ const Formatter = struct {
             try fmt.pushIndent();
         }
         try fmt.push('}');
+    }
+
+    fn interpolationWillBeMultiline(fmt: *Formatter, idx: AST.Expr.Idx) bool {
+        const region = fmt.nodeRegion(@intFromEnum(idx));
+        return fmt.ast.regionIsMultiline(.{ .start = region.start - 1, .end = region.end + 1 }) or
+            fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
+    }
+
+    fn stringWillBeMultiline(fmt: *Formatter, parts: AST.Expr.Span) bool {
+        for (fmt.ast.store.exprSlice(parts)) |part| {
+            if (fmt.ast.store.getExpr(part) != .string_part and fmt.interpolationWillBeMultiline(part)) return true;
+        }
+        return false;
     }
 
     fn formatPatternString(fmt: *Formatter, str: anytype) FormatAstError!void {
@@ -1712,7 +1719,7 @@ const Formatter = struct {
             },
             .field_access => |fa| {
                 const receiver_expr = fmt.ast.store.getExpr(fa.receiver);
-                const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline;
+                const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline and !format_context.starts_pipe_target;
                 const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.postfixReceiverNeedsParens(fa.receiver);
                 const expand_parenthesized_receiver = receiver_expr == .arrow_call and
                     fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.receiver);
@@ -1754,7 +1761,7 @@ const Formatter = struct {
             },
             .method_call => |mc| {
                 const left_expr = fmt.ast.store.getExpr(mc.receiver);
-                const flatten_pipe_receiver = left_expr == .arrow_call and multiline;
+                const flatten_pipe_receiver = left_expr == .arrow_call and multiline and !format_context.starts_pipe_target;
                 const parenthesize_receiver = (left_expr == .arrow_call and !flatten_pipe_receiver) or fmt.postfixReceiverNeedsParens(mc.receiver);
                 const expand_parenthesized_receiver = left_expr == .arrow_call and
                     fmt.nodeWillBeMultiline(AST.Expr.Idx, mc.receiver);
@@ -1930,7 +1937,7 @@ const Formatter = struct {
             },
             .tuple_access => |ta| {
                 const receiver_expr = fmt.ast.store.getExpr(ta.expr);
-                const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline;
+                const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline and !format_context.starts_pipe_target;
                 const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.postfixReceiverNeedsParens(ta.expr);
                 if (parenthesize_receiver) try fmt.push('(');
                 const target = try fmt.formatExprInner(ta.expr, .{
@@ -2234,12 +2241,13 @@ const Formatter = struct {
                     try fmt.flushCommentsBeforeDiscard(branch_region.start);
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
-                    const pattern_region = try fmt.formatPattern(branch.pattern);
+                    var arrow_boundary = (try fmt.formatPattern(branch.pattern)).end;
                     if (branch.guard) |guard| {
                         try fmt.pushAll(" if ");
                         try fmt.formatExprDiscard(guard);
+                        arrow_boundary = fmt.nodeRegion(@intFromEnum(guard)).end;
                     }
-                    var flushed = try fmt.flushCommentsBefore(pattern_region.end);
+                    var flushed = try fmt.flushCommentsBefore(arrow_boundary);
                     if (flushed) {
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
@@ -2654,6 +2662,7 @@ const Formatter = struct {
                 }
             },
             .as => |a| {
+                region = a.region;
                 try fmt.formatPatternDiscard(a.pattern);
                 try fmt.pushAll(" as ");
                 try fmt.pushTokenText(a.name);
@@ -4147,7 +4156,7 @@ const Formatter = struct {
             // Inserted receiver parentheses normalize bare boundary newlines.
             // Interior comments still require expansion below.
             if (!fmt.postfixReceiverNeedsParens(method.receiver) and
-                fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 }))
+                fmt.ast.regionIsMultiline(.{ .start = receiver_region.end - 1, .end = method.method_token + 1 }))
             {
                 return true;
             }
@@ -4160,7 +4169,9 @@ const Formatter = struct {
         if (owns_collection and fmt.regionHasInteriorComment(expr.to_tokenized_region())) return true;
 
         return switch (expr) {
-            .block, .multiline_string, .typed_multiline_string => true,
+            .block, .multiline_string, .typed_multiline_string, .match => true,
+            .string => |str| fmt.stringWillBeMultiline(str.parts),
+            .typed_string => |str| fmt.stringWillBeMultiline(str.parts),
             .list => |l| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(l.items)),
             .tuple => |t| fmt.tupleWillBeMultiline(expr_idx, t),
@@ -4208,11 +4219,8 @@ const Formatter = struct {
             .typed_frac,
             .single_quote,
             .string_part,
-            .string,
-            .typed_string,
             .tag,
             .record_updater,
-            .match,
             .ident,
             .ellipsis,
             .@"break",
@@ -4228,7 +4236,7 @@ const Formatter = struct {
                 const method = expr.method_call;
                 const receiver_region = fmt.nodeRegion(@intFromEnum(method.receiver));
                 if (!fmt.postfixReceiverNeedsParens(method.receiver) and
-                    fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 }))
+                    fmt.ast.regionIsMultiline(.{ .start = receiver_region.end - 1, .end = method.method_token + 1 }))
                 {
                     return true;
                 }
@@ -4243,7 +4251,12 @@ const Formatter = struct {
             }
 
             switch (expr) {
-                .block => return true,
+                .block, .match => return true,
+                .string => |str| return fmt.stringWillBeMultiline(str.parts),
+                .typed_string => |str| return fmt.stringWillBeMultiline(str.parts),
+                .dbg => |d| return fmt.nodeWillBeMultiline(AST.Expr.Idx, d.expr),
+                .crash => |c| return fmt.nodeWillBeMultiline(AST.Expr.Idx, c.expr),
+                .@"return" => |r| return fmt.nodeWillBeMultiline(AST.Expr.Idx, r.expr),
                 .multiline_string, .typed_multiline_string => return true,
                 .list => |l| {
                     return fmt.ast.store.getCollectionLayout(item) == .expanded or
@@ -4366,18 +4379,12 @@ const Formatter = struct {
                 .typed_frac,
                 .single_quote,
                 .string_part,
-                .string,
-                .typed_string,
-                .tag,
+                        .tag,
                 .record_updater,
-                .match,
-                .ident,
-                .dbg,
-                .crash,
-                .ellipsis,
+                    .ident,
+                        .ellipsis,
                 .@"break",
-                .@"return",
-                .malformed,
+                    .malformed,
                 => return false,
             }
         }
@@ -4532,7 +4539,8 @@ const Formatter = struct {
             cache_entry.* = .compact;
             return false;
         };
-        const multiline = fmt.regionHasInteriorComment(field.region) or fmt.typeAnnoWillBeMultiline(field.ty);
+        const multiline = fmt.regionHasInteriorComment(field.region) or fmt.typeAnnoWillBeMultiline(field.ty) or
+            (if (field.default_value) |value| fmt.nodeWillBeMultiline(AST.Expr.Idx, value) else false);
 
         cache_entry.* = if (multiline) .expanded else .compact;
         return multiline;
@@ -6967,4 +6975,19 @@ test "builtin facts are reused across directory files and later paths" {
     try std.testing.expectEqual(syntax, facts.syntax.?);
     try std.testing.expectEqual(position_count, facts.syntax.?.rows.position_cache.count());
     try std.testing.expectEqualStrings("", stderr.written());
+}
+
+ test "issue 11936: formatting is stable across nested layouts" {
+    const inputs = [_][]const u8{
+        "connect : ({ ports : List(U16) ?? [80, 443,] }) -> Str",
+        "{\n\n    field } = record\n\nprocess = |\n    Foo(value) as whole,\n    other,\n| value",
+        "matched = [match status { Ok(value) => value, Err(_) => 0 }]\n\nmessages = [\"items: ${[1, 2,]}\"]\n\ninspected = [dbg [1, 2,]]",
+        "result = match value {\n    Some(item)\n        if is_valid(item) => transform(item)\n    None => default_value\n}",
+        "total = (\n    items.keep_if(\n        is_valid\n    ).len()\n)",
+        "result = input |> (\n    step_one\n    |> step_two\n).finalize()",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+    }
 }
