@@ -224,6 +224,11 @@ pub const FnTemplate = struct {
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
     cached: ?Common.SpecCacheHit = null,
+    /// The checked template is called at exactly one site of its module's
+    /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
+    /// when Monotype finalizes the program. Dev inline analysis decides
+    /// single-use inlining by this fact, which every program agrees on.
+    single_source_call: bool = false,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),

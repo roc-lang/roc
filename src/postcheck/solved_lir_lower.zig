@@ -722,6 +722,10 @@ const Lowerer = struct {
     /// of the representative chosen to lower a shared procedure body.
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
+    /// The lifted function whose body is being lowered, through any inline
+    /// bodies: the owner of the calls lowered now, which decides whether a
+    /// source-single-use callee is inlined (`SolvedInline.Plan.bodyForCall`).
+    current_body_owner: ?Lifted.FnId = null,
     /// Keyed specializations whose bodies `keep_specialization_procs` lowers
     /// whether or not a reference reaches them, and how many are queued.
     keep_specialization_procs: bool,
@@ -2192,7 +2196,7 @@ const Lowerer = struct {
             try self.add(.{ .proc = target });
             const spec = self.lowerer.fn_specs.items[@intFromEnum(target)];
             if (spec.abi == .finite and spec.capture_ty == null and !is_cold and !spec.return_reuse.enabled()) {
-                if (try self.lowerer.inlineBodyForKnownCall(target)) |body| try self.add(.{ .expr = body });
+                if (try self.lowerer.inlineBodyForKnownCall(target, null)) |body| try self.add(.{ .expr = body });
             }
         }
 
@@ -2415,6 +2419,9 @@ const Lowerer = struct {
         self.aggregate_bindings = &aggregates;
         defer self.aggregate_bindings = saved_aggregates;
         const proc_id = try self.procPlaceholder(fn_id);
+        const saved_owner = self.current_body_owner;
+        self.current_body_owner = spec.source;
+        defer self.current_body_owner = saved_owner;
         // The store accumulates this body's shapes from the statements it
         // appends; a body lowered inside another body keeps its own set.
         const saved_shapes = self.result.store.shapes;
@@ -2944,6 +2951,7 @@ const Lowerer = struct {
             .rc_ret_unique = if (cached) |hit| hit.rc_ret_unique else false,
             .rc_ret_unique_fields = if (cached) |hit| hit.rc_ret_unique_fields else 0,
             .rc_ret_conditions = cached_ret_conditions,
+            .inlined_at_calls = self.inline_plan.kind(spec.source) != .none,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
         if (self.proc_debug_names) {
@@ -2955,9 +2963,9 @@ const Lowerer = struct {
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
                 // A program that keeps its keyed specializations lowers each
-                // one's body as a procedure, except a single-use body, which
-                // is lowered at its call site alone and so is not kept.
-                const kept = self.keep_specialization_procs and !self.inline_plan.isSingleUse(spec.source);
+                // one's body as a procedure, except a body its calls inline,
+                // which a program linking the pack would inline too.
+                const kept = self.keep_specialization_procs and self.inline_plan.kind(spec.source) == .none;
                 if (plain_spec and (kept or !self.keep_specialization_procs)) {
                     try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
@@ -7124,7 +7132,7 @@ const Lowerer = struct {
         // input, so preserve the specialized call boundary until inlining can
         // model destination demand directly.
         if (capture_arg == null and !is_cold and !has_return_reuse) {
-            if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
+            if (try self.inlineBodyForKnownCall(callee, self.current_body_owner)) |body_expr| {
                 var current = try self.lowerInlineKnownCallInto(where, call_target, callee, lowered.ids, body_expr, after_call);
                 current = try self.prependExprsAtTypes(where, lowered, arg_tys, current);
                 return current;
@@ -7188,9 +7196,12 @@ const Lowerer = struct {
         return try self.lowerTypeSpan(self.solved_types.span(func.args));
     }
 
-    fn inlineBodyForKnownCall(self: *Lowerer, callee: Type.FnId) Common.LowerError!?Lifted.ExprId {
+    /// The body to inline for a direct call to `callee` lowered in `owner`'s
+    /// body. Worker preparation passes no owner, which admits every body the
+    /// call could inline.
+    fn inlineBodyForKnownCall(self: *Lowerer, callee: Type.FnId, owner: ?Lifted.FnId) Common.LowerError!?Lifted.ExprId {
         const spec = self.fn_specs.items[@intFromEnum(callee)];
-        const body_expr = self.inline_plan.bodyForFn(spec.source) orelse return null;
+        const body_expr = self.inline_plan.bodyForCall(spec.source, owner) orelse return null;
 
         if (spec.abi != .finite) Common.invariant("inline plan selected a non-finite function spec");
         if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
@@ -7243,6 +7254,9 @@ const Lowerer = struct {
         // call's scope, whose call site is this call.
         var callee_parent = where;
         callee_parent.outer = try self.addKnownCallInlineScope(where, source_fn, body_expr);
+        const saved_owner = self.current_body_owner;
+        self.current_body_owner = spec.source;
+        defer self.current_body_owner = saved_owner;
         return try self.lowerExprInto(callee_parent, target, body_expr, next);
     }
 

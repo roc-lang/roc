@@ -5640,7 +5640,12 @@ The explicit `InlineMode` controls the optional specialization work:
 - `.none` skips Monotype Lifted SpecConstr and produces an empty solved inline
   plan. The interpreter selects this.
 - `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
-  decisions from Lambda Solved. Dev, size and speed modes select this.
+  decisions from Lambda Solved. Size and speed modes select this.
+- `.wrappers_and_source_single_use` makes the same wrapper decisions, and
+  decides single use by the source instead of the program (below). Dev mode
+  selects this, because the object cache links dev procedures into programs
+  other than the one compiling them, and only decisions that depend on source
+  alone are the same in all of them.
 - optimized eval and focused lowering tests may select `.wrappers` directly.
 
 The mode is compiler input supplied to the checked pipeline. SpecConstr and the
@@ -5679,7 +5684,23 @@ analyzer records the complete decision before LIR generation; direct
 Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
 body at its unique call site. The existing wrapper eligibility remains available
 for proven small call-through and low-level wrappers even when they have multiple
-direct uses. Checked call-through wrappers also qualify when a single-condition
+direct uses.
+
+Under `.wrappers_and_source_single_use`, how many callers a whole program has
+plays no part. Checking publishes, per module, the procedure templates its
+source calls at exactly one site and never uses as a value, among those no
+other module can call: promoted local procedures, and source definitions that
+are neither exposed nor methods, since another module can dispatch to any
+method (`CheckedProcedureTemplateTable.single_source_call_templates`).
+Monotype stamps the fact on each function template, and a capture-free body
+without a procedure-relative return that has it is a source-single-use
+candidate. Every call to it in any program is that one site, lowered in some
+specialization of the function containing it, so lowering inlines the call
+wherever the function it is lowering is not a wrapper: a wrapper body can be
+lowered more than once into one procedure, which a body with its own locals
+and joins must not be. Each specialization of the containing function is a
+separate procedure, so the body can be lowered once per specialization; the
+once-per-program guarantee belongs to `.wrappers` only. Checked call-through wrappers also qualify when a single-condition
 `if` has a literal-crash arm and a continuing wrapper arm. The guard and both
 arms must read only arguments or constants; there are no captures or local
 statements other than the terminal literal crash. Argument substitution preserves
@@ -15714,16 +15735,20 @@ procedure's facts rather than inferring them, so callers of a cached
 procedure prove exactly the uniqueness they would against its body.
 
 Every program must lower a procedure an entry offers to the same LIR, since
-any of them may link it. A pack program therefore makes the inline decisions
-any program makes: it keeps a keyed specialization's procedure, and withholds
-single-use inlining only where the single caller is one of its own export
-wrappers, a call no other program makes. Generated code names nothing a
+any of them may link it. Dev inlining depends only on source
+(`.wrappers_and_source_single_use`), so a pack program makes the inline
+decisions any program makes, and it keeps as a procedure every keyed
+specialization except a body its calls inline. A program that takes its
+cache hits during specialization, as a pack program does, could not inline a
+body a hit replaced, so an entry is never a procedure whose calls the plan
+inlines (`inlined_at_calls`). Generated code names nothing a
 program numbers: a Debug invariant check names its procedure by content
 identity and its local by position in the procedure's frame. Under
-`ROC_PACK_TRACE`, every offered and every compiled procedure prints a LIR
-fingerprint with program numbering canonicalized, and the CLI suite checks
-that each offered identity has one fingerprint across a build, an edited
-warm build, and the edited source's cold build.
+`ROC_PACK_TRACE`, every offered and every compiled specialization prints a
+LIR fingerprint with program numbering canonicalized, by the key a pack
+serves it by, and the CLI suite checks that each offered key has one
+fingerprint across a build, an edited warm build, and the edited source's
+cold build.
 
 ### Outcome-Conditioned Argument Restitution
 

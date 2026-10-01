@@ -752,6 +752,7 @@ pub fn run(
         var finalization_timing_scope = TimingPhaseScope.begin(options.timing, .finalization);
         defer finalization_timing_scope.end();
         program.next_symbol = builder.symbols.coordinator.next;
+        builder.stampSingleSourceCalls();
         try program.sealRemainingCaptureIdentities();
         try recordComptimeValueReads(allocator, &program);
         program.freeze();
@@ -8722,6 +8723,39 @@ const Builder = struct {
             out[i] = try self.lowerType(view, ty);
         }
         return out;
+    }
+
+    /// Stamp every function and definition from a checked template with
+    /// whether its module's source calls it at exactly one site, wherever it
+    /// was created: a fresh specialization or a restored function value. The
+    /// two records of one function carry the same template.
+    fn stampSingleSourceCalls(self: *Builder) void {
+        for (0..self.program.fnCount()) |raw| {
+            const id: Ast.FnId = @enumFromInt(@as(u32, @intCast(raw)));
+            var source = self.program.getFn(id).source;
+            if (self.singleSourceCall(source)) {
+                source.single_source_call = true;
+                self.program.setFnSource(id, source);
+            }
+        }
+        for (0..self.program.defCount()) |raw| {
+            const id: Ast.DefId = @enumFromInt(@as(u32, @intCast(raw)));
+            var def = self.program.getDef(id);
+            var fn_def = def.fn_def orelse continue;
+            if (!self.singleSourceCall(fn_def)) continue;
+            fn_def.single_source_call = true;
+            def.fn_def = fn_def;
+            self.program.setDef(id, def);
+        }
+    }
+
+    fn singleSourceCall(self: *Builder, template: Ast.FnTemplate) bool {
+        const checked_template = switch (template.fn_def) {
+            .local_template, .imported_template => |checked_template| checked_template,
+            .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return false,
+        };
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(checked_template));
+        return view.templates.templateHasSingleSourceCall(checked_template.template);
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {

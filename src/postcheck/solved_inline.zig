@@ -13,23 +13,53 @@ const GuardedList = collections.GuardedList;
 /// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
+    /// Inline wrappers, and bodies the whole program calls exactly once.
     wrappers,
+    /// Inline wrappers, and bodies whose module's source calls them at
+    /// exactly one site (`FnTemplate.single_source_call`). Both depend only on
+    /// source, never on which other procedures a program contains, so every
+    /// program inlines the same calls. Dev builds use this: the object cache
+    /// links a dev procedure into programs other than the one compiling it.
+    wrappers_and_source_single_use,
+};
+
+/// What an inline body is.
+pub const InlineKind = enum(u8) {
+    none,
+    /// A small call-through or low-level wrapper, inlined at every call site.
+    wrapper,
+    /// Called exactly once in the whole program and lowered only there.
+    single_use,
+    /// Called at one site of its module's source. Inlined wherever that call
+    /// is lowered outside a wrapper body: a wrapper body can be lowered more
+    /// than once into one procedure, and a single-use body must not be.
+    source_single_use,
 };
 
 /// Immutable inline eligibility table consumed by later lowering stages.
 pub const Plan = struct {
     inline_bodies: []const ?Lifted.ExprId = &.{},
-    /// Whether a selected body is a single-use body: lowered only at its one
-    /// call site, so the function has no procedure of its own.
-    single_use: []const bool = &.{},
+    kinds: []const InlineKind = &.{},
 
-    pub fn isSingleUse(self: Plan, fn_id: Lifted.FnId) bool {
-        if (self.single_use.len == 0) return false;
+    pub fn kind(self: Plan, fn_id: Lifted.FnId) InlineKind {
+        if (self.kinds.len == 0) return .none;
         const index = @intFromEnum(fn_id);
-        if (index >= self.single_use.len) {
+        if (index >= self.kinds.len) {
             Common.invariant("inline plan did not contain a lifted function");
         }
-        return self.single_use[index];
+        return self.kinds[index];
+    }
+
+    /// The body to inline for a direct call to `callee` lowered while
+    /// lowering `owner`'s body, if the plan inlines that call.
+    pub fn bodyForCall(self: Plan, callee: Lifted.FnId, owner: ?Lifted.FnId) ?Lifted.ExprId {
+        const body = self.bodyForFn(callee) orelse return null;
+        if (self.kind(callee) == .source_single_use) {
+            if (owner) |owning_fn| {
+                if (self.kind(owning_fn) == .wrapper) return null;
+            }
+        }
+        return body;
     }
 
     pub fn bodyForFn(self: Plan, fn_id: Lifted.FnId) ?Lifted.ExprId {
@@ -47,32 +77,30 @@ pub const Plan = struct {
 pub const OwnedPlan = struct {
     allocator: std.mem.Allocator,
     inline_bodies: []?Lifted.ExprId,
-    single_use: []bool,
+    kinds: []InlineKind,
 
     pub fn empty(allocator: std.mem.Allocator) OwnedPlan {
-        return .{ .allocator = allocator, .inline_bodies = &.{}, .single_use = &.{} };
+        return .{ .allocator = allocator, .inline_bodies = &.{}, .kinds = &.{} };
     }
 
     pub fn deinit(self: *OwnedPlan) void {
         if (self.inline_bodies.len != 0) self.allocator.free(self.inline_bodies);
-        if (self.single_use.len != 0) self.allocator.free(self.single_use);
+        if (self.kinds.len != 0) self.allocator.free(self.kinds);
         self.* = empty(self.allocator);
     }
 
     pub fn view(self: *const OwnedPlan) Plan {
-        return .{ .inline_bodies = self.inline_bodies, .single_use = self.single_use };
+        return .{ .inline_bodies = self.inline_bodies, .kinds = self.kinds };
     }
 };
 
 /// Analyze a Lambda Solved program and produce explicit inline decisions.
 /// With `keep_keyed_specializations`, a function that is a keyed template
-/// specialization is never inlined away: a pack program offers those
-/// procedures from its manifest, so each must survive as a procedure even
-/// when its only caller is the export wrapper. Every other inline decision is
-/// the one any program makes, so the pack's procedures are lowered as a
-/// program that links them would lower them: a wrapper is inlined at its call
-/// sites and keeps its procedure, and a single-use body whose one caller is
-/// not a root is inlined, so the pack does not offer it.
+/// specialization is never inlined away by the whole-program single-use
+/// rule: a pack program offers those procedures from its manifest, so each
+/// must survive as a procedure even when its only caller is the export
+/// wrapper. Wrapper and source-single-use decisions depend on source alone,
+/// so a pack program makes them as any program does.
 pub fn analyze(
     allocator: std.mem.Allocator,
     mode: Mode,
@@ -82,7 +110,8 @@ pub fn analyze(
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
         .none => OwnedPlan.empty(allocator),
-        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations),
+        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .program),
+        .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .source),
     };
 }
 
@@ -95,8 +124,10 @@ const Decision = union(enum) {
 
 const Candidate = struct {
     body: Lifted.ExprId,
-    kind: enum { wrapper, single_use },
+    kind: InlineKind,
 };
+
+const SingleUseRule = enum { program, source };
 
 const MaterializationState = enum {
     unknown,
@@ -113,15 +144,16 @@ const InlineAnalyzer = struct {
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
     keep_keyed_specializations: bool,
-    /// Root functions, under `keep_keyed_specializations`: a pack program's
-    /// export wrappers, whose calls no other program makes.
-    roots: std.DynamicBitSetUnmanaged,
+    /// How a body qualifies as used once: by the whole program's calls, or
+    /// by its module's source.
+    single_use: SingleUseRule,
 
     fn run(
         allocator: std.mem.Allocator,
         procedure_usage: SpecConstr.ProcedureUsage,
         solved: *const Solved.Program,
         keep_keyed_specializations: bool,
+        single_use: SingleUseRule,
     ) std.mem.Allocator.Error!OwnedPlan {
         if (procedure_usage.items.len != solved.lifted.fnCount()) {
             Common.invariant("optimized inline analysis requires exact use information for every lifted function");
@@ -138,13 +170,9 @@ const InlineAnalyzer = struct {
             .decisions = decisions,
             .stack = .empty,
             .keep_keyed_specializations = keep_keyed_specializations,
-            .roots = try std.DynamicBitSetUnmanaged.initEmpty(allocator, if (keep_keyed_specializations) solved.lifted.fnCount() else 0),
+            .single_use = single_use,
         };
         defer analyzer.stack.deinit(allocator);
-        defer analyzer.roots.deinit(allocator);
-        if (keep_keyed_specializations) {
-            for (solved.lifted.rootsView()) |root| analyzer.roots.set(@intFromEnum(root.fn_id));
-        }
 
         for (0..solved.lifted.fnCount()) |index| {
             const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
@@ -161,9 +189,9 @@ const InlineAnalyzer = struct {
 
         const inline_bodies = try allocator.alloc(?Lifted.ExprId, decisions.len);
         errdefer allocator.free(inline_bodies);
-        const single_use = try allocator.alloc(bool, decisions.len);
-        errdefer allocator.free(single_use);
-        for (decisions, inline_bodies, single_use) |decision, *body, *is_single_use| {
+        const kinds = try allocator.alloc(InlineKind, decisions.len);
+        errdefer allocator.free(kinds);
+        for (decisions, inline_bodies, kinds) |decision, *body, *body_kind| {
             body.* = switch (decision) {
                 .inline_body => |candidate| candidate.body,
                 .unknown,
@@ -171,7 +199,7 @@ const InlineAnalyzer = struct {
                 .never,
                 => null,
             };
-            is_single_use.* = decision == .inline_body and decision.inline_body.kind == .single_use;
+            body_kind.* = if (decision == .inline_body) decision.inline_body.kind else .none;
         }
 
         allocator.free(decisions);
@@ -180,7 +208,7 @@ const InlineAnalyzer = struct {
         return .{
             .allocator = allocator,
             .inline_bodies = inline_bodies,
-            .single_use = single_use,
+            .kinds = kinds,
         };
     }
 
@@ -231,25 +259,37 @@ const InlineAnalyzer = struct {
     }
 
     fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Candidate {
-        // A wrapper is inlined at every call site and still lowered as a
-        // procedure, so a pack program inlines it exactly as any program
-        // does and keeps the procedure to offer.
+        // A pack program inlines a wrapper exactly as any program does.
         if (self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
-        // A single-use body is lowered only at its call site. A keyed
-        // specialization whose one caller is a pack program's export wrapper
-        // must survive as a procedure to be offered; no other program calls
-        // it from there.
+        if (self.single_use == .source) {
+            if (self.sourceSingleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .source_single_use };
+            return null;
+        }
+        // A single-use body is lowered only at its call site, and a keyed
+        // specialization a pack program offers must survive as a procedure.
         if (self.keep_keyed_specializations) {
             if (self.solved.lifted.getFn(fn_id).source) |template| {
-                if (template.spec_key != null) {
-                    if (self.procedure_usage.get(fn_id).external_call_owner) |owner| {
-                        if (self.roots.isSet(@intFromEnum(owner))) return null;
-                    }
-                }
+                if (template.spec_key != null) return null;
             }
         }
         if (self.singleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .single_use };
         return null;
+    }
+
+    /// A body its module's source calls at one site. Every call to it in any
+    /// program is that site, lowered in some specialization of the function
+    /// containing it, so the decision needs no program-wide count.
+    fn sourceSingleUseCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
+        const source_fn = self.solved.lifted.getFn(fn_id);
+        const template = source_fn.source orelse return null;
+        if (!template.single_source_call) return null;
+        if (self.procedure_usage.get(fn_id).contains_return) return null;
+        if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
+        if (self.solvedCaptureCount(fn_id) != 0) return null;
+        return switch (source_fn.body) {
+            .roc => |body_expr| body_expr,
+            .hosted => null,
+        };
     }
 
     fn singleUseCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {

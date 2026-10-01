@@ -22044,6 +22044,12 @@ pub const CheckedProcedureTemplateTable = struct {
     /// runtime error, in ascending id order. Empty for a module whose checked
     /// bodies and imports contain no such code.
     checked_error_templates: []canonical.CheckedProcedureTemplateId = &.{},
+    /// Templates no other module can call and whose module's source calls
+    /// them at exactly one site and never uses them as a value, in ascending
+    /// id order. Every program that specializes such a template finds its
+    /// calls at that one site, so an inline decision based on it is the same
+    /// in every program (`SingleSourceCalls`).
+    single_source_call_templates: []canonical.CheckedProcedureTemplateId = &.{},
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
@@ -22059,6 +22065,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
         checked_error_templates: SerializedSlice(canonical.CheckedProcedureTemplateId) = .{},
+        single_source_call_templates: SerializedSlice(canonical.CheckedProcedureTemplateId) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -22372,22 +22379,20 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_interface_relations);
         allocator.free(self.specialization_interface_types);
         allocator.free(self.checked_error_templates);
+        allocator.free(self.single_source_call_templates);
         self.* = .{};
     }
 
     /// Whether evaluating this template can reach code checking replaced with
     /// a runtime error.
     pub fn templateReachesCheckedError(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) bool {
-        const target = @intFromEnum(id);
-        var lo: usize = 0;
-        var hi = self.checked_error_templates.len;
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            const candidate = @intFromEnum(self.checked_error_templates[mid]);
-            if (candidate == target) return true;
-            if (candidate < target) lo = mid + 1 else hi = mid;
-        }
-        return false;
+        return sortedTemplateIdsContain(self.checked_error_templates, id);
+    }
+
+    /// Whether this template is called at exactly one site of its module's
+    /// source and cannot be called from elsewhere.
+    pub fn templateHasSingleSourceCall(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) bool {
+        return sortedTemplateIdsContain(self.single_source_call_templates, id);
     }
 
     /// The quantified variables of a template's scheme, in slot order.
@@ -22428,6 +22433,19 @@ pub const PromotedProcedureTemplateEntry = struct {
     pattern: CIR.Pattern.Idx,
     template: canonical.ProcedureTemplateRef,
 };
+
+fn sortedTemplateIdsContain(ids: []const canonical.CheckedProcedureTemplateId, id: canonical.CheckedProcedureTemplateId) bool {
+    const target = @intFromEnum(id);
+    var lo: usize = 0;
+    var hi = ids.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = @intFromEnum(ids[mid]);
+        if (candidate == target) return true;
+        if (candidate < target) lo = mid + 1 else hi = mid;
+    }
+    return false;
+}
 
 /// Public `CheckedProcedureTemplateTableView` declaration.
 pub const CheckedProcedureTemplateTableView = struct {
@@ -28377,6 +28395,128 @@ const CheckedErrorReachability = struct {
     }
 };
 
+/// Finds the procedure templates whose every call, in every program, comes
+/// from one site of their module's source: a template that is private (a
+/// promoted local, or a source definition the module neither exposes nor
+/// registers as a method another module could dispatch to), that no dispatch
+/// plan targets, and that the module's source references exactly once, as
+/// the function of a call. Dev builds inline such a template by this fact
+/// rather than by how many callers one program has, so the decision is the
+/// same in every program that links the code (design.md "Object cache").
+const SingleSourceCalls = struct {
+    module: TypedCIR.Module,
+    artifact_key: CheckedModuleArtifactKey,
+    exported_defs: []const CIR.Def.Idx,
+    checked_bodies: *const CheckedBodyStore,
+    templates: *CheckedProcedureTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+
+    fn publish(self: SingleSourceCalls, allocator: Allocator) Allocator.Error!void {
+        const count = self.templates.templates.items.len;
+        const eligible = try allocator.alloc(bool, count);
+        defer allocator.free(eligible);
+        @memset(eligible, false);
+        const references = try allocator.alloc(u32, count);
+        defer allocator.free(references);
+        @memset(references, 0);
+        const calls = try allocator.alloc(u32, count);
+        defer allocator.free(calls);
+        @memset(calls, 0);
+
+        // Private templates: promoted locals, and source definitions that are
+        // neither exposed nor methods.
+        const module_env = self.module.moduleEnvConst();
+        var public_defs = std.AutoHashMap(CIR.Def.Idx, void).init(allocator);
+        defer public_defs.deinit();
+        for (self.exported_defs) |def| try public_defs.put(def, {});
+        for (module_env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
+        for (self.templates.by_def) |entry| {
+            const id = self.localTemplate(entry.template) orelse continue;
+            if (!public_defs.contains(entry.def)) eligible[@intFromEnum(id)] = true;
+        }
+        for (self.templates.promoted) |entry| {
+            const id = self.localTemplate(entry.template) orelse continue;
+            eligible[@intFromEnum(id)] = true;
+        }
+        for (self.templates.templates.items, eligible) |template, *is_eligible| {
+            if (template.target != .roc or template.body != .checked_body) is_eligible.* = false;
+        }
+
+        // A dispatch target can be reached without a reference.
+        for (self.static_dispatch_plans.direct_template_refs) |plan_id| {
+            const id = self.dispatchTemplate(self.static_dispatch_plans.plans[@intFromEnum(plan_id)]) orelse continue;
+            eligible[@intFromEnum(id)] = false;
+        }
+
+        const callees = try allocator.alloc(bool, self.checked_bodies.exprCount());
+        defer allocator.free(callees);
+        @memset(callees, false);
+        for (0..self.checked_bodies.exprCount()) |raw| {
+            const expr = self.checked_bodies.expr(@enumFromInt(@as(u32, @intCast(raw))));
+            if (expr.data == .call) callees[@intFromEnum(expr.data.call.func)] = true;
+        }
+        for (self.resolved_value_refs.records) |record| {
+            const id = self.referencedTemplate(record.ref) orelse continue;
+            references[@intFromEnum(id)] += 1;
+            if (callees[@intFromEnum(record.expr)]) calls[@intFromEnum(id)] += 1;
+        }
+
+        var published = std.ArrayList(canonical.CheckedProcedureTemplateId).empty;
+        errdefer published.deinit(allocator);
+        for (eligible, references, calls, 0..) |is_eligible, reference_count, call_count, raw| {
+            if (is_eligible and reference_count == 1 and call_count == 1) {
+                try published.append(allocator, @enumFromInt(@as(u32, @intCast(raw))));
+            }
+        }
+        allocator.free(self.templates.single_source_call_templates);
+        self.templates.single_source_call_templates = try published.toOwnedSlice(allocator);
+    }
+
+    fn localTemplate(self: SingleSourceCalls, template: canonical.ProcedureTemplateRef) ?canonical.CheckedProcedureTemplateId {
+        if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template.artifact), self.artifact_key)) return null;
+        return template.template;
+    }
+
+    /// The local template a value reference names, if any. Only a reference
+    /// through this module's own top-level binding can name one.
+    fn referencedTemplate(self: SingleSourceCalls, ref: ResolvedValueRef) ?canonical.CheckedProcedureTemplateId {
+        const procedure = switch (ref) {
+            .top_level_proc, .promoted_top_level_proc => |procedure| procedure,
+            .platform_required_proc => |required| required.procedure,
+            else => return null,
+        };
+        const binding = switch (procedure.binding) {
+            .top_level => |binding| binding,
+            .platform_required => |required| ArtifactTopLevelProcedureBindingRef{ .artifact = required.artifact, .binding = required.procedure_binding },
+            .imported, .hosted => return null,
+        };
+        if (!checkedArtifactKeyEql(binding.artifact, self.artifact_key)) return null;
+        return switch (self.top_level_procedure_bindings.get(binding.binding).body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.localTemplate(template),
+                .lifted, .synthetic => null,
+            },
+            .callable_eval_template, .checked_error => null,
+        };
+    }
+
+    fn dispatchTemplate(self: SingleSourceCalls, plan: static_dispatch.StaticDispatchCallPlan) ?canonical.CheckedProcedureTemplateId {
+        const direct = switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| direct,
+            else => return null,
+        };
+        return switch (self.static_dispatch_plans.evidenceNode(direct.evidence).target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .procedure => self.localTemplate(procedure.template),
+                .low_level, .intrinsic, .graph_participating => null,
+            },
+            .local_proc, .structural => null,
+        };
+    }
+};
+
 fn checkedTypeIsContextFreeCompileTimeRoot(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
@@ -33470,8 +33610,9 @@ pub const CheckedModuleArtifact = struct {
             // record-unset label pool one more. Ordered debug entries and their
             // byte pool add two explicit relocation pointers, and the
             // checked-error template list one more. Loop mutation plans add one.
-            // Promoted local procedure templates and callable contract types add one each.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 232);
+            // Promoted local procedure templates and callable contract types add one each,
+            // and the single-source-call template list one more.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 233);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -37871,6 +38012,16 @@ pub fn publishFromTypedModule(
         .const_templates = &const_templates,
         .static_dispatch_plans = &static_dispatch_plans,
     }).publish(allocator, any_diagnostic_error, compile_time_roots.roots);
+    try (SingleSourceCalls{
+        .module = module,
+        .artifact_key = artifact_key,
+        .exported_defs = exports,
+        .checked_bodies = checked_bodies,
+        .templates = &checked_procedure_templates,
+        .resolved_value_refs = &resolved_value_refs,
+        .top_level_procedure_bindings = &top_level_procedure_bindings,
+        .static_dispatch_plans = &static_dispatch_plans,
+    }).publish(allocator);
     try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
@@ -40614,8 +40765,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xB2, 0xDC, 0x12, 0xE2, 0x5D, 0x24, 0x46, 0x52, 0x6A, 0x83, 0xBA, 0xF7, 0xC8, 0x6D, 0x5A, 0xF4,
-        0xC0, 0xC1, 0x8D, 0x6D, 0xFD, 0x84, 0xE2, 0x08, 0x2F, 0x16, 0x2B, 0x6B, 0x6D, 0x67, 0x9E, 0x84,
+        0x5E, 0x6A, 0x2A, 0x75, 0xD0, 0x84, 0xF4, 0x53, 0x96, 0x2E, 0xC4, 0x84, 0xBF, 0x29, 0xD8, 0x64,
+        0x58, 0x86, 0x82, 0x9A, 0x8D, 0xE6, 0x7E, 0x9F, 0x4A, 0xDD, 0x88, 0x34, 0x80, 0xA4, 0xA6, 0xB7,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
