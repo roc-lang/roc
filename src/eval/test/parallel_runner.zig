@@ -1745,6 +1745,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .invalid_num_literal,
         .empty_tuple,
         .ident_already_in_scope,
+        .duplicate_pattern_binder,
         .ident_not_in_scope,
         .read_uninitialized_var,
         .self_referential_definition,
