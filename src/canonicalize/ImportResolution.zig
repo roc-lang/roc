@@ -1004,8 +1004,30 @@ const Resolver = struct {
         path_text: []const u8,
     ) std.mem.Allocator.Error!void {
         const selects_type = entry.has(DeferredImportRef.Flags.selects_type);
-        if (try self.exposedTarget(available.module_env, prefix, path_text)) |target| {
-            const node = if (selects_type) target.typeDeclNode() else target.valueDefNode();
+        const main_node = try self.importMainTypeNode(available);
+        const member_prefix: Prefix = if (main_node != null) .{ .text = prefix.text, .exclusive = true } else prefix;
+        const target = try self.exposedTarget(available.module_env, member_prefix, path_text);
+        if (main_node != null and !entry.parentName().eql(Ident.Idx.NONE) and
+            entry.qualifiedName().eql(entry.parentName()))
+        {
+            const region = self.regionOf(entry);
+            if (target != null and target.?.typeDeclNode() != null) {
+                try self.env.pushDiagnostic(.{ .type_redeclared = .{
+                    .name = entry.qualifiedName(),
+                    .redeclared_region = region,
+                    .original_region = self.env.store.getRegionAt(@enumFromInt(entry.node_idx)),
+                } });
+            } else {
+                try self.env.pushDiagnostic(.{ .redundant_expose_main_type = .{
+                    .type_name = entry.qualifiedName(),
+                    .module_name = entry.moduleName(),
+                    .region = region,
+                } });
+            }
+            return;
+        }
+        if (target) |resolved| {
+            const node = if (selects_type) resolved.typeDeclNode() else resolved.valueDefNode();
             if (node != null) return;
         }
         const region = self.regionOf(entry);

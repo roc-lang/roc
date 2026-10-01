@@ -1610,6 +1610,17 @@ incorrect directory spelling, and multiple logical targets for one underlying
 file are errors. Cache keys and watch inputs consume the normalized identity
 and exact resolved path produced here.
 
+An import's `exposing` items select members inside the imported declaration,
+never its automatically bound main type. Canonicalization records each item's
+local binding identity, the import's alias identity, and the item's source
+region. Import resolution compares those identities only after it knows which
+public type declaration the import selects. An item colliding with that alias
+is an error: a missing nested member reports redundant main-type exposure; an
+existing nested type reports a duplicate type declaration. An explicit `as`
+name performs the ordinary nested-member lookup. Ordinary modules without a
+selected main declaration keep their existing member bindings. Formatting
+preserves exposing items because it does not resolve imports.
+
 The parser is a direct token-dispatch machine. Hot parser code is organized as
 grammar kernels that walk the token buffer with local token dispatch and ordinary
 lexical control flow. The hot path must not route grammar progress through a

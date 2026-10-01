@@ -396,7 +396,7 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
 }
 
 const canonicalized_module_cache_magic = "roc-can-cache-v1";
-const canonicalized_module_entry_version: u32 = 2;
+const canonicalized_module_entry_version: u32 = 3;
 const canonicalized_module_entry_version_hash: [32]u8 = computeCanonicalizedModuleEntryVersionHash();
 
 // Header: magic, composite entry-version hash (32), canonicalized-module cache

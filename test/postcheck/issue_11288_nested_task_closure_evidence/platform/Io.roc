@@ -1,4 +1,4 @@
-import Files exposing [Files]
+import Files
 
 Io := {}.{
 	new : {} -> Io

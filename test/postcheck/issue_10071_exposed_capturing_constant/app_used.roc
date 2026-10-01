@@ -1,7 +1,7 @@
 app [main] { pf: platform "./platform/main.roc" }
 
 import pf.Browser
-import pf.Elem exposing [Elem]
+import pf.Elem
 
 current = Browser.location
 

@@ -7313,7 +7313,7 @@ fn importAliased(
 
     // 9. Whether this name denotes a module at all is not a source-local
     // question, so the statement waits for import resolution's answer.
-    try self.deferImportStatement(module_import_idx, module_name, import_idx, is_package_qualified, exposed_items_span);
+    try self.deferImportStatement(module_import_idx, module_name, import_idx, is_package_qualified, exposed_items_span, alias);
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_idents so we don't report
@@ -7371,7 +7371,7 @@ fn importUnaliased(
 
     // 6. Whether this name denotes a module at all is not a source-local
     // question, so the statement waits for import resolution's answer.
-    try self.deferImportStatement(module_import_idx, module_name, import_idx, is_package_qualified, exposed_items_span);
+    try self.deferImportStatement(module_import_idx, module_name, import_idx, is_package_qualified, exposed_items_span, null);
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_idents so we don't report
@@ -7392,6 +7392,7 @@ fn deferImportStatement(
     import_stmt_idx: Statement.Idx,
     is_package_qualified: bool,
     exposed_items_span: CIR.ExposedItem.Span,
+    import_alias: ?Ident.Idx,
 ) std.mem.Allocator.Error!void {
     const ref = try self.pushDeferredRef(.{
         .import_idx = module_import_idx,
@@ -7418,11 +7419,12 @@ fn deferImportStatement(
             .path = exposed_item.name,
             .module_name = module_name,
             .item_name = exposed_item.name,
-            .parent_name = module_name,
-            .qualified_name = exposed_item.name,
+            .parent_name = import_alias orelse Ident.Idx.NONE,
+            .qualified_name = local_ident,
             .missing_module_failure = failure,
             .not_found_failure = failure,
             .selects_type = selects_type,
+            .diagnostic_region = self.env.store.getRegionAt(@enumFromInt(@intFromEnum(exposed_item_idx))),
         });
         self.setDeferredRefNode(item_ref, @intFromEnum(import_stmt_idx));
     }

@@ -1,7 +1,7 @@
-import HostValue exposing [HostValue]
-import Capability exposing [Capability]
+import HostValue
+import Capability
 import Node
-import Signal exposing [Signal]
+import Signal
 
 Browser := [].{
     Location : { path : Str, query : Str, hash : Str }
