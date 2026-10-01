@@ -329,8 +329,8 @@ pub const Context = union(enum) {
     /// Context for method type mismatch (where clause)
     /// Context for a tag the definition produced beyond its annotation
     pub const TagNotInAnnotationContext = struct {
-        /// The expression that produced the tag, or the annotated tag union
-        /// when a generated codec demanded it
+        /// The expression that produced the tag, the pattern that matched it,
+        /// or the annotated tag union when a generated codec demanded it
         region: base.Region,
         /// The first tag the definition produced beyond the annotation
         tag_name: Ident.Idx,
@@ -339,6 +339,9 @@ pub const Context = union(enum) {
         pub const Source = enum {
             /// An expression in the definition's body produced the tag.
             expression,
+            /// A pattern matched the tag on a value that an annotated
+            /// definition also produces.
+            pattern,
             /// A generated codec the definition introduced demands the tag.
             generated_codec,
         };

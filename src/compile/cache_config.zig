@@ -257,6 +257,8 @@ pub const Constants = struct {
     /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
     /// 117: Raw alias types record the source argument boundary before their
     ///      hidden polarity parameters.
+    /// 118: Checked modules drop checked-error reachability templates, and
+    ///      compile-time values and test results record checked-error crashes.
     pub const CACHE_VERSION = 118;
 };
 

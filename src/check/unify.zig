@@ -783,7 +783,7 @@ const Unifier = struct {
                 .flex, .rigid, .field_presence, .err => return false,
             }
         }
-        return false;
+        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     /// The first tag a row carries anywhere along its extension chain.
@@ -803,14 +803,14 @@ const Unifier = struct {
                 .flex, .rigid, .field_presence, .err => return null,
             }
         }
-        return null;
+        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     /// A bounded extension may close or stay open, never gain a tag. Joining
     /// a tagless row hands the bound to that row's own extension.
     fn refuseTagsIntoBoundedExt(self: *Self, ext: ResolvedVarDesc, other: Var) Error!void {
         if (ext.desc.content != .flex or !ext.desc.flags.bounded_row_ext) return;
-        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(ext.var_, tag);
+        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag);
         if (self.rowTail(other)) |tail| try self.types_store.markBoundedRowExt(tail);
     }
 
@@ -833,12 +833,12 @@ const Unifier = struct {
                 .rigid, .field_presence, .err => return null,
             }
         }
-        return null;
+        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
-    fn refuseBoundedRowTag(self: *Self, ext: Var, tag: Ident.Idx) Error!void {
+    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx) Error!void {
         if (self.scratch.bounded_row_violation == null) {
-            self.scratch.bounded_row_violation = .{ .ext = ext, .tag = tag };
+            self.scratch.bounded_row_violation = .{ .tag = tag };
         }
         return error.TypeMismatch;
     }
@@ -3185,10 +3185,10 @@ const Unifier = struct {
         // A bounded annotation row refuses unlisted tags exactly as a closed
         // row does, and for the same reason this check precedes any merge.
         if ((tags_ext == .b_extends_a or tags_ext == .both_extend) and self.rowChainIsBounded(a_tag_union)) {
-            return self.refuseBoundedRowTag(a_gathered_tags.ext, self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name);
+            return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name);
         }
         if ((tags_ext == .a_extends_b or tags_ext == .both_extend) and self.rowChainIsBounded(b_tag_union)) {
-            return self.refuseBoundedRowTag(b_gathered_tags.ext, self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name);
+            return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name);
         }
 
         // Unify tags (recursion guard in unifyGuarded prevents infinite loops,
@@ -4121,7 +4121,6 @@ pub const ChainDuplicateTag = struct {
 
 /// A tag a unification refused to add to a bounded annotation extension.
 pub const BoundedRowViolation = struct {
-    ext: Var,
     tag: Ident.Idx,
 };
 

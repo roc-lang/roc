@@ -6859,7 +6859,13 @@ use of the definition relates to one signature. Instantiation never copies the
 bound, so uses widen their own copies freely. A definition whose type
 generalizes keeps its rows bounded for the rest of checking; a weak value
 binding's row is shared by every use, so its bound ends with its right-hand
-side. `Check.auditImplicitOpenExts` then hands every extension of the
+side. A platform relates a required definition as a caller does, so that
+definition's bound ends before its requirement relation. Rows of different
+definitions can share one class, so `Check.bounded_row_marks` records each
+mark with the annotation that owns it, and ending one bound re-applies every
+mark another definition still owns. A relation refused at a match pattern is
+reported at that pattern: the matched value is also produced by a definition
+whose annotation does not list the tag. `Check.auditImplicitOpenExts` then hands every extension of the
 definition to the late audit below.
 
 A definition can still widen a row after its body is checked through a
@@ -9440,6 +9446,21 @@ Other solved-graph mutations:
   Accepted and rejected codec cases are pinned by
   `src/check/test/issue_11632_test.zig` and the polarity derivation tests in
   `src/check/test/type_checking_integration.zig`.
+- `boundAnnotationRows` / `releaseBoundedAnnotationRows` /
+  `markBoundedRowChain` / `clearBoundedRowChain` (`Store.markBoundedRowExt` /
+  `Store.clearBoundedRowExt`) and the unifier's `refuseTagsIntoBoundedExt`—
+  policy: Polarity's bounded annotation rows (above). A definition's body
+  check marks its annotation's implicitly opened extensions bounded; the flag
+  is OR-preserved by flex class merges and never copied by instantiation or
+  import. The unifier refuses a relation that would add a tag to a bounded
+  row, and a bounded flex joining a tagless row passes the mark to that row's
+  tail. Every mark is recorded with the annotation that owns it, so releasing
+  a weak binding's bound, or a platform-required definition's bound before
+  its requirement relation, clears that annotation's chains and re-applies
+  every mark still owned. Accepted and rejected cases are pinned by the
+  `check type - polarity` tests in
+  `src/check/test/type_checking_integration.zig` and by
+  `test/cli/platform_requirement_wider_error_row/`.
 - `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
   Derived Structural Codec Record-Row Closure (above). After derived codec
   dispatch reaches quiescence, a record inferred from use sites closes its

@@ -632,6 +632,11 @@ implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
 /// implicitly opened rows are bounded for the rest of that body check
 /// (`beginBoundedAnnotationRows`).
 bounding_annotation: ?CIR.Annotation.Idx = null,
+/// Every implicitly opened extension a definition's bound currently covers,
+/// with the annotation that owns the bound. The bound is a flag on the row's
+/// whole class, and rows of different definitions can share one class, so
+/// releasing one definition's bound restores every bound still owned there.
+bounded_row_marks: std.ArrayListUnmanaged(BoundedRowMark) = .empty,
 /// Scoped sink owned by the alias declaration currently being constructed.
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
@@ -3165,6 +3170,7 @@ pub fn deinit(self: *Self) void {
     self.nominal_positions.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
+    self.bounded_row_marks.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.codec_row_demands.deinit(self.gpa);
@@ -5740,12 +5746,13 @@ fn unifyOwnedRootRelation(
         .nominal_record_mismatch_role = nominal_record_mismatch_role,
     });
     if (result.isAccepted()) return result;
-    return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
+    return .{ .problem = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual)) };
 }
 
 /// Record a type mismatch between two vars under a context. Every caller that
 /// owns its own rejection reports through here, so a rejection re-decided at
-/// the settled state renders exactly like the relation-time one.
+/// the settled state renders exactly like the relation-time one. A caller
+/// reporting the relation it just ran passes `mismatchContext(ctx, actual)`.
 fn appendTypeMismatch(
     self: *Self,
     expected: Var,
@@ -5763,20 +5770,26 @@ fn appendTypeMismatch(
             .actual_var = actual,
             .actual_snapshot = actual_snapshot,
         },
-        .context = self.mismatchContext(ctx, actual),
+        .context = ctx,
         .evidence = evidence,
     } });
 }
 
-/// The context a rejected relation reports under. A relation the unifier
-/// rejected because it would add a tag to a bounded annotation row reports
-/// that tag at the expression that produced it (design.md "Polarity").
+/// The context the relation just rejected reports under. A relation the
+/// unifier rejected because it would add a tag to a bounded annotation row
+/// reports that tag at the expression that produced it (design.md
+/// "Polarity"). Reading the refusal consumes it, so it describes only the
+/// report of the relation that made it.
 fn mismatchContext(self: *Self, ctx: problem.Context, actual: Var) problem.Context {
     const violation = self.unify_scratch.bounded_row_violation orelse return ctx;
+    self.unify_scratch.bounded_row_violation = null;
+    const raw_actual = @intFromEnum(actual);
+    const actual_is_pattern = raw_actual < self.cir.store.nodes.len() and
+        isPatternNodeTag(self.cir.store.nodes.get(@enumFromInt(raw_actual)).tag);
     return .{ .tag_not_in_annotation = .{
         .region = self.getRegionAt(actual),
         .tag_name = violation.tag,
-        .source = .expression,
+        .source = if (actual_is_pattern) .pattern else .expression,
     } };
 }
 
@@ -14807,8 +14820,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
             }
         }
     }
-    if (def.annotation != null) {
+    if (def.annotation) |annotation_idx| {
         if (platform_required) |required| {
+            // The platform uses the definition as a caller does, so it may
+            // relate the definition's rows at a wider union.
+            try self.releaseBoundedAnnotationRows(annotation_idx);
             _ = try self.unifyInContext(
                 required.expected_var,
                 ModuleEnv.varFrom(def.expr),
@@ -17302,32 +17318,76 @@ fn endBoundedAnnotationRows(
 ) std.mem.Allocator.Error!void {
     self.bounding_annotation = saved;
     if (generalizes) return;
-    const annotation_idx = annotation orelse return;
-    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
-    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
-        // The bound passes along a tagless row to that row's own extension,
-        // so it ends along the same chain.
-        var current = entry.var_;
-        var remaining = self.types.len();
-        while (remaining > 0) : (remaining -= 1) {
-            try self.types.clearBoundedRowExt(current);
-            switch (self.types.resolveVar(current).desc.content) {
-                .alias => |alias| current = self.types.getAliasBackingVar(alias),
-                .structure => |flat_type| switch (flat_type) {
-                    .tag_union => |tag_union| current = tag_union.ext,
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => break,
-                },
-                .flex, .rigid, .field_presence, .err => break,
-            }
-        }
-    }
+    try self.releaseBoundedAnnotationRows(annotation orelse return);
 }
+
+/// An extension one annotation's bound covers.
+const BoundedRowMark = struct {
+    owner: CIR.Annotation.Idx,
+    ext: Var,
+};
 
 fn boundAnnotationRows(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
+    // A mark outlives any rollback scope, so it is only made outside one.
+    self.types.assertNoSavepointActive();
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
-        try self.types.markBoundedRowExt(entry.var_);
+        try self.bounded_row_marks.append(self.gpa, .{ .owner = annotation_idx, .ext = entry.var_ });
+        try self.markBoundedRowChain(entry.var_);
     }
+}
+
+/// End `owner`'s bound. Its rows' classes may also hold rows another
+/// definition still bounds, so after clearing, every remaining mark is applied
+/// again.
+fn releaseBoundedAnnotationRows(self: *Self, owner: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+    var released = false;
+    var index: usize = 0;
+    while (index < self.bounded_row_marks.items.len) {
+        const mark = self.bounded_row_marks.items[index];
+        if (mark.owner != owner) {
+            index += 1;
+            continue;
+        }
+        try self.clearBoundedRowChain(mark.ext);
+        _ = self.bounded_row_marks.swapRemove(index);
+        released = true;
+    }
+    if (!released) return;
+    for (self.bounded_row_marks.items) |mark| try self.markBoundedRowChain(mark.ext);
+}
+
+/// The bound passes along a tagless row to that row's own extension
+/// (`unify.refuseTagsIntoBoundedExt`), so it covers that whole chain.
+fn markBoundedRowChain(self: *Self, ext: Var) std.mem.Allocator.Error!void {
+    var current = ext;
+    var remaining = self.types.len();
+    while (remaining > 0) : (remaining -= 1) {
+        try self.types.markBoundedRowExt(current);
+        current = self.boundedRowChainNext(current) orelse return;
+    }
+    std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+}
+
+fn clearBoundedRowChain(self: *Self, ext: Var) std.mem.Allocator.Error!void {
+    var current = ext;
+    var remaining = self.types.len();
+    while (remaining > 0) : (remaining -= 1) {
+        try self.types.clearBoundedRowExt(current);
+        current = self.boundedRowChainNext(current) orelse return;
+    }
+    std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+}
+
+fn boundedRowChainNext(self: *Self, current: Var) ?Var {
+    return switch (self.types.resolveVar(current).desc.content) {
+        .alias => |alias| self.types.getAliasBackingVar(alias),
+        .structure => |flat_type| switch (flat_type) {
+            .tag_union => |tag_union| tag_union.ext,
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => null,
+        },
+        .flex, .rigid, .field_presence, .err => null,
+    };
 }
 
 fn auditImplicitOpenExts(
@@ -33185,7 +33245,7 @@ fn relateResultValue(
     const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
     if (!result.isProblem()) return result;
     const result_expr = self.resultValueExpr(actual_expr);
-    const problem_idx = try self.appendTypeMismatch(expected, actual, ctx);
+    const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
     self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(expected, actual);
@@ -33200,7 +33260,7 @@ fn relateResultValue(
 fn unifyReturnContribution(self: *Self, expected: Var, actual: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
     if (result.isAccepted()) return result;
-    return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
+    return .{ .problem = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual)) };
 }
 
 /// The expression that produces `expr_idx`'s value. A block whose type is its
@@ -40747,7 +40807,7 @@ fn relateDerivedDispatchOperand(
     if (!result.isProblem()) return true;
     if (!report_mismatch) return false;
     if (!try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) {
-        _ = try self.appendTypeMismatch(expected, actual, .none);
+        _ = try self.appendTypeMismatch(expected, actual, self.mismatchContext(.none, actual));
         try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
         try self.markStaticDispatchRejected(constraint);
     }

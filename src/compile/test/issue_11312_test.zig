@@ -209,8 +209,9 @@ test "issue 11312: a root reading an annotated constant whose initializer was re
 
 // repro for https://github.com/roc-lang/roc/issues/11923
 // The `parser_for` codec call reaches `Format.parse_u8` through the format's
-// method, so the expect is blocked by its type mismatch instead of being
-// lowered and evaluated.
+// method, whose type mismatch is reported once. `roc test` counts the expect
+// as a compiler error when its evaluation reaches that rejected code
+// (test/cli/issue_11923_codec_reaches_unlisted_tag.roc).
 test "issue 11923: an expect reaching an erroneous format method through a codec reports its problem once" {
     try expectRecovery(
         \\Format := [Default].{

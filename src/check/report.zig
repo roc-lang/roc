@@ -1026,6 +1026,11 @@ pub const ReportBuilder = struct {
                                 D.ident(ctx.tag_name).withAnnotation(.inline_code),
                                 D.bytes("but the annotated tag union does not list it."),
                             },
+                            .pattern => &.{
+                                D.bytes("This pattern matches the tag"),
+                                D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                                D.bytes("on a value an annotated definition produces, but that definition's annotated tag union does not list it."),
+                            },
                             .generated_codec => &.{
                                 D.bytes("This definition can produce the tag"),
                                 D.ident(ctx.tag_name).withAnnotation(.inline_code),

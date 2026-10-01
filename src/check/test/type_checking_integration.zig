@@ -9013,6 +9013,70 @@ test "check type - polarity - a definition producing an unlisted tag keeps its a
     try test_env.assertDefTypeOptions("Test.Format.parse_u8", "Format, {} -> Try(U8, [Bad])", .{ .allow_type_errors = true });
 }
 
+test "check type - polarity - an annotated local keeps its enclosing definition's bound" {
+    // `r`'s weak bound ends with its own body, but `r`'s row shares a class
+    // with the row `run` bounds, so `run`'s bound still refuses `C`.
+    const source =
+        \\run : ({} -> [A, B]) -> U64
+        \\run = |fn| {
+        \\    r : [A, B]
+        \\    r = fn({})
+        \\    n = match fn({}) {
+        \\        A => 1
+        \\        B => 2
+        \\        C => 3
+        \\    }
+        \\    match r {
+        \\        A => n
+        \\        B => n + 1
+        \\    }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a pattern matching an unlisted tag on a bounded value" {
+    // `pick` returns `r`, so `r`'s row is the row `pick`'s annotation bounds.
+    const source =
+        \\run = |flag| {
+        \\    r = if flag A else B
+        \\    pick : {} -> [A, B]
+        \\    pick = |_| r
+        \\    n = match r {
+        \\        A => 1.U64
+        \\        B => 2
+        \\        C => 3
+        \\    }
+        \\    (pick({}), n)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorMsg(
+        \\**Type Mismatch**
+        \\This pattern matches the tag `C` on a value an annotated definition produces, but that definition's annotated tag union does not list it.
+        \\```roc
+        \\        C => 3
+        \\```
+        \\        ^
+        \\
+        \\It has the type:
+        \\
+        \\    [C]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    [A, B]
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
+        \\**Hint:** Maybe `C` should be `B`?
+        \\
+        \\
+    );
+}
+
 test "check type - polarity - body may produce a subset of the annotated output union" {
     const source =
         \\parse : Str -> [Empty, Fail]
