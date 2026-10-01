@@ -25545,6 +25545,27 @@ const BodyContext = struct {
         produced: NodeId,
     };
 
+    /// Request-completion relations of the pairs one produced-value walk
+    /// enters. A pair's relation is a fact about its whole subtree, so a walk
+    /// that asks it of every container on a path would otherwise re-walk each
+    /// subtree once per enclosing container. Relations are recorded while the
+    /// first query walks the subtree and hold while the graph's
+    /// `structure_epoch` is unchanged; a relation decided by assuming a pair
+    /// still on the walked path is not recorded, since it holds only under
+    /// that assumption.
+    const CompletionMemo = struct {
+        epoch: u32,
+        relations: std.AutoHashMap(RequestCompletionPair, RequestCompletion),
+
+        fn init(allocator: Allocator) CompletionMemo {
+            return .{ .epoch = 0, .relations = std.AutoHashMap(RequestCompletionPair, RequestCompletion).init(allocator) };
+        }
+
+        fn deinit(self: *CompletionMemo) void {
+            self.relations.deinit();
+        }
+    };
+
     const ProducedValueRowKind = enum {
         record,
         tag_union,
@@ -25559,7 +25580,29 @@ const BodyContext = struct {
         defer timing_scope.end();
         var visiting = std.AutoHashMap(RequestCompletionPair, void).init(self.allocator);
         defer visiting.deinit();
-        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting)) == .completed;
+        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting, null)) == .completed;
+    }
+
+    /// `resultCompletesRequest` for a pair a produced-value walk enters,
+    /// answered from the walk's memo while the graph is unchanged.
+    fn producedPairCompletesRequest(
+        self: *BodyContext,
+        checked_root: NodeId,
+        produced_root: NodeId,
+        memo: *CompletionMemo,
+    ) Allocator.Error!bool {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
+        const pair = RequestCompletionPair{ .request = self.graph.rootNode(checked_root), .produced = self.graph.rootNode(produced_root) };
+        if (memo.epoch != self.graph.structure_epoch) {
+            memo.relations.clearRetainingCapacity();
+            memo.epoch = self.graph.structure_epoch;
+        } else if (memo.relations.get(pair)) |relation| {
+            return relation == .completed;
+        }
+        var visiting = std.AutoHashMap(RequestCompletionPair, void).init(self.allocator);
+        defer visiting.deinit();
+        return (try self.requestCompletionRelation(checked_root, produced_root, &visiting, memo)) == .completed;
     }
 
     fn relateCheckedNodeToProducedValue(
@@ -25569,7 +25612,9 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         var visiting = std.AutoHashMap(ProducedValuePair, void).init(self.allocator);
         defer visiting.deinit();
-        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting);
+        var completions = CompletionMemo.init(self.allocator);
+        defer completions.deinit();
+        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting, &completions);
     }
 
     /// One step of relating a matching container's children: a child pair
@@ -25603,6 +25648,7 @@ const BodyContext = struct {
         root_checked: NodeId,
         root_produced: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
+        completions: *CompletionMemo,
     ) Allocator.Error!NodeId {
         var frames: std.ArrayListUnmanaged(ProducedValueFrame) = .empty;
         defer frames.deinit(self.allocator);
@@ -25614,7 +25660,7 @@ const BodyContext = struct {
             _ = visiting.remove(frame.pair);
         };
 
-        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, &frames, &ops, &results);
+        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, completions, &frames, &ops, &results);
         while (true) {
             if (delivered) |node| {
                 if (frames.items.len == 0) return node;
@@ -25628,7 +25674,7 @@ const BodyContext = struct {
                 frames.items[frames.items.len - 1].next += 1;
                 switch (op) {
                     .child => |child| {
-                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, &frames, &ops, &results);
+                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, completions, &frames, &ops, &results);
                         continue;
                     },
                     .field_name => |field| failed = field.checked != field.produced,
@@ -25655,6 +25701,7 @@ const BodyContext = struct {
         checked_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
+        completions: *CompletionMemo,
         frames: *std.ArrayListUnmanaged(ProducedValueFrame),
         ops: *std.ArrayListUnmanaged(ProducedValueOp),
         results: *std.ArrayListUnmanaged(NodeId),
@@ -25693,7 +25740,7 @@ const BodyContext = struct {
             }
             return checked_node;
         }
-        if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
+        if (try self.producedPairCompletesRequest(checked_root, produced_root, completions)) return produced_node;
 
         const ops_start = ops.items.len;
         const matched: bool = matched: {
@@ -26041,18 +26088,22 @@ const BodyContext = struct {
     /// Whether a produced value's graph completes a request's. Composite
     /// relations are explicit frames over their child relations, so type
     /// depth never becomes native call depth; a pair already on the current
-    /// path is unchanged by assumption.
+    /// path is unchanged by assumption. With `memo`, every relation decided
+    /// without such an assumption is recorded for its pair.
     fn requestCompletionRelation(
         self: *BodyContext,
         request_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(RequestCompletionPair, void),
+        memo: ?*CompletionMemo,
     ) Allocator.Error!RequestCompletion {
         const Frame = struct {
             pair: RequestCompletionPair,
             ops_start: usize,
             next: usize,
             relation: RequestCompletion,
+            /// Whether a relation below this frame assumed a pair on the path.
+            assumed: bool = false,
         };
         var frames: std.ArrayListUnmanaged(Frame) = .empty;
         defer frames.deinit(self.allocator);
@@ -26064,7 +26115,11 @@ const BodyContext = struct {
 
         var delivered: RequestCompletion = undefined;
         var has_delivery = false;
-        if (try self.enterRequestCompletion(request_node, produced_node, visiting, &ops)) |relation| return relation;
+        var assumed = false;
+        if (try self.enterRequestCompletion(request_node, produced_node, visiting, &ops, &assumed)) |relation| {
+            if (memo) |m| try m.relations.put(.{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) }, relation);
+            return relation;
+        }
         try frames.append(self.allocator, .{
             .pair = .{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) },
             .ops_start = 0,
@@ -26097,7 +26152,13 @@ const BodyContext = struct {
                     const op = ops.items[frame.next];
                     frame.next += 1;
                     const ops_start = ops.items.len;
-                    if (try self.enterRequestCompletion(op.request, op.produced, visiting, &ops)) |relation| {
+                    assumed = false;
+                    if (try self.enterRequestCompletion(op.request, op.produced, visiting, &ops, &assumed)) |relation| {
+                        if (assumed) {
+                            for (frames.items) |*open| open.assumed = true;
+                        } else if (memo) |m| {
+                            try m.relations.put(.{ .request = self.graph.rootNode(op.request), .produced = self.graph.rootNode(op.produced) }, relation);
+                        }
                         delivered = relation;
                         has_delivery = true;
                     } else {
@@ -26116,6 +26177,7 @@ const BodyContext = struct {
             const done = frames.pop().?;
             _ = visiting.remove(done.pair);
             ops.shrinkRetainingCapacity(done.ops_start);
+            if (memo) |m| if (!done.assumed) try m.relations.put(done.pair, finished.?);
             if (frames.items.len == 0) return finished.?;
             delivered = finished.?;
             has_delivery = true;
@@ -26130,6 +26192,7 @@ const BodyContext = struct {
         produced_node: NodeId,
         visiting: *std.AutoHashMap(RequestCompletionPair, void),
         ops: *std.ArrayListUnmanaged(RequestCompletionOp),
+        assumed: *bool,
     ) Allocator.Error!?RequestCompletion {
         const gpa = self.allocator;
         const request_root = self.graph.rootNode(request_node);
@@ -26143,7 +26206,10 @@ const BodyContext = struct {
 
         const pair = RequestCompletionPair{ .request = request_root, .produced = produced_root };
         const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return .unchanged;
+        if (entry.found_existing) {
+            assumed.* = true;
+            return .unchanged;
+        }
         const start = ops.items.len;
         const relation: ?RequestCompletion = relation: {
             if (self.checkedPublicInspectableBacking(produced_root)) |backing| {
