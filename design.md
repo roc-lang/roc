@@ -6505,7 +6505,10 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
   declarations, and writes of the next join's parameters before its jump,
   until one body reaches a switch whose condition is a known discriminant of
   a tag built on the edge (directly or through a tag bound once), and whose
-  selected arm is a bare jump to a parameterless join;
+  selected arm is a bare jump to a parameterless join. A literal with the
+  `bool` layout is such a tag, with its value as the discriminant: lowering
+  writes a payload-free two-variant union as that byte, which is how a
+  compile-time-known `Bool.True` reaches the edge;
 - that exit join lexically encloses the edge, so the new jump is in scope;
 - nothing the exit executes, following its jumps into join bodies, reads a
   definition the threaded path skips or a parameter the edge would have
