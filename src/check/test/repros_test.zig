@@ -1386,6 +1386,24 @@ test "check - issue 11940 - effectful annotation accepts for_each helper" {
     try test_env.assertNoErrors();
 }
 
+test "check - a literal-free boundary settles its own instantiated relations before a later definition's literals" {
+    // `rec` has no literals, so its boundary skips literal defaulting. Its
+    // instantiated `Set.insert` relations must still settle at that boundary;
+    // left queued, `run`'s literal defaulting would resolve them and judge the
+    // variables they instantiate as `run`'s own unpinnable receivers.
+    const src =
+        \\rec : Set({ a : x, b : List(x) }), x -> U64
+        \\    where [x.is_eq : x, x -> Bool, x.to_hash : x, Hasher -> Hasher]
+        \\rec = |s, x| s.insert({ a: x, b: [x] }).len()
+        \\
+        \\run : {} -> U64
+        \\run = |_| Set.empty().insert("a").len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 test "check - issue 11940 - deferred method helper has independent pure and effectful uses" {
     const src =
         \\Pure := {}.{

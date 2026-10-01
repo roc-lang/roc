@@ -33732,6 +33732,13 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         break;
     }
     if (!has_candidate) {
+        // A boundary without literals still owns the instantiated relations
+        // its definition created, so they settle here, in this definition's
+        // context, exactly as the literal path's round zero settles them.
+        // Left queued, the next boundary that has literals would resolve
+        // them and attribute what they instantiate to its own definition.
+        try self.checkInstantiatedStaticDispatchConstraints(env, false, .ordinary);
+        try self.quiesceConstraints(env, false);
         try self.quiesceSchemeRequirementsAtBoundary(roots, env, &boundary_codecs);
         return;
     }
