@@ -17573,18 +17573,23 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
 /// quantified row) is left alone: closing a quantified variable after it has
 /// been instantiated would desync the scheme from its uses.
 ///
+/// A use may have widened the shared row, so the extension can resolve to a
+/// tag row; what is grounded is the row's tail (`tagRowTail`), which a
+/// widening leaves open.
+///
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
 /// reason stated there: grounding an extension empties it, and the late audit
 /// only reads extensions that still carry tags.
 fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.weak_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
-            const resolved = self.types.resolveVar(entry.var_);
+            const tail = self.tagRowTail(entry.var_);
+            const resolved = self.types.resolveVar(tail);
             if (resolved.desc.content != .flex) continue;
             if (resolved.desc.content.flex.constraints.len() != 0) continue;
             if (resolved.desc.rank == .generalized) continue;
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, entry.region);
-            _ = try self.unify(entry.var_, empty_tu_var, env);
+            _ = try self.unify(tail, empty_tu_var, env);
         }
     }
 }
