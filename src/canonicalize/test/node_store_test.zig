@@ -1292,6 +1292,21 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .control_flow_in_expect = .{
+            .region = rand_region(),
+            .kind = .try_suffix,
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .var_reassigned_in_expect = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+            .declaration_region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .mutually_recursive_type_aliases = .{
             .name = rand_ident_idx(),
             .other_name = rand_ident_idx(),

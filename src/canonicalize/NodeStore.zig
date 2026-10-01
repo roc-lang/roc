@@ -271,6 +271,8 @@ const DiagnosticNodeTag = enum {
     diag_infinite_loop_never_exits,
     diag_trailing_try_suffix,
     diag_return_outside_fn,
+    diag_control_flow_in_expect,
+    diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
@@ -830,7 +832,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 90;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 92;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -6023,6 +6025,16 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.context) } });
         },
+        .control_flow_in_expect => |r| {
+            node.tag = .diag_control_flow_in_expect;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.kind) } });
+        },
+        .var_reassigned_in_expect => |r| {
+            node.tag = .diag_var_reassigned_in_expect;
+            region = r.region;
+            node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.ident), .region_start = r.declaration_region.start.offset, .region_end = r.declaration_region.end.offset } });
+        },
         .mutually_recursive_type_aliases => |r| {
             node.tag = .diag_mutually_recursive_type_aliases;
             region = r.region;
@@ -6543,6 +6555,24 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             return CIR.Diagnostic{ .return_outside_fn = .{
                 .region = store.getRegionAt(node_idx),
                 .context = @enumFromInt(p.value),
+            } };
+        },
+        .diag_control_flow_in_expect => {
+            const p = payload.diag_single_value;
+            return CIR.Diagnostic{ .control_flow_in_expect = .{
+                .region = store.getRegionAt(node_idx),
+                .kind = @enumFromInt(p.value),
+            } };
+        },
+        .diag_var_reassigned_in_expect => {
+            const p = payload.diag_ident_with_region;
+            return CIR.Diagnostic{ .var_reassigned_in_expect = .{
+                .ident = @bitCast(p.ident),
+                .region = store.getRegionAt(node_idx),
+                .declaration_region = .{
+                    .start = .{ .offset = p.region_start },
+                    .end = .{ .offset = p.region_end },
+                },
             } };
         },
         .diag_mutually_recursive_type_aliases => {

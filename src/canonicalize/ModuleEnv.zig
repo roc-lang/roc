@@ -4187,6 +4187,108 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .control_flow_in_expect => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = switch (data.kind) {
+                .try_suffix => r: {
+                    var r = try Report.init(allocator, "Try Operator In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("?", .inline_code);
+                    try r.headline.addReflowingText(" operator cannot be used directly inside an inline ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+                .return_keyword => r: {
+                    var r = try Report.init(allocator, "Return In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("return", .inline_code);
+                    try r.headline.addReflowingText(" keyword cannot be used directly inside an ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+                .break_keyword => r: {
+                    var r = try Report.init(allocator, "Break In Expect", "", .runtime_error);
+                    try r.headline.addReflowingText("The ");
+                    try r.headline.addAnnotated("break", .inline_code);
+                    try r.headline.addReflowingText(" statement cannot exit a loop from inside an ");
+                    try r.headline.addAnnotated("expect", .inline_code);
+                    try r.headline.addReflowingText(".");
+                    break :r r;
+                },
+            };
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Optimized builds remove inline ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText("s, so an ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" must not move control flow outside of itself, or the program would behave differently in optimized builds.");
+            if (data.kind == .try_suffix) {
+                try report.document.addReflowingText(" Handle the ");
+                try report.document.addAnnotated("Err", .inline_code);
+                try report.document.addReflowingText(" case explicitly instead, for example with a ");
+                try report.document.addAnnotated("match", .inline_code);
+                try report.document.addReflowingText(".");
+            }
+
+            break :blk report;
+        },
+        .var_reassigned_in_expect => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const declaration_region_info = self.calcRegionInfo(data.declaration_region);
+
+            var report = try Report.init(allocator, "Var Reassigned In Expect", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            const owned_filename = try report.addOwnedString(filename);
+            try report.headline.addReflowingText("This ");
+            try report.headline.addAnnotated("expect", .inline_code);
+            try report.headline.addReflowingText(" reassigns ");
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(", which was declared outside of it:");
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" was declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                declaration_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Optimized builds remove inline ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText("s, so an ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" must not change variables declared outside of it, or the program would behave differently in optimized builds. Variables declared inside the ");
+            try report.document.addAnnotated("expect", .inline_code);
+            try report.document.addReflowingText(" can be reassigned freely.");
+
+            break :blk report;
+        },
         .mutually_recursive_type_aliases => |data| blk: {
             const type_name = self.getIdent(data.name);
             const other_type_name = self.getIdent(data.other_name);

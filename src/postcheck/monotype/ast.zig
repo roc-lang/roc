@@ -1100,8 +1100,6 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
-    /// Explicit consumer input: opaque until target LIR selects run/omit.
-    inline_expects_enabled: void,
     comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),

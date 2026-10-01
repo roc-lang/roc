@@ -1174,17 +1174,12 @@ propagates a failure. They never reconstruct the original source from the
 value's use site or from checked bodies. The table is diagnostic session data,
 not part of the runtime frozen value representation.
 
-A shared expect that reassigns surrounding variables uses an ordinary Monotype
-`if_` whose condition is the explicit `inline_expects_enabled` consumer input.
-Its run arm executes the expect and returns the resulting variable-state tuple;
-its omit arm returns the original state tuple. An ordinary outer tuple binding
-names the merged variables. Both arms remain visible through lifting and lambda
-solving, including callable identities stored in compile-time results. The
-consumer input is opaque to value folding until target LIR lowering supplies the
-configured run/omit Boolean. No specialization is repeated.
-Run-only lowering uses the same explicit state-result binding without the
-consumer branch; it must not lower a mutating condition as an isolated Boolean
-whose state updates are lost to the enclosing continuation.
+An expect never changes state outside its own body (see "Control Flow and Var
+Writes Inside `expect`"), so the shared Monotype lowers it as a plain `expect` statement whose
+condition is an ordinary expression. Running or omitting it changes no variable
+the continuation reads, so target LIR lowering selects run/omit per consumer
+without any merge. Checked loop mutation plans and Monotype state merges
+likewise never look inside expect bodies.
 
 Compile-time evaluation is a function of the checked program alone. Every
 command that finalizes checking evaluates the same roots, every checked
@@ -2348,10 +2343,11 @@ canonicalization mode.
 
 The three suffix callers provide only the distinct error-branch body:
 
-- `expr?` returns the original error payload from the enclosing function, or
-  emits `e_expect_err` inside a top-level `expect`.
-- `expr ? handler` transforms the error payload and then returns `Err(...)`, or
-  emits `e_expect_err` inside a top-level `expect`.
+- `expr?` returns the original error payload from the enclosing function. Directly
+  inside a top-level `expect` it emits `e_expect_err`, and directly inside an
+  inline `expect` it emits the `control_flow_in_expect` diagnostic (see below).
+- `expr ? handler` transforms the error payload and then returns `Err(...)`, with
+  the same top-level and inline `expect` handling as `expr?`.
 - `expr ?? default` uses the default expression and does not mark the match as a
   try suffix.
 
@@ -2361,6 +2357,58 @@ and scratch spans as the current hand-written paths. This keeps
 canonicalization output explicit, keeps diagnostics in `Can`, and keeps release
 builds fast: the work runs once per source suffix or type declaration, with no
 runtime cost in the compiled program.
+
+### Control Flow and Var Writes Inside `expect`
+
+An `expect` body must never move control flow outside the `expect`. Optimized
+builds omit inline `expect`s, so a body that could return from the enclosing
+function or exit an enclosing loop would make optimized and unoptimized programs
+behave differently. Top-level `expect`s follow the same rule so that the two
+kinds of `expect` agree. Directly inside an `expect` body (that is, not inside a
+lambda nested within it):
+
+- `return` is a compile error in both top-level and inline `expect`s.
+- `break` with no loop written inside the `expect` body is a compile error in
+  both top-level and inline `expect`s. A `break` inside a loop written within
+  the `expect` body is allowed, because it cannot leave the `expect`.
+- `?` (both `expr?` and `expr ? handler`) is a compile error in inline
+  `expect`s. In top-level `expect`s it emits `e_expect_err`, which fails the
+  test; there is no enclosing function, and a failing test is the intended
+  outcome.
+
+An `expect` body must also never change a `var` declared outside it.
+Reassigning such a var directly inside an `expect` body is a compile error. (Only
+inline `expect`s can see one, since `var` is not allowed at the top level.) This
+covers both `$x = ...` and structural reassignments such as `($x, y) = ...`.
+Reassigning a var declared inside the `expect` body is allowed at any depth,
+including inside loops written within it. A `for` or `match` binder that reuses
+an outer var's name is not a reassignment and is allowed.
+
+Inside a lambda nested within an `expect`, `return`, `break`, and `?` have their
+ordinary meaning, since leaving the lambda does not leave the `expect`.
+(Reassigning a var declared outside the lambda is already rejected by the
+function-boundary rule for vars.)
+
+If the language gains `continue` (or any other construct that transfers control
+out of the enclosing expression), it must be prohibited directly inside an
+`expect` body in the same way: permitted inside a loop written within the
+`expect` and inside lambdas nested within it, rejected at the `expect` body's
+outer level.
+
+`Can` enforces this during its existing traversal, with no extra pass. It keeps
+an `ExpectContext` (`none`, `top_level`, or `inline`) and an
+`expect_scope_floor` alongside `enclosing_lambda` and `loop_depth`. Entering an
+`expect` body sets the context, resets `loop_depth` to zero (loops enclosing the
+`expect` are not reachable from its body), and sets `expect_scope_floor` to the
+number of open scopes; entering a lambda body resets the context to `none`; all
+are restored on exit. Each `return`, `break`, and `?` reads that state where it
+is canonicalized and reports `control_flow_in_expect`. Each var reassignment
+already resolves its binding through the scope stack, which reports the index
+of the declaring scope; an index below `expect_scope_floor` means the var was
+declared outside the `expect`, and `Can` reports `var_reassigned_in_expect`.
+The offending node becomes a malformed node, and a rejected reassignment emits
+no `s_reassign`. Later stages never see control flow or var writes that escape
+an `expect`.
 
 ## Checked Type Equivalence Classes
 

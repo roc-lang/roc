@@ -10557,11 +10557,10 @@ pub const CheckedStrPatternStep = struct {
 };
 
 /// Ordered mutation identities for a loop body, published from checked
-/// assignments and explicit dispatch operands. Both ranges use the body's
-/// pattern-binder pool; expect-only identities are disjoint from always.
+/// assignments and explicit dispatch operands, as a range of the body's
+/// pattern-binder pool.
 pub const CheckedLoopMutations = struct {
-    always: CheckedBodyRange,
-    expect_only: CheckedBodyRange,
+    binders: CheckedBodyRange,
 };
 
 /// Dense identity in a checked body's loop mutation table.
@@ -12106,12 +12105,10 @@ const CheckedSourceNodes = struct {
 /// Publish loop mutation summaries once; nested loops reuse their published
 /// ranges instead of revisiting bodies for each enclosing loop.
 const CheckedLoopMutationPublisher = struct {
-    const Mutation = struct { binder: PatternBinderId, expect_only: bool };
-
     allocator: Allocator,
     store: *CheckedBodyStore,
     dispatch_operands: []const []const CheckedExprId,
-    scratch: std.ArrayList(Mutation) = .empty,
+    scratch: std.ArrayList(PatternBinderId) = .empty,
     work: std.ArrayList(Work) = .empty,
     positions: []usize = &.{},
 
@@ -12120,12 +12117,12 @@ const CheckedLoopMutationPublisher = struct {
         if (store.pattern_binder_id_pool.items.len == 0) {
             var empty_plan: ?LoopMutationPlanId = null;
             for (store.stored_exprs.items) |*expr| if (expr.data == .for_) {
-                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
                 expr.data.for_.mutations = empty_plan;
             };
             for (store.stored_statements.items) |*stmt| switch (stmt.data) {
                 inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| {
-                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .always = .{}, .expect_only = .{} });
+                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
                     loop_.mutations = empty_plan;
                 },
                 .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
@@ -12165,15 +12162,15 @@ const CheckedLoopMutationPublisher = struct {
     /// becomes native call depth. Children are pushed in reverse so they are
     /// collected in source order.
     const Work = union(enum) {
-        expr: struct { id: CheckedExprId, expect_only: bool },
-        statement: struct { id: CheckedStatementId, expect_only: bool },
+        expr: CheckedExprId,
+        statement: CheckedStatementId,
         /// A loop reached from an enclosing loop's body.
-        nested_loop: struct { loop: LoopRef, expect_only: bool },
+        nested_loop: LoopRef,
         /// Deduplicate and publish a loop whose mutations were collected
         /// above `scratch_start`; a nested loop then contributes its plan to
         /// the enclosing loop.
-        finish_loop: struct { loop: LoopRef, scratch_start: usize, enclosing_expect_only: ?bool },
-        append_ranges: struct { mutations: CheckedLoopMutations, expect_only: bool },
+        finish_loop: struct { loop: LoopRef, scratch_start: usize, nested: bool },
+        append_binders: CheckedLoopMutations,
     };
 
     fn loopFields(self: *@This(), ref: LoopRef) LoopFields {
@@ -12196,49 +12193,49 @@ const CheckedLoopMutationPublisher = struct {
 
     fn publishLoop(self: *@This(), ref: LoopRef) Allocator.Error!void {
         if (self.loopFields(ref).mutations.* != null) return;
-        try self.beginLoop(ref, null);
+        try self.beginLoop(ref, false);
         while (self.work.pop()) |work| switch (work) {
-            .expr => |item| try self.visitExpr(item.id, item.expect_only),
-            .statement => |item| try self.visitStatement(item.id, item.expect_only),
-            .nested_loop => |item| {
-                const fields = self.loopFields(item.loop);
+            .expr => |id| try self.visitExpr(id),
+            .statement => |id| try self.visitStatement(id),
+            .nested_loop => |loop| {
+                const fields = self.loopFields(loop);
                 if (fields.mutations.*) |published| {
-                    try self.pushLoopContribution(self.store.loopMutations(published), fields.iterable, item.expect_only);
+                    try self.pushLoopContribution(self.store.loopMutations(published), fields.iterable);
                 } else {
-                    try self.beginLoop(item.loop, item.expect_only);
+                    try self.beginLoop(loop, true);
                 }
             },
             .finish_loop => |item| {
                 const mutations = try self.finishLoop(item.loop, item.scratch_start);
-                if (item.enclosing_expect_only) |expect_only| {
-                    try self.pushLoopContribution(mutations, self.loopFields(item.loop).iterable, expect_only);
+                if (item.nested) {
+                    try self.pushLoopContribution(mutations, self.loopFields(item.loop).iterable);
                 }
             },
-            .append_ranges => |item| {
-                try self.appendRange(item.mutations.always, item.expect_only);
-                try self.appendRange(item.mutations.expect_only, true);
+            .append_binders => |mutations| {
+                const range = mutations.binders;
+                try self.scratch.appendSlice(self.allocator, self.store.pattern_binder_id_pool.items[range.start..][0..range.len]);
             },
         };
     }
 
     /// Collect an unpublished loop's condition and body into a fresh scratch
     /// region, then finish it.
-    fn beginLoop(self: *@This(), ref: LoopRef, enclosing_expect_only: ?bool) Allocator.Error!void {
+    fn beginLoop(self: *@This(), ref: LoopRef, nested: bool) Allocator.Error!void {
         if (self.positions.len == 0) {
             self.positions = try self.allocator.alloc(usize, self.store.pattern_binders.items.len);
             @memset(self.positions, std.math.maxInt(usize));
         }
         const fields = self.loopFields(ref);
-        try self.push(.{ .finish_loop = .{ .loop = ref, .scratch_start = self.scratch.items.len, .enclosing_expect_only = enclosing_expect_only } });
-        try self.push(.{ .expr = .{ .id = fields.body, .expect_only = false } });
-        if (fields.cond) |cond| try self.push(.{ .expr = .{ .id = cond, .expect_only = false } });
+        try self.push(.{ .finish_loop = .{ .loop = ref, .scratch_start = self.scratch.items.len, .nested = nested } });
+        try self.push(.{ .expr = fields.body });
+        if (fields.cond) |cond| try self.push(.{ .expr = cond });
     }
 
     /// An enclosing loop sees a nested `for` loop's iterable in its own
     /// context, then the nested loop's published mutations.
-    fn pushLoopContribution(self: *@This(), mutations: CheckedLoopMutations, iterable: ?CheckedExprId, expect_only: bool) Allocator.Error!void {
-        try self.push(.{ .append_ranges = .{ .mutations = mutations, .expect_only = expect_only } });
-        if (iterable) |expr| try self.push(.{ .expr = .{ .id = expr, .expect_only = expect_only } });
+    fn pushLoopContribution(self: *@This(), mutations: CheckedLoopMutations, iterable: ?CheckedExprId) Allocator.Error!void {
+        try self.push(.{ .append_binders = mutations });
+        if (iterable) |expr| try self.push(.{ .expr = expr });
     }
 
     fn finishLoop(self: *@This(), ref: LoopRef, start: usize) Allocator.Error!CheckedLoopMutations {
@@ -12249,39 +12246,24 @@ const CheckedLoopMutationPublisher = struct {
         var end = start;
         const count = self.scratch.items.len;
         for (start..count) |i| {
-            const mutation = self.scratch.items[i];
-            const position = &self.positions[@intFromEnum(mutation.binder)];
+            const binder = self.scratch.items[i];
+            const position = &self.positions[@intFromEnum(binder)];
             if (position.* == std.math.maxInt(usize)) {
                 position.* = end;
-                self.scratch.items[end] = mutation;
+                self.scratch.items[end] = binder;
                 end += 1;
-            } else {
-                self.scratch.items[position.*].expect_only = self.scratch.items[position.*].expect_only and mutation.expect_only;
             }
         }
-        defer for (self.scratch.items[start..end]) |mutation| {
-            self.positions[@intFromEnum(mutation.binder)] = std.math.maxInt(usize);
+        defer for (self.scratch.items[start..end]) |binder| {
+            self.positions[@intFromEnum(binder)] = std.math.maxInt(usize);
         };
-        const always_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
-        for (self.scratch.items[start..end]) |mutation| if (!mutation.expect_only) {
-            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
-        };
-        const expect_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
-        for (self.scratch.items[start..end]) |mutation| if (mutation.expect_only) {
-            try self.store.pattern_binder_id_pool.append(self.allocator, mutation.binder);
-        };
+        const binders_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
+        try self.store.pattern_binder_id_pool.appendSlice(self.allocator, self.scratch.items[start..end]);
         const result: CheckedLoopMutations = .{
-            .always = .{ .start = always_start, .len = expect_start - always_start },
-            .expect_only = .{ .start = expect_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - expect_start },
+            .binders = .{ .start = binders_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - binders_start },
         };
         self.loopFields(ref).mutations.* = try self.store.appendLoopMutations(self.allocator, result);
         return result;
-    }
-
-    fn appendRange(self: *@This(), range: CheckedBodyRange, expect_only: bool) Allocator.Error!void {
-        for (self.store.pattern_binder_id_pool.items[range.start..][0..range.len]) |binder| {
-            try self.scratch.append(self.allocator, .{ .binder = binder, .expect_only = expect_only });
-        }
     }
 
     /// Children are pushed in source order between `beginChildren` and
@@ -12294,71 +12276,74 @@ const CheckedLoopMutationPublisher = struct {
         std.mem.reverse(Work, self.work.items[start..]);
     }
 
-    fn pushExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
-        try self.push(.{ .expr = .{ .id = id, .expect_only = expect_only } });
+    fn pushExpr(self: *@This(), id: CheckedExprId) Allocator.Error!void {
+        try self.push(.{ .expr = id });
     }
 
-    fn visitExpr(self: *@This(), id: CheckedExprId, expect_only: bool) Allocator.Error!void {
+    fn visitExpr(self: *@This(), id: CheckedExprId) Allocator.Error!void {
         const data = self.store.expr(id).data;
         const children = self.beginChildren();
         defer self.endChildren(children);
         switch (data) {
-            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item, expect_only),
+            .str, .list, .tuple => |items| for (items) |item| try self.pushExpr(item),
             .match_ => |match| {
-                try self.pushExpr(match.cond, expect_only);
+                try self.pushExpr(match.cond);
                 for (match.branches) |branch| {
-                    if (branch.guard) |guard| try self.pushExpr(guard, expect_only);
-                    try self.pushExpr(branch.value, expect_only);
+                    if (branch.guard) |guard| try self.pushExpr(guard);
+                    try self.pushExpr(branch.value);
                 }
             },
             .if_ => |if_| {
                 for (if_.branches) |branch| {
-                    try self.pushExpr(branch.cond, expect_only);
-                    try self.pushExpr(branch.body, expect_only);
+                    try self.pushExpr(branch.cond);
+                    try self.pushExpr(branch.body);
                 }
-                try self.pushExpr(if_.final_else, expect_only);
+                try self.pushExpr(if_.final_else);
             },
             .call => |call| {
-                try self.pushExpr(call.func, expect_only);
-                for (call.args) |arg| try self.pushExpr(arg, expect_only);
+                try self.pushExpr(call.func);
+                for (call.args) |arg| try self.pushExpr(arg);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.pushExpr(ext, expect_only);
-                for (record.fields) |field| try self.pushExpr(field.value, expect_only);
+                if (record.ext) |ext| try self.pushExpr(ext);
+                for (record.fields) |field| try self.pushExpr(field.value);
             },
             .block => |block| {
-                for (block.statements) |statement| try self.push(.{ .statement = .{ .id = statement, .expect_only = expect_only } });
-                try self.pushExpr(block.final_expr, expect_only);
+                for (block.statements) |statement| try self.push(.{ .statement = statement });
+                try self.pushExpr(block.final_expr);
             },
-            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg, expect_only),
-            .nominal => |nominal| try self.pushExpr(nominal.backing_expr, expect_only),
+            .tag => |tag| for (tag.args) |arg| try self.pushExpr(arg),
+            .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
             .binop => |binop| {
-                try self.pushExpr(binop.lhs, expect_only);
-                try self.pushExpr(binop.rhs, expect_only);
+                try self.pushExpr(binop.lhs);
+                try self.pushExpr(binop.rhs);
             },
-            .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child, expect_only),
-            .expect => |child| try self.pushExpr(child, true),
-            .expect_err => |child| try self.pushExpr(child.expr, expect_only),
-            .field_access => |field| try self.pushExpr(field.receiver, expect_only),
+            .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child),
+            // An expect body can only reassign vars declared inside it
+            // (canonicalization rejects the rest), so it carries no state
+            // through an enclosing loop.
+            .expect => {},
+            .expect_err => |child| try self.pushExpr(child.expr),
+            .field_access => |field| try self.pushExpr(field.receiver),
             .structural_eq => |eq| {
-                try self.pushExpr(eq.lhs, expect_only);
-                try self.pushExpr(eq.rhs, expect_only);
+                try self.pushExpr(eq.lhs);
+                try self.pushExpr(eq.rhs);
             },
             .structural_hash => |hash| {
-                try self.pushExpr(hash.value, expect_only);
-                try self.pushExpr(hash.hasher, expect_only);
+                try self.pushExpr(hash.value);
+                try self.pushExpr(hash.hasher);
             },
             .interpolation => |interpolation| {
-                try self.pushExpr(interpolation.first, expect_only);
+                try self.pushExpr(interpolation.first);
                 for (interpolation.parts) |part| {
-                    try self.pushExpr(part.value, expect_only);
-                    try self.pushExpr(part.following_segment, expect_only);
+                    try self.pushExpr(part.value);
+                    try self.pushExpr(part.following_segment);
                 }
             },
-            .tuple_access => |access| try self.pushExpr(access.tuple, expect_only),
-            .return_ => |ret| try self.pushExpr(ret.expr, expect_only),
-            .for_ => try self.push(.{ .nested_loop = .{ .loop = .{ .expr = id }, .expect_only = expect_only } }),
-            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg, expect_only),
+            .tuple_access => |access| try self.pushExpr(access.tuple),
+            .return_ => |ret| try self.pushExpr(ret.expr),
+            .for_ => try self.push(.{ .nested_loop = .{ .expr = id } }),
+            .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg),
             // A lambda's body executes at invocation, not at this expression.
             .lambda,
             .closure,
@@ -12380,27 +12365,24 @@ const CheckedLoopMutationPublisher = struct {
             .break_,
             => {},
             .dispatch_call, .method_eq, .type_dispatch_call => {
-                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.pushExpr(operand, expect_only);
+                for (self.dispatch_operands[@intFromEnum(id)]) |operand| try self.pushExpr(operand);
             },
             .pending => checkedArtifactInvariant("pending expression in loop mutation publication", .{}),
         }
     }
 
-    fn visitStatement(self: *@This(), id: CheckedStatementId, expect_only: bool) Allocator.Error!void {
+    fn visitStatement(self: *@This(), id: CheckedStatementId) Allocator.Error!void {
         switch (self.store.statement(id).data) {
-            .decl => |decl| try self.pushExpr(decl.expr, expect_only),
-            .var_ => |decl| try self.pushExpr(decl.expr, expect_only),
+            .decl => |decl| try self.pushExpr(decl.expr),
+            .var_ => |decl| try self.pushExpr(decl.expr),
             .reassign => |reassign| {
-                for (reassign.reassigned_binders) |binder| try self.scratch.append(self.allocator, .{
-                    .binder = binder,
-                    .expect_only = expect_only,
-                });
-                try self.pushExpr(reassign.expr, expect_only);
+                try self.scratch.appendSlice(self.allocator, reassign.reassigned_binders);
+                try self.pushExpr(reassign.expr);
             },
-            .dbg, .expr => |child| try self.pushExpr(child, expect_only),
-            .expect => |child| try self.pushExpr(child, true),
-            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested_loop = .{ .loop = .{ .statement = id }, .expect_only = expect_only } }),
-            .return_ => |ret| try self.pushExpr(ret.expr, expect_only),
+            .dbg, .expr => |child| try self.pushExpr(child),
+            .expect => {},
+            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested_loop = .{ .statement = id } }),
+            .return_ => |ret| try self.pushExpr(ret.expr),
             .promoted_proc, .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             .pending => checkedArtifactInvariant("pending statement in loop mutation publication", .{}),
         }
@@ -16294,10 +16276,8 @@ fn verifyCheckedExprDataComplete(
         .for_ => |for_| {
             std.debug.assert(for_.plan != null);
             std.debug.assert(for_.mutations != null);
-            const mutations = checked_bodies.loopMutations(for_.mutations.?);
-            for ([_]CheckedBodyRange{ mutations.always, mutations.expect_only }) |range| {
-                std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
-            }
+            const range = checked_bodies.loopMutations(for_.mutations.?).binders;
+            std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
         },
         .field_access => |field_access| {
             if (field_access.segments.len == 0) {
@@ -37133,6 +37113,8 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_infinite_loop_never_exits,
             .diag_trailing_try_suffix,
             .diag_return_outside_fn,
+            .diag_control_flow_in_expect,
+            .diag_var_reassigned_in_expect,
             .diag_mutually_recursive_type_aliases,
             .diag_deprecated_number_suffix,
             .diag_range_op_chained,
@@ -39965,8 +39947,8 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         };
         for (plans) |plan| {
             const pool = body.patternBinderIdPool();
-            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.always.start..][0..plan.always.len]);
-            try std.testing.expectEqualSlices(PatternBinderId, &.{b1}, pool[plan.expect_only.start..][0..plan.expect_only.len]);
+            // b1 is reassigned only inside an expect, which never carries loop state.
+            try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.binders.start..][0..plan.binders.len]);
         }
         const condition_plans = [_]CheckedLoopMutations{
             body.loopMutations(body.statement(@enumFromInt(7)).data.while_.mutations.?),
@@ -39974,8 +39956,7 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         };
         for (condition_plans) |plan| {
             const pool = body.patternBinderIdPool();
-            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.always.start..][0..plan.always.len]);
-            try std.testing.expectEqual(@as(u32, 0), plan.expect_only.len);
+            try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.binders.start..][0..plan.binders.len]);
         }
     }
 }
@@ -40416,8 +40397,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xC0, 0x08, 0xC0, 0x6E, 0x82, 0xAF, 0xF8, 0x70, 0x5D, 0xE9, 0xBE, 0xEE, 0x4D, 0x96, 0xCE, 0xE1,
-        0x85, 0xB4, 0x51, 0x78, 0xA8, 0x60, 0x93, 0x56, 0x2D, 0xDF, 0x0F, 0x83, 0xC8, 0x02, 0x40, 0x60,
+        0x63, 0x53, 0x6B, 0x25, 0x03, 0x14, 0x60, 0xCE, 0x23, 0x7C, 0x0A, 0xEE, 0x5B, 0x5A, 0x54, 0xDD,
+        0xB4, 0xDD, 0x5C, 0xCD, 0x84, 0x68, 0xB1, 0x4D, 0xC0, 0x74, 0x06, 0x3A, 0x36, 0xEA, 0xB5, 0xF6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

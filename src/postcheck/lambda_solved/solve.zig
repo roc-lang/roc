@@ -794,7 +794,6 @@ const Solver = struct {
                 const children = self.lifted.exprSpan(if (expr.data == .tuple) expr.data.tuple else expr.data.tag.payloads);
                 return if (cursor < children.len) .{ .expr = .{ .id = children[cursor] } } else null;
             },
-            .inline_expects_enabled => {},
             .comptime_value => |value| {
                 return if (cursor == 0) .{ .expr = .{ .id = value.initializer, .generated_backing = true } } else null;
             },
@@ -816,7 +815,6 @@ const Solver = struct {
         switch (expr.data) {
             .local => |local| try self.unify(expected, self.localTy(local)),
             .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .comptime_exhaustiveness_failed, .@"unreachable" => {},
-            .inline_expects_enabled => {},
             .comptime_value => |value| {
                 if (cursor == 0) return .{ .expr = .{ .id = value.initializer, .expected = expected } };
             },

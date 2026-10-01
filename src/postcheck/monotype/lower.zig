@@ -13269,7 +13269,6 @@ const Builder = struct {
                 .crash,
                 .comptime_exhaustiveness_failed,
                 .def_ref,
-                .inline_expects_enabled,
                 => {},
                 .fn_ref => |fn_ref| for (program.captureOperandSpan(fn_ref.captures)) |operand| try search.push(.{ .expr = operand.value }),
                 .uninitialized_payload => |payload| return builder.localDependsOnTarget(payload.condition, search.target, search.bound()),
@@ -14979,7 +14978,6 @@ const DraftExprData = union(enum(u8)) {
     str_lit: DraftStringLiteralId,
     bytes_lit: DraftPackedListLiteral,
     static_data_candidate: DraftStaticDataCandidate,
-    inline_expects_enabled: void,
     comptime_value: struct { root: DraftComptimeValueRootId, initializer: DraftExprId },
     list: DraftSpan(DraftExprId),
     tuple: DraftSpan(DraftExprId),
@@ -18517,7 +18515,6 @@ const BodyDraftStore = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
-            .inline_expects_enabled,
             .comptime_value,
             .typed_boundary,
             .list,
@@ -18620,7 +18617,6 @@ const BodyDraftStore = struct {
                 .str_lit,
                 .bytes_lit,
                 .static_data_candidate,
-                .inline_expects_enabled,
                 .comptime_value,
                 .list,
                 .tuple,
@@ -18698,7 +18694,6 @@ const BodyDraftStore = struct {
                 .element = literal.element,
                 .product_width = literal.product_width,
             } },
-            .inline_expects_enabled => .{ .inline_expects_enabled = {} },
             .comptime_value => |value| .{ .comptime_value = .{
                 .root = try self.commitComptimeValueRoot(program, comptime_roots, value.root),
                 .initializer = ids.expr(value.initializer),
@@ -20995,7 +20990,6 @@ const BodyContext = struct {
             .uninitialized_payload,
             => null,
             .static_data_candidate => |candidate| self.exprImpossibilityProof(candidate.runtime_expr),
-            .inline_expects_enabled => null,
             .comptime_value => |candidate| self.exprImpossibilityProof(candidate.initializer),
             .@"unreachable",
             .break_,
@@ -22954,7 +22948,6 @@ const BodyContext = struct {
                 .str_lit,
                 .bytes_lit,
                 .static_data_candidate,
-                .inline_expects_enabled,
                 .comptime_value,
                 .record_update,
                 .lambda,
@@ -23187,7 +23180,6 @@ const BodyContext = struct {
                 .comptime_exhaustiveness_failed,
                 .def_ref,
                 .fn_ref,
-                .inline_expects_enabled,
                 => {},
                 .uninitialized_payload => |payload| return try ctx.localDependsOnTarget(payload.condition, search.target, &search.bound),
                 .list,
@@ -29657,16 +29649,11 @@ const BodyContext = struct {
         /// `in_place_statement_expr` before an expression statement's value
         /// lowered, restored once it has.
         saved_in_place: ?checked.CheckedExprId = null,
-        stage: enum { start, pattern_value, divergent_value, expr_value, state_only, dbg, expect, stateful_expect, loop, return_value } = .start,
+        stage: enum { start, pattern_value, divergent_value, expr_value, state_only, dbg, expect, loop, return_value } = .start,
         requested_cell: DraftTypeCell = undefined,
         /// The binders a stateful statement reassigns. Owned.
         merge_binders: []MergeBinder = &.{},
         state_cell: DraftTypeCell = undefined,
-        condition_cell: DraftTypeCell = undefined,
-        condition_state_cell: DraftTypeCell = undefined,
-        unit_cell: DraftTypeCell = undefined,
-        unit: DraftExprId = undefined,
-        omitted: ?DraftExprId = null,
     };
 
     fn releaseStatementTask(self: *BodyContext, task: *StatementTask) void {
@@ -29704,7 +29691,6 @@ const BodyContext = struct {
             } }, .none),
             .dbg => return self.finishStatement(task, .{ .dbg = input.?.exprValue() }, .none),
             .expect => return self.finishStatement(task, .{ .expect = input.?.exprValue() }, .none),
-            .stateful_expect => return self.finishStatement(task, try self.finishStatefulExpectStatement(task, input.?.exprValue()), .none),
             .loop => {
                 const lowered = input.?.statementValue();
                 self.restoreSourceLocation(&task.saved);
@@ -29828,75 +29814,8 @@ const BodyContext = struct {
     }
 
     fn beginExpectStatement(self: *BodyContext, task: *StatementTask, child: checked.CheckedExprId) Allocator.Error!LowerStep {
-        task.merge_binders = try self.stateMergeBinders(child);
-        if (task.merge_binders.len == 0) {
-            task.stage = .expect;
-            return requestLowerTask(self, .{ .expr = .{ .expr = child } });
-        }
-        const merges = task.merge_binders;
-        task.unit_cell = .{ .sealed = try self.unitType() };
-        task.condition_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child));
-        task.state_cell = try self.stateResultTypeCell(merges, task.unit_cell);
-        task.condition_state_cell = try self.stateResultTypeCell(merges, task.condition_cell);
-        task.unit = try self.addExprWithTypeCell(task.unit_cell, .unit);
-        task.omitted = if (self.builder.inline_expects == .shared)
-            try self.stateResultTupleExprAtTypeCells(task.state_cell, merges, task.unit)
-        else
-            null;
-        task.stage = .stateful_expect;
-        return branchBodyStep(self, child, .{ .state_result = .{
-            .result_cell = task.condition_cell,
-            .state_cell = task.condition_state_cell,
-            .merge_binders = merges,
-        } });
-    }
-
-    fn finishStatefulExpectStatement(self: *BodyContext, task: *StatementTask, condition_state: DraftExprId) Allocator.Error!DraftStmt {
-        const merges = task.merge_binders;
-        const unit_cell = task.unit_cell;
-        const condition_cell = task.condition_cell;
-        const state_cell = task.state_cell;
-        const condition_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
-        defer self.allocator.free(condition_pattern);
-        for (merges, 0..) |merge, i| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
-            try self.bindLocalName(local, merge.binder);
-            try self.binders.put(merge.binder, local);
-            condition_pattern[i] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
-        }
-        const condition_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), condition_cell, null);
-        condition_pattern[merges.len] = try self.addPatWithTypeCell(condition_cell, .{ .bind = condition_local });
-        const run_statements = [_]DraftStmtId{
-            try self.addStmt(.{ .let_ = .{
-                .pat = try self.addPatWithTypeCell(task.condition_state_cell, .{ .tuple = try self.addPatSpan(condition_pattern) }),
-                .value = condition_state,
-            } }),
-            try self.addStmt(.{ .expect = try self.addExprWithTypeCell(condition_cell, .{ .local = condition_local }) }),
-        };
-        const executed = try self.addExprWithTypeCell(state_cell, .{ .block = .{
-            .statements = try self.addStmtSpan(&run_statements),
-            .final_expr = try self.stateResultTupleExprAtTypeCells(state_cell, merges, task.unit),
-        } });
-        const choice = if (task.omitted) |omitted_state| blk: {
-            const enabled = try self.addExpr(.{ .ty = try self.primitiveType(.bool), .data = .inline_expects_enabled });
-            break :blk try self.addExprWithTypeCell(state_cell, .{ .if_ = .{
-                .branches = try self.addIfBranchSpan(&.{.{ .cond = enabled, .body = executed }}),
-                .final_else = omitted_state,
-            } });
-        } else executed;
-        const output_pattern = try self.allocator.alloc(DraftPatId, merges.len + 1);
-        defer self.allocator.free(output_pattern);
-        for (merges, 0..) |merge, i| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
-            try self.bindLocalName(local, merge.binder);
-            try self.binders.put(merge.binder, local);
-            output_pattern[i] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
-        }
-        output_pattern[merges.len] = try self.addPatWithTypeCell(unit_cell, .wildcard);
-        return .{ .let_ = .{
-            .pat = try self.addPatWithTypeCell(state_cell, .{ .tuple = try self.addPatSpan(output_pattern) }),
-            .value = choice,
-        } };
+        task.stage = .expect;
+        return requestLowerTask(self, .{ .expr = .{ .expr = child } });
     }
 
     /// A return's value lowered as a child task, producing the return's
@@ -61906,7 +61825,7 @@ const BodyContext = struct {
     fn prepareLoopCarries(self: *BodyContext, plan: ?checked.LoopMutationPlanId) Allocator.Error![]LoopCarry {
         var carries = std.ArrayList(LoopCarry).empty;
         errdefer carries.deinit(self.allocator);
-        for (self.loopMutationSpans(plan)) |binders| for (binders) |binder| {
+        for (self.loopMutationBinders(plan)) |binder| {
             const initial = self.binders.get(binder) orelse continue;
             const ty = self.localTypeCell(initial);
             // The loop parameter is an ordinary version of the binder's local:
@@ -61920,7 +61839,7 @@ const BodyContext = struct {
                 .param_local = param_local,
                 .ty = ty,
             });
-        };
+        }
         return try carries.toOwnedSlice(self.allocator);
     }
 
@@ -62014,9 +61933,9 @@ const BodyContext = struct {
             .unary_not,
             .dbg,
             => |child| try pending.append(gpa, .{ .expr = child }),
-            .expect => |child| if (self.builder.inline_expects.includesConditions()) {
-                try pending.append(gpa, .{ .expr = child });
-            },
+            // An expect body can only reassign vars declared inside it, so
+            // it never changes state an enclosing construct carries.
+            .expect => {},
             .expect_err => |expect_err| try pending.append(gpa, .{ .expr = expect_err.expr }),
             .field_access => |field| try pending.append(gpa, .{ .expr = field.receiver }),
             .structural_eq => |eq| {
@@ -62081,9 +62000,7 @@ const BodyContext = struct {
             .dbg,
             .expr,
             => |expr| try pending.append(gpa, .{ .expr = expr }),
-            .expect => |expr| if (self.builder.inline_expects.includesConditions()) {
-                try pending.append(gpa, .{ .expr = expr });
-            },
+            .expect => {},
             .for_ => |for_| {
                 try pending.append(gpa, .{ .expr = for_.expr });
                 try pending.append(gpa, .{ .loop_mutations = for_.mutations });
@@ -62109,18 +62026,13 @@ const BodyContext = struct {
         plan: ?checked.LoopMutationPlanId,
         out: *std.ArrayList(checked.PatternBinderId),
     ) Allocator.Error!void {
-        const spans = self.loopMutationSpans(plan);
-        for (spans) |binders| for (binders) |binder| try self.appendUniqueBinder(out, binder);
+        for (self.loopMutationBinders(plan)) |binder| try self.appendUniqueBinder(out, binder);
     }
 
-    /// The published binders a loop carries under this compilation's expect mode.
-    fn loopMutationSpans(self: *BodyContext, plan: ?checked.LoopMutationPlanId) [2][]const checked.PatternBinderId {
-        const mutations = self.view.bodies.loopMutations(plan orelse Common.invariant("checked loop omitted its mutation plan"));
-        const pool = self.view.bodies.patternBinderIdPool();
-        return .{
-            pool[mutations.always.start..][0..mutations.always.len],
-            if (self.builder.inline_expects.includesConditions()) pool[mutations.expect_only.start..][0..mutations.expect_only.len] else &.{},
-        };
+    /// The published binders a loop carries.
+    fn loopMutationBinders(self: *BodyContext, plan: ?checked.LoopMutationPlanId) []const checked.PatternBinderId {
+        const range = self.view.bodies.loopMutations(plan orelse Common.invariant("checked loop omitted its mutation plan")).binders;
+        return self.view.bodies.patternBinderIdPool()[range.start..][0..range.len];
     }
 
     fn appendUniqueBinder(
