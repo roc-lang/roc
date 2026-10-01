@@ -17,7 +17,8 @@
 //!   argument, or a call whose return borrows exactly one refcounted argument
 //! - no occurrence of the binding demands ownership: it is never an owned
 //!   call-argument position, a consumed or retained low-level argument, an
-//!   aggregate or capture operand, a `set_local` source, or an owned return
+//!   aggregate or capture operand, a `set_local` source, an owned return, or
+//!   any return of a borrowed-variant low-level result
 //! - the lender chain resolves to a leader local that is bound exactly once:
 //!   either an owned local (emission extends its lifetime past the borrow
 //!   group's last use) or a borrowed parameter (live for the whole call)
@@ -624,6 +625,7 @@ const BindingFact = union(enum) {
     fresh: LIR.LocalId,
     multi: LIR.LocalId,
     borrow: struct { target: LIR.LocalId, source: LIR.LocalId },
+    variant_borrow: struct { target: LIR.LocalId, source: LIR.LocalId },
     alias: struct { target: LIR.LocalId, source: LIR.LocalId },
     demand: LIR.LocalId,
 };
@@ -693,8 +695,9 @@ const Solver = struct {
     /// Call-graph SCC id per proc, for the tail-call rule.
     scc: []u32,
     defs: []DefKind,
-    /// Ownership demands per local. Returns never demand: a returned borrow
-    /// pays one retain at the return when the signature's return is owned.
+    /// Ownership demands per local. Returns demand only borrowed-variant
+    /// results: any other returned borrow pays one retain at the return when
+    /// the signature's return is owned.
     demand: []bool,
     /// Source local of each pure same-value alias (`.local`,
     /// `.list_reinterpret`, `.nominal`), or `no_local`. A demand on an alias
@@ -702,6 +705,12 @@ const Solver = struct {
     /// single unit, so the whole chain must be owned for the unit to move
     /// through instead of paying a retain/release pair.
     alias_source: []u32,
+    /// Lender local of each result of a low-level operation whose ordinary
+    /// form consumes the lender (`LowLevel.arcOwnedResultConsumesLender`), or
+    /// `no_local`. An owned result materializes the consuming operation, so a
+    /// demand on the result is a demand on the lender's unit. Unlike
+    /// `alias_source`, the result is a different value than its lender.
+    variant_lender: []u32,
     /// Parameter position per local when the local is a proc parameter
     /// (positions beyond the signature mask are recorded as owned-only).
     param_position: []u32,
@@ -792,6 +801,7 @@ pub fn solveWithOptions(
         .defs = &.{},
         .demand = &.{},
         .alias_source = &.{},
+        .variant_lender = &.{},
         .param_position = &.{},
         .param_proc = &.{},
         .join_param = .{},
@@ -822,6 +832,7 @@ pub fn solveWithOptions(
         allocator.free(solver.defs);
         allocator.free(solver.demand);
         allocator.free(solver.alias_source);
+        allocator.free(solver.variant_lender);
         allocator.free(solver.param_position);
         allocator.free(solver.param_proc);
         solver.join_param.deinit(allocator);
@@ -859,6 +870,7 @@ pub fn solveWithOptions(
     solver.defs = try allocator.alloc(DefKind, arc_local_count);
     solver.demand = try allocator.alloc(bool, arc_local_count);
     solver.alias_source = try allocator.alloc(u32, arc_local_count);
+    solver.variant_lender = try allocator.alloc(u32, arc_local_count);
     solver.param_position = try allocator.alloc(u32, arc_local_count);
     solver.param_proc = try allocator.alloc(u32, arc_local_count);
     solver.join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, arc_local_count);
@@ -2269,14 +2281,30 @@ fn collectAll(solver: *Solver) SolveError!void {
     @memset(solver.defs, .none);
     @memset(solver.demand, false);
     @memset(solver.alias_source, no_local);
+    @memset(solver.variant_lender, no_local);
 
     for (solver.binding_facts.items) |fact| switch (fact) {
         .fresh => |local| noteDef(solver, local, .fresh),
         .multi => |local| noteDef(solver, local, .multi),
         .borrow => |borrow| noteBorrowDef(solver, borrow.target, borrow.source),
+        .variant_borrow => |borrow| {
+            noteBorrowDef(solver, borrow.target, borrow.source);
+            noteVariantLender(solver, borrow.target, borrow.source);
+        },
         .alias => |alias| noteAlias(solver, alias.target, alias.source),
         .demand => |local| noteDemand(solver, local),
     };
+
+    // A returned borrow normally costs its caller one retain, but a returned
+    // borrowed-variant result also fixes which operation produced it: the
+    // caller cannot turn a borrowed view back into the consuming operation's
+    // in-place result. Returning such a result therefore demands it owned.
+    for (solver.proc_returns) |returns| {
+        for (returns.items) |return_local| {
+            const index = solver.domain.indexOfRaw(return_local) orelse continue;
+            if (returnsVariantResult(solver, index)) solver.demand[index] = true;
+        }
+    }
 
     // Direct-call demands are the only binding facts that depend on the
     // current optimistic parameter signatures. Tailness never changes the
@@ -2301,6 +2329,27 @@ fn collectAll(solver: *Solver) SolveError!void {
     }
 
     propagateAliasDemands(solver);
+}
+
+/// Whether the value reaching a `ret` through pure same-value aliases is the
+/// result of a borrowed-variant low-level operation.
+fn returnsVariantResult(solver: *const Solver, start: u32) bool {
+    var cursor = start;
+    while (true) {
+        if (solver.defs[cursor] == .multi) return false;
+        if (solver.variant_lender[cursor] != no_local) return true;
+        const source = solver.alias_source[cursor];
+        if (source == no_local) return false;
+        cursor = source;
+    }
+}
+
+/// The local a demand on `local` also demands: the source of a pure
+/// same-value alias, or the lender of a borrowed-variant result.
+fn demandSource(solver: *const Solver, local: u32) u32 {
+    const source = solver.alias_source[local];
+    if (source != no_local) return source;
+    return solver.variant_lender[local];
 }
 
 /// Settles the borrowed-parameter lattice from the facts collected above.
@@ -2356,8 +2405,9 @@ fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u
     try work.append(solver.allocator, proc_index * arc_sig.tracked_param_count + position);
 }
 
-/// Adds one ownership demand and propagates it through the exact pure-alias
-/// chain. Every newly demanded parameter bit is queued immediately.
+/// Adds one ownership demand and propagates it through the exact chain of
+/// pure-alias sources and borrowed-variant lenders. Every newly demanded
+/// parameter bit is queued immediately.
 fn demandAliasChain(solver: *Solver, start: u32, work: *std.ArrayList(u32)) SolveError!void {
     var cursor = start;
     while (true) {
@@ -2365,7 +2415,7 @@ fn demandAliasChain(solver: *Solver, start: u32, work: *std.ArrayList(u32)) Solv
         solver.demand[cursor] = true;
         try flipParamIfRequired(solver, cursor, work);
         if (solver.defs[cursor] == .multi) return;
-        const source = solver.alias_source[cursor];
+        const source = demandSource(solver, cursor);
         if (source == no_local) return;
         cursor = source;
     }
@@ -2521,7 +2571,9 @@ fn noteAlias(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
 /// Demands on aliases are demands on their sources, transitively: the chain
 /// shares one value whose single unit should move through the chain to the
 /// consuming occurrence rather than the alias paying a retain while the
-/// source's unit is separately released.
+/// source's unit is separately released. A demand on a borrowed-variant
+/// result is likewise a demand on its lender, whose unit the consuming
+/// operation takes.
 fn propagateAliasDemands(solver: *Solver) void {
     for (0..solver.demand.len) |start| {
         if (!solver.demand[start]) continue;
@@ -2530,7 +2582,7 @@ fn propagateAliasDemands(solver: *Solver) void {
             // A multi-bound alias names different values over time; its
             // recorded edge is not a same-value link.
             if (solver.defs[cursor] == .multi) break;
-            const source = solver.alias_source[cursor];
+            const source = demandSource(solver, cursor);
             if (source == no_local or solver.demand[source]) break;
             solver.demand[source] = true;
             cursor = source;
@@ -2565,6 +2617,16 @@ fn noteBorrowDef(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void
         return;
     };
     noteDef(solver, target, .{ .borrow_capable = source_index });
+}
+
+/// Records the lender a demand on a borrowed-variant result also demands.
+/// A result bound more than once names different values over time, so its
+/// demands stop at the result (`.multi` ends every demand chain).
+fn noteVariantLender(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
+    const index = solver.domain.indexOf(target) orelse return;
+    const source_index = solver.domain.indexOf(source) orelse
+        solveInvariant("ARC borrowed-variant lender was outside the ARC-local domain");
+    solver.variant_lender[index] = source_index;
 }
 
 fn noteDemand(solver: *Solver, local: LIR.LocalId) void {
@@ -2904,7 +2966,10 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             const borrow_source = lowLevelBorrowSource(solver.domain, rc_effect, args);
             if (rc_effect.retain_result and borrow_source != no_local) {
                 const source: LIR.LocalId = @enumFromInt(solver.domain.localAt(borrow_source));
-                try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = source } });
+                try solver.binding_facts.append(allocator, if (assign.op.arcOwnedResultConsumesLender())
+                    .{ .variant_borrow = .{ .target = assign.target, .source = source } }
+                else
+                    .{ .borrow = .{ .target = assign.target, .source = source } });
             } else {
                 try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             }

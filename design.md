@@ -15278,6 +15278,15 @@ generates constraints per statement:
   to supply that consumed unit. Every post-ARC statement therefore contains
   the exact concrete operation and effect the backend executes. The variant
   mapping is static low-level-op data, and only ARC may select from it.
+  Because an owned result selects the operation that consumes its lender,
+  an ownership demand on such a result is a demand on the lender, propagated
+  exactly like a demand through a pure same-value alias. A `ret` of such a
+  result (directly or through pure aliases) also demands it: the borrowed
+  view and the consuming operation's result are different values, so a
+  caller cannot recover the consuming operation's in-place result from a
+  borrowed return by retaining it. A procedure that returns a sublist of its
+  parameter therefore takes that parameter owned, and a caller passing a
+  dying unique list lets the consuming operation reuse the allocation.
   `Box.unbox` is the ownership-transfer case: its neutral operation is solved
   conservatively as consuming so the payload has an ownership place distinct
   from the outer allocation. Emission selects the ARC-only borrowing variant
@@ -15420,6 +15429,8 @@ Signatures solve in two phases:
 2. With parameter modes final, a return becomes borrowed when every `ret`
    in the proc returns a borrow anchored on a borrowed parameter of that
    proc, with the parameter positions recorded as the return's lenders. A
+   returned ARC-only borrowed-variant result is demanded owned in phase 1,
+   so it never qualifies. A
    final binding solve then lets callers borrow such results: a call result
    whose lender mask names exactly one refcounted argument is borrow-capable
    in the caller, anchored on that argument.
@@ -15712,7 +15723,9 @@ or above the solved signature (pointwise more owned); tail positions remain
 owned. Return positions are never
 demanded: a borrowed return that the caller needs owned pays one retain, and
 that retain costs the same whether it is emitted in the caller or inside an
-owned-returning variant, so no variant exists to save it. Specialization is
+owned-returning variant, so no variant exists to save it. Returned ARC-only
+borrowed-variant results never reach this case, because returning one already
+demands it owned in the base signature. Specialization is
 a worklist keyed by `(proc, demand vector)`:
 
 1. Every proc is emitted once at its solved signature (the base variant).
