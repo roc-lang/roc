@@ -186,6 +186,7 @@ const Solver = struct {
         list_swap,
         list_prepend,
         list_map_prepare_reuse,
+        list_prefetched,
         list_map_can_reuse,
         list_map_write_unsafe,
         dict_pseudo_seed,
@@ -1776,6 +1777,10 @@ const Solver = struct {
             },
             .list_map_prepare_reuse => {
                 expectLowLevelArity(op, args, 1);
+                try self.unify(expected, args[0]);
+            },
+            .list_prefetched => {
+                expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
             },
             .list_map_can_reuse => {

@@ -2195,6 +2195,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (ll.op) {
                 .num_plus, .num_minus, .num_times => unreachable,
+                // LIR lowering splits this into an alias and `list_prefetch`.
+                .list_prefetched => unreachable,
                 .list_sort_with => {
                     if (args.len != 2) unreachable;
                     const list_local = GuardedList.at(args, 0);
@@ -7482,6 +7484,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_capacity,
                 .list_len,
                 .list_prefetch,
+                .list_prefetched,
                 .list_map_can_reuse,
                 .list_map_cast_unsafe,
                 .list_map_extract_unsafe,

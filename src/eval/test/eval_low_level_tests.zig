@@ -8161,18 +8161,17 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
-        // A prefetch changes nothing a program can observe, at an index
-        // inside the list or far past its end.
-        .name = "low_level - prefetch is a hint that changes nothing",
+        // The prefetched list is the list it was given, at an index inside
+        // it or far past its end.
+        .name = "low_level - prefetched returns its list unchanged",
         .source =
         \\{
-        \\x = [1.U8, 2, 3]
-        \\List.prefetch(x, 1)
-        \\List.prefetch(x, 1000000)
-        \\(List.len(x), List.get(x, 1))
+        \\x = List.prefetched([1.U8, 2, 3], 1)
+        \\y = List.prefetched(x, 1000000)
+        \\(List.len(y), List.get(y, 1), y == [1, 2, 3])
         \\}
         ,
-        .expected = .{ .inspect_str = "(3, Ok(2))" },
+        .expected = .{ .inspect_str = "(3, Ok(2), True)" },
     },
     .{
         .name = "low_level - U64.to_f64 reads the source as unsigned",

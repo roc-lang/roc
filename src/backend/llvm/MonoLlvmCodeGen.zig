@@ -4650,6 +4650,8 @@ pub const MonoLlvmCodeGen = struct {
         }
         switch (op) {
             .num_plus, .num_minus, .num_times => unreachable,
+            // LIR lowering splits this into an alias and `list_prefetch`.
+            .list_prefetched => unreachable,
             .list_sort_with => try self.emitListSortWith(target, arg_locals, unique_args),
             .bool_not => {
                 const value = try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr);
