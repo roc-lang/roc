@@ -953,6 +953,8 @@ const DeferredRef = struct {
     /// Whether an exposed-item check expects a type declaration rather than a
     /// value definition.
     selects_type: bool = false,
+    /// An exposed-item check selects constructors with `Type.*`.
+    exposes_constructors: bool = false,
     /// For a receiver-extension method registration, the method this entry
     /// registers once the receiver type resolves. `qualified_name` carries the
     /// qualified name it is registered under.
@@ -995,6 +997,7 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
             (if (ref.names_import_main_type) ModuleEnv.DeferredImportRef.Flags.names_import_main_type else 0) |
             (if (ref.tag_after_import_alias) ModuleEnv.DeferredImportRef.Flags.tag_after_import_alias else 0) |
             (if (ref.selects_type) ModuleEnv.DeferredImportRef.Flags.selects_type else 0) |
+            (if (ref.exposes_constructors) ModuleEnv.DeferredImportRef.Flags.exposes_constructors else 0) |
             (if (ref.file_import_is_bytes) ModuleEnv.DeferredImportRef.Flags.file_import_is_bytes else 0) |
             (if (ref.diagnostic_region != null) ModuleEnv.DeferredImportRef.Flags.has_diagnostic_region else 0),
         .method_binding_type_node = if (ref.method_binding) |binding|
@@ -7275,7 +7278,7 @@ fn importAliased(
     const alias = self.resolveModuleAlias(alias_tok, default_alias) orelse return null;
 
     // 3. Add to scope: alias -> module_name mapping (includes is_package_qualified flag)
-    const alias_outcome = try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span, is_package_qualified);
+    const alias_outcome = try self.scopeIntroduceModuleAlias(alias, module_name, import_region, is_package_qualified);
 
     // 4. Process type imports from this module
     try self.processTypeImports(module_name, alias);
@@ -7406,8 +7409,8 @@ fn deferImportStatement(
     });
     self.setDeferredRefNode(ref, @intFromEnum(import_stmt_idx));
 
-    // Whether the module exposes each named item is the import statement's
-    // own question, reported at the statement rather than at a use.
+    // Whether the module exposes each item is the import statement's own
+    // question, reported at that item's source region rather than at a use.
     for (self.env.store.sliceExposedItems(exposed_items_span)) |exposed_item_idx| {
         const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
         const local_ident = exposed_item.alias orelse exposed_item.name;
@@ -7424,6 +7427,7 @@ fn deferImportStatement(
             .missing_module_failure = failure,
             .not_found_failure = failure,
             .selects_type = selects_type,
+            .exposes_constructors = exposed_item.is_wildcard,
             .diagnostic_region = self.env.store.getRegionAt(@enumFromInt(@intFromEnum(exposed_item_idx))),
         });
         self.setDeferredRefNode(item_ref, @intFromEnum(import_stmt_idx));
@@ -21049,14 +21053,11 @@ fn ensureParserImportAlias(self: *Self, alias_name: Ident.Idx) std.mem.Allocator
     if (!resolved_alias.eql(alias_name)) return;
 
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-    const exposed_items_start = self.env.store.scratchExposedItemTop();
-    const empty_exposes = try self.env.store.exposedItemSpanFrom(exposed_items_start);
     _ = try self.scopeIntroduceModuleAliasAt(
         entry.binding.canonical_scope,
         alias_name,
         module_name,
         import_region,
-        empty_exposes,
         import_stmt.target.origin == .package,
         false,
     );
@@ -21094,14 +21095,11 @@ fn ensureHeaderExposedModule(self: *Self, module_name: Ident.Idx) std.mem.Alloca
     );
     try self.import_indices.put(self.env.gpa, module_name, module_import_idx);
 
-    const exposed_items_start = self.env.store.scratchExposedItemTop();
-    const empty_exposes = try self.env.store.exposedItemSpanFrom(exposed_items_start);
     _ = try self.scopeIntroduceModuleAliasAt(
         0,
         module_name,
         module_name,
         region,
-        empty_exposes,
         false,
         false,
     );
@@ -21134,13 +21132,12 @@ const ImportAliasOutcome = enum {
 };
 
 /// Introduce a module alias into scope
-fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span, is_package_qualified: bool) std.mem.Allocator.Error!ImportAliasOutcome {
+fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, is_package_qualified: bool) std.mem.Allocator.Error!ImportAliasOutcome {
     return self.scopeIntroduceModuleAliasAt(
         self.currentScopeIdx(),
         alias_name,
         module_name,
         import_region,
-        exposed_items_span,
         is_package_qualified,
         true,
     );
@@ -21152,7 +21149,6 @@ fn scopeIntroduceModuleAliasAt(
     alias_name: Ident.Idx,
     module_name: Ident.Idx,
     import_region: Region,
-    exposed_items_span: CIR.ExposedItem.Span,
     is_package_qualified: bool,
     report_diagnostics: bool,
 ) std.mem.Allocator.Error!ImportAliasOutcome {
@@ -21163,20 +21159,6 @@ fn scopeIntroduceModuleAliasAt(
     // Check if this alias conflicts with an existing type binding (e.g., auto-imported type or primitive builtin)
     // Primitive builtins (Str, List, Box) are now added to type_bindings in setupAutoImportedBuiltinTypes
     if (target_scope.type_bindings.get(alias_name)) |existing_binding| {
-        // Check if any exposed items have the same name as the alias
-        // If so, skip the error here and let introduceItemsAliased handle it
-        const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
-        for (exposed_items_slice) |exposed_item_idx| {
-            const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
-            const local_ident = exposed_item.alias orelse exposed_item.name;
-
-            if (local_ident.eql(alias_name)) {
-                // The alias has the same name as an exposed item, which is
-                // the binding that decides what the name denotes.
-                return .bound;
-            }
-        }
-
         // A binding that already denotes this very module is not a shadow of
         // it: a header's `exposes` list names the module before the file's own
         // `import` statement reaches it.

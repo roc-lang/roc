@@ -31,7 +31,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package [Foo] { other: "../../other/main.roc", roc: "0.1.0" }
 ~~~
 # CANONICALIZE
 ~~~clojure

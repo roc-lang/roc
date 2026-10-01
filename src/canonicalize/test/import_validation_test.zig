@@ -488,6 +488,7 @@ test "issue 11270: exposed names are members and cannot replace the imported typ
             .{ .clause = " exposing [Shape]", .expected = .redundant_expose_main_type },
             .{ .clause = " exposing [Shape, area]", .expected = .redundant_expose_main_type },
             .{ .clause = " exposing [area]", .expected = null },
+            .{ .clause = " exposing [Shape.*]", .expected = null },
             .{ .clause = " exposing [Shape as Inner]", .expected = .type_not_exposed },
             .{ .clause = " as S exposing [area]", .expected = null },
         };

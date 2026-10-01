@@ -76,7 +76,7 @@ match items {
 	[first, ..] => first # pattern match on the first item in the list
 	[_, _, third] => third # pattern match on the third item in the list
 	[x, _, _, y] => x + y # first + fourth item in the list
-	[] => 0
+	[] => 0 # match an empty list
 }
 ~~~
 # CANONICALIZE

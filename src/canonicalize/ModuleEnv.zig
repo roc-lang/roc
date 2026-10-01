@@ -1368,6 +1368,9 @@ pub const DeferredImportRef = extern struct {
         /// none, the qualifier names the module and `Name` names one of its
         /// exposed types.
         pub const tag_after_import_alias: u8 = 1 << 6;
+        /// An exposed-item check spells `Type.*`, which retains the import
+        /// constructor lookup rules rather than binding a same-name member.
+        pub const exposes_constructors: u8 = 1 << 7;
     };
 
     pub fn has(self: @This(), flag: u8) bool {

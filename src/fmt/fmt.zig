@@ -383,6 +383,9 @@ pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = stdout.writer(io, &stdout_buffer);
     try formatAstWithOptions(parse_ast.*, &stdout_writer.interface, options);
+    if (migrates_record_assignments) {
+        try stderr.writeAll("Corrected record field separators `=` to `:` from stdin.\n");
+    }
     if (migrates_optional_field_syntax) {
         try stderr.writeAll("Migrated legacy optional field syntax `:?` to `?:` from stdin.\n");
     }
@@ -1225,7 +1228,13 @@ const Formatter = struct {
             entries.deinit(fmt.ast.gpa);
         }
         try entries.ensureTotalCapacity(fmt.ast.gpa, items.len);
-        var leading_start: usize = fmt.ast.tokens.resolve(region.start).end.offset;
+        const opening_end: usize = fmt.ast.tokens.resolve(region.start).end.offset;
+        const first_start = fmt.ast.tokens.resolve(fmt.nodeRegion(@intFromEnum(items[0])).start).start.offset;
+        const opening_text = fmt.ast.env.source[opening_end..first_start];
+        const opening_line_end = std.mem.indexOfScalar(u8, opening_text, '\n') orelse opening_text.len;
+        const has_opening_comment = std.mem.indexOfScalar(u8, opening_text[0..opening_line_end], '#') != null;
+        const opening_gap = SourceGap{ .start = opening_end, .end = if (has_opening_comment) opening_end + opening_line_end else opening_end };
+        var leading_start: usize = if (has_opening_comment and opening_line_end < opening_text.len) opening_gap.end + 1 else opening_gap.end;
         const closing_start = fmt.ast.tokens.resolve(fmt.regionClosingToken(region).?).start.offset;
         for (items, 0..) |idx, i| {
             const item_region = fmt.nodeRegion(@intFromEnum(idx));
@@ -1255,6 +1264,7 @@ const Formatter = struct {
 
         if (multiline) fmt.curr_indent += 1 else if (braces == .curly) try fmt.push(' ');
         const item_indent = fmt.curr_indent;
+        try fmt.flushSourceGap(opening_gap, .{ .after_block_open = true });
         for (entries.items, 0..) |entry, i| {
             if (multiline) {
                 try fmt.flushSourceGap(entry.leading, .{ .after_block_open = i == 0 });
@@ -1642,8 +1652,12 @@ const Formatter = struct {
     /// Item regions end at the separator or closing delimiter. A source comma
     /// has trivia on both sides; an inserted comma has only the closing gap.
     fn flushItemComments(fmt: *Formatter, end: Token.Idx) error{WriteFailed}!void {
-        try fmt.flushCommentsBeforeDiscard(end);
-        if (fmt.ast.tokens.tokenTag(end) == .Comma) try fmt.flushCommentsAfterDiscard(end);
+        if (fmt.ast.tokens.tokenTag(end) == .Comma) {
+            if (fmt.hasCommentBefore(end)) try fmt.flushCommentsBeforeDiscard(end);
+            try fmt.flushCommentsAfterDiscard(end);
+        } else {
+            try fmt.flushCommentsBeforeDiscard(end);
+        }
     }
 
     fn flushCommentsAfterDiscard(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!void {
@@ -7085,4 +7099,17 @@ test "issue 3157: multiline parenthesized call arguments outdent" {
             "))\n",
         result,
     );
+}
+
+test "issue 3486: opening delimiter comments stay at the collection boundary" {
+    const result = try moduleFmtsStable(std.testing.allocator, "module [ # Header comment.\n z, # z comment.\n a,\n]", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("module [ # Header comment.\n\ta,\n\tz, # z comment.\n]\n", result);
+}
+
+test "issue 11926: multiline string separator whitespace is emitted once" {
+    const source = "r = {\n\tx: \\\\value\n\t,\n}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(source, result);
 }

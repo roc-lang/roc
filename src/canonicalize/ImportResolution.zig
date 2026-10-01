@@ -1005,9 +1005,10 @@ const Resolver = struct {
     ) std.mem.Allocator.Error!void {
         const selects_type = entry.has(DeferredImportRef.Flags.selects_type);
         const main_node = try self.importMainTypeNode(available);
-        const member_prefix: Prefix = if (main_node != null) .{ .text = prefix.text, .exclusive = true } else prefix;
+        const exposes_constructors = entry.has(DeferredImportRef.Flags.exposes_constructors);
+        const member_prefix: Prefix = if (main_node != null and !exposes_constructors) .{ .text = prefix.text, .exclusive = true } else prefix;
         const target = try self.exposedTarget(available.module_env, member_prefix, path_text);
-        if (main_node != null and !entry.parentName().eql(Ident.Idx.NONE) and
+        if (main_node != null and !exposes_constructors and !entry.parentName().eql(Ident.Idx.NONE) and
             entry.qualifiedName().eql(entry.parentName()))
         {
             const region = self.regionOf(entry);

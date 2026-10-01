@@ -736,7 +736,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import json.Json exposing [Value, Error, Config]
+import json.Json exposing [Config, Error, Value]
 import http.Client as Http exposing [Request, Response, Status]
 import utils.Try exposing [Try]
 

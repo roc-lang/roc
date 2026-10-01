@@ -1610,8 +1610,10 @@ incorrect directory spelling, and multiple logical targets for one underlying
 file are errors. Cache keys and watch inputs consume the normalized identity
 and exact resolved path produced here.
 
-An import's `exposing` items select members inside the imported declaration,
-never its automatically bound main type. Canonicalization records each item's
+An import's named `exposing` items select members inside the imported
+declaration, never its automatically bound main type. Constructor exposure
+with `Type.*` keeps its existing lookup rules and carries an explicit wildcard
+flag to import resolution. Canonicalization records each item's
 local binding identity, the import's alias identity, and the item's source
 region. Import resolution compares those identities only after it knows which
 public type declaration the import selects. An item colliding with that alias

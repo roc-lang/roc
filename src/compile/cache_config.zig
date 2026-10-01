@@ -257,6 +257,8 @@ pub const Constants = struct {
     /// 116: Combine Stream builtin identity with derived-method dispatch metadata.
     /// 117: Raw alias types record the source argument boundary before their
     ///      hidden polarity parameters.
+    /// 118: Exposed-item import checks carry local binding identities and exact
+    ///      source regions; main-type exposures are errors.
     pub const CACHE_VERSION = 118;
 };
 
