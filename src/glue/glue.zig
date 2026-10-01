@@ -5137,14 +5137,14 @@ test "glue platform schema lock rejects field rename addition and type mutation"
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const mutations = [_]struct { path: []const u8, source: []const u8 }{
-        .{ .path = "Types.roc", .source = "import ModuleTypeInfo exposing [ModuleTypeInfo]\nimport TypeInfo exposing [TypeInfo]\nimport ProvidesEntry exposing [ProvidesEntry]\nTypes := { modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), types : List(TypeInfo), added : U64 }" },
-        .{ .path = "ProvidesEntry.roc", .source = "import ProvidedExport exposing [ProvidedExport]\nProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str, type_id : U64 }" },
-        .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature exposing [FunctionSignature]\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
+        .{ .path = "Types.roc", .source = "import ModuleTypeInfo\nimport TypeInfo\nimport ProvidesEntry\nTypes := { modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), types : List(TypeInfo), added : U64 }" },
+        .{ .path = "ProvidesEntry.roc", .source = "import ProvidedExport\nProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str, type_id : U64 }" },
+        .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
         .{ .path = "FunctionSignature.roc", .source = "FunctionSignature := { args : List(U64), result : U64 }" },
-        .{ .path = "CallableSignature.roc", .source = "import FunctionSignature exposing [FunctionSignature]\nCallableSignature := [Known(FunctionSignature), Opaque(U64)]" },
-        .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
-        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
-        .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
+        .{ .path = "CallableSignature.roc", .source = "import FunctionSignature\nCallableSignature := [Known(FunctionSignature), Opaque(U64)]" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
+        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
         .{ .path = "RecordField.roc", .source = "RecordField := { is_padding : Bool, name : Str, type_id : U32 }" },
         .{ .path = "HostRcPlan.roc", .source = "HostRcPlan := [RcNoop(U64), RcRefcounted]" },
     };

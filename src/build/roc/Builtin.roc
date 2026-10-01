@@ -3151,11 +3151,11 @@ Builtin :: [].{
 						Unknown => Unknown
 					},
 					||
-					# Once `remaining_first` is exhausted it is kept (not swapped
-					# for `range_done()`) so `make`'s inner-iterator argument keeps
-					# a single monomorphic type for the whole chain. An exhausted
-					# iterator reports length 0 and its `next` stays `Done`, so this
-					# is length- and result-equivalent.
+						# Once `remaining_first` is exhausted it is kept (not swapped
+						# for `range_done()`) so `make`'s inner-iterator argument keeps
+						# a single monomorphic type for the whole chain. An exhausted
+						# iterator reports length 0 and its `next` stays `Done`, so this
+						# is length- and result-equivalent.
 						match Iter.next(remaining_first) {
 							Done =>
 								match Iter.next(remaining_second) {
@@ -19214,14 +19214,14 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-					# Compare the index against a limit rather than subtracting from it.
-					# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-					# reads repeatedly hoists them out and keeps just the one comparison of
-					# `start` against a precomputed bound. Subtracting the other way round --
-					# `len - start < 16` -- reads the same but depends on `start`, so all of it
-					# stays in the loop.
-					#
-					# Wrapping is safe because the first check has already ruled out `len < 16`.
+						# Compare the index against a limit rather than subtracting from it.
+						# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+						# reads repeatedly hoists them out and keeps just the one comparison of
+						# `start` against a precomputed bound. Subtracting the other way round --
+						# `len - start < 16` -- reads the same but depends on `start`, so all of it
+						# stays in the loop.
+						#
+						# Wrapping is safe because the first check has already ruled out `len < 16`.
 						if len >= 16 and start <= len.minus_wrap(16) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {

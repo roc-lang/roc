@@ -703,18 +703,14 @@ const Unifier = struct {
     /// large as its largest variant, and most frames are small.
     fn pushWorkFrame(self: *Self, frame: WorkFrame) std.mem.Allocator.Error!void {
         const slot = try self.scratch.unify_work_stack.items.addOne(self.scratch.gpa);
-        switch (frame) {
-            inline else => |payload, tag| slot.* = @unionInit(WorkFrame, @tagName(tag), payload),
-        }
+        writeActiveVariant(WorkFrame, slot, frame);
     }
 
     /// Pop the top frame into `out`, reading only its active variant.
     fn popWorkFrame(self: *Self, out: *WorkFrame) bool {
         const items = &self.scratch.unify_work_stack.items.items;
         if (items.len == 0) return false;
-        switch (items.*[items.len - 1]) {
-            inline else => |payload, tag| out.* = @unionInit(WorkFrame, @tagName(tag), payload),
-        }
+        writeActiveVariant(WorkFrame, out, items.*[items.len - 1]);
         items.len -= 1;
         return true;
     }
@@ -4947,4 +4943,16 @@ pub fn structurallyIncompatiblePair(
         },
         .alias, .field_presence, .err => return .uninspectable,
     }
+}
+
+/// Write `src` into `dest`, copying only the active variant's payload.
+fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
+    const tag = std.meta.activeTag(src);
+    inline for (@typeInfo(U).@"union".fields) |field| {
+        if (tag == @field(std.meta.Tag(U), field.name)) {
+            dest.* = @unionInit(U, field.name, @field(src, field.name));
+            return;
+        }
+    }
+    unreachable;
 }

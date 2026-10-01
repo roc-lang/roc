@@ -504,12 +504,18 @@ test "issue 11270: exposed names are members and cannot replace the imported typ
     try checkMainNameExposure("module [Shape]\nShape : {}", "import Shape exposing [Shape]\nmain : Shape\nmain = {}", "Shape", null);
 }
 
+const MainNameExposureTestError = std.mem.Allocator.Error || error{
+    UnexpectedDiagnostic,
+    TestExpectedEqual,
+    TestUnexpectedResult,
+};
+
 fn checkMainNameExposure(
     shape_source: []const u8,
     importer_source: []const u8,
     import_name: []const u8,
     expected: ?std.meta.Tag(@import("../Diagnostic.zig").Diagnostic),
-) !void {
+) MainNameExposureTestError!void {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();

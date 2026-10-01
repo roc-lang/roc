@@ -1313,7 +1313,7 @@ pub const tests = [_]TestCase{
             ,
         }},
         .source =
-        \\import Acct exposing [Acct]
+        \\import Acct
         \\
         \\describe : Acct -> U32
         \\describe = |{ id, balance }| id.to_u32() * 1000 + balance
@@ -2440,7 +2440,7 @@ pub const tests = [_]TestCase{
             ,
         }},
         .source =
-        \\import Effect exposing [Effect]
+        \\import Effect
         \\
         \\Model : { query : Str, items : List(Str) }
         \\

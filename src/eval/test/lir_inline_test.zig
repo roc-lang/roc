@@ -11979,7 +11979,7 @@ test "issue 11291 boxy imported nominal forwarding executes with exact backing d
         \\to_list_help = |{ items }| items
     ;
     const source =
-        \\import Container exposing [Container]
+        \\import Container
         \\value : Container(U8)
         \\value = { items: Str.to_utf8("xyz") }
         \\main = Container.to_list(value)

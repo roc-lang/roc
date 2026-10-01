@@ -23725,9 +23725,7 @@ const BodyContext = struct {
                     // A frame is written in place, one variant's worth.
                     pushed.cursor = 0;
                     pushed.index = 0;
-                    switch (called) {
-                        inline else => |payload, tag| pushed.task = @unionInit(InstTask, @tagName(tag), payload),
-                    }
+                    writeActiveVariant(InstTask, &pushed.task, called);
                     input = null;
                     // Most checked types are already instantiated in their
                     // scope; such a request answers without keeping a frame.
@@ -69636,4 +69634,16 @@ test "issue 11737: independent call selects its own nested contract without copy
     const vector = [_]SpecEvidence{.{ .target = &primary }};
     const normalized = try normalizeMaterializedEvidence(failing.allocator(), &vector);
     try std.testing.expect(normalized.ptr == &vector);
+}
+
+/// Write `src` into `dest`, copying only the active variant's payload.
+fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
+    const tag = std.meta.activeTag(src);
+    inline for (@typeInfo(U).@"union".fields) |field| {
+        if (tag == @field(std.meta.Tag(U), field.name)) {
+            dest.* = @unionInit(U, field.name, @field(src, field.name));
+            return;
+        }
+    }
+    unreachable;
 }

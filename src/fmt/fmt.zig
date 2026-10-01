@@ -1270,8 +1270,8 @@ const Formatter = struct {
         const opening_end: usize = fmt.ast.tokens.resolve(region.start).end.offset;
         const first_start = fmt.ast.tokens.resolve(fmt.nodeRegion(@intFromEnum(items[0])).start).start.offset;
         const opening_text = fmt.ast.env.source[opening_end..first_start];
-        const opening_line_end = std.mem.indexOfScalar(u8, opening_text, '\n') orelse opening_text.len;
-        const has_opening_comment = std.mem.indexOfScalar(u8, opening_text[0..opening_line_end], '#') != null;
+        const opening_line_end = std.mem.findScalar(u8, opening_text, '\n') orelse opening_text.len;
+        const has_opening_comment = std.mem.findScalar(u8, opening_text[0..opening_line_end], '#') != null;
         const opening_gap = SourceGap{ .start = opening_end, .end = if (has_opening_comment) opening_end + opening_line_end else opening_end };
         var leading_start: usize = if (has_opening_comment and opening_line_end < opening_text.len) opening_gap.end + 1 else opening_gap.end;
         const closing_start = fmt.ast.tokens.resolve(fmt.regionClosingToken(region).?).start.offset;
@@ -1287,8 +1287,8 @@ const Formatter = struct {
             else
                 closing_start;
             const gap = fmt.ast.env.source[gap_start..gap_end];
-            const line_end = std.mem.indexOfScalar(u8, gap, '\n') orelse gap.len;
-            const inline_end = if (std.mem.indexOfScalar(u8, gap[0..line_end], '#') != null) gap_start + line_end else gap_start;
+            const line_end = std.mem.findScalar(u8, gap, '\n') orelse gap.len;
+            const inline_end = if (std.mem.findScalar(u8, gap[0..line_end], '#') != null) gap_start + line_end else gap_start;
             entries.appendAssumeCapacity(.{
                 .idx = idx,
                 .name = try fmt.orderedName(T, idx),
@@ -1318,7 +1318,7 @@ const Formatter = struct {
                     try fmt.pushIndent();
                 }
                 if (trailing_comma or i + 1 < entries.items.len) try fmt.push(',');
-                if (std.mem.indexOfScalar(u8, fmt.ast.env.source[entry.before_separator.start..entry.before_separator.end], '#') != null) {
+                if (std.mem.findScalar(u8, fmt.ast.env.source[entry.before_separator.start..entry.before_separator.end], '#') != null) {
                     try fmt.flushSourceGap(entry.before_separator, .{});
                 }
                 try fmt.flushSourceGap(entry.trailing, .{});
@@ -7331,9 +7331,9 @@ test "issue 11930: first doc comments follow opening delimiters directly" {
     for (inputs) |input| {
         const result = try moduleFmtsStable(std.testing.allocator, input, false);
         defer std.testing.allocator.free(result);
-        const first_comment = std.mem.indexOf(u8, result, "\t##").?;
+        const first_comment = std.mem.find(u8, result, "\t##").?;
         try std.testing.expect(first_comment >= 2 and result[first_comment - 2] != '\n');
-        try std.testing.expect(std.mem.indexOf(u8, result, "\n\t##") != null);
+        try std.testing.expect(std.mem.find(u8, result, "\n\t##") != null);
     }
 }
 
@@ -7347,8 +7347,8 @@ test "issue 11929: continuation comments share their expression indentation" {
     for (inputs) |input| {
         const result = try moduleFmtsStable(std.testing.allocator, input, false);
         defer std.testing.allocator.free(result);
-        try std.testing.expect(std.mem.indexOf(u8, result, "\n# Continuation.") == null);
-        try std.testing.expect(std.mem.indexOf(u8, result, "\n\t# Continuation.") != null);
+        try std.testing.expect(std.mem.find(u8, result, "\n# Continuation.") == null);
+        try std.testing.expect(std.mem.find(u8, result, "\n\t# Continuation.") != null);
     }
 }
 
@@ -7432,10 +7432,10 @@ test "issue 3486: platform requires packages and host symbols sort by name" {
     const input = "platform \"p\" requires { z : Str -> Str, a : Str -> Str } exposes [] packages { z: \"z\", a: \"a\" } provides { \"z\": z, \"a\": a } hosted { \"z\": z!, \"a\": a! } targets: {}";
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
     defer std.testing.allocator.free(result);
-    try std.testing.expect(std.mem.indexOf(u8, result, "a : Str").? < std.mem.indexOf(u8, result, "z : Str").?);
-    try std.testing.expect(std.mem.indexOf(u8, result, "packages { a:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "provides { \"a\": a, \"z\": z }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "hosted { \"a\": a!, \"z\": z! }") != null);
+    try std.testing.expect(std.mem.find(u8, result, "a : Str").? < std.mem.find(u8, result, "z : Str").?);
+    try std.testing.expect(std.mem.find(u8, result, "packages { a:") != null);
+    try std.testing.expect(std.mem.find(u8, result, "provides { \"a\": a, \"z\": z }") != null);
+    try std.testing.expect(std.mem.find(u8, result, "hosted { \"a\": a!, \"z\": z! }") != null);
 }
 
 test "issue 3157: multiline parenthesized call arguments outdent" {
