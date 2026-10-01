@@ -506,6 +506,15 @@ binding_scheme_classification_stack: std.ArrayListUnmanaged(Var) = .empty,
 /// evidence of discharge: an unrelated error can poison the receiver, and a
 /// relation may be concrete before its place in the worklist is visited.
 settled_static_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// The context each waiting obligation was last re-deferred in (see
+/// `waitingObligationUnchanged`).
+waiting_obligations: std.AutoHashMapUnmanaged(WaitingObligationKey, WaitingObligationContext) = .empty,
+/// Whether the running drain is the numeric-default pass.
+draining_numeric_default_pass: bool = false,
+/// Advances whenever a waiting obligation's context can change: a group frame
+/// is pushed or popped, or a top-level def's checking status changes. It
+/// starts at one so a fresh obligation's zero never matches.
+waiting_context_epoch: u32 = 1,
 /// The failure expression of the queued entry that first consumed each
 /// relation in `settled_static_dispatch_constraint_fns`: the use a failure of
 /// that relation was attributed to.
@@ -1065,6 +1074,7 @@ fn topLevelPattern(self: *const Self, pattern: CIR.Pattern.Idx) ?DefProcessed {
 
 fn setTopLevelPattern(self: *Self, pattern: CIR.Pattern.Idx, value: DefProcessed) void {
     self.top_level_ptrns.items[nodeSlot(pattern)] = value;
+    self.waiting_context_epoch +%= 1;
 }
 
 fn patternIsTopLevelDef(self: *const Self, pattern: CIR.Pattern.Idx) bool {
@@ -3231,6 +3241,7 @@ pub fn deinit(self: *Self) void {
     self.binding_scheme_classification_seen.deinit(self.gpa);
     self.binding_scheme_classification_stack.deinit(self.gpa);
     self.settled_static_dispatch_constraint_fns.deinit(self.gpa);
+    self.waiting_obligations.deinit(self.gpa);
     self.settled_static_dispatch_failure_exprs.deinit(self.gpa);
     self.scheme_requirement_candidates.deinit(self.gpa);
     var scheme_candidate_indices = self.scheme_requirement_candidate_indices_by_owner.valueIterator();
@@ -15949,17 +15960,20 @@ fn activeGroupFrameIndex(self: *const Self, group_index: u32) ?usize {
 }
 
 fn pushGroupFrame(self: *Self, frame: GroupFrame) std.mem.Allocator.Error!void {
+    self.waiting_context_epoch +%= 1;
     try self.group_frame_positions.ensureUnusedCapacity(self.gpa, 1);
     try self.group_stack.append(self.gpa, frame);
     self.group_frame_positions.putAssumeCapacityNoClobber(frame.group_index, self.group_stack.items.len - 1);
 }
 
 fn popGroupFrame(self: *Self) void {
+    self.waiting_context_epoch +%= 1;
     const frame = self.group_stack.pop().?;
     _ = self.group_frame_positions.remove(frame.group_index);
 }
 
 fn clearGroupFrames(self: *Self) void {
+    self.waiting_context_epoch +%= 1;
     self.group_stack.shrinkRetainingCapacity(0);
     self.group_frame_positions.clearRetainingCapacity();
 }
@@ -16167,6 +16181,64 @@ fn enqueueDeferredDispatchConstraint(
 /// `currentGroupIndex` leaves the obligation unstamped—both correct there:
 /// module finalization and REPL/expect checking have no in-flight def whose
 /// boundary could own the resolution.
+/// Everything a waiting obligation's re-deferral depends on besides its own
+/// receiver and constraints: its target's checking status and the frames that
+/// own, adopt, or check it. While this is unchanged, a later pass would look
+/// the target up again only to re-defer the obligation exactly as before.
+const WaitingObligationContext = struct {
+    target_def: CIR.Def.Idx,
+    status: HasProcessed,
+    owner_frame: ?usize,
+    /// Whether the frame processing the obligation adopts it.
+    adopted: bool,
+    /// Whether the target's frame is checking inside the owner's.
+    target_inside_owner: bool,
+    /// The outermost frame, which pins and links an orphaned obligation.
+    outermost_group: ?u32,
+    is_numeric_default_pass: bool,
+};
+
+const WaitingObligationKey = struct {
+    constraints_start: u32,
+    owner_group: ?u32,
+};
+
+fn waitingObligationKey(deferred: DeferredConstraintCheck) WaitingObligationKey {
+    return .{ .constraints_start = @intFromEnum(deferred.constraints.start), .owner_group = deferred.owner_group_index };
+}
+
+fn waitingObligationContext(
+    self: *const Self,
+    target_def_idx: CIR.Def.Idx,
+    owner_group_index: ?u32,
+    is_numeric_default_pass: bool,
+) ?WaitingObligationContext {
+    const target = self.topLevelPattern(self.cir.store.getDef(target_def_idx).pattern) orelse return null;
+    const owner_frame = self.activeDeferredDispatchObligationOwnerFrame(owner_group_index);
+    return .{
+        .target_def = target_def_idx,
+        .status = target.status,
+        .owner_frame = owner_frame,
+        .adopted = self.currentFrameAdoptsDeferredDispatchObligation(owner_frame),
+        .target_inside_owner = self.dispatchTargetFrameNestedInsideObligationOwner(target_def_idx, owner_group_index),
+        .outermost_group = if (self.group_stack.items.len == 0) null else self.group_stack.items[0].group_index,
+        .is_numeric_default_pass = is_numeric_default_pass,
+    };
+}
+
+/// Whether a waiting obligation would be re-deferred exactly as on its last
+/// pass. Each finished expression drains the deferred queue, so an obligation
+/// waiting on a target several groups away is otherwise looked up again after
+/// every expression checked in between.
+fn waitingObligationUnchanged(self: *Self, deferred: DeferredConstraintCheck, is_numeric_default_pass: bool) bool {
+    const key = waitingObligationKey(deferred);
+    const last = self.waiting_obligations.get(key) orelse return false;
+    const current = self.waitingObligationContext(last.target_def, deferred.owner_group_index, is_numeric_default_pass) orelse return false;
+    if (std.meta.eql(last, current)) return true;
+    _ = self.waiting_obligations.remove(key);
+    return false;
+}
+
 fn deferDispatchObligationForUncheckedTarget(
     self: *Self,
     deferred_constraint: DeferredConstraintCheck,
@@ -16194,6 +16266,12 @@ fn deferDispatchObligationForUncheckedTarget(
         const link_frame = owner_frame orelse if (self.group_stack.items.len > 0) @as(usize, 0) else null;
         if (link_frame) |frame_idx| {
             try self.addTryRowFixpointLink(self.group_stack.items[frame_idx].try_row_fixpoint, constraint.fn_var);
+        }
+    }
+    if (!self.commit_probe_active) {
+        if (self.waitingObligationContext(target_def_idx, waiting_constraint.owner_group_index, self.draining_numeric_default_pass)) |context| {
+            try self.waiting_obligations.put(self.gpa, waitingObligationKey(waiting_constraint), context);
+            waiting_constraint.waiting_epoch = self.waiting_context_epoch;
         }
     }
     try self.scratch_deferred_static_dispatch_constraints.append(waiting_constraint);
@@ -20569,6 +20647,10 @@ const Expected = struct {
         /// Borrow a field of `var_` until a construction actually consumes
         /// this context. Value lookups never need to project the base row.
         record_field: ?Ident.Idx = null,
+        /// `var_` is a cell of an enclosing construction's own projected
+        /// shape: already a fresh shape copy, which the construction relates
+        /// to its value anyway, so a nested construction projects it directly.
+        projected_cell: bool = false,
     };
 
     fn none() Expected {
@@ -21688,15 +21770,35 @@ fn projectExpectedAggregateShape(
     var committed = false;
     defer if (!committed) commit_probe.rollback();
 
+    if (aggregate_type.projected_cell and aggregate_type.record_field == null) {
+        // Copying an already-copied shape would give an isomorphic fresh copy
+        // of every level beneath it, once per level of nesting. A sibling may
+        // have related an error into a shared cell, which is diagnostic
+        // recovery exactly as for a copied source.
+        if (self.types.mayContainErrorState()) {
+            self.var_set.clearRetainingCapacity();
+            const cell_contains_error = try self.varContainsError(aggregate_type.var_, &self.var_set);
+            self.var_set.clearRetainingCapacity();
+            if (cell_contains_error) return false;
+        }
+        const result = try commit_probe.unifyInContext(aggregate_type.var_, shape_var, aggregate_type.context);
+        if (!result.isEstablished()) return false;
+        committed = true;
+        commit_probe.commit();
+        return true;
+    }
     const source = if (aggregate_type.record_field) |name|
         try self.borrowExpectedRecordField(aggregate_type.var_, name, env) orelse return false
     else
         aggregate_type.var_;
-    // Error context is diagnostic recovery, never construction evidence.
-    self.var_set.clearRetainingCapacity();
-    const expected_contains_error = try self.varContainsError(source, &self.var_set);
-    self.var_set.clearRetainingCapacity();
-    if (expected_contains_error) return false;
+    // Error context is diagnostic recovery, never construction evidence. No
+    // variable can reach the error state before one has been written.
+    if (self.types.mayContainErrorState()) {
+        self.var_set.clearRetainingCapacity();
+        const expected_contains_error = try self.varContainsError(source, &self.var_set);
+        self.var_set.clearRetainingCapacity();
+        if (expected_contains_error) return false;
+    }
 
     const expected_copy = try self.copyExpectedShape(source, env);
     const result = try commit_probe.unifyInContext(expected_copy, shape_var, aggregate_type.context);
@@ -23094,6 +23196,7 @@ fn listElemExpected(frame: *const ExprCheckFrame, seed_elem_var: ?Var) Expected 
         child_expected.withContextualType(.{
             .var_ = seed,
             .context = frame.nested_expected.aggregateType().?.context,
+            .projected_cell = true,
         })
     else
         child_expected;
@@ -23240,6 +23343,7 @@ fn aggregateChildExpected(frame: *const ExprCheckFrame, projected: ?Var.SafeList
         child_expected.withContextualType(.{
             .var_ = types.getVarAt(projected_vars, @intCast(index)),
             .context = frame.nested_expected.aggregateType().?.context,
+            .projected_cell = true,
         })
     else
         child_expected;
@@ -37200,6 +37304,15 @@ fn resumeStaticDispatchDrain(
     defer trace.end();
 
     const is_numeric_default_pass = drain.is_numeric_default_pass;
+    const numeric_pass_before = self.draining_numeric_default_pass;
+    self.draining_numeric_default_pass = is_numeric_default_pass;
+    defer self.draining_numeric_default_pass = numeric_pass_before;
+    // A waiting obligation re-deferred in one kind of pass says nothing about
+    // the other kind.
+    if (is_numeric_default_pass) self.waiting_context_epoch +%= 1;
+    defer if (is_numeric_default_pass) {
+        self.waiting_context_epoch +%= 1;
+    };
     const start = drain.start;
     const scratch_deferred_top = drain.scratch_top;
     errdefer self.abandonStaticDispatchDrain(drain);
@@ -37224,6 +37337,15 @@ fn resumeStaticDispatchDrain(
         // both attribute a failure to the same use, the entry that reaches
         // the drain second finds it already consumed.
         if (self.deferredRelationsAlreadySettled(deferred_constraint)) continue;
+        if (deferred_constraint.waiting_on_target_def and !self.commit_probe_active and
+            (deferred_constraint.waiting_epoch == self.waiting_context_epoch or
+                self.waitingObligationUnchanged(deferred_constraint, is_numeric_default_pass)))
+        {
+            var retained = deferred_constraint;
+            retained.waiting_epoch = self.waiting_context_epoch;
+            try self.scratch_deferred_static_dispatch_constraints.append(retained);
+            continue;
+        }
         const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
         const failure_expr = explicitDeferredConstraintFailureExpr(deferred_constraint);
         const deferred_children_start = env.deferred_static_dispatch_constraints.items.items.len;

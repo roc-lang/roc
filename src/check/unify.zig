@@ -3967,6 +3967,10 @@ pub const DeferredConstraintCheck = struct {
     /// leave the obligation waiting (Invariant D). The checker stamps this
     /// where an obligation enters the deferred queue.
     owner_group_index: ?u32 = null,
+    /// For an obligation waiting on its target, the checker's waiting-context
+    /// epoch when it was last re-deferred; while the epoch is unchanged the
+    /// obligation would be re-deferred exactly as before.
+    waiting_epoch: u32 = 0,
 
     pub const SafeList = MkSafeList(@This());
 };

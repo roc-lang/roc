@@ -12076,13 +12076,14 @@ from its argument evidence, a hosted `Try` request may be widened by the
 expected result's error labels, and an expected cell carrying generated-private
 evidence becomes the request's own result.
 
-A dispatch expression's result type is likewise instantiated once per lowered
-body for every result-type read that carries no expected cell: an enclosing
-dispatch's or call's operand evidence, a request relation's operand evidence,
-and the expression's own representation selection all read the same result
-node. A result carrying generated-private evidence depends on the read and is
-never shared. Without this, every level of a nested dispatch chain would
-re-instantiate every dispatch beneath it.
+Every expression's result type is likewise instantiated once per lowered body
+for every result-type read that carries no expected cell: an enclosing
+dispatch's or call's operand evidence, a request relation's operand evidence, a
+field or tuple access's receiver type, and a dispatch's own representation
+selection all read the same result node. A result carrying generated-private
+evidence depends on the read and is never shared. Without this, every level of
+a nested dispatch chain or access chain would re-instantiate every expression
+beneath it.
 
 The `.lss` strategy consumes these plans while producing Monotype IR. The
 `.boxy` strategy does not enter Monotype; it consumes the same checked dispatch

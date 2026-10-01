@@ -1654,6 +1654,10 @@ pub const InstGraph = struct {
     /// maps re-allocate and re-zero sparse chunks across the node/type ID
     /// domains on every walk; pooled maps keep their chunks.
     node_set_pool: collections.DenseMapPool(NodeId, void),
+    /// Class roots whose inhabitance proof can no longer hold: a `may` scan
+    /// answered false for them without assuming anything about a node on its
+    /// path. That answer is permanent (see `mayFinalizeAsUninhabited`).
+    never_uninhabited: std.AutoHashMapUnmanaged(NodeId, void) = .empty,
     /// Transitive unification scratch, one entry per call in flight; a union
     /// can unify again while an outer call is still draining.
     unify_scratch_pool: std.ArrayList(UnifyScratch) = .empty,
@@ -1874,6 +1878,7 @@ pub const InstGraph = struct {
         self.snapshot_free_types.deinit();
         self.resolved_roots.deinit();
         self.node_set_pool.deinit();
+        self.never_uninhabited.deinit(self.allocator);
         for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
         self.unify_scratch_pool.deinit(self.allocator);
         self.row_label_right_generation.deinit(self.allocator);
@@ -2958,6 +2963,7 @@ pub const InstGraph = struct {
         visiting: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         var scan = GraphUninhabitedScan{ .graph = self, .mode = .may, .visiting = visiting };
+        defer scan.entered_hits.deinit(self.allocator);
         return try GraphUninhabitedScan.Eval.run(self.allocator, &scan, raw_node);
     }
 
@@ -7040,13 +7046,21 @@ const GraphUninhabitedScan = struct {
         finalizes,
     },
     visiting: *collections.DenseMap(NodeId, void),
+    /// Re-entries of a node already on the path, whose answer was assumed.
+    path_hits: usize = 0,
+    /// `path_hits` when each node on the path was entered, innermost last.
+    entered_hits: std.ArrayList(usize) = .empty,
 
     const Eval = AnyAll.Evaluation(NodeId, GraphUninhabitedScan);
 
     pub fn enter(scan: *GraphUninhabitedScan, items: Eval.Items, raw_node: NodeId) Allocator.Error!Eval.Expansion {
         const graph = scan.graph;
         const node = graph.find(raw_node);
-        if (scan.visiting.contains(node)) return .{ .value = false };
+        if (scan.visiting.contains(node)) {
+            scan.path_hits += 1;
+            return .{ .value = false };
+        }
+        if (scan.mode == .may and graph.never_uninhabited.contains(node)) return .{ .value = false };
         const expansion: Eval.Expansion = switch (graph.nodes.items[@intFromEnum(node)]) {
             .redirect => unreachable,
             .empty_tag_union => .{ .value = true },
@@ -7098,12 +7112,19 @@ const GraphUninhabitedScan = struct {
             .zst,
             => .{ .value = false },
         };
-        if (expansion == .group) try scan.visiting.put(node, {});
+        if (expansion == .group) {
+            try scan.visiting.put(node, {});
+            if (scan.mode == .may) try scan.entered_hits.append(graph.allocator, scan.path_hits);
+        }
         return expansion;
     }
 
-    pub fn exit(scan: *GraphUninhabitedScan, raw_node: NodeId, _: ?bool) std.mem.Allocator.Error!void {
-        _ = scan.visiting.remove(scan.graph.find(raw_node));
+    pub fn exit(scan: *GraphUninhabitedScan, raw_node: NodeId, result: ?bool) std.mem.Allocator.Error!void {
+        const node = scan.graph.find(raw_node);
+        _ = scan.visiting.remove(node);
+        if (scan.mode != .may) return;
+        const hits_before = scan.entered_hits.pop() orelse return;
+        if (result == false and scan.path_hits == hits_before) try scan.graph.never_uninhabited.put(scan.graph.allocator, node, {});
     }
 };
 

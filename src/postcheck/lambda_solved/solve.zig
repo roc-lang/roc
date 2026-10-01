@@ -150,6 +150,8 @@ const Solver = struct {
     /// solver's lifetime and a row unified against many small rows is
     /// indexed once.
     tag_row_indexes: std.AutoHashMapUnmanaged(u32, TagRowIndex),
+    /// Member positions by lambda per stored lambda set (`lambdaSetIndex`).
+    lambda_set_indexes: std.AutoHashMapUnmanaged(u32, LambdaSetIndex),
     /// The clone context every callable-free lazy leaf expands in. A
     /// callable-free Monotype has no lambda-set state to solve, so all of its
     /// uses can read one clone; giving each use its own would make every
@@ -285,6 +287,7 @@ const Solver = struct {
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
             .tag_row_indexes = .empty,
+            .lambda_set_indexes = .empty,
             .shared_leaf_context = null,
             .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
             .mono_uninhabited = collections.DenseMap(MonoType.TypeId, bool).init(allocator),
@@ -296,6 +299,9 @@ const Solver = struct {
         var row_indexes = self.tag_row_indexes.valueIterator();
         while (row_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
         self.tag_row_indexes.deinit(self.allocator);
+        var set_indexes = self.lambda_set_indexes.valueIterator();
+        while (set_indexes.next()) |set_index| set_index.by_lambda.deinit(self.allocator);
+        self.lambda_set_indexes.deinit(self.allocator);
         self.clone_map_pool.deinit();
         self.mono_set_pool.deinit();
         self.mono_uninhabited.deinit();
@@ -2853,27 +2859,73 @@ const Solver = struct {
         rhs: Type.Span,
         capture_pairs: *std.ArrayList(DeferredSpanPair),
     ) Allocator.Error!Type.Span {
-        var members = std.ArrayList(Type.FnMember).empty;
-        defer members.deinit(self.allocator);
-
-        for (0..lhs.count()) |i| try members.append(self.allocator, self.program.types.memberItem(lhs, i));
+        const left_index = try self.lambdaSetIndex(lhs);
+        var added = std.ArrayList(Type.FnMember).empty;
+        defer added.deinit(self.allocator);
+        var added_positions = std.AutoHashMapUnmanaged(Common.Symbol, usize).empty;
+        defer added_positions.deinit(self.allocator);
 
         for (0..rhs.count()) |i| {
             const right_member = self.program.types.memberItem(rhs, i);
-            var found = false;
-            for (members.items) |left_member| {
-                if (left_member.lambda != right_member.lambda) continue;
-                found = true;
-                try capture_pairs.append(self.allocator, .{
-                    .lhs = left_member.captures,
-                    .rhs = right_member.captures,
-                });
-                break;
-            }
-            if (!found) try members.append(self.allocator, right_member);
+            const left_captures = if (left_index.position(right_member.lambda, lhs)) |position|
+                self.program.types.memberItem(lhs, position).captures
+            else if (added_positions.get(right_member.lambda)) |position|
+                added.items[position].captures
+            else {
+                try added_positions.put(self.allocator, right_member.lambda, added.items.len);
+                try added.append(self.allocator, right_member);
+                continue;
+            };
+            try capture_pairs.append(self.allocator, .{
+                .lhs = left_captures,
+                .rhs = right_member.captures,
+            });
         }
 
+        // Every right member already sits in the left set: the merge is the
+        // left set itself.
+        if (added.items.len == 0) return lhs;
+        // A left set at the end of the member pool grows in place. Every set
+        // sharing its start stays a prefix of it, so they all read the same
+        // stored members.
+        if (lhs.count() != 0 and @as(usize, lhs.start) + lhs.count() == self.program.types.fn_members.items.len) {
+            _ = try self.program.types.addMembers(added.items);
+            return .{ .start = lhs.start, .len = @intCast(lhs.count() + added.items.len) };
+        }
+        var members = try std.ArrayList(Type.FnMember).initCapacity(self.allocator, lhs.count() + added.items.len);
+        defer members.deinit(self.allocator);
+        for (0..lhs.count()) |i| members.appendAssumeCapacity(self.program.types.memberItem(lhs, i));
+        members.appendSliceAssumeCapacity(added.items);
         return try self.program.types.addMembers(members.items);
+    }
+
+    const LambdaSetIndex = struct {
+        len: u32,
+        by_lambda: std.AutoHashMapUnmanaged(Common.Symbol, usize),
+
+        /// The first position of `lambda` within `span`, a set sharing this
+        /// index's start.
+        fn position(index: *const LambdaSetIndex, lambda: Common.Symbol, span: Type.Span) ?usize {
+            const found = index.by_lambda.get(lambda) orelse return null;
+            return if (found < span.count()) found else null;
+        }
+    };
+
+    /// Member positions by lambda per stored lambda set, keyed by the set's
+    /// start. Stored members never change and a set grows only in place, so
+    /// every set sharing a start is a prefix of the longest, and one index
+    /// serves them all, extended as the longest grows.
+    fn lambdaSetIndex(self: *Solver, span: Type.Span) Allocator.Error!*const LambdaSetIndex {
+        const gop = try self.lambda_set_indexes.getOrPut(self.allocator, span.start);
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = 0, .by_lambda = .empty };
+        if (gop.value_ptr.len >= span.len) return gop.value_ptr;
+        try gop.value_ptr.by_lambda.ensureUnusedCapacity(self.allocator, span.len - gop.value_ptr.len);
+        for (gop.value_ptr.len..span.count()) |index| {
+            const entry = gop.value_ptr.by_lambda.getOrPutAssumeCapacity(self.program.types.memberItem(span, index).lambda);
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+        gop.value_ptr.len = span.len;
+        return gop.value_ptr;
     }
 
     fn solvedTypeDigest(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.names.TypeDigest {
@@ -3723,6 +3775,7 @@ fn solvedTypeDigestTestSolver(
     solver.lifted.names = name_store;
     solver.solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator);
     solver.tag_row_indexes = .empty;
+    solver.lambda_set_indexes = .empty;
     solver.shared_leaf_context = null;
     return solver;
 }

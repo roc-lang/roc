@@ -6753,8 +6753,11 @@ const Inserter = struct {
         // bitset scratch belongs to the durable allocator, unlike SCC work.
         var scratch = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
         var edge_scratch = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
-        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
-        var node_work = std.ArrayList(usize).empty;
+        const LiveWord = struct { node: usize, word: u32, mask: u64 };
+        var word_work = std.ArrayList(LiveWord).empty;
+        // Words members gained while flooding, by `node << 32 | word`, written
+        // to their persistent sets once the component is solved.
+        var gained_words = std.AutoHashMapUnmanaged(u64, u64).empty;
 
         var scc_cursor = scc_offsets.items.len - 1;
         while (scc_cursor > 0) {
@@ -6775,23 +6778,73 @@ const Inserter = struct {
                 _ = try self.recomputeLivenessNode(graph, members[0], &scratch, &edge_scratch);
                 continue;
             }
+            // The members' sets are the least fixpoint of the equation
+            // `recomputeLivenessNode` evaluates. Evaluate each member once, then
+            // flood each word of newly exposed bits to every predecessor that
+            // passes them: bits reach a predecessor that does not define them
+            // along an edge that does not kill them. A member's word changes
+            // only when it gains bits, where re-evaluating whole members would
+            // revisit each one once per loop around it.
+            for (members) |node_index| graph.nodes.items[node_index].exposed.unsetAll();
             for (members) |node_index| {
-                if (in_work.isSet(node_index)) continue;
-                in_work.set(node_index);
-                try node_work.append(allocator, node_index);
+                _ = try self.recomputeLivenessNode(graph, node_index, &scratch, &edge_scratch);
+                var words = graph.nodes.items[node_index].exposed.words.iterator();
+                while (words.next()) |entry| try word_work.append(allocator, .{ .node = node_index, .word = entry.index, .mask = entry.value });
             }
-            while (node_work.pop()) |node_index| {
-                in_work.unset(node_index);
-                if (!try self.recomputeLivenessNode(graph, node_index, &scratch, &edge_scratch)) continue;
-                const pred_start = graph.predecessor_starts[node_index];
-                const pred_end = graph.predecessor_starts[node_index + 1];
+            while (word_work.pop()) |live| {
+                const pred_start = graph.predecessor_starts[live.node];
+                const pred_end = graph.predecessor_starts[live.node + 1];
                 for (graph.predecessors[pred_start..pred_end]) |predecessor| {
-                    if (scc_of[predecessor] != scc_cursor or in_work.isSet(predecessor)) continue;
-                    in_work.set(predecessor);
-                    try node_work.append(allocator, predecessor);
+                    if (scc_of[predecessor] != scc_cursor) continue;
+                    const pred_node = &graph.nodes.items[predecessor];
+                    const slot = try gained_words.getOrPut(allocator, (@as(u64, predecessor) << 32) | live.word);
+                    if (!slot.found_existing) slot.value_ptr.* = pred_node.exposed.words.get(live.word);
+                    var gained = live.mask & ~slot.value_ptr.*;
+                    if (gained == 0) continue;
+                    gained &= ~self.livenessDefinedWordMask(pred_node.*, live.word);
+                    gained &= livenessEdgeWordMask(graph, pred_node.*, live.node, live.word);
+                    if (gained == 0) continue;
+                    slot.value_ptr.* |= gained;
+                    try word_work.append(allocator, .{ .node = predecessor, .word = live.word, .mask = gained });
                 }
             }
+            var gained_entries = gained_words.iterator();
+            while (gained_entries.next()) |entry| {
+                const node_index: usize = @intCast(entry.key_ptr.* >> 32);
+                const word: u32 = @truncate(entry.key_ptr.*);
+                const exposed = &graph.nodes.items[node_index].exposed;
+                if (exposed.words.get(word) != entry.value_ptr.*) try exposed.words.put(word, entry.value_ptr.*);
+            }
+            gained_words.clearRetainingCapacity();
         }
+    }
+
+    /// The bits of word `word` that `node`'s definition removes from what
+    /// reaches it.
+    fn livenessDefinedWordMask(self: *const Inserter, node: ReadBeforeRebindNode, word: u32) u64 {
+        const local = node.def orelse return 0;
+        var mask: u64 = 0;
+        for ([_]?usize{ self.rawLivenessBitOf(local), self.groupBitOf(local), self.valueUseBitOf(local) }) |maybe_bit| {
+            const bit = maybe_bit orelse continue;
+            if (bit / 64 == word) mask |= @as(u64, 1) << @intCast(bit % 64);
+        }
+        return mask;
+    }
+
+    /// The bits of word `word` that some edge from `node` to `successor`
+    /// carries: each edge carries every bit it does not kill.
+    fn livenessEdgeWordMask(graph: *const ReadBeforeRebindGraph, node: ReadBeforeRebindNode, successor: usize, word: u32) u64 {
+        const successors = graph.successors.items[node.successor_start..][0..node.successor_len];
+        var passes: u64 = 0;
+        for (successors, 0..) |candidate, offset| {
+            if (candidate != successor) continue;
+            var edge: u64 = std.math.maxInt(u64);
+            for (node.edge_kills) |kill| {
+                if (kill.successor_offset == offset and kill.bit / 64 == word) edge &= ~(@as(u64, 1) << @intCast(kill.bit % 64));
+            }
+            passes |= edge;
+        }
+        return passes;
     }
 
     fn recomputeLivenessNode(
