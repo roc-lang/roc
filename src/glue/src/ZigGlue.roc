@@ -1,26 +1,26 @@
 ## A glue script for generating a Zig source file with hosted function bindings.
 app [make_glue] { pf: platform glue }
 
-import pf.Types exposing [Types]
-import pf.File exposing [File]
-import pf.RecordFieldInfo exposing [RecordFieldInfo]
-import pf.TypeRepr exposing [TypeRepr]
-import pf.AbiLayout exposing [AbiLayout]
-import pf.AbiFieldLayout exposing [AbiFieldLayout]
-import pf.AbiTagLayout exposing [AbiTagLayout]
-import pf.AbiWidth exposing [AbiWidth]
-import pf.ArgShape exposing [ArgShape]
-import pf.GlueInput exposing [GlueInput]
-import pf.HostedFunctionInfo exposing [HostedFunctionInfo]
-import pf.TypeNamePlan exposing [TypeNamePlan]
-import pf.RecordRepr exposing [RecordRepr]
-import pf.TagUnionRepr exposing [TagUnionRepr]
-import pf.RecordField exposing [RecordField]
-import pf.TagVariant exposing [TagVariant]
-import pf.ProvidesEntry exposing [ProvidesEntry]
-import pf.TypeInfo exposing [TypeInfo]
-import pf.TypeTable exposing [TypeTable]
-import pf.RocName exposing [RocName]
+import pf.Types
+import pf.File
+import pf.RecordFieldInfo
+import pf.TypeRepr
+import pf.AbiLayout
+import pf.AbiFieldLayout
+import pf.AbiTagLayout
+import pf.AbiWidth
+import pf.ArgShape
+import pf.GlueInput
+import pf.HostedFunctionInfo
+import pf.TypeNamePlan
+import pf.RecordRepr
+import pf.TagUnionRepr
+import pf.RecordField
+import pf.TagVariant
+import pf.ProvidesEntry
+import pf.TypeInfo
+import pf.TypeTable
+import pf.RocName
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {

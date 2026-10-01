@@ -1,4 +1,4 @@
-import Catalog exposing [Catalog]
+import Catalog
 
 CatalogHost := [].{
     roundtrip! : Catalog.CatalogUnion => Catalog.CatalogUnion

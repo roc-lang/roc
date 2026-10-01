@@ -13,7 +13,7 @@ platform ""
         arm64mac: { inputs: ["libhost.a", app] },
     }
 
-import V exposing [V]
+import V
 
 main_for_host : {} -> Box(Model)
 main_for_host = |{}| {

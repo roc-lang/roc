@@ -270,7 +270,9 @@ pub const Constants = struct {
     /// 121: Raw alias types record the source argument boundary before their
     ///      hidden polarity parameters.
     /// 122: Builtin indices include the Encoding and Json declarations.
-    pub const CACHE_VERSION = 122;
+    /// 123: Exposed-item import checks carry local binding identities and exact
+    ///      source regions; main-type exposures are errors.
+    pub const CACHE_VERSION = 123;
 };
 
 /// Configuration for the Roc cache system.

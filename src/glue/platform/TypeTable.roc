@@ -1,10 +1,10 @@
-import AbiLayout exposing [AbiLayout]
-import HostRcPlan exposing [HostRcPlan]
-import RecordField exposing [RecordField]
-import RecordRepr exposing [RecordRepr]
-import TagUnionRepr exposing [TagUnionRepr]
-import TypeInfo exposing [TypeInfo]
-import TypeRepr exposing [TypeRepr]
+import AbiLayout
+import HostRcPlan
+import RecordField
+import RecordRepr
+import TagUnionRepr
+import TypeInfo
+import TypeRepr
 
 ## Typed view over compiler-emitted glue type metadata.
 ##

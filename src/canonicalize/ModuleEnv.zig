@@ -1331,9 +1331,11 @@ pub const DeferredImportRef = extern struct {
     module_name_bits: u32,
     /// The leaf name this reference selects, for diagnostics.
     item_name_bits: u32,
-    /// The parent name nested-path diagnostics report.
+    /// The parent name nested-path diagnostics report. For exposed-item checks,
+    /// the source import alias, or NONE for an unaliased import.
     parent_name_bits: u32,
-    /// The whole qualified spelling, for diagnostics that name it.
+    /// The whole qualified spelling, for diagnostics that name it. For
+    /// exposed-item checks, the local name bound by the item.
     qualified_name_bits: u32,
     /// For `receiver_method_owner`, the method registration this entry
     /// completes; unused otherwise.
@@ -1389,6 +1391,9 @@ pub const DeferredImportRef = extern struct {
         /// none, the qualifier names the module and `Name` names one of its
         /// exposed types.
         pub const tag_after_import_alias: u8 = 1 << 6;
+        /// An exposed-item check spells `Type.*`, which retains the import
+        /// constructor lookup rules rather than binding a same-name member.
+        pub const exposes_constructors: u8 = 1 << 7;
     };
 
     pub fn has(self: @This(), flag: u8) bool {
@@ -3928,7 +3933,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const type_name_bytes = self.getIdent(data.type_name);
             const module_name_bytes = self.getIdent(data.module_name);
 
-            var report = try Report.init(allocator, "Redundant Expose", "", .warning);
+            var report = try Report.init(allocator, "Redundant Expose", "", .runtime_error);
             const type_name = try report.addOwnedString(type_name_bytes);
             const module_name = try report.addOwnedString(module_name_bytes);
             try report.headline.addReflowingText("Redundantly exposing ");
@@ -3951,7 +3956,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
-                .warning_highlight,
+                .error_highlight,
                 owned_filename,
                 self.getSourceAll(),
                 self.getLineStartsAll(),

@@ -2390,7 +2390,7 @@ fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Er
     const p = try self.store.addPattern(.{ .as = .{
         .name = self.pos,
         .pattern = pattern,
-        .region = .{ .start = parent_region.start, .end = self.pos },
+        .region = .{ .start = parent_region.start, .end = self.pos + 1 },
     } });
     self.advance(); // Advance past LowerIdent;
     return p;
@@ -3357,6 +3357,35 @@ fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocator.
     return try self.runExprStatementKernel(.type_anno, 0, undefined, undefined, null, .alternatives_forbidden, looking_for_args);
 }
 
+/// A top-level comma distinguishes a mistaken record separator from a block
+/// assignment. Delimited expressions and lambda parameters own their commas.
+fn braceHasFieldComma(self: *const Parser) bool {
+    var token = self.pos + 2;
+    var depth: u32 = 0;
+    var lambda_params = false;
+    const tags = self.tok_buf.tokens.items(.tag);
+    while (token < tags.len) : (token += 1) {
+        const tag = tags[token];
+        if (tag == .OpenRound or tag == .NoSpaceOpenRound or tag == .OpenSquare or
+            tag == .OpenCurly or tag == .OpenStringInterpolation or tag == .StringStart)
+        {
+            depth += 1;
+        } else if (tag == .CloseRound or tag == .CloseSquare or tag == .CloseCurly or
+            tag == .CloseStringInterpolation or tag == .StringEnd)
+        {
+            if (depth == 0) return false;
+            depth -= 1;
+        } else if (depth == 0 and tag == .OpBar) {
+            lambda_params = !lambda_params;
+        } else if (depth == 0 and !lambda_params and tag == .Comma) {
+            return true;
+        } else if (tag == .EndOfFile) {
+            return false;
+        }
+    }
+    return false;
+}
+
 fn runExprStatementKernel(
     self: *Parser,
     comptime root: ExprKernelRoot,
@@ -3682,6 +3711,7 @@ fn runExprStatementKernel(
                     } else if (self.peek() == .LowerIdent and
                         (self.peekNext() == .Comma or
                             self.peekNext() == .OpColon or
+                            (self.peekNext() == .OpAssign and self.braceHasFieldComma()) or
                             (self.peekNext() == .CloseCurly and open_syntax.peekExpr() == .expr_record_field)))
                     {
                         // A punned single-field record is otherwise ambiguous
@@ -3702,6 +3732,8 @@ fn runExprStatementKernel(
                                     lookahead_pos = close + 1;
                                     continue;
                                 } else if (lookahead_tag == .CloseRound or lookahead_tag == .CloseSquare or lookahead_tag == .CloseCurly) {
+                                    break;
+                                } else if (lookahead_tag == .Comma) {
                                     break;
                                 } else if (lookahead_tag == .LowerIdent) {
                                     if (lookahead_pos + 1 < tags.len and tags[lookahead_pos + 1] == .OpAssign) {
@@ -4961,7 +4993,10 @@ fn runExprStatementKernel(
                 const field_start = self.pos;
                 self.advance();
                 const name = field_start;
-                if (self.peek() == .OpColon) {
+                if (self.peek() == .OpColon or self.peek() == .OpAssign) {
+                    if (self.peek() == .OpAssign) {
+                        try self.pushDiagnostic(.record_field_assignment, .{ .start = self.pos, .end = self.pos + 1 });
+                    }
                     self.advance();
                     // A bare `_` as the entire field value marks the field
                     // unset. Only `Underscore` directly followed by `,` or
