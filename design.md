@@ -8951,7 +8951,12 @@ Restrictions:
   field-type mismatches, whose standard recovery leaves the var `.err`)
   by replacing the default expression and its omitting construction
   sites with runtime errors before the CheckedModule is built, so
-  postcheck materialization can never observe a rejected default.
+  postcheck materialization can never observe a rejected default. A
+  module that constructs an imported nominal while omitting one of its
+  defaults retires that construction site the same way when the declaring
+  module's check retired the default (its default expression is a runtime
+  error), reporting nothing further: the problem was reported once, at the
+  default, and the construction is never a compile-time crash of its own.
 
 The CheckedModule preserves the kind: a defaulted field serializes as a
 required field CARRYING its default identity (`CheckedFieldDefault`), with
