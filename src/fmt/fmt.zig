@@ -7055,3 +7055,34 @@ test "issue 3486: platform requires packages and host symbols sort by name" {
     try std.testing.expect(std.mem.indexOf(u8, result, "provides { \"a\": a, \"z\": z }") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "hosted { \"a\": a!, \"z\": z! }") != null);
 }
+
+test "issue 3157: multiline parenthesized call arguments outdent" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\result = Task.from_result(
+        \\    (
+        \\        {
+        \\            a = binary_op(ctx)
+        \\            if a == b {
+        \\                -1
+        \\            } else {
+        \\                0
+        \\            }
+        \\        }
+        \\    )
+        \\)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "result = Task.from_result((\n" ++
+            "\t{\n" ++
+            "\t\ta = binary_op(ctx)\n" ++
+            "\t\tif a == b {\n" ++
+            "\t\t\t-1\n" ++
+            "\t\t} else {\n" ++
+            "\t\t\t0\n" ++
+            "\t\t}\n" ++
+            "\t}\n" ++
+            "))\n",
+        result,
+    );
+}

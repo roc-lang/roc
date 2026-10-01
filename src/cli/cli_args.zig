@@ -2886,6 +2886,7 @@ test "--replace-dep rejects missing values, the = form, and non-resolving comman
 
 test "issue 5181: misspelled formatter flags identify the offending argument" {
     const gpa = testing.allocator;
+    // typos:ignore-next-line
     for ([_][]const u8{ "--chek", "-x", "--stdiin" }) |flag| {
         const result = try parse(gpa, testing.io, &.{ "fmt", flag, "foo.roc" });
         defer result.deinit(gpa);
