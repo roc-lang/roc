@@ -11497,7 +11497,8 @@ fn runExprKernel(
                     var field_work: std.ArrayList(ExprRecordBuilderFieldWork) = .empty;
                     defer field_work.deinit(frame_allocator);
                     var explicit_value_count: usize = 0;
-                    for (fields_slice) |field_idx| {
+                    var last_duplicate_diag: ?CIR.Diagnostic.Idx = null;
+                    for (fields_slice, 0..) |field_idx, field_index| {
                         const field = self.parse_ir.store.getRecordField(field_idx);
                         const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
                             const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
@@ -11506,6 +11507,25 @@ fn runExprKernel(
                             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
                             continue :expr_kernel_loop .dispatch;
                         };
+                        const is_duplicate = for (field_work.items) |seen| {
+                            if (field_name.eql(seen.name)) break true;
+                        } else false;
+                        if (is_duplicate) {
+                            // Duplicate fields are reported and dropped, as in plain
+                            // record literals. Every field in `field_work` resolved, so
+                            // the first field with this name is the one it duplicates.
+                            const original_region = for (fields_slice[0..field_index]) |earlier_idx| {
+                                const earlier = self.parse_ir.store.getRecordField(earlier_idx);
+                                const earlier_name = self.parse_ir.tokens.resolveIdentifier(earlier.name).?;
+                                if (field_name.eql(earlier_name)) break self.parse_ir.tokens.resolve(earlier.name);
+                            } else unreachable;
+                            last_duplicate_diag = try self.env.addDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                                .field_name = field_name,
+                                .duplicate_region = self.parse_ir.tokens.resolve(field.name),
+                                .original_region = original_region,
+                            } });
+                            continue;
+                        }
                         if (field.value == .unset) {
                             // A builder field's value is mapped through the
                             // builder function; there is nothing to map for an
@@ -11523,6 +11543,14 @@ fn runExprKernel(
                             .name = field_name,
                             .value_expr = field.value.asSupplied(),
                         });
+                    }
+
+                    if (field_work.items.len < 2) {
+                        // Only duplicates can bring a builder below two fields here,
+                        // and those were already reported.
+                        const expr_idx = try self.env.addMalformed(last_duplicate_diag.?, region);
+                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = ModuleEnv.castIdx(CIR.Node.Idx, Expr.Idx, expr_idx), .free_vars = DataSpan.empty() });
+                        continue :expr_kernel_loop .dispatch;
                     }
 
                     const fields = try field_work.toOwnedSlice(frame_allocator);
