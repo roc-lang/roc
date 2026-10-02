@@ -91,9 +91,14 @@ cd "$repo_root"
 # it still fills 32 bytes per iteration with paired vector stores, compares
 # eight bytes per iteration, and finishes with the byte tail. The explicit
 # releases of both lists remain. x64musl stays at 97.
+# A crash exit now ends in a trap after the call to the host's crash handler,
+# because a host must never return from `roc_crashed`. On x64musl that is one
+# `ud2`, 97 to 98. On arm64musl the crash exit used to return a zeroed result
+# to the caller, which needed its own epilogue; it is now the call and a `brk`,
+# 94 to 90. The compare, byte-tail, and fill loops are unchanged.
 expectations=(
-    "x64musl:97"
-    "arm64musl:94"
+    "x64musl:98"
+    "arm64musl:90"
 )
 
 failed=0
