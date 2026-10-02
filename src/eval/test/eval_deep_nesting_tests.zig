@@ -22,14 +22,12 @@ const stack_bytes = 4 * 1024 * 1024;
 const shallow_depth = 1000;
 const shallow_stack_bytes = 2 * 1024 * 1024;
 
-/// A deep equality's canonical type keys, a curried lambda chain's
-/// per-procedure function types, and a method-dispatch chain's waiting
-/// dispatch obligations cost the square of their depth.
+/// A curried lambda chain instantiates each level's whole remaining function
+/// type, so it costs the square of its depth.
 const shallower_depth = 500;
-const shallower_depth_str = std.fmt.comptimePrint("{d}", .{shallower_depth});
 
-/// A loop nest's liveness facts grow with the product of its size and its
-/// depth.
+/// Each loop of a loop nest keeps a set of every enclosing loop's iteration
+/// state, so its ownership facts cost the square of its depth.
 const loop_depth = 300;
 
 /// Lowering a custom-parser chain for compile-time evaluation relates each
@@ -213,10 +211,10 @@ const cases = [_]TestCase{
         // Rendering the value would recurse once per level at runtime, which
         // is the program's own depth; the untaken branch still compiles the
         // rendering of the deep type.
-        .source = "nested = " ++ repeat("Ok(", shallow_depth) ++ "1.U64" ++ repeat(")", shallow_depth) ++
+        .source = "nested = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++
             "\nrender = |n| if n == 0 { 1.U64 } else { Str.count_utf8_bytes(Str.inspect(nested)) }\nmain = render(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested blocks",
@@ -264,10 +262,10 @@ const cases = [_]TestCase{
         // Comparing the values would recurse once per level at runtime, which
         // is the program's own depth; the untaken branch still compiles the
         // equality of the deep type.
-        .source = "nested = " ++ repeat("Ok(", shallower_depth) ++ "1.U64" ++ repeat(")", shallower_depth) ++
+        .source = "nested = " ++ repeat("Ok(", depth) ++ "1.U64" ++ repeat(")", depth) ++
             "\ncompare = |n| if n == 0 { 1.U64 } else if nested == nested { 2.U64 } else { 3.U64 }\nmain = compare(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: long call chain",
@@ -285,10 +283,10 @@ const cases = [_]TestCase{
         .source_kind = .module,
         // Each method's body dispatches on the next type's value, whose
         // method checking resolves on demand.
-        .source = numberedLines(shallower_depth, "T{d} := [V{d}(U64)].{{\n    step = |T{d}.V{d}(x)| T{d}.V{d}(x).step()\n}}\n", struct { usize, usize, usize, usize, usize, usize }, methodChainArgs) ++
-            "T" ++ shallower_depth_str ++ " := [V" ++ shallower_depth_str ++ "(U64)].{\n    step = |T" ++ shallower_depth_str ++ ".V" ++ shallower_depth_str ++ "(x)| x\n}\nrun = |n| if n == 0 { 1.U64 } else { T0.V0(n).step() }\nmain = run(0.U64)\n",
+        .source = numberedLines(depth, "T{d} := [V{d}(U64)].{{\n    step = |T{d}.V{d}(x)| T{d}.V{d}(x).step()\n}}\n", struct { usize, usize, usize, usize, usize, usize }, methodChainArgs) ++
+            "T" ++ depth_str ++ " := [V" ++ depth_str ++ "(U64)].{\n    step = |T" ++ depth_str ++ ".V" ++ depth_str ++ "(x)| x\n}\nrun = |n| if n == 0 { 1.U64 } else { T0.V0(n).step() }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested for loops",
@@ -307,9 +305,9 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: nested while loops",
         .source_kind = .module,
-        .source = "count = |n| {\n    var $total = n\n" ++ repeat("while $total < 1 {\n", loop_depth) ++ "$total = $total + 1\n" ++ repeat("}\n", loop_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("while $total < 1 {\n", depth) ++ "$total = $total + 1\n" ++ repeat("}\n", depth) ++ "    $total\n}\nmain = count(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: nested stateful ifs",
