@@ -582,10 +582,25 @@ fn proofAnd(lhs: ProofStatus, rhs: ProofStatus) ProofStatus {
     return .proven;
 }
 
+// Every structured value records two facts about the tree it expands to:
+//
+// - `substitutable`: whether each of its leaves is a substitutable read (see
+//   `exprCanSubstitute`), so a use may duplicate the whole value without
+//   duplicating work.
+// - `expanded_size`: how many nodes materializing it produces, counting a
+//   shared sub-value once per path to it, saturating at `maxInt(usize)`.
+//
+// Values are immutable and built from already-complete children, so both are
+// computed once, from the children's own facts, by the constructors below
+// (`tagValue`, `recordValue`, `tupleValue`, `nominalValue`, `callableValue`),
+// and a query never walks the value.
+
 const TagValue = struct {
     ty: Type.TypeId,
     name: names.TagNameId,
     payloads: []const Value,
+    substitutable: bool,
+    expanded_size: usize,
 };
 
 const FieldValue = struct {
@@ -596,16 +611,22 @@ const FieldValue = struct {
 const RecordValue = struct {
     ty: Type.TypeId,
     fields: []const FieldValue,
+    substitutable: bool,
+    expanded_size: usize,
 };
 
 const TupleValue = struct {
     ty: Type.TypeId,
     items: []const Value,
+    substitutable: bool,
+    expanded_size: usize,
 };
 
 const NominalValue = struct {
     ty: Type.TypeId,
     backing: *const Value,
+    substitutable: bool,
+    expanded_size: usize,
 };
 
 const CaptureValue = struct {
@@ -618,7 +639,193 @@ const CallableValue = struct {
     fn_id: Ast.FnId,
     captures: []const CaptureValue,
     iterator_step: bool = false,
+    substitutable: bool,
+    expanded_size: usize,
 };
+
+/// Whether `value` may be substituted at every use: each of its leaves is a
+/// substitutable read. A runtime anchor substitutes its exact runtime value
+/// and a static-data candidate its closed initializer, so neither depends on
+/// its symbolic structure.
+fn valueIsSubstitutable(program: *const Ast.Program, allocator: Allocator, value: Value) Allocator.Error!bool {
+    return switch (value) {
+        .expr => |expr| try exprIsSubstitutable(program, allocator, expr),
+        .runtime_anchor => |anchor| try exprIsSubstitutable(program, allocator, anchor.runtime),
+        .static_data_candidate => true,
+        .tag => |tag| tag.substitutable,
+        .record => |record| record.substitutable,
+        .tuple => |tuple| tuple.substitutable,
+        .nominal => |nominal| nominal.substitutable,
+        .callable => |callable| callable.substitutable,
+    };
+}
+
+fn valuesAreSubstitutable(program: *const Ast.Program, allocator: Allocator, values: []const Value) Allocator.Error!bool {
+    for (values) |value| {
+        if (!try valueIsSubstitutable(program, allocator, value)) return false;
+    }
+    return true;
+}
+
+fn valueExpandedSize(value: Value) usize {
+    return switch (value) {
+        .expr, .runtime_anchor, .static_data_candidate => 1,
+        .tag => |tag| tag.expanded_size,
+        .record => |record| record.expanded_size,
+        .tuple => |tuple| tuple.expanded_size,
+        .nominal => |nominal| nominal.expanded_size,
+        .callable => |callable| callable.expanded_size,
+    };
+}
+
+fn valuesExpandedSize(values: []const Value) usize {
+    var size: usize = 1;
+    for (values) |value| size +|= valueExpandedSize(value);
+    return size;
+}
+
+fn fieldsExpandedSize(fields: []const FieldValue) usize {
+    var size: usize = 1;
+    for (fields) |field| size +|= valueExpandedSize(field.value);
+    return size;
+}
+
+fn capturesExpandedSize(captures: []const CaptureValue) usize {
+    var size: usize = 1;
+    for (captures) |capture| size +|= valueExpandedSize(capture.value);
+    return size;
+}
+
+fn tagValue(program: *const Ast.Program, allocator: Allocator, ty: Type.TypeId, name: names.TagNameId, payloads: []const Value) Allocator.Error!Value {
+    return .{ .tag = .{
+        .ty = ty,
+        .name = name,
+        .payloads = payloads,
+        .substitutable = try valuesAreSubstitutable(program, allocator, payloads),
+        .expanded_size = valuesExpandedSize(payloads),
+    } };
+}
+
+fn recordValue(program: *const Ast.Program, allocator: Allocator, ty: Type.TypeId, fields: []const FieldValue) Allocator.Error!Value {
+    const substitutable = for (fields) |field| {
+        if (!try valueIsSubstitutable(program, allocator, field.value)) break false;
+    } else true;
+    return .{ .record = .{
+        .ty = ty,
+        .fields = fields,
+        .substitutable = substitutable,
+        .expanded_size = fieldsExpandedSize(fields),
+    } };
+}
+
+fn tupleValue(program: *const Ast.Program, allocator: Allocator, ty: Type.TypeId, items: []const Value) Allocator.Error!Value {
+    return .{ .tuple = .{
+        .ty = ty,
+        .items = items,
+        .substitutable = try valuesAreSubstitutable(program, allocator, items),
+        .expanded_size = valuesExpandedSize(items),
+    } };
+}
+
+fn nominalValue(program: *const Ast.Program, allocator: Allocator, ty: Type.TypeId, backing: *const Value) Allocator.Error!Value {
+    return .{ .nominal = .{
+        .ty = ty,
+        .backing = backing,
+        .substitutable = try valueIsSubstitutable(program, allocator, backing.*),
+        .expanded_size = 1 +| valueExpandedSize(backing.*),
+    } };
+}
+
+fn callableValue(
+    program: *const Ast.Program,
+    allocator: Allocator,
+    ty: Type.TypeId,
+    fn_id: Ast.FnId,
+    captures: []const CaptureValue,
+    iterator_step: bool,
+) Allocator.Error!Value {
+    const substitutable = for (captures) |capture| {
+        if (!try valueIsSubstitutable(program, allocator, capture.value)) break false;
+    } else true;
+    return .{ .callable = .{
+        .ty = ty,
+        .fn_id = fn_id,
+        .captures = captures,
+        .iterator_step = iterator_step,
+        .substitutable = substitutable,
+        .expanded_size = capturesExpandedSize(captures),
+    } };
+}
+
+/// Whether `expr_id` is a substitutable read: a leaf, or an access or
+/// callable whose operands all are. Operands are checked on a work stack.
+fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_id: Ast.ExprId) Allocator.Error!bool {
+    var stack: std.ArrayList(Ast.ExprId) = .empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, expr_id);
+    while (stack.pop()) |id| switch (program.getExpr(id).data) {
+        .local,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .bytes_lit,
+        .static_data_candidate,
+        .comptime_value,
+        => {},
+        .fn_ref => |fn_ref| {
+            const operand_count: usize = @intCast(fn_ref.captures.len);
+            for (0..operand_count) |index| {
+                try stack.append(allocator, program.captureOperandAt(fn_ref.captures, index).value);
+            }
+        },
+        .field_access => |field| try stack.append(allocator, field.receiver),
+        .tuple_access => |access| try stack.append(allocator, access.tuple),
+        .typed_boundary,
+        .@"unreachable",
+        .list,
+        .tuple,
+        .record,
+        .record_update,
+        .tag,
+        .nominal,
+        .let_,
+        .lambda,
+        .def_ref,
+        .fn_def,
+        .call_value,
+        .call_proc,
+        .low_level,
+        .structural_eq,
+        .structural_hash,
+        .match_,
+        .if_,
+        .uninitialized,
+        .uninitialized_payload,
+        .if_initialized_payload,
+        .try_sequence,
+        .try_record_sequence,
+        .block,
+        .loop_,
+        .break_,
+        .continue_,
+        .join_point,
+        .jump,
+        .return_,
+        .crash,
+        .checked_error,
+        .comptime_branch_taken,
+        .comptime_exhaustiveness_failed,
+        .dbg,
+        .expect_err,
+        .literal_rejected,
+        .expect,
+        => return false,
+    };
+    return true;
+}
 
 const CallPattern = struct {
     args: []const Shape,
@@ -1621,8 +1828,8 @@ const Pass = struct {
                     break :blk structure;
                 },
             } },
-            .tag => |tag| .{ .tag = .{ .ty = expr.ty, .name = tag.name, .payloads = try arena.dupe(Value, values) } },
-            .tuple => .{ .tuple = .{ .ty = expr.ty, .items = try arena.dupe(Value, values) } },
+            .tag => |tag| try tagValue(self.program, self.allocator, expr.ty, tag.name, try arena.dupe(Value, values)),
+            .tuple => try tupleValue(self.program, self.allocator, expr.ty, try arena.dupe(Value, values)),
             .record => |span| blk: {
                 const fields = try arena.alloc(FieldValue, span.len);
                 for (fields, values, 0..) |*field, field_value, i| {
@@ -1631,16 +1838,13 @@ const Pass = struct {
                         .value = field_value,
                     };
                 }
-                break :blk .{ .record = .{ .ty = expr.ty, .fields = fields } };
+                break :blk try recordValue(self.program, self.allocator, expr.ty, fields);
             },
-            .nominal => .{ .nominal = .{
-                .ty = expr.ty,
-                .backing = blk: {
-                    const backing = try arena.create(Value);
-                    backing.* = values[0];
-                    break :blk backing;
-                },
-            } },
+            .nominal => try nominalValue(self.program, self.allocator, expr.ty, blk: {
+                const backing = try arena.create(Value);
+                backing.* = values[0];
+                break :blk backing;
+            }),
             .fn_ref => |ref| blk: {
                 const captures = try arena.alloc(CaptureValue, ref.captures.len);
                 for (captures, values, 0..) |*capture, capture_value, i| {
@@ -1649,7 +1853,7 @@ const Pass = struct {
                         .value = capture_value,
                     };
                 }
-                break :blk .{ .callable = .{ .ty = expr.ty, .fn_id = ref.fn_id, .captures = captures } };
+                break :blk try callableValue(self.program, self.allocator, expr.ty, ref.fn_id, captures, false);
             },
             .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         };
@@ -6024,11 +6228,7 @@ const Cloner = struct {
                 if (frame.index < task.sources.len) {
                     return .{ .call = .{ .demanding = .{ .expr = task.sources[frame.index], .bindings = bindings } } };
                 }
-                return self.finishExprValue(task, .{ .tag = .{
-                    .ty = expr.ty,
-                    .name = tag.name,
-                    .payloads = task.values,
-                } });
+                return self.finishExprValue(task, try tagValue(self.pass.program, self.pass.allocator, expr.ty, tag.name, task.values));
             },
             .record => |fields_span| {
                 if (frame.cursor == 0) {
@@ -6046,10 +6246,7 @@ const Cloner = struct {
                 if (frame.index < task.source_fields.len) {
                     return .{ .call = .{ .demanding = .{ .expr = task.source_fields[frame.index].value, .bindings = bindings } } };
                 }
-                return self.finishExprValue(task, .{ .record = .{
-                    .ty = expr.ty,
-                    .fields = task.fields,
-                } });
+                return self.finishExprValue(task, try recordValue(self.pass.program, self.pass.allocator, expr.ty, task.fields));
             },
             .record_update => |update| return try self.stepRecordUpdateValue(frame, task, expr, update, input),
             .tuple => |items_span| {
@@ -6065,20 +6262,14 @@ const Cloner = struct {
                 if (frame.index < task.sources.len) {
                     return .{ .call = .{ .demanding = .{ .expr = task.sources[frame.index], .bindings = bindings } } };
                 }
-                return self.finishExprValue(task, .{ .tuple = .{
-                    .ty = expr.ty,
-                    .items = task.values,
-                } });
+                return self.finishExprValue(task, try tupleValue(self.pass.program, self.pass.allocator, expr.ty, task.values));
             },
             .nominal => |backing| {
                 if (frame.cursor == 0) {
                     frame.cursor = 1;
                     return .{ .call = .{ .demanding = .{ .expr = backing, .bindings = bindings } } };
                 }
-                return self.finishExprValue(task, .{ .nominal = .{
-                    .ty = expr.ty,
-                    .backing = try self.copyValue(input.?.get(.value)),
-                } });
+                return self.finishExprValue(task, try nominalValue(self.pass.program, self.pass.allocator, expr.ty, try self.copyValue(input.?.get(.value))));
             },
             .let_ => |let_| {
                 if (frame.cursor != 0) return self.finishExprValue(task, input.?.get(.value));
@@ -6395,17 +6586,11 @@ const Cloner = struct {
             };
             return .{ .call = .{ .demanding = .{ .expr = updated, .bindings = bindings } } };
         }
-        const record_value = Value{ .record = .{
-            .ty = recordUpdateBackingType(self.pass.program, expr.ty),
-            .fields = task.fields,
-        } };
+        const record_value = try recordValue(self.pass.program, self.pass.allocator, recordUpdateBackingType(self.pass.program, expr.ty), task.fields);
         if (nominalConstructionLayer(self.pass.program, expr.ty) != null) {
             const backing = try self.arena.allocator().create(Value);
             backing.* = record_value;
-            return self.finishExprValue(task, .{ .nominal = .{
-                .ty = expr.ty,
-                .backing = backing,
-            } });
+            return self.finishExprValue(task, try nominalValue(self.pass.program, self.pass.allocator, expr.ty, backing));
         }
         return self.finishExprValue(task, record_value);
     }
@@ -6598,11 +6783,7 @@ const Cloner = struct {
             const operand = self.pass.program.captureOperandAt(fn_ref.captures, frame.index);
             return .{ .call = .{ .expr_value = .{ .expr = operand.value, .bindings = task.bindings } } };
         }
-        return retValue(.{ .callable = .{
-            .ty = task.ty,
-            .fn_id = fn_ref.fn_id,
-            .captures = task.captures,
-        } });
+        return retValue(try callableValue(self.pass.program, self.pass.allocator, task.ty, fn_ref.fn_id, task.captures, false));
     }
 
     /// A value computation whose strict chain is placed around its
@@ -7251,7 +7432,7 @@ const Cloner = struct {
 
     fn stepBindLetValue(self: *Cloner, task: *BindLetValueTask) Common.LowerError!CloneStep {
         const change_start = self.subst.watermark();
-        if (try self.bindPatToReusableValue(task.pat, task.value) == .match) return .{ .ret = .{ .flag = true } };
+        if (try self.bindPatToReusableValue(task.pat, task.value)) return .{ .ret = .{ .flag = true } };
         self.subst.restore(change_start);
         return .{ .tail = .{ .positioned_reusable = .{
             .pat = task.pat,
@@ -7289,7 +7470,7 @@ const Cloner = struct {
             return .{ .call = try self.makeReusableTask(task.value, task.bindings) };
         }
         const reusable = input.?.get(.value);
-        if (try self.bindPatToReusableValue(task.pat, reusable) != .match) {
+        if (!try self.bindPatToReusableValue(task.pat, reusable)) {
             self.subst.restore(task.change_before);
             task.bindings.rewind(task.bindings_before);
             return .{ .ret = .{ .flag = false } };
@@ -7534,7 +7715,7 @@ const Cloner = struct {
                     return .{ .call = .{ .materialize = .{ .value = value } } };
                 }
                 task.budget.* -= 1;
-                if (try self.valueCanSubstitute(value) == .proven) return retValue(value);
+                if (try self.valueCanSubstitute(value)) return retValue(value);
                 switch (value) {
                     .expr => |expr| {
                         const ty = self.pass.program.getExpr(expr).ty;
@@ -7596,33 +7777,15 @@ const Cloner = struct {
             return .{ .call = .{ .make_reusable = .{ .value = child, .budget = task.budget, .bindings = bindings } } };
         }
         return retValue(switch (value) {
-            .tag => |tag| .{ .tag = .{
-                .ty = tag.ty,
-                .name = tag.name,
-                .payloads = task.values,
-            } },
-            .record => |record| .{ .record = .{
-                .ty = record.ty,
-                .fields = task.fields,
-            } },
-            .tuple => |tuple| .{ .tuple = .{
-                .ty = tuple.ty,
-                .items = task.values,
-            } },
+            .tag => |tag| try tagValue(self.pass.program, self.pass.allocator, tag.ty, tag.name, task.values),
+            .record => |record| try recordValue(self.pass.program, self.pass.allocator, record.ty, task.fields),
+            .tuple => |tuple| try tupleValue(self.pass.program, self.pass.allocator, tuple.ty, task.values),
             .nominal => |nominal| blk: {
                 const backing = try self.arena.allocator().create(Value);
                 backing.* = task.values[0];
-                break :blk .{ .nominal = .{
-                    .ty = nominal.ty,
-                    .backing = backing,
-                } };
+                break :blk try nominalValue(self.pass.program, self.pass.allocator, nominal.ty, backing);
             },
-            .callable => |callable| .{ .callable = .{
-                .ty = callable.ty,
-                .fn_id = callable.fn_id,
-                .captures = task.captures,
-                .iterator_step = callable.iterator_step,
-            } },
+            .callable => |callable| try callableValue(self.pass.program, self.pass.allocator, callable.ty, callable.fn_id, task.captures, callable.iterator_step),
             .expr, .runtime_anchor, .static_data_candidate => unreachable,
         });
     }
@@ -8543,20 +8706,15 @@ const Cloner = struct {
             } } };
         }
         return retValue(switch (values[0]) {
-            .tag => |first| .{ .tag = .{ .ty = first.ty, .name = first.name, .payloads = task.children } },
-            .record => |first| .{ .record = .{ .ty = first.ty, .fields = task.fields } },
-            .tuple => |first| .{ .tuple = .{ .ty = first.ty, .items = task.children } },
+            .tag => |first| try tagValue(self.pass.program, self.pass.allocator, first.ty, first.name, task.children),
+            .record => |first| try recordValue(self.pass.program, self.pass.allocator, first.ty, task.fields),
+            .tuple => |first| try tupleValue(self.pass.program, self.pass.allocator, first.ty, task.children),
             .nominal => |first| blk: {
                 const backing = try arena.create(Value);
                 backing.* = task.children[0];
-                break :blk .{ .nominal = .{ .ty = first.ty, .backing = backing } };
+                break :blk try nominalValue(self.pass.program, self.pass.allocator, first.ty, backing);
             },
-            .callable => |first| .{ .callable = .{
-                .ty = first.ty,
-                .fn_id = first.fn_id,
-                .captures = task.captures,
-                .iterator_step = task.iterator_step,
-            } },
+            .callable => |first| try callableValue(self.pass.program, self.pass.allocator, first.ty, first.fn_id, task.captures, task.iterator_step),
             .expr, .runtime_anchor, .static_data_candidate => unreachable,
         });
     }
@@ -9995,10 +10153,7 @@ const Cloner = struct {
                     const inner = child.get(.maybe_value) orelse return .{ .ret = .{ .maybe_value = null } };
                     const backing = try arena.create(Value);
                     backing.* = inner;
-                    return .{ .ret = .{ .maybe_value = Value{ .nominal = .{
-                        .ty = structuralValue(value).nominal.ty,
-                        .backing = backing,
-                    } } } };
+                    return .{ .ret = .{ .maybe_value = try nominalValue(self.pass.program, self.pass.allocator, structuralValue(value).nominal.ty, backing) } };
                 },
                 .children => {
                     const index = frame.index;
@@ -10036,7 +10191,7 @@ const Cloner = struct {
             },
             .as => {
                 task.mode = .as_base;
-                if (try self.valueCanSubstitute(value) == .proven) {
+                if (try self.valueCanSubstitute(value)) {
                     // The base is the value itself.
                     return self.stepBindPatToMatchValue(frame, task, .{ .value = value });
                 }
@@ -10159,10 +10314,7 @@ const Cloner = struct {
                 }
                 const record = task.value.record;
                 if (index >= record.fields.len) {
-                    return .{ .ret = .{ .maybe_value = Value{ .record = .{
-                        .ty = record.ty,
-                        .fields = task.fields,
-                    } } } };
+                    return .{ .ret = .{ .maybe_value = try recordValue(self.pass.program, self.pass.allocator, record.ty, task.fields) } };
                 }
                 const field = record.fields[index];
                 if (recordPatField(self.pass.program, fields, field.name)) |field_pat| {
@@ -10184,10 +10336,7 @@ const Cloner = struct {
                 }
                 const tuple = task.value.tuple;
                 if (index >= pats.len) {
-                    return .{ .ret = .{ .maybe_value = Value{ .tuple = .{
-                        .ty = tuple.ty,
-                        .items = task.values,
-                    } } } };
+                    return .{ .ret = .{ .maybe_value = try tupleValue(self.pass.program, self.pass.allocator, tuple.ty, task.values) } };
                 }
                 return .{ .call = .{ .bind_pat_to_match_value = .{ .pat = GuardedList.at(pats, index), .value = tuple.items[index], .body = task.body, .bindings = bindings } } };
             },
@@ -10195,11 +10344,7 @@ const Cloner = struct {
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
                 const tag = task.value.tag;
                 if (index >= pats.len) {
-                    return .{ .ret = .{ .maybe_value = Value{ .tag = .{
-                        .ty = tag.ty,
-                        .name = tag.name,
-                        .payloads = task.values,
-                    } } } };
+                    return .{ .ret = .{ .maybe_value = try tagValue(self.pass.program, self.pass.allocator, tag.ty, tag.name, task.values) } };
                 }
                 return .{ .call = .{ .bind_pat_to_match_value = .{ .pat = GuardedList.at(pats, index), .value = tag.payloads[index], .body = task.body, .bindings = bindings } } };
             },
@@ -10244,7 +10389,7 @@ const Cloner = struct {
                 return .{ .call = .{ .materialize = .{ .value = task.value } } };
             },
         }
-        if (try self.valueCanSubstitute(task.value) == .proven) return retValue(task.value);
+        if (try self.valueCanSubstitute(task.value)) return retValue(task.value);
         return .{ .tail = try self.makeReusableTask(task.value, task.bindings) };
     }
 
@@ -10951,7 +11096,7 @@ const Cloner = struct {
                         self.pass.program.getPat(let_.pat).data != .bind and
                         try task.recursive_value_bindings.referencedByExpr(self.pass.allocator, self.pass.program, task.materialized_value);
                     if (!value_escapes_recursive_scope and
-                        try self.bindPatToReusableValue(let_.pat, continuation_value) == .match)
+                        try self.bindPatToReusableValue(let_.pat, continuation_value))
                     {
                         const cloned: Ast.Stmt = .{ .let_ = .{
                             .pat = task.recursive_pat orelse try self.clonePat(let_.pat, .output_only),
@@ -11606,7 +11751,7 @@ const Cloner = struct {
         if (frame.cursor == 0) {
             task.change_before = self.subst.watermark();
             task.bindings_before = task.bindings.mark();
-            if (try self.bindPatToReusableValue(task.pat, task.value) == .match) return .{ .ret = .{ .flag = true } };
+            if (try self.bindPatToReusableValue(task.pat, task.value)) return .{ .ret = .{ .flag = true } };
             self.subst.restore(task.change_before);
             task.bindings.rewind(task.bindings_before);
 
@@ -11950,16 +12095,22 @@ const Cloner = struct {
     /// The value a shape describes, with a fresh argument local for each
     /// `.any` position, appended to `args` in shape order. Shapes nest as
     /// deeply as their constructors, so positions are filled from a
-    /// worklist, last-first so the first is filled next.
+    /// worklist, last-first so the first is filled next. Every leaf is one of
+    /// those locals, so every node is substitutable. A node is filled before
+    /// its children, so expanded sizes are recorded afterwards, in reverse
+    /// fill order, once each node's children are final.
     fn valueFromShapeArgs(self: *Cloner, root_shape: Shape, args: *std.ArrayList(Ast.TypedLocal)) Allocator.Error!Value {
         const Pending = struct { shape: Shape, target: *Value };
         var result: Value = undefined;
         var pending = std.ArrayList(Pending).empty;
         defer pending.deinit(self.pass.allocator);
+        var filled = std.ArrayList(*Value).empty;
+        defer filled.deinit(self.pass.allocator);
         try pending.append(self.pass.allocator, .{ .shape = root_shape, .target = &result });
         const arena = self.arena.allocator();
         while (pending.pop()) |item| {
             const mark = pending.items.len;
+            try filled.append(self.pass.allocator, item.target);
             item.target.* = switch (item.shape) {
                 .any => |ty| blk: {
                     const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
@@ -11976,6 +12127,8 @@ const Cloner = struct {
                         .ty = tag.ty,
                         .name = tag.name,
                         .payloads = payloads,
+                        .substitutable = true,
+                        .expanded_size = 0,
                     } };
                 },
                 .record => |record| blk: {
@@ -11987,6 +12140,8 @@ const Cloner = struct {
                     break :blk .{ .record = .{
                         .ty = record.ty,
                         .fields = fields,
+                        .substitutable = true,
+                        .expanded_size = 0,
                     } };
                 },
                 .tuple => |tuple| blk: {
@@ -11995,6 +12150,8 @@ const Cloner = struct {
                     break :blk .{ .tuple = .{
                         .ty = tuple.ty,
                         .items = items,
+                        .substitutable = true,
+                        .expanded_size = 0,
                     } };
                 },
                 .nominal => |nominal| blk: {
@@ -12003,6 +12160,8 @@ const Cloner = struct {
                     break :blk .{ .nominal = .{
                         .ty = nominal.ty,
                         .backing = backing,
+                        .substitutable = true,
+                        .expanded_size = 0,
                     } };
                 },
                 .callable => |callable| blk: {
@@ -12022,10 +12181,24 @@ const Cloner = struct {
                         .ty = callable.ty,
                         .fn_id = callable.fn_id,
                         .captures = captures,
+                        .substitutable = true,
+                        .expanded_size = 0,
                     } };
                 },
             };
             std.mem.reverse(Pending, pending.items[mark..]);
+        }
+        var index = filled.items.len;
+        while (index > 0) {
+            index -= 1;
+            switch (filled.items[index].*) {
+                .expr, .runtime_anchor, .static_data_candidate => {},
+                .tag => |*tag| tag.expanded_size = valuesExpandedSize(tag.payloads),
+                .record => |*record| record.expanded_size = fieldsExpandedSize(record.fields),
+                .tuple => |*tuple| tuple.expanded_size = valuesExpandedSize(tuple.items),
+                .nominal => |*nominal| nominal.expanded_size = 1 +| valueExpandedSize(nominal.backing.*),
+                .callable => |*callable| callable.expanded_size = capturesExpandedSize(callable.captures),
+            }
         }
         return result;
     }
@@ -12145,137 +12318,24 @@ const Cloner = struct {
         };
     }
 
-    /// Total work budget for walking one substitution-candidate value.
-    ///
-    /// A known value is not always a small finite tree. A loop-carried value
-    /// can reference itself through the fixpoint of a recursive construction
-    /// (e.g. an iterator wrapped around itself a runtime number of times,
-    /// where the step callable's capture reaches the nominal whose backing
-    /// reaches the callable again), and a deep statically-built chain shares
-    /// substructure between levels, so a per-level depth budget still permits
-    /// combinatorially many paths through the shared nodes. The budget is
-    /// therefore spent per NODE VISIT—one shared counter across the whole
-    /// walk—which bounds total work absolutely for cycles and shared
-    /// structure alike. See design.md "Core Principles" on bounded post-check
-    /// walks.
-    ///
-    /// A work budget is the right bound here, rather than a visited set,
-    /// because this predicate is allowed to answer "no" spuriously: declining
-    /// a substitution keeps the construction materialized, which is a missed
-    /// optimization and never a miscompile. A cyclic value exhausts the
-    /// budget and gets "no"—the correct answer, since a self-referential
-    /// value cannot be substituted anyway—and a value large enough to
-    /// exhaust it honestly is one whose substitution would bloat the clone
-    /// regardless. Value identity is also too murky for a reliable visited
-    /// set: values are by-value unions holding slices, with only the nominal
-    /// backing behind a stable pointer.
-    const value_substitute_work_budget: u32 = 4096;
+    /// Explicit code-growth limit on substitution. A substitutable value never
+    /// duplicates work, but every opaque use materializes its whole expanded
+    /// tree, and a value whose sub-values are shared along many paths can
+    /// expand to far more nodes than were ever constructed. A value larger
+    /// than this keeps its ordinary named binding instead. This limit admits
+    /// code growth only; it is not legality evidence. See design.md "Core
+    /// Principles" on proof exhaustion versus code-growth admission.
+    const substitution_expansion_limit: usize = 4096;
 
-    fn valueCanSubstitute(self: *Cloner, value: Value) Allocator.Error!ProofStatus {
-        var budget: u32 = value_substitute_work_budget;
-        return self.valueCanSubstituteBudgeted(value, &budget);
+    /// Whether `value` may replace its binder at every use: it is
+    /// substitutable and its expansion is within the code-growth limit.
+    fn valueCanSubstitute(self: *Cloner, value: Value) Allocator.Error!bool {
+        if (valueExpandedSize(value) > substitution_expansion_limit) return false;
+        return valueIsSubstitutable(self.pass.program, self.pass.allocator, value);
     }
 
-    /// Values are visited depth-first in order on a work stack; any
-    /// disproven node disproves the whole.
-    fn valueCanSubstituteBudgeted(self: *Cloner, root: Value, budget: *u32) Allocator.Error!ProofStatus {
-        const allocator = self.pass.allocator;
-        var proof = ProofStatus.proven;
-        var stack: std.ArrayList(Value) = .empty;
-        defer stack.deinit(allocator);
-        try stack.append(allocator, root);
-        while (stack.pop()) |value| {
-            if (budget.* == 0) {
-                proof = .unknown_budget_exhausted;
-                continue;
-            }
-            budget.* -= 1;
-            // Children are appended in order, then reversed.
-            const start = stack.items.len;
-            switch (value) {
-                .expr => |expr| if (!try self.exprCanSubstitute(expr)) return .disproven,
-                .runtime_anchor => |anchor| if (!try self.exprCanSubstitute(anchor.runtime)) return .disproven,
-                .static_data_candidate => {},
-                .tag => |tag| try stack.appendSlice(allocator, tag.payloads),
-                .record => |record| for (record.fields) |field| try stack.append(allocator, field.value),
-                .tuple => |tuple| try stack.appendSlice(allocator, tuple.items),
-                .nominal => |nominal| try stack.append(allocator, nominal.backing.*),
-                .callable => |callable| for (callable.captures) |capture| try stack.append(allocator, capture.value),
-            }
-            std.mem.reverse(Value, stack.items[start..]);
-        }
-        return proof;
-    }
-
-    /// Whether `expr_id` is a substitutable read: a leaf, or an access or
-    /// callable whose operands all are. Operands are checked on a work stack.
     fn exprCanSubstitute(self: *Cloner, expr_id: Ast.ExprId) Allocator.Error!bool {
-        const program = self.pass.program;
-        var stack: std.ArrayList(Ast.ExprId) = .empty;
-        defer stack.deinit(self.pass.allocator);
-        try stack.append(self.pass.allocator, expr_id);
-        while (stack.pop()) |id| switch (program.getExpr(id).data) {
-            .local,
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .static_data_candidate,
-            .comptime_value,
-            => {},
-            .fn_ref => |fn_ref| {
-                const operand_count: usize = @intCast(fn_ref.captures.len);
-                for (0..operand_count) |index| {
-                    try stack.append(self.pass.allocator, program.captureOperandAt(fn_ref.captures, index).value);
-                }
-            },
-            .field_access => |field| try stack.append(self.pass.allocator, field.receiver),
-            .tuple_access => |access| try stack.append(self.pass.allocator, access.tuple),
-            .typed_boundary,
-            .@"unreachable",
-            .list,
-            .tuple,
-            .record,
-            .record_update,
-            .tag,
-            .nominal,
-            .let_,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            .call_value,
-            .call_proc,
-            .low_level,
-            .structural_eq,
-            .structural_hash,
-            .match_,
-            .if_,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .block,
-            .loop_,
-            .break_,
-            .continue_,
-            .join_point,
-            .jump,
-            .return_,
-            .crash,
-            .checked_error,
-            .comptime_branch_taken,
-            .comptime_exhaustiveness_failed,
-            .dbg,
-            .expect_err,
-            .literal_rejected,
-            .expect,
-            => return false,
-        };
-        return true;
+        return exprIsSubstitutable(self.pass.program, self.pass.allocator, expr_id);
     }
 
     fn canReuseOriginalExpr(self: *const Cloner, expr_id: Ast.ExprId) bool {
@@ -12946,13 +13006,10 @@ const Cloner = struct {
     /// always a small finite tree: substitution shares one value union across
     /// every use site, so a value built by a recursively-constructed chain (an
     /// iterator wrapped around itself through many map layers) is a compact
-    /// graph reached by combinatorially many distinct paths, and this walk
-    /// probes each visited node with `valueCanSubstitute`—itself a full
-    /// sub-walk—so its cost is the node count times that probe and grows far
-    /// past any per-level depth. The walk spends one shared budget per node
-    /// visit and, when it runs out, keeps the remaining sub-value materialized
-    /// as-is instead of continuing to rewrite it. See design.md "Core
-    /// Principles" on bounded post-check walks.
+    /// graph reached by combinatorially many distinct paths. The walk returns
+    /// every sub-value that can already substitute unchanged, which costs one
+    /// read of its recorded facts, and spends one shared budget per node
+    /// visit. See design.md "Core Principles" on bounded post-check walks.
     ///
     /// When the budget is exhausted, the remaining sub-value is materialized
     /// and named as one strict binding. This bounds compiler work without
@@ -13213,12 +13270,10 @@ const Cloner = struct {
         };
     }
 
-    fn bindPatToReusableValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
-        return switch (try self.valueCanSubstitute(value)) {
-            .proven => if (try self.bindPatToFlowValue(pat_id, value)) .match else .unknown,
-            .disproven => .unknown,
-            .unknown_budget_exhausted => .unknown_budget_exhausted,
-        };
+    /// Bind `pat_id` to `value` for reuse at every use of its locals, which
+    /// requires the value to be substitutable.
+    fn bindPatToReusableValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
+        return try self.valueCanSubstitute(value) and try self.bindPatToFlowValue(pat_id, value);
     }
 
     /// Bind a pattern for ordinary structured value flow. Unlike the
@@ -13906,8 +13961,8 @@ const Cloner = struct {
             }
             const finished = frames.pop().?;
             const structure: Value = switch (finished.structure) {
-                .record => |record| .{ .record = .{ .ty = record.ty, .fields = finished.fields } },
-                .tuple => |tuple| .{ .tuple = .{ .ty = tuple.ty, .items = finished.values } },
+                .record => |record| try recordValue(self.pass.program, self.pass.allocator, record.ty, finished.fields),
+                .tuple => |tuple| try tupleValue(self.pass.program, self.pass.allocator, tuple.ty, finished.values),
                 .nominal => |nominal| blk: {
                     const inner = delivered orelse {
                         delivered = if (finished.runtime_has_value_type) Value{ .expr = finished.runtime } else null;
@@ -13915,7 +13970,7 @@ const Cloner = struct {
                     };
                     const backing = try arena.create(Value);
                     backing.* = inner;
-                    break :blk .{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
+                    break :blk try nominalValue(self.pass.program, self.pass.allocator, nominal.ty, backing);
                 },
                 .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
             };
@@ -16380,7 +16435,7 @@ test "SpecConstr keeps a transparent recursive anchor and its initializer bindin
     const no_bindings: BindingChain = .{};
     var reanchor_budget: u32 = Cloner.recursive_anchor_scope_work_budget;
     const reanchored = (try cloner.reanchorRecursiveValue(
-        .{ .record = .{ .ty = record_ty, .fields = &synthetic_fields } },
+        try recordValue(&program, allocator, record_ty, &synthetic_fields),
         runtime_anchor.runtime,
         no_bindings,
         &reanchor_budget,
@@ -17781,7 +17836,8 @@ test "static match verdicts separate definite no-match from statically undecidab
 
     const opaque_expr = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = try program.addLocal(@enumFromInt(1), u8_ty) } });
     const opaque_value = Value{ .expr = opaque_expr };
-    const foo_value = Value{ .tag = .{ .ty = union_ty, .name = foo, .payloads = &.{opaque_value} } };
+    const opaque_payloads = [_]Value{opaque_value};
+    const foo_value = try tagValue(&program, allocator, union_ty, foo, &opaque_payloads);
 
     const wildcard_pat = try program.addPat(.{ .ty = u8_ty, .data = .wildcard });
     const foo_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .tag = .{
@@ -17829,7 +17885,8 @@ test "static match verdicts separate definite no-match from statically undecidab
     // pattern even when another element is undecidable; otherwise an
     // undecidable element makes the whole pattern undecidable.
     const tuple_ty = try program.types.add(.{ .tuple = Type.Span.empty() });
-    const tuple_value = Value{ .tuple = .{ .ty = tuple_ty, .items = &.{ foo_value, opaque_value } } };
+    const tuple_items = [_]Value{ foo_value, opaque_value };
+    const tuple_value = try tupleValue(&program, allocator, tuple_ty, &tuple_items);
     const both_undecidable = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(&.{ foo_list_pat, list_pat }) } });
     const excluded_and_undecidable = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(&.{ bar_pat, list_pat }) } });
     const matched_and_undecidable = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(&.{ foo_pat, list_pat }) } });
@@ -17840,17 +17897,98 @@ test "static match verdicts separate definite no-match from statically undecidab
     // Nominal patterns delegate to the backing; probing an opaque value is
     // undecidable.
     const nominal_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .nominal = foo_pat } });
-    const backing = Value{ .tag = .{ .ty = union_ty, .name = foo, .payloads = &.{opaque_value} } };
-    const nominal_value = Value{ .nominal = .{ .ty = union_ty, .backing = &backing } };
+    const backing = try tagValue(&program, allocator, union_ty, foo, &opaque_payloads);
+    const nominal_value = try nominalValue(&program, allocator, union_ty, &backing);
     try std.testing.expectEqual(MatchVerdict.match, try cloner.bindPatToValue(nominal_pat, nominal_value));
     try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(nominal_pat, opaque_value));
 
     // A structured wrapper does not make its opaque backing statically known.
-    const wrapped_opaque = Value{ .nominal = .{ .ty = union_ty, .backing = &opaque_value } };
+    const wrapped_opaque = try nominalValue(&program, allocator, union_ty, &opaque_value);
     const record_pat = try program.addPat(.{ .ty = u8_ty, .data = .{ .record = Ast.Span(Ast.RecordDestruct).empty() } });
     try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(foo_pat, wrapped_opaque));
     try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(both_undecidable, wrapped_opaque));
     try std.testing.expectEqual(MatchVerdict.unknown, try cloner.bindPatToValue(record_pat, wrapped_opaque));
+}
+
+test "value substitutability is exact at any depth" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const foo = try program.names.internTagLabel("Foo");
+
+    const read = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = try program.addLocal(@enumFromInt(1), u8_ty) } });
+    const work = try program.addExpr(.{ .ty = u8_ty, .data = .{ .block = .{
+        .statements = Ast.Span(Ast.StmtId).empty(),
+        .final_expr = read,
+    } } });
+
+    // A long string interpolation's iterator nests one level per part, so a
+    // value can be far deeper than any per-query work budget. Whether it is
+    // substitutable depends only on its leaves, never on its depth.
+    const depth = 10_000;
+    var reads: Value = .{ .expr = read };
+    var works: Value = .{ .expr = work };
+    for (1..depth + 1) |level| {
+        const read_payload = try arena.allocator().alloc(Value, 1);
+        read_payload[0] = reads;
+        reads = try tagValue(&program, allocator, union_ty, foo, read_payload);
+        const work_payload = try arena.allocator().alloc(Value, 1);
+        work_payload[0] = works;
+        works = try tagValue(&program, allocator, union_ty, foo, work_payload);
+
+        // Substitution admits a chain of reads exactly while its expansion
+        // is within the code-growth limit.
+        if (level + 1 == Cloner.substitution_expansion_limit) {
+            try std.testing.expect(try cloner.valueCanSubstitute(reads));
+        } else if (level + 1 == Cloner.substitution_expansion_limit + 1) {
+            try std.testing.expect(!try cloner.valueCanSubstitute(reads));
+        }
+    }
+    try std.testing.expect(try valueIsSubstitutable(&program, allocator, reads));
+    try std.testing.expect(!try valueIsSubstitutable(&program, allocator, works));
+    try std.testing.expectEqual(@as(usize, depth + 1), valueExpandedSize(reads));
+}
+
+test "value substitution bounds the expansion of shared sub-values" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const tuple_ty = try program.types.add(.{ .tuple = Type.Span.empty() });
+    const read = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = try program.addLocal(@enumFromInt(1), u8_ty) } });
+
+    // `x(n + 1) = (x(n), x(n))` constructs one node per level, but
+    // materializing it expands every path through the shared halves.
+    var shared: Value = .{ .expr = read };
+    for (0..128) |_| {
+        const items = try arena.allocator().alloc(Value, 2);
+        items[0] = shared;
+        items[1] = shared;
+        shared = try tupleValue(&program, allocator, tuple_ty, items);
+    }
+    try std.testing.expect(try valueIsSubstitutable(&program, allocator, shared));
+    try std.testing.expectEqual(std.math.maxInt(usize), valueExpandedSize(shared));
+    try std.testing.expect(!try cloner.valueCanSubstitute(shared));
 }
 
 test "static value matchers bound wrapper strips over a cyclic value" {
@@ -17883,7 +18021,7 @@ test "static value matchers bound wrapper strips over a cyclic value" {
     };
 
     // A cyclic symbolic view does not prevent reuse of the closed initializer.
-    try std.testing.expectEqual(ProofStatus.proven, try cloner.valueCanSubstitute(cyclic));
+    try std.testing.expect(try cloner.valueCanSubstitute(cyclic));
 
     // A nominal pattern strips the wrapper chain looking for its backing. The
     // static-data case keeps the same pattern, so the strip would loop forever
@@ -18059,7 +18197,7 @@ test "known match fold aborts on undecidable branches and keeps the match when e
     const foo = try program.names.internTagLabel("Foo");
     const bar = try program.names.internTagLabel("Bar");
 
-    const foo_value = Value{ .tag = .{ .ty = union_ty, .name = foo, .payloads = &.{} } };
+    const foo_value = try tagValue(&program, allocator, union_ty, foo, &.{});
     const foo_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .tag = .{ .name = foo, .payloads = Ast.Span(Ast.PatId).empty() } } });
     const bar_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .tag = .{ .name = bar, .payloads = Ast.Span(Ast.PatId).empty() } } });
     const list_pat = try program.addPat(.{ .ty = union_ty, .data = .{ .list = .{
@@ -18106,10 +18244,8 @@ test "known match fold preserves absurd elimination of a structural product" {
     }) });
     const impossible_local = try program.addLocal(@enumFromInt(1), empty_union_ty);
     const impossible_expr = try program.addExpr(.{ .ty = empty_union_ty, .data = .{ .local = impossible_local } });
-    const record_value = Value{ .record = .{
-        .ty = record_ty,
-        .fields = &.{.{ .name = field_name, .value = .{ .expr = impossible_expr } }},
-    } };
+    const impossible_fields = [_]FieldValue{.{ .name = field_name, .value = .{ .expr = impossible_expr } }};
+    const record_value = try recordValue(&program, allocator, record_ty, &impossible_fields);
 
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
