@@ -36325,6 +36325,24 @@ fn hasSameTargetDispatchAncestor(
     return false;
 }
 
+/// `dispatchEdgeCanBeSameTargetAncestor` for an edge that tried to replay
+/// and did not.
+noinline fn replayCandidateCanBeSameTargetAncestor(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+    cycle_method_expr_var: ?Var,
+    predeclared_scheme_for_method: ?Var,
+) Allocator.Error!bool {
+    return try @call(.always_inline, dispatchEdgeCanBeSameTargetAncestor, .{
+        self,
+        constraint,
+        method_lookup,
+        cycle_method_expr_var,
+        predeclared_scheme_for_method,
+    });
+}
+
 /// Whether a new dispatch edge with no same-target ancestor can later be the
 /// same-target ancestor of a descendant, so its state key can be read.
 ///
@@ -38030,8 +38048,9 @@ fn pairReplayVars(self: *Self, source: []const Var, target: []const Var) Allocat
     }
 }
 
-/// Normalize an eligible edge's rows, encode its replay shape, and replay
-/// the source with that shape if there is one that can be replayed now.
+/// Encode an eligible edge's replay shape from its normalized rows, and
+/// replay the source with that shape if there is one that can be replayed
+/// now.
 /// Otherwise the shape's hash, if it has one, goes with the edge's fresh
 /// instantiation.
 noinline fn attemptDispatchReplay(
@@ -38039,11 +38058,9 @@ noinline fn attemptDispatchReplay(
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
-    dispatch_value: ?Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!struct { method_var: ?Var = null, shape_hash: ?u64 = null } {
-    try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
     const hash = try self.encodeDispatchReplayShape(dispatcher_var, constraint, method_lookup) orelse return .{};
     if (self.findDispatchReplaySource(hash, self.scratch_replay_shape.items)) |replay_source| {
         if (try self.replayDispatchTarget(replay_source, dispatcher_var, constraint, method_lookup, env, region)) |method_var| {
@@ -38107,24 +38124,31 @@ fn resolveDispatchTargetMethodVar(
             cycle_method_expr_var,
             predeclared_scheme_for_method,
         );
-        var replay_shape_hash: ?u64 = null;
-        if (replay_eligible) {
-            const attempt = try self.attemptDispatchReplay(dispatcher_var, constraint, method_lookup, dispatch_value, env, region);
-            if (attempt.method_var) |method_var| return method_var;
-            replay_shape_hash = attempt.shape_hash;
-        }
-        const state_type_key: ?[32]u8 = if (try self.dispatchEdgeCanBeSameTargetAncestor(
+        // An edge that may replay normalizes its rows to encode its shape,
+        // and asks whether it keeps a state key only once it does not replay.
+        const can_be_ancestor = !replay_eligible and try @call(.always_inline, dispatchEdgeCanBeSameTargetAncestor, .{
+            self,
             constraint,
             method_lookup,
             cycle_method_expr_var,
             predeclared_scheme_for_method,
-        ))
+        });
+        if (!can_be_ancestor) try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
+        var replay_shape_hash: ?u64 = null;
+        if (replay_eligible) {
+            const attempt = try self.attemptDispatchReplay(dispatcher_var, constraint, method_lookup, env, region);
+            if (attempt.method_var) |method_var| return method_var;
+            replay_shape_hash = attempt.shape_hash;
+        }
+        const state_type_key: ?[32]u8 = if (can_be_ancestor or (replay_eligible and try self.replayCandidateCanBeSameTargetAncestor(
+            constraint,
+            method_lookup,
+            cycle_method_expr_var,
+            predeclared_scheme_for_method,
+        )))
             try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var, dispatch_value, env)
-        else blk: {
-            // A replay attempt has already normalized the rows.
-            if (!replay_eligible) try self.normalizeDispatchStateRows(dispatcher_var, constraint.fn_var, dispatch_value, env);
-            break :blk null;
-        };
+        else
+            null;
         return try self.instantiateDispatchTargetMethodVar(
             dispatcher_var,
             parent_constraint_fn_var,

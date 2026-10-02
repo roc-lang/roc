@@ -5883,6 +5883,12 @@ fn deinitCheckedTagsBuild(allocator: Allocator, tags: []const CheckedTagBuild) v
 
 /// Free a build-form payload's individually-allocated slices/name.
 fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayloadBuild) void {
+    freeCheckedTypePayloadBuild(allocator, payload);
+    payload.* = .pending;
+}
+
+/// Free what a payload build owns, for a payload that is discarded at once.
+fn freeCheckedTypePayloadBuild(allocator: Allocator, payload: *const CheckedTypePayloadBuild) void {
     switch (payload.*) {
         .pending,
         .err,
@@ -5908,7 +5914,6 @@ fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayl
         .function => |function| allocator.free(function.args),
         .tag_union => |tag_union| deinitCheckedTagsBuild(allocator, tag_union.tags),
     }
-    payload.* = .pending;
 }
 
 const LocalTypeDeclarationIndex = struct {
@@ -8255,6 +8260,8 @@ const CheckedSourceTypeRoots = struct {
         graph_analysis: SourceTypeGraphAnalysis,
         key_writer: canonical_type_keys.TypeWriter,
         local_nominal_declarations: LocalNominalDeclarationIds,
+        /// The publisher's frame stack, empty between publications.
+        publisher_frames: std.ArrayList(CheckedTypePublisher.Frame) = .empty,
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
@@ -8276,6 +8283,7 @@ const CheckedSourceTypeRoots = struct {
 
     fn releaseScratch(self: *CheckedSourceTypeRoots) void {
         if (self.scratch) |*scratch| {
+            scratch.publisher_frames.deinit(scratch.graph_analysis.allocator);
             scratch.local_nominal_declarations.deinit();
             scratch.key_writer.deinit();
             scratch.graph_analysis.deinit();
@@ -8327,6 +8335,13 @@ fn appendCheckedTypeRootWithRowDefault(
     var_: Var,
     row_default_candidate: ?RowDefault,
 ) Allocator.Error!CheckedTypeId {
+    // Most requests name a variable that is already published; answer those
+    // exactly as a publication's root step would, without starting one.
+    const resolved = module.typeStoreConst().resolveVar(var_);
+    if (active.get(resolved.var_)) |id| {
+        applyCheckedTypeRowDefault(store, id, checkedTypeVariableRowDefault(resolved.desc.content, row_default_candidate));
+        return id;
+    }
     var publisher = CheckedTypePublisher{
         .allocator = allocator,
         .module = module,
@@ -8388,9 +8403,12 @@ const CheckedTypePublisher = struct {
     };
 
     fn run(self: *CheckedTypePublisher, root: Task) Allocator.Error!Result {
-        var frames: std.ArrayList(Frame) = .empty;
-        defer frames.deinit(self.allocator);
+        const scratch = &self.active.scratch.?;
+        const frames = &scratch.publisher_frames;
+        const frames_allocator = scratch.graph_analysis.allocator;
+        std.debug.assert(frames.items.len == 0);
         errdefer {
+            defer frames.clearRetainingCapacity();
             // Reservations nest, so the innermost frame releases first.
             var index = frames.items.len;
             while (index > 0) {
@@ -8398,19 +8416,21 @@ const CheckedTypePublisher = struct {
                 self.releaseFrame(&frames.items[index]);
             }
         }
-        try frames.append(self.allocator, .{ .task = root });
+        try frames.append(frames_allocator, .{ .task = root });
         var input: ?Result = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
-            switch (try self.stepFrame(frame, input)) {
-                .call => |task| {
-                    try frames.append(self.allocator, .{ .task = task });
+            const step = try self.stepFrame(frame, input);
+            switch (step) {
+                .call => {
+                    const next = try frames.addOne(frames_allocator);
+                    next.* = .{ .task = step.call };
                     input = null;
                 },
-                .ret => |result| {
-                    _ = frames.pop();
-                    if (frames.items.len == 0) return result;
-                    input = result;
+                .ret => {
+                    frames.items.len -= 1;
+                    if (frames.items.len == 0) return step.ret;
+                    input = step.ret;
                 },
             }
         }
@@ -8433,14 +8453,14 @@ const CheckedTypePublisher = struct {
     }
 
     fn stepFrame(self: *CheckedTypePublisher, frame: *Frame, input: ?Result) Allocator.Error!Step {
-        return switch (frame.task) {
-            .root => |*task| self.stepRoot(frame, task, input),
-            .payload => |*task| self.stepPayload(frame, task, input),
-            .range => |*task| self.stepRange(frame, task, input),
-            .fields => |*task| self.stepFields(frame, task, input),
-            .tags => |*task| self.stepTags(frame, task, input),
-            .constraints => |*task| self.stepConstraints(frame, task, input),
-        };
+        switch (frame.task) {
+            .root => |*task| return self.stepRoot(frame, task, input),
+            .payload => |*task| return self.stepPayload(frame, task, input),
+            .range => |*task| return self.stepRange(frame, task, input),
+            .fields => |*task| return self.stepFields(frame, task, input),
+            .tags => |*task| return self.stepTags(frame, task, input),
+            .constraints => |*task| return self.stepConstraints(frame, task, input),
+        }
     }
 
     fn rootStep(var_: Var, row_default_candidate: ?RowDefault) Step {
@@ -8581,7 +8601,7 @@ const CheckedTypePublisher = struct {
         errdefer _ = active.remove(resolved_var);
         const fingerprint = checkedTypePayloadStructuralFingerprint(.source, build_payload.*);
         if (store.structuralRootForPayload(.source, fingerprint, build_payload.*)) |existing| {
-            deinitCheckedTypePayloadBuild(self.allocator, build_payload);
+            freeCheckedTypePayloadBuild(self.allocator, build_payload);
             payload_owned = false;
             applyCheckedTypeRowDefault(store, existing, row_default);
             source_root.value_ptr.* = existing;
@@ -8591,7 +8611,7 @@ const CheckedTypePublisher = struct {
         const key_info = try active.scratch.?.key_writer.fromVar(resolved_var);
         std.debug.assert(!key_info.contains_identity_variables);
         if (store.rootForKey(key_info.key)) |existing| {
-            deinitCheckedTypePayloadBuild(self.allocator, build_payload);
+            freeCheckedTypePayloadBuild(self.allocator, build_payload);
             payload_owned = false;
             applyCheckedTypeRowDefault(store, existing, row_default);
             source_root.value_ptr.* = existing;
