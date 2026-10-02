@@ -1360,7 +1360,7 @@ pub const Program = struct {
             .parser_runtime => |runtime| runtime.owner,
             .encoder_for_runtime => |runtime| runtime.owner,
         };
-        return std.mem.eql(u8, &proc_template.artifact.bytes, &filling.app_artifact);
+        return std.mem.eql(u8, &proc_template.artifact.bytes, &filling.app_module);
     }
 
     fn computeRequirementReachingFns(self: *Program, filling: Common.PlatformRequirementFilling) std.mem.Allocator.Error!std.DynamicBitSetUnmanaged {

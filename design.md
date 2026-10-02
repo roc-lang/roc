@@ -475,7 +475,7 @@ the platform's source or types. So a function that references a function of
 the app from outside the app (which only a requirement can), or references a
 function that does, digests the program's platform/app relation key into its
 identity (`Lifted.Program.fnReachesPlatformRequirement`). The relation key is a
-function of the app's artifact key, which the app's own procedure identities
+function of the app's checked module key, which the app's own procedure identities
 already digest, so such a platform procedure is shared exactly as widely as
 the app procedures it reaches; every other platform procedure keeps one
 identity across apps.

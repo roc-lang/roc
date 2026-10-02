@@ -9354,7 +9354,7 @@ const Builder = struct {
         for (self.moduleViews()) |*view| {
             for (view.platform_required_bindings.bindings) |binding| {
                 const this: Common.PlatformRequirementFilling = .{
-                    .app_artifact = binding.app_value.artifact.bytes,
+                    .app_module = binding.app_value.artifact.bytes,
                     .relation = binding.relation.bytes,
                 };
                 if (filling) |existing| {

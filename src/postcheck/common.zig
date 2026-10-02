@@ -78,7 +78,7 @@ pub const LoweringModuleId = LIR.LoweringModuleId;
 /// platform's source or types, so a procedure whose code reaches one digests
 /// the relation into its identity (`Lifted.Program.fnSourceDigest`).
 pub const PlatformRequirementFilling = struct {
-    app_artifact: [32]u8,
+    app_module: [32]u8,
     relation: [32]u8,
 };
 
