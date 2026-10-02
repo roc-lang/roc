@@ -119,6 +119,9 @@ pub const EvidenceView = struct {
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     digest: Ast.EvidenceDigest,
+    /// Where the topology sits in the program's evidence lists, when it was
+    /// read from them.
+    program_span: ?ProgramEvidenceSpan = null,
 
     pub fn init(
         nodes: []const check.ConstStore.ConstFnEvidence,
@@ -127,6 +130,17 @@ pub const EvidenceView = struct {
     ) EvidenceView {
         return .{ .nodes = nodes, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(nodes, frames, head) };
     }
+};
+
+/// An evidence topology's position in the program's evidence lists. The
+/// lists only grow, so a position names the same topology for the program's
+/// whole lifetime.
+pub const ProgramEvidenceSpan = struct {
+    nodes_start: u32,
+    nodes_len: u32,
+    frames_start: u32,
+    frames_len: u32,
+    head: ?u32,
 };
 
 const OwnedEvidence = struct {
@@ -286,6 +300,9 @@ pub const SpecBuilder = struct {
     /// whose topology is equal, found through `owned_evidence_by_digest`.
     owned_evidence: std.ArrayList(OwnedEvidence),
     owned_evidence_by_digest: std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)),
+    /// The owned copy each program evidence position was already found
+    /// equal to.
+    owned_evidence_by_program_span: std.AutoHashMap(ProgramEvidenceSpan, u32),
     lookup: std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)),
     counters: ?*Counters,
     reserved_identities: if (identity_shadow_enabled) std.ArrayList(Ast.SpecIdentity) else void,
@@ -305,6 +322,7 @@ pub const SpecBuilder = struct {
             .local_evidence = .empty,
             .owned_evidence = .empty,
             .owned_evidence_by_digest = std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)).init(allocator),
+            .owned_evidence_by_program_span = std.AutoHashMap(ProgramEvidenceSpan, u32).init(allocator),
             .lookup = std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)).init(allocator),
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
@@ -326,6 +344,7 @@ pub const SpecBuilder = struct {
         var owned_buckets = self.owned_evidence_by_digest.valueIterator();
         while (owned_buckets.next()) |bucket| bucket.deinit(self.allocator);
         self.owned_evidence_by_digest.deinit();
+        self.owned_evidence_by_program_span.deinit();
     }
 
     /// Reserve a fresh record for `identity`, or return the existing
@@ -414,9 +433,13 @@ pub const SpecBuilder = struct {
         identity: Ast.SpecIdentity,
         evidence: EvidenceView,
     ) std.mem.Allocator.Error!?LookupResult {
+        // Owned copies are one per distinct topology, so once the request's
+        // program position is known to equal one, comparing copies is
+        // comparing topologies.
+        const known: ?u32 = if (evidence.program_span) |span| self.owned_evidence_by_program_span.get(span) else null;
         for (entries) |local_spec| {
             const record = self.recordPtr(local_spec);
-            if (!evidenceEql(self.localEvidence(local_spec), evidence)) continue;
+            if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.request_fn_ty, record.request_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.request_fn_ty);
@@ -424,12 +447,21 @@ pub const SpecBuilder = struct {
         for (entries) |local_spec| {
             const record = self.recordPtr(local_spec);
             if (record.status != .ready) continue;
-            if (!evidenceEql(self.localEvidence(local_spec), evidence)) continue;
+            if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.solved_fn_ty, record.solved_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.solved_fn_ty);
         }
         return null;
+    }
+
+    fn localEvidenceEql(self: *const SpecBuilder, local_spec: Ast.SpecId, evidence: EvidenceView, known: ?u32) bool {
+        if (known) |index| {
+            const raw = @intFromEnum(local_spec);
+            if (raw >= self.local_evidence.items.len) invariant("Monotype specialization record had no exact evidence topology");
+            return self.local_evidence.items[raw] == index;
+        }
+        return evidenceEql(self.localEvidence(local_spec), evidence);
     }
 
     fn localCodecContractMatches(
@@ -576,6 +608,15 @@ pub const SpecBuilder = struct {
 
     /// The owned copy equal to `evidence`, made on first use.
     fn ownedEvidenceIndex(self: *SpecBuilder, evidence: EvidenceView) std.mem.Allocator.Error!u32 {
+        const span = evidence.program_span orelse return try self.ownedEvidenceIndexByTopology(evidence);
+        const known = try self.owned_evidence_by_program_span.getOrPut(span);
+        if (known.found_existing) return known.value_ptr.*;
+        errdefer _ = self.owned_evidence_by_program_span.remove(span);
+        known.value_ptr.* = try self.ownedEvidenceIndexByTopology(evidence);
+        return known.value_ptr.*;
+    }
+
+    fn ownedEvidenceIndexByTopology(self: *SpecBuilder, evidence: EvidenceView) std.mem.Allocator.Error!u32 {
         const bucket = try self.owned_evidence_by_digest.getOrPut(evidence.digest);
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         for (bucket.value_ptr.items) |index| {

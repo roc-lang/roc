@@ -3306,6 +3306,18 @@ fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) Sto
     );
 }
 
+/// Where a committed function's evidence sits in the program's evidence
+/// lists.
+fn programFnEvidenceSpan(template: Ast.FnTemplate) specialize.ProgramEvidenceSpan {
+    return .{
+        .nodes_start = template.const_evidence.start,
+        .nodes_len = template.const_evidence.len,
+        .frames_start = template.const_evidence_frames.start,
+        .frames_len = template.const_evidence_frames.len,
+        .head = template.const_evidence_frame_head,
+    };
+}
+
 fn draftFnEvidence(body_draft: *const BodyDraftStore, template: DraftFnTemplate) StoredConstFnEvidence {
     return StoredConstFnEvidence.recorded(
         body_draft.constFnEvidence(template.const_evidence),
@@ -8496,6 +8508,7 @@ const Builder = struct {
                 request_fn_ty_digest,
             ),
             evidence,
+            null,
             fn_id,
             status,
         );
@@ -8506,6 +8519,7 @@ const Builder = struct {
         nested: Ast.NestedFn,
         method_scope: checked.ModuleId,
         evidence: StoredConstFnEvidence,
+        program_span: ?specialize.ProgramEvidenceSpan,
         capture_abi_digest: names.TypeDigest,
         codec_contract: ?Ast.CodecContractIdentity,
         request_fn_ty: Type.TypeId,
@@ -8516,6 +8530,7 @@ const Builder = struct {
         return try self.addSpecRecord(
             self.nestedSpecIdentity(nested, method_scope, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
+            program_span,
             fn_id,
             .lowering,
         );
@@ -8525,10 +8540,13 @@ const Builder = struct {
         self: *Builder,
         identity: Ast.SpecIdentity,
         evidence: StoredConstFnEvidence,
+        program_span: ?specialize.ProgramEvidenceSpan,
         fn_id: Ast.FnId,
         status: Ast.SpecStatus,
     ) Allocator.Error!Ast.SpecId {
-        const reserved = try self.spec_store.reserve(identity, specializationEvidenceView(evidence), fn_id);
+        var view = specializationEvidenceView(evidence);
+        view.program_span = program_span;
+        const reserved = try self.spec_store.reserve(identity, view, fn_id);
         if (!reserved.created) Common.invariant("Monotype specialization record already existed before lowering registered it");
         const spec = reserved.spec orelse Common.invariant("fresh Monotype specialization record resolved to an imported target");
         switch (status) {
@@ -12741,15 +12759,19 @@ const Builder = struct {
             const digest = self.specializationTypeDigest(fn_ty);
             const fn_template = self.program.fnSource(fn_id);
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
+            const program_span = programFnEvidenceSpan(fn_template);
             const capture_abi_digest = spec.capture_abi_digest;
+            var view = specializationEvidenceView(evidence);
+            view.program_span = program_span;
             if (try self.spec_store.findLocal(
                 self.nestedSpecIdentity(spec.nested, spec.method_scope, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
-                specializationEvidenceView(evidence),
+                view,
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
                 spec.nested,
                 spec.method_scope,
                 evidence,
+                program_span,
                 capture_abi_digest,
                 spec.sealed_codec_contract,
                 fn_ty,
