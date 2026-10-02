@@ -511,8 +511,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_lte", .{num_type}, .num_is_lte);
     }
 
-    if (env.common.findIdent("numeric_compare")) |ident| {
-        try low_level_map.put(ident, .compare);
+    // Three-way ordering (every numeric type with a total order)
+    for (non_float_numeric_type_names) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.order_relative_to", .{num_type}, .compare);
     }
 
     // from_str (all numeric types)

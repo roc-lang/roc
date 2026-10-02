@@ -6879,7 +6879,6 @@ Builtin :: [].{
 			## expect U8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U8, U8 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -7606,7 +7605,6 @@ Builtin :: [].{
 			## expect I8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I8, I8 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -8452,7 +8450,6 @@ Builtin :: [].{
 			## expect U16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U16, U16 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -9238,7 +9235,6 @@ Builtin :: [].{
 			## expect I16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I16, I16 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10125,7 +10121,6 @@ Builtin :: [].{
 			## expect U32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U32, U32 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10943,7 +10938,6 @@ Builtin :: [].{
 			## expect I32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I32, I32 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -11847,7 +11841,6 @@ Builtin :: [].{
 			## expect U64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U64, U64 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -12727,7 +12720,6 @@ Builtin :: [].{
 			## expect I64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I64, I64 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -13654,7 +13646,6 @@ Builtin :: [].{
 			## expect U128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U128, U128 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -14547,7 +14538,6 @@ Builtin :: [].{
 			## expect I128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I128, I128 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -15562,7 +15552,6 @@ Builtin :: [].{
 			## expect Dec.order_relative_to(3.0, 2.0) == After
 			## ```
 			order_relative_to : Dec, Dec -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -24030,8 +24019,6 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 	} else {
 		value.rem_by(divisor) == zero
 	}
-
-numeric_compare : item, item -> [Before, Same, After]
 
 range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
 	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]

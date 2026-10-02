@@ -59,6 +59,7 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -107,7 +108,7 @@ fn carriesExpectation(store: *const LirStore, definitions: *const collections.De
                 .local => |source| local = source,
                 .field, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return false,
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .store_struct, .store_tag, .set_local, .join, .switch_stmt, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .jump, .ret, .crash => return false,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .store_struct, .store_tag, .set_local, .join, .switch_stmt, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .jump, .ret, .crash => return false,
         }
     }
     return false;

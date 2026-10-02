@@ -202,7 +202,9 @@ pub const RepresentationKind = union(enum) {
     dynamic: DynamicKind,
     primitive: checked.CheckedPrimitive,
     bool_tag_union,
-    erased_callable: checked.CheckedFunctionKind,
+    /// Every function value, pure or effectful, has the one erased-callable
+    /// representation.
+    erased_callable,
     alias,
     record,
     tuple,
@@ -524,6 +526,12 @@ pub const DictionaryMethodEvidence = struct {
     worker_desc_args: Span = .{},
     requirement_desc_sources: Span = .{},
     requirement_desc_args: Span = .{},
+    /// One representation per open record inside the requirement's
+    /// signature, in `requirementOpenRecords` order: the value this method's
+    /// evidence callable has at that position. A frame holding this
+    /// dictionary reads each one as a requirement descriptor after the
+    /// requirement's own.
+    requirement_leaf_sources: Span = .{},
     hidden_desc_sources: Span = .{},
     /// The checked evidence edge that selected this method's target. Its
     /// recorded substitution names the type each variable of the target's
@@ -875,6 +883,14 @@ pub const StoredFnSource = struct {
     fn_id: checked.ConstFnId,
 };
 
+/// An open record's descriptor read from a worker's dictionary: requirement
+/// descriptor `hidden_index` of the requirement's method.
+pub const WorkerDictionaryDescriptor = struct {
+    rep: TypeRepId,
+    requirement: DictionaryRequirementId,
+    hidden_index: u32,
+};
+
 /// Complete checked source and hidden-input plan for one worker.
 pub const WorkerPlan = struct {
     id: WorkerPlanId,
@@ -896,6 +912,9 @@ pub const WorkerPlan = struct {
     hidden_dicts: Span = .{},
     body_hidden_dicts: Span = .{},
     erased_captures: Span = .{},
+    /// Open records the worker's body needs whose descriptor one of its own
+    /// dictionaries supplies, read from it on entry.
+    dictionary_descs: Span = .{},
     /// For a hosted worker, the host ABI signature of its extern boundary: the
     /// hosted declaration's type, with each of its type variable slots
     /// represented exactly as this worker represents it.
@@ -1180,6 +1199,9 @@ pub const ProgramPlan = struct {
     representations: std.ArrayList(TypeRepresentation),
     /// Checked-source ABI shapes, requested only at public boundaries.
     host_reps: collections.DenseMap(TypeRepId, TypeRepId),
+    /// The ABI representation the sort low-level calls each comparator
+    /// representation through, keyed by the comparator's representation.
+    sort_comparator_abis: collections.DenseMap(TypeRepId, TypeRepId),
     children: std.ArrayList(RepChild),
     tag_variants: std.ArrayList(TagVariant),
     declared_fields: std.ArrayList(DeclaredField),
@@ -1195,6 +1217,8 @@ pub const ProgramPlan = struct {
     direct_call_hidden_dict_args: std.ArrayList(DirectCallHiddenDictionaryArg),
     dictionary_method_evidence: std.ArrayList(DictionaryMethodEvidence),
     dictionary_method_desc_sources: std.ArrayList(DictionaryMethodDescriptorSource),
+    requirement_leaf_reps: std.ArrayList(TypeRepId),
+    worker_dictionary_descs: std.ArrayList(WorkerDictionaryDescriptor),
     dictionary_method_hidden_desc_sources: std.ArrayList(DictionaryMethodHiddenDescriptorSource),
     scheme_rep_substitutions: std.ArrayList(SchemeRepSubstitution),
     call_type_substitutions: std.ArrayList(CallTypeSubstitution),
@@ -1244,6 +1268,7 @@ pub const ProgramPlan = struct {
             .stored_type_reps = .empty,
             .representations = .empty,
             .host_reps = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
+            .sort_comparator_abis = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .children = .empty,
             .tag_variants = .empty,
             .declared_fields = .empty,
@@ -1257,6 +1282,8 @@ pub const ProgramPlan = struct {
             .direct_call_hidden_dict_args = .empty,
             .dictionary_method_evidence = .empty,
             .dictionary_method_desc_sources = .empty,
+            .requirement_leaf_reps = .empty,
+            .worker_dictionary_descs = .empty,
             .dictionary_method_hidden_desc_sources = .empty,
             .scheme_rep_substitutions = .empty,
             .call_type_substitutions = .empty,
@@ -1272,6 +1299,10 @@ pub const ProgramPlan = struct {
         return self.host_reps.get(rep) orelse boxyPlanInvariant("missing checked host ABI request");
     }
 
+    pub fn sortComparatorAbiRep(self: *const ProgramPlan, comparator_rep: TypeRepId) TypeRepId {
+        return self.sort_comparator_abis.get(comparator_rep) orelse boxyPlanInvariant("missing planned sort comparator ABI");
+    }
+
     pub fn deinit(self: *ProgramPlan) void {
         self.literal_sites.deinit(self.allocator);
         if (self.literal_evidence) |*evidence| evidence.deinit(self.allocator);
@@ -1283,6 +1314,8 @@ pub const ProgramPlan = struct {
         self.dictionary_method_hidden_desc_sources.deinit(self.allocator);
         self.scheme_rep_substitutions.deinit(self.allocator);
         self.dictionary_method_desc_sources.deinit(self.allocator);
+        self.requirement_leaf_reps.deinit(self.allocator);
+        self.worker_dictionary_descs.deinit(self.allocator);
         self.dictionary_method_evidence.deinit(self.allocator);
         self.direct_call_hidden_dict_args.deinit(self.allocator);
         self.direct_call_hidden_desc_args.deinit(self.allocator);
@@ -1297,6 +1330,7 @@ pub const ProgramPlan = struct {
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
         self.host_reps.deinit();
+        self.sort_comparator_abis.deinit();
         self.type_reps.deinit(self.allocator);
         self.stored_type_reps.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
@@ -1682,6 +1716,27 @@ pub const ProgramPlan = struct {
 
     pub fn dictionaryMethodDescriptorSourceSlice(self: *const ProgramPlan, span: Span) []const DictionaryMethodDescriptorSource {
         return self.dictionary_method_desc_sources.items[span.start .. span.start + span.len];
+    }
+
+    pub fn requirementLeafRepSlice(self: *const ProgramPlan, span: Span) []const TypeRepId {
+        return self.requirement_leaf_reps.items[span.start .. span.start + span.len];
+    }
+
+    pub fn workerDictionaryDescriptorSlice(self: *const ProgramPlan, span: Span) []const WorkerDictionaryDescriptor {
+        return self.worker_dictionary_descs.items[span.start .. span.start + span.len];
+    }
+
+    /// A record whose row is still open: a dynamic representation whose
+    /// children are only the fields its row names. Its value is the complete
+    /// record it was built from, which only that value's descriptor
+    /// describes; its fields are a view of that record.
+    pub fn repIsOpenRecord(self: *const ProgramPlan, rep_id: TypeRepId) bool {
+        const rep = self.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind != .dynamic or rep.children.len == 0) return false;
+        for (self.childSlice(rep.children)) |child| {
+            if (child.role != .record_field) return false;
+        }
+        return true;
     }
 
     pub fn dictionaryMethodHiddenDescriptorSourceSlice(
@@ -2392,8 +2447,8 @@ const LiteralPlanner = struct {
                     shape.kind = .tuple;
                     for (args, 0..) |arg, index| try children.append(allocator, self.literalChild(.{ .tuple_elem = @intCast(index) }, arg));
                 },
-                .function => |function| {
-                    shape.kind = .{ .erased_callable = checked.finalizedFunctionKind(function.kind) };
+                .function => {
+                    shape.kind = .erased_callable;
                     for (args[0 .. args.len - 1], 0..) |arg, index| try children.append(allocator, self.literalChild(.{ .function_arg = @intCast(index) }, arg));
                     try children.append(allocator, self.literalChild(.function_ret, args[args.len - 1]));
                 },
@@ -2686,6 +2741,7 @@ const LiteralPlanner = struct {
                     const descriptors = try self.builder.dictionaryMethodRequirementDescriptorSources(adapter.requirement_type, shape.arg_reps, shape.ret_rep);
                     adapter.requirement_desc_args = descriptors.args;
                     adapter.requirement_desc_sources = descriptors.sources;
+                    adapter.requirement_leaf_sources = descriptors.leaf_sources;
                     adapter.hidden_desc_sources = try self.builder.dictionaryMethodHiddenDescriptorSources(adapter.resolution.worker, adapter.worker_desc_args, adapter.requirement_desc_args);
                 }
                 const adapter_index: u32 = @intCast(self.builder.plan.dictionary_method_evidence.items.len);
@@ -3019,6 +3075,7 @@ const LiteralPlanner = struct {
             const requirement = try self.builder.dictionaryMethodRequirementDescriptorSources(method.requirement_type, shape.arg_reps, shape.ret_rep);
             method.requirement_desc_args = requirement.args;
             method.requirement_desc_sources = requirement.sources;
+            method.requirement_leaf_sources = requirement.leaf_sources;
             method.hidden_desc_sources = try self.builder.dictionaryMethodHiddenDescriptorSources(method.resolution.worker, method.worker_desc_args, method.requirement_desc_args);
         }
         self.builder.plan.dictionary_method_evidence.items[index] = method;
@@ -3498,6 +3555,7 @@ pub fn analyzeProgram(
     try builder.materializeWorkerHiddenDictionaryParams();
     try builder.materializeWorkerErasedCaptures();
     try builder.materializeStoredCallableCaptureSources();
+    try builder.materializeStoredCallableHiddenDescriptorArgs();
     try builder.materializeRootHiddenDescriptorArgs();
     try builder.materializeDirectCallHiddenDescriptorArgs();
     try builder.materializeGeneratedCodecCallHiddenDescriptorArgs();
@@ -4473,8 +4531,13 @@ const Builder = struct {
             },
             .low_level_after_args => |site| {
                 const expr = site.view.checked_bodies.expr(site.expr);
-                if (builtinTryArgs(site.view.checked_types, expr.ty) != null) {
+                if (builtinTryArgs(site.view.checked_types, expr.ty) != null or expr.data.run_low_level.op == .compare) {
                     _ = try self.requestHostRep(try self.analyzeType(site.view, expr.ty));
+                }
+                const run = expr.data.run_low_level;
+                if (run.op == .list_sort_with) {
+                    if (run.args.len != 2) boxyPlanInvariant("list_sort_with did not take a list and a comparator");
+                    try self.planSortComparatorAbi(try self.analyzeType(site.view, site.view.checked_bodies.expr(run.args[1]).ty));
                 }
             },
             .inspect_expr => |site| try self.pushPlanActions(actions, &.{
@@ -6072,6 +6135,10 @@ const Builder = struct {
                 try actions.append(self.allocator, .{ .interpolation_after_parts = site });
             },
             .structural_eq => |eq| {
+                if (eq.discriminant) |discriminant| {
+                    try actions.append(self.allocator, exprAction(view, discriminant.value));
+                    return;
+                }
                 try actions.append(self.allocator, exprAction(view, eq.lhs));
                 try actions.append(self.allocator, exprAction(view, eq.rhs));
                 try actions.append(self.allocator, .{ .derived_root_after_operands = .{ .view = view, .expr = expr_id, .worker = worker } });
@@ -8546,6 +8613,39 @@ const Builder = struct {
         }
     }
 
+    /// The sort low-level calls its boxed comparator through a fixed ABI: the
+    /// comparator's arguments keep their worker representation, and its
+    /// ordering result is the closed `[Before, Same, After]` that the ABI
+    /// context gives the open callback result.
+    fn planSortComparatorAbi(self: *Builder, boxed_comparator_rep: TypeRepId) Allocator.Error!void {
+        const comparator_rep = self.repQuery().requiredSingleChild(boxed_comparator_rep, .box_payload).rep;
+        if (self.plan.sort_comparator_abis.get(comparator_rep) != null) return;
+        const function = self.repQuery().functionChildren(comparator_rep) orelse
+            boxyPlanInvariant("sort comparator was not a function");
+        const abi_ret = try self.requestHostRep(function.ret);
+        var children = std.ArrayList(RepChild).empty;
+        defer children.deinit(self.allocator);
+        for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(comparator_rep)].children)) |child| {
+            var abi_child = child;
+            switch (child.role) {
+                .function_ret => {
+                    abi_child.rep = abi_ret;
+                    abi_child.source_type = self.plan.representations.items[@intFromEnum(abi_ret)].source_type;
+                },
+                .function_arg => {},
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyPlanInvariant("sort comparator representation had a non-function child"),
+            }
+            try children.append(self.allocator, abi_child);
+        }
+        const abi_rep: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+        try self.plan.representations.append(self.allocator, .{
+            .source_type = self.plan.representations.items[@intFromEnum(comparator_rep)].source_type,
+            .kind = .erased_callable,
+            .children = try self.commitPendingChildren(children.items),
+        });
+        try self.plan.sort_comparator_abis.put(comparator_rep, abi_rep);
+    }
+
     fn requestHostRep(self: *Builder, worker_rep: TypeRepId) Allocator.Error!TypeRepId {
         if (self.plan.host_reps.get(worker_rep)) |rep| return rep;
         const source = self.plan.representations.items[@intFromEnum(worker_rep)].source_type;
@@ -9084,7 +9184,7 @@ const Builder = struct {
                 }
                 try roles.append(self.allocator, .function_ret);
                 try requests.append(self.allocator, self.checkedRequest(view, function.ret));
-                break :blk try self.childrenFinish(source_type, .{ .erased_callable = checked.finalizedFunctionKind(function.kind) }, &roles, requests.items, false);
+                break :blk try self.childrenFinish(source_type, .erased_callable, &roles, requests.items, false);
             },
             .empty_record => self.completeRep(rep_id, .{ .source_type = source_type, .kind = .empty_record }),
             .tag_union => |tag_union| if (self.host_mode)
@@ -9232,7 +9332,7 @@ const Builder = struct {
                         current = record.ext;
                     },
                     .alias => |alias| current = alias.backing,
-                    .flex, .rigid => |variable| break :structural variable.row_default == .empty_record,
+                    .flex, .rigid => break :structural self.variableRowIsDefaultClosed(view, current, .empty_record),
                     .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => break :structural false,
                 }
             }
@@ -10281,10 +10381,7 @@ const Builder = struct {
                 try children.append(self.allocator, self.storedChild(.function_ret, results[results.len - 1]));
                 return .{
                     .source_type = checked_source,
-                    .kind = .{ .erased_callable = checked.finalizedFunctionKind(checkedFunctionPayload(
-                        self.moduleForId(checked_source.module),
-                        checked_source.ty,
-                    ).kind) },
+                    .kind = .erased_callable,
                     .children = try self.commitPendingChildren(children.items),
                 };
             },
@@ -11171,8 +11268,148 @@ const Builder = struct {
     /// hidden descriptor.
     fn isDescriptorLeaf(self: *const Builder, rep_id: TypeRepId) bool {
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        return rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0 and
-            rep.descriptor != null and rep.sealed_default == null;
+        if (rep.descriptor == null or rep.sealed_default != null) return false;
+        return (rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0) or
+            self.plan.repIsOpenRecord(rep_id);
+    }
+
+    /// The row variable that leaves an open record's row open.
+    fn openRecordRowVariable(self: *Builder, rep_id: TypeRepId) ?CheckedTypeIdentity {
+        const source = self.plan.representations.items[@intFromEnum(rep_id)].source_type;
+        const view = self.moduleForId(source.module);
+        var current = source.ty;
+        while (true) {
+            switch (view.checked_types.payload(current)) {
+                .record => |record| {
+                    if (record.ext == current) return null;
+                    current = record.ext;
+                },
+                .alias => |alias| current = alias.backing,
+                .flex, .rigid => return typeRef(view, current),
+                .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union, .empty_record => return null,
+            }
+        }
+    }
+
+    /// Whether a worker's own scheme quantifies the row variable of an open
+    /// record, so the worker's own frame describes it.
+    fn openRecordOwnedByScheme(self: *Builder, worker_id: WorkerPlanId, rep_id: TypeRepId) bool {
+        if (!self.plan.repIsOpenRecord(rep_id)) return false;
+        const row = self.openRecordRowVariable(rep_id) orelse return false;
+        const scheme = self.workerSchemeVars(self.plan.workers.items[@intFromEnum(worker_id)].source) orelse return false;
+        for (scheme.vars) |variable| {
+            if (typeRefEql(typeRef(scheme.view, variable), row)) return true;
+        }
+        return false;
+    }
+
+    /// Open records inside a dictionary requirement's signature, including
+    /// its function-typed positions, in a fixed order: the positions a frame
+    /// holding the dictionary can read a descriptor for.
+    fn collectRequirementOpenRecords(
+        self: *Builder,
+        rep_id: TypeRepId,
+        out: *std.ArrayList(TypeRepId),
+        seen: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!void {
+        if ((try seen.getOrPut(rep_id)).found_existing) return;
+        if (self.plan.repIsOpenRecord(rep_id) and self.plan.representations.items[@intFromEnum(rep_id)].descriptor != null) {
+            const identity = self.repQuery().descriptorArgumentIdentityRep(rep_id);
+            for (out.items) |existing| {
+                if (self.repQuery().descriptorArgumentIdentityRep(existing) == identity) break;
+            } else try out.append(self.allocator, rep_id);
+        }
+        var index: usize = 0;
+        while (index < self.plan.representations.items[@intFromEnum(rep_id)].children.len) : (index += 1) {
+            const child = self.plan.children.items[self.plan.representations.items[@intFromEnum(rep_id)].children.start + index];
+            if (self.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
+            try self.collectRequirementOpenRecords(child.rep, out, seen);
+        }
+    }
+
+    /// The number of requirement descriptors a dictionary method's call
+    /// supplies for its requirement's runtime values.
+    fn requirementRuntimeDescriptorCount(self: *Builder, requirement_rep: TypeRepId) Allocator.Error!u32 {
+        const requirement_function = (self.repQuery().functionChildren(requirement_rep)) orelse
+            boxyPlanInvariant("dictionary method requirement was not callable");
+        var params = std.ArrayList(HiddenDescriptorParam).empty;
+        defer params.deinit(self.allocator);
+        var seen_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer seen_reps.deinit();
+        var seen_descs = collections.DenseMap(DescriptorRequirementId, void).init(self.allocator);
+        defer seen_descs.deinit();
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_function.rep)].children);
+        for (children[requirement_function.args_start..][0..requirement_function.arg_count]) |arg| {
+            try self.collectRuntimeHiddenDescriptorsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+        }
+        try self.collectRuntimeHiddenDescriptorsForRep(requirement_function.ret, &params, &seen_reps, &seen_descs);
+        return @intCast(params.items.len);
+    }
+
+    /// The requirement of one of a worker's own dictionaries whose signature
+    /// names an open record, and where the dictionary describes it.
+    fn workerDictionaryDescriptorForLeaf(
+        self: *Builder,
+        worker: WorkerPlan,
+        leaf: TypeRepId,
+    ) Allocator.Error!?WorkerDictionaryDescriptor {
+        if (!self.plan.repIsOpenRecord(leaf)) return null;
+        var roots = std.ArrayList(TypeRepId).empty;
+        defer roots.deinit(self.allocator);
+        try roots.append(self.allocator, worker.rep);
+        if (self.workerSchemeVars(worker.source)) |scheme| {
+            for (scheme.vars) |variable| {
+                const rep = self.plan.repForSourceType(typeRef(scheme.view, variable)) orelse continue;
+                try roots.append(self.allocator, rep);
+            }
+        }
+        var dispatchers = std.ArrayList(TypeRepId).empty;
+        defer dispatchers.deinit(self.allocator);
+        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer seen.deinit();
+        for (roots.items) |root| try self.collectRepsWithDictionaries(root, &dispatchers, &seen);
+
+        const leaf_identity = self.repQuery().descriptorArgumentIdentityRep(leaf);
+        for (dispatchers.items) |dispatcher| {
+            const dictionaries = self.plan.representations.items[@intFromEnum(dispatcher)].dictionaries;
+            var offset: u32 = 0;
+            while (offset < dictionaries.len) : (offset += 1) {
+                const requirement_id: DictionaryRequirementId = @enumFromInt(dictionaries.start + offset);
+                const requirement = self.plan.dictionaries.items[@intFromEnum(requirement_id)];
+                if (requirement.compile_time_only) continue;
+                const requirement_rep = self.plan.repForSourceType(requirement.fn_ty) orelse continue;
+                if (self.repQuery().functionChildren(requirement_rep) == null) continue;
+                var leaves = std.ArrayList(TypeRepId).empty;
+                defer leaves.deinit(self.allocator);
+                var leaf_seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+                defer leaf_seen.deinit();
+                try self.collectRequirementOpenRecords(requirement_rep, &leaves, &leaf_seen);
+                for (leaves.items, 0..) |candidate, index| {
+                    if (self.repQuery().descriptorArgumentIdentityRep(candidate) != leaf_identity) continue;
+                    return .{
+                        .rep = leaf,
+                        .requirement = requirement_id,
+                        .hidden_index = try self.requirementRuntimeDescriptorCount(requirement_rep) + @as(u32, @intCast(index)),
+                    };
+                }
+            }
+        }
+        return null;
+    }
+
+    fn collectRepsWithDictionaries(
+        self: *Builder,
+        rep_id: TypeRepId,
+        out: *std.ArrayList(TypeRepId),
+        seen: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!void {
+        if ((try seen.getOrPut(rep_id)).found_existing) return;
+        if (self.plan.representations.items[@intFromEnum(rep_id)].dictionaries.len != 0) try out.append(self.allocator, rep_id);
+        var index: usize = 0;
+        while (index < self.plan.representations.items[@intFromEnum(rep_id)].children.len) : (index += 1) {
+            const child = self.plan.children.items[self.plan.representations.items[@intFromEnum(rep_id)].children.start + index];
+            try self.collectRepsWithDictionaries(child.rep, out, seen);
+        }
     }
 
     /// Add the descriptor leaves `root` reaches to `leaves`, in pre-order.
@@ -11248,6 +11485,9 @@ const Builder = struct {
             try edge_stored_substitutions.append(self.allocator, null);
         }
         for (self.plan.callable_uses.items) |use| {
+            // A stored callable's descriptors come from its stored value, not
+            // from the frame restoring it.
+            if (use.stored_fn != null) continue;
             try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
             try edge_substitutions.append(self.allocator, self.useSchemeSubstitution(use.worker, use.use));
             // A stored function value's use fixes every variable of its
@@ -11382,7 +11622,7 @@ const Builder = struct {
                                 continue;
                             }
                         }
-                        if (own_scheme[callee].contains(leaf)) {
+                        if (own_scheme[callee].contains(leaf) or self.openRecordOwnedByScheme(edge.callee, leaf)) {
                             // A scheme variable the callee's signature names
                             // is described by the use's own argument and
                             // result values.
@@ -11612,6 +11852,7 @@ const Builder = struct {
             }
 
             const enclosing_start: u32 = @intCast(pending.items.len);
+            const dictionary_descs_start: u32 = @intCast(self.plan.worker_dictionary_descs.items.len);
             {
                 var evidence_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
                 defer evidence_reps.deinit();
@@ -11623,9 +11864,19 @@ const Builder = struct {
                 }
                 for (worker_leaves[worker_index].order.items) |leaf| {
                     if (seen_reps.contains(leaf) or evidence_reps.contains(leaf)) continue;
+                    // A dictionary of the worker's own describes an open
+                    // record its requirement names, so no caller supplies it.
+                    if (try self.workerDictionaryDescriptorForLeaf(self.plan.workers.items[worker_index], leaf)) |entry| {
+                        try self.plan.worker_dictionary_descs.append(self.allocator, entry);
+                        continue;
+                    }
                     try self.collectHiddenDescriptorsForRep(leaf, &pending, &seen_reps, &seen_descs);
                 }
             }
+            self.plan.workers.items[worker_index].dictionary_descs = .{
+                .start = dictionary_descs_start,
+                .len = @intCast(self.plan.worker_dictionary_descs.items.len - dictionary_descs_start),
+            };
 
             const evidence_only_start: u32 = @intCast(pending.items.len);
             const evidence_start: u32 = @intCast(self.plan.worker_evidence_descriptor_params.items.len);
@@ -12372,6 +12623,82 @@ const Builder = struct {
                 .fn_id = static_fn.fn_id,
             }, static_fn.worker);
         }
+    }
+
+    /// A stored callable value fixes its worker's instantiation: every type
+    /// variable its worker's descriptors describe occupies some position of
+    /// the stored function type or of a stored capture's type, and the stored
+    /// representation at that position is that descriptor's concrete source.
+    /// A checked use supplies its signature and evidence descriptors as any
+    /// callable use does; the variables of the scope that created the stored
+    /// closure appear in no type the use names, so the stored value supplies
+    /// those.
+    fn materializeStoredCallableHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
+        for (self.plan.callable_uses.items) |use| {
+            const stored_fn = use.stored_fn orelse continue;
+            const worker = self.plan.workers.items[@intFromEnum(use.worker)];
+            if (worker.enclosing_descs.len == 0) continue;
+            const value_rep = self.plan.repForSourceType(use.callable_ty) orelse
+                boxyPlanInvariant("stored callable use type was not analyzed");
+            const args = self.plan.direct_call_hidden_desc_args.items[use.hidden_desc_args.start..][0..use.hidden_desc_args.len];
+            const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+            if (args.len != params.len) boxyPlanInvariant("stored callable use did not plan every worker descriptor");
+            const enclosing_start = worker.enclosing_descs.start - worker.hidden_descs.start;
+            for (params[enclosing_start..][0..worker.enclosing_descs.len], args[enclosing_start..][0..worker.enclosing_descs.len]) |param, *arg| {
+                const rep = try self.storedCallableDescriptorRep(stored_fn, worker, value_rep, param.rep);
+                arg.* = .{
+                    .worker_desc = param.desc,
+                    .worker_rep = param.rep,
+                    .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
+                    .rep = rep,
+                };
+            }
+        }
+        for (self.plan.static_fns.items) |*static_fn| {
+            const stored_fn = StoredFnSource{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
+            const worker = self.plan.workers.items[@intFromEnum(static_fn.worker)];
+            const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+            const start: u32 = @intCast(self.plan.direct_call_hidden_desc_args.items.len);
+            for (params) |param| {
+                const rep = try self.storedCallableDescriptorRep(stored_fn, worker, static_fn.rep, param.rep);
+                try self.plan.direct_call_hidden_desc_args.append(self.allocator, .{
+                    .worker_desc = param.desc,
+                    .worker_rep = param.rep,
+                    .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
+                    .rep = rep,
+                });
+            }
+            static_fn.hidden_desc_args = .{ .start = start, .len = @intCast(params.len) };
+        }
+    }
+
+    /// The concrete representation a stored callable gives one worker
+    /// descriptor representation. `value_rep` is the callable value's own
+    /// concrete function type.
+    fn storedCallableDescriptorRep(
+        self: *Builder,
+        stored_fn: StoredFnSource,
+        worker: WorkerPlan,
+        value_rep: TypeRepId,
+        desc_rep: TypeRepId,
+    ) Allocator.Error!TypeRepId {
+        if (try self.repAtTypePosition(worker.rep, desc_rep, value_rep)) |found| return found;
+        const store_view = self.moduleForId(stored_fn.module);
+        const store = store_view.const_store orelse
+            boxyPlanInvariant("stored callable descriptor planning had no ConstStore");
+        const fn_value = store.getFn(stored_fn.fn_id);
+        for (self.plan.erasedCaptureSlice(worker.erased_captures)) |capture| {
+            if (capture.kind != .captured_value) continue;
+            const capture_id = capture.capture_id orelse
+                boxyPlanInvariant("stored callable value capture had no checked capture id");
+            const persisted = for (fn_value.captures) |persisted| {
+                if (std.meta.eql(persisted.id, capture_id)) break persisted;
+            } else continue;
+            const persisted_rep = self.plan.repForStoredType(.{ .module = stored_fn.module, .ty = persisted.ty }) orelse
+                boxyPlanInvariant("stored callable capture type was not analyzed");
+            if (try self.repAtTypePosition(capture.rep, desc_rep, persisted_rep)) |found| return found;
+        }
+        boxyPlanInvariant("stored callable worker descriptor was absent from its stored types");
     }
 
     fn appendStoredCallableCaptureSources(
@@ -13472,7 +13799,7 @@ const Builder = struct {
         const evidence = self.workerEvidenceParams(worker.source) orelse return false;
         for (self.plan.workerEvidenceDescriptorParamSlice(worker.evidence_descs)) |mapping| {
             const param = evidence.params[mapping.evidence_index];
-            if (evidence.view.checked_procedure_templates.evidenceParamPath(param).len == 0) return true;
+            if (param.path.len == 0) return true;
         }
         return false;
     }
@@ -14258,7 +14585,9 @@ const Builder = struct {
         }
         const param = worker_evidence.params[evidence_index];
         const path_view = worker_evidence.view;
-        const path = path_view.checked_procedure_templates.evidenceParamPath(param);
+        var path_steps = std.ArrayListUnmanaged(static_dispatch.EvidencePathStep).empty;
+        defer path_steps.deinit(self.allocator);
+        const path = try path_view.checked_procedure_templates.evidenceParamPath(self.allocator, param, &path_steps);
         const call_path: []const static_dispatch.EvidencePathStep = switch (param.source) {
             .scheme_callable => path,
             .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
@@ -15956,6 +16285,87 @@ const Builder = struct {
     /// representation whose descriptor identity is `target`. `path` holds
     /// the children stepped through; `active` holds the representations on
     /// the path, so a recursive type is not re-entered.
+    /// The representation at the position `target` occupies in `worker_root`,
+    /// read from `value_root`, a representation of the same type structure.
+    /// Unlike a runtime descriptor path, a type position may lie inside a
+    /// function's arguments or result.
+    fn repAtTypePosition(
+        self: *Builder,
+        worker_root: TypeRepId,
+        target: TypeRepId,
+        value_root: TypeRepId,
+    ) Allocator.Error!?TypeRepId {
+        var path = std.ArrayList(RepChild).empty;
+        defer path.deinit(self.allocator);
+        var active = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer active.deinit();
+        if (!try self.findTypePositionPath(worker_root, self.repQuery().descriptorArgumentIdentityRep(target), &path, &active)) return null;
+
+        var current = value_root;
+        for (path.items) |step| {
+            var candidate = current;
+            const next: RepChild = while (true) {
+                const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(candidate)].children);
+                if (self.namedQuery().findMatchingChildByRole(children, step)) |child| break child;
+                candidate = self.repQuery().structuralWrapperBackingRep(candidate) orelse return null;
+            };
+            current = next.rep;
+        }
+        return current;
+    }
+
+    fn findTypePositionPath(
+        self: *Builder,
+        root: TypeRepId,
+        target: TypeRepId,
+        path: *std.ArrayList(RepChild),
+        active: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!bool {
+        if (self.repQuery().descriptorArgumentIdentityRep(root) == target) return true;
+        if ((try active.getOrPut(root)).found_existing) return false;
+        const Frame = struct { rep: TypeRepId, index: usize = 0 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer {
+            for (frames.items) |frame| _ = active.remove(frame.rep);
+            frames.deinit(self.allocator);
+        }
+        frames.append(self.allocator, .{ .rep = root }) catch |err| {
+            _ = active.remove(root);
+            return err;
+        };
+        while (frames.items.len != 0) {
+            const top = &frames.items[frames.items.len - 1];
+            const children = self.plan.representations.items[@intFromEnum(top.rep)].children;
+            if (top.index == children.len) {
+                _ = active.remove(top.rep);
+                frames.items.len -= 1;
+                if (frames.items.len != 0) path.items.len -= 1;
+                continue;
+            }
+            const current = top.rep;
+            const child = self.plan.children.items[children.start + top.index];
+            top.index += 1;
+            switch (child.role) {
+                .function_arg, .function_ret => {},
+                .alias_backing, .nominal_backing, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload, .alias_arg, .nominal_arg, .nominal_padding_field => {
+                    if (!childCarriesRuntimeDescriptor(child.role)) continue;
+                },
+            }
+            if (self.plan.childIsSharedBackingTemplate(current, child)) continue;
+            try path.append(self.allocator, child);
+            if (self.repQuery().descriptorArgumentIdentityRep(child.rep) == target) return true;
+            if ((try active.getOrPut(child.rep)).found_existing) {
+                path.items.len -= 1;
+                continue;
+            }
+            frames.append(self.allocator, .{ .rep = child.rep }) catch |err| {
+                _ = active.remove(child.rep);
+                return err;
+            };
+        }
+        return false;
+    }
+
     fn findWorkerRuntimePath(
         self: *Builder,
         root: TypeRepId,
@@ -16482,6 +16892,7 @@ const Builder = struct {
     const DictionaryMethodRequirementDescriptorPlan = struct {
         args: Span = .{},
         sources: Span = .{},
+        leaf_sources: Span = .{},
     };
 
     const DictionaryMethodCallShape = struct {
@@ -16560,7 +16971,13 @@ const Builder = struct {
             &param_seen_reps,
             &param_seen_descs,
         );
-        if (params.items.len == 0) return .{};
+        const leaf_sources = try self.requirementLeafSources(
+            requirement_function,
+            requirement_children,
+            callable_arg_reps,
+            callable_ret_rep,
+        );
+        if (params.items.len == 0) return .{ .leaf_sources = leaf_sources };
 
         var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
         defer pending.deinit(self.allocator);
@@ -16634,7 +17051,37 @@ const Builder = struct {
         return .{
             .args = .{ .start = args_start, .len = @intCast(pending.items.len) },
             .sources = .{ .start = sources_start, .len = @intCast(pending.items.len) },
+            .leaf_sources = leaf_sources,
         };
+    }
+
+    /// The evidence callable's representation at each open record position of
+    /// the requirement's signature.
+    fn requirementLeafSources(
+        self: *Builder,
+        requirement_function: FunctionChildren,
+        requirement_children: []const RepChild,
+        callable_arg_reps: []const TypeRepId,
+        callable_ret_rep: TypeRepId,
+    ) Allocator.Error!Span {
+        var leaves = std.ArrayList(TypeRepId).empty;
+        defer leaves.deinit(self.allocator);
+        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer seen.deinit();
+        try self.collectRequirementOpenRecords(requirement_function.rep, &leaves, &seen);
+        const start: u32 = @intCast(self.plan.requirement_leaf_reps.items.len);
+        const requirement_args = requirement_children[requirement_function.args_start..][0..requirement_function.arg_count];
+        for (leaves.items) |leaf| {
+            const source = found: {
+                for (requirement_args, callable_arg_reps) |requirement_arg, callable_arg_rep| {
+                    if (try self.repAtTypePosition(requirement_arg.rep, leaf, callable_arg_rep)) |rep| break :found rep;
+                }
+                break :found try self.repAtTypePosition(requirement_function.ret, leaf, callable_ret_rep) orelse
+                    boxyPlanInvariant("dictionary method evidence callable had no value at a requirement open record position");
+            };
+            try self.plan.requirement_leaf_reps.append(self.allocator, source);
+        }
+        return .{ .start = start, .len = @intCast(leaves.items.len) };
     }
 
     fn dictionaryMethodWorkerDescriptorArgs(
@@ -16974,6 +17421,7 @@ const Builder = struct {
                 );
                 method.requirement_desc_args = requirement_plan.args;
                 method.requirement_desc_sources = requirement_plan.sources;
+                method.requirement_leaf_sources = requirement_plan.leaf_sources;
                 method.hidden_desc_sources = try self.dictionaryMethodHiddenDescriptorSources(
                     worker,
                     method.worker_desc_args,
@@ -21610,7 +22058,7 @@ test "evidence representation paths use exact nominal backing substitutions" {
     });
     const worker_substitutions = try testNominalSubstitution(&builder.plan, generalized_arg, exact_arg);
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .erased_callable = .pure }, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .erased_callable, .children = .{ .start = 0, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 1, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .empty_record },
@@ -21719,7 +22167,7 @@ test "evidence representation paths apply structural steps through a call-side n
     });
     const call_substitutions = try testNominalSubstitution(&builder.plan, formal, actual);
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .erased_callable = .pure } },
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .erased_callable },
         .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .tuple, .children = .{ .start = 2, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
@@ -21761,7 +22209,7 @@ test "dictionary method hidden descriptors preserve exact implementation substit
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(2), .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .erased_callable = .pure } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .erased_callable },
     });
     try builder.plan.hidden_descriptor_params.appendSlice(gpa, &.{
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .rep = worker_left_rep, .desc = @enumFromInt(fixtureTableIndex(0)) },

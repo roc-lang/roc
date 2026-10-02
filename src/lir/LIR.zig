@@ -1207,6 +1207,20 @@ pub const CFStmt = union(enum) {
         payload_mode: BoxyTransferMode = .move,
         next: CFStmtId,
     },
+    /// Box a copy of the record `base`, whose layout only `base_desc`
+    /// knows, in which every field `fields_desc` names takes its value from
+    /// the `fields` record payload instead. A record update never changes a
+    /// field's type, so the result has `base`'s exact runtime representation
+    /// and descriptor. `base` is borrowed and `fields` is consumed.
+    assign_boxy_record_update: struct {
+        target: LocalId,
+        base: LocalId,
+        base_desc: BoxyDescRef,
+        fields: LocalId,
+        fields_layout: layout.Idx,
+        fields_desc: BoxyDescRef,
+        next: CFStmtId,
+    },
     assign_boxy_reuse_box: struct {
         target: LocalId,
         source: LocalId,

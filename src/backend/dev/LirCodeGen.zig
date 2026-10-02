@@ -410,6 +410,7 @@ pub const BoxyBuiltinFn = enum {
     inspect,
     box,
     unbox,
+    record_update,
     adapt,
     tag,
     tag_payload,
@@ -463,6 +464,7 @@ pub const BoxyBuiltinFn = enum {
             .inspect => "roc_boxy_inspect",
             .box => "roc_boxy_box",
             .unbox => "roc_boxy_unbox",
+            .record_update => "roc_boxy_record_update",
             .adapt => "roc_boxy_adapt",
             .tag => "roc_boxy_tag",
             .tag_payload => "roc_boxy_tag_payload",
@@ -509,6 +511,7 @@ pub const BoxyBuiltinFn = enum {
             .call_erased => &.{ p, p, p, p, p, p, p, 4, p, 4, 4, 4, 4 },
             .tag_payload => &.{ p, p, p, 4, p, 4, 4, 4, 1 },
             .call_dict => &.{ p, p, p, 4, 4, p, p, p, p, p, 4 },
+            .record_update => &.{ p, p, p, 4, p, p, 4, p, 4 },
             .list_concat => &.{ p, p, p, p, p, p, p, 4, p, 4, p, p },
             .list_prepend => &.{ p, p, p, p, 4, p, p, 4, p, 1 },
             .list_sublist => &.{ p, p, p, p, 4, p, p, p, 4, p, 1 },
@@ -3243,6 +3246,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
+                    if (try self.boxyListElementDescForLocals(list_abi, &.{GuardedList.at(args, 0)}, ll.target)) |boxy_elem| {
+                        // Descriptor-governed elements cannot use layout-keyed RC
+                        // callbacks, so the Boxy runtime receives the exact list
+                        // descriptor instead.
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer builder.deinit();
+
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addLeaArg(base_reg, elem_off);
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addMemArg(base_reg, boxy_elem.desc_slot);
+                        try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+
+                        try self.callBoxyBuiltin(&builder, .list_prepend);
+                        return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                    }
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
                     const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
@@ -10214,7 +10239,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn lowLevelListDescRef(self: *Self, s: anytype) ?LIR.BoxyDescRef {
             const op = s.op;
-            if (op != .list_concat and op != .list_set and op != .list_set_in_place_unsafe and
+            if (op != .list_concat and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
                 op != .list_swap and op != .list_drop_first and op != .list_drop_last and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
                 op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
@@ -10288,6 +10313,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_desc_ref,
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
+                    .assign_boxy_record_update,
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
@@ -10336,7 +10362,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                         .i64_literal, .i128_literal, .f32_literal, .f64_literal, .dec_literal, .str_literal, .bytes_literal, .null_ptr, .static_data, .proc_ref => {},
                     },
-                    inline .assign_boxy_box, .assign_boxy_unbox, .assign_boxy_adapt => |s| ctx.outputDescriptor(s.target),
+                    inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt => |s| ctx.outputDescriptor(s.target),
                     .assign_call_dict => |s| ctx.outputDescriptor(s.target),
                     inline .incref, .decref, .decref_if_initialized, .free => |s| if (s.rc == .boxy) {
                         ctx.descriptor(s.rc.boxy);
@@ -10430,6 +10456,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_desc_ref,
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
+                    .assign_boxy_record_update,
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
@@ -18360,6 +18387,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
+        fn generateBoxyRecordUpdate(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(assign.target);
+            const base_off = try self.boxyLocalBytesOffset(assign.base);
+            const base_layout = self.localLayout(assign.base);
+            const base_desc_slot = try self.boxyDescRefToSlot(assign.base_desc);
+            const fields_off = try self.boxyLocalBytesOffset(assign.fields);
+            const fields_desc_slot = try self.boxyDescRefToSlot(assign.fields_desc);
+            const out_slot = try self.allocBoxyOutSlot(target_layout);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
+            if (base_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(base_layout));
+            try builder.addMemArg(frame_ptr, base_desc_slot);
+            if (fields_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
+            try builder.addImmArg(@intFromEnum(assign.fields_layout));
+            try builder.addMemArg(frame_ptr, fields_desc_slot);
+            try builder.addImmArg(@intFromEnum(target_layout));
+            try self.callBoxyBuiltin(&builder, .record_update);
+            try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
+            return self.stackLocationForLayout(target_layout, out_slot);
+        }
+
         fn generateBoxyUnbox(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
             const target_layout = assign.target_layout;
             const source_off = try self.boxyLocalBytesOffset(assign.source);
@@ -22907,6 +22960,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .assign_boxy_box => |assign| {
                             const value_loc = try self.generateBoxyBox(assign);
+                            try self.bindAssignedLocal(assign.target, value_loc);
+                            try work.append(wa, .{ .node = assign.next });
+                        },
+
+                        .assign_boxy_record_update => |assign| {
+                            const value_loc = try self.generateBoxyRecordUpdate(assign);
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },

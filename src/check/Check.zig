@@ -37797,7 +37797,7 @@ fn closeConcreteRecursiveDispatch(
     defer params.deinit(self.gpa);
     try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, scheme_root, &scratch, &params);
     for (params.items) |param| {
-        if (param.source != .scheme_callable or param.path.len == 0) return null;
+        if (param.source != .scheme_callable or param.path_len == 0) return null;
     }
 
     const ancestor = self.dispatch_target_instantiations.items[ancestor_idx];
@@ -39434,7 +39434,12 @@ fn satisfyBuiltinStrInterpolation(
         try self.markErroneous(dispatcher_var);
         try self.markStaticDispatchRejected(constraint);
         try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
+        return true;
     }
+    // `Str.from_interpolation` receives `Iter((Str, Str))`, so the
+    // constraint's generated item type is Str. A generic body that keeps the
+    // dispatch calls that method with an iterator of this item type.
+    _ = try self.unify(metadata.item_var, expected_str_var, env);
     return true;
 }
 
