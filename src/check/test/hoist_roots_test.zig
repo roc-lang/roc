@@ -281,8 +281,11 @@ test "non-iterator methods sharing iterator producer names remain hoistable" {
 
         try test_env.assertNoErrors();
         const roots = test_env.checker.selectedHoistedRoots();
-        try std.testing.expectEqual(@as(usize, 1), roots.len);
+        // The binding root, then the guarded `List.len` root in the branch.
+        try std.testing.expectEqual(@as(usize, 2), roots.len);
         try std.testing.expect(roots[0].pattern != null);
+        try std.testing.expect(!roots[0].guarded);
+        try std.testing.expect(roots[1].guarded);
         const root_expr = test_env.module_env.store.getExpr(roots[0].expr);
         const root_tag = std.meta.activeTag(root_expr);
         try std.testing.expect(root_tag == .e_method_call or root_tag == .e_dispatch_call);
@@ -517,6 +520,33 @@ test "hoist context matrix selects roots in unguarded eligible positions" {
             .expected_call_roots = 1,
         },
         .{
+            .name = "block_final_after_dbg",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |_| {
+            \\    dbg 0.I64
+            \\    add_one(41.I64)
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
+            .name = "statement_after_while",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| {
+            \\    while arg == 0.I64 {
+            \\        break
+            \\    }
+            \\    result = add_one(41.I64)
+            \\    result + arg
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
             .name = "dbg_operand",
             .source =
             \\add_one = |n| n + 1.I64
@@ -543,11 +573,12 @@ test "hoist context matrix selects roots in unguarded eligible positions" {
     }
 }
 
-test "hoist context matrix suppresses guarded and default-suppressed positions" {
+test "hoist context matrix marks guarded positions and suppresses default-suppressed positions" {
     const cases = [_]struct {
         name: []const u8,
         source: []const u8,
         expected_comptime_condition_warnings: usize = 0,
+        expected_guarded_roots: usize = 0,
     }{
         .{
             .name = "if_branch_body",
@@ -560,6 +591,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    arg
             \\}
             ,
+            .expected_guarded_roots = 1,
         },
         .{
             .name = "later_if_condition",
@@ -574,6 +606,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    arg
             \\}
             ,
+            .expected_guarded_roots = 1,
             .expected_comptime_condition_warnings = 1,
         },
         .{
@@ -586,6 +619,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    _ => arg
             \\}
             ,
+            .expected_guarded_roots = 1,
             .expected_comptime_condition_warnings = 1,
         },
         .{
@@ -601,6 +635,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    }
             \\}
             ,
+            .expected_guarded_roots = 3,
         },
         .{
             .name = "expect_body",
@@ -615,6 +650,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    arg
             \\}
             ,
+            .expected_guarded_roots = 1,
         },
         .{
             .name = "lambda_inside_branch_body",
@@ -626,6 +662,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    arg
             \\}
             ,
+            .expected_guarded_roots = 1,
         },
         .{
             .name = "for_body",
@@ -639,6 +676,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    items
             \\}
             ,
+            .expected_guarded_roots = 1,
         },
         .{
             .name = "while_body",
@@ -655,12 +693,12 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             ,
         },
         .{
-            .name = "block_final_after_dbg",
+            .name = "block_final_after_return",
             .source =
             \\add_one = |n| n + 1.I64
             \\
-            \\main = |_| {
-            \\    dbg 0.I64
+            \\main = |arg| {
+            \\    return arg
             \\    add_one(41.I64)
             \\}
             ,
@@ -687,7 +725,9 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
         } else {
             try expectOnlyComptimeConditionWarnings(&test_env, matrix_case.expected_comptime_condition_warnings);
         }
-        try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+        const roots = test_env.checker.selectedHoistedRoots();
+        try std.testing.expectEqual(matrix_case.expected_guarded_roots, roots.len);
+        for (roots) |root| try std.testing.expect(root.guarded);
     }
 }
 
@@ -1064,7 +1104,7 @@ test "hoist roots are not selected for runtime-dependent multi-branch match" {
     try std.testing.expectEqual(@as(usize, 0), countMatchExprRoots(&test_env));
 }
 
-test "hoist roots are not selected for runtime-controlled match branch bodies" {
+test "guarded hoist roots are selected for runtime-controlled match branch bodies" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    input : Try(I64, I64)
@@ -1082,7 +1122,9 @@ test "hoist roots are not selected for runtime-controlled match branch bodies" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 3), roots.len);
+    for (roots) |root| try std.testing.expect(root.guarded);
 }
 
 test "hoist roots are not selected for local values depending on function arguments" {
@@ -1314,19 +1356,52 @@ test "hoist roots are not selected for observable debug expressions" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected after observable effects in blocks" {
-    var test_env = try TestEnv.init("Test",
-        \\main = |_| {
+test "hoist roots selected after observable effects in blocks match those without the effect" {
+    var with_dbg = try TestEnv.init("Test",
+        \\main = |arg| {
         \\    before = 1.I64 + 2.I64
         \\    dbg 0.I64
         \\    after = 3.I64 + 4.I64
-        \\    before + after
+        \\    before + after + arg
+        \\}
+    );
+    defer with_dbg.deinit();
+
+    var without_dbg = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    before = 1.I64 + 2.I64
+        \\    after = 3.I64 + 4.I64
+        \\    before + after + arg
+        \\}
+    );
+    defer without_dbg.deinit();
+
+    try with_dbg.assertNoErrors();
+    try without_dbg.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 3), countExprRootsByTag(&without_dbg, .e_dispatch_call));
+    try std.testing.expectEqual(
+        countExprRootsByTag(&without_dbg, .e_dispatch_call),
+        countExprRootsByTag(&with_dbg, .e_dispatch_call),
+    );
+}
+
+test "refutable destructure after an effect selects validation root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    dbg 0.I64
+        \\    Ok(_) = List.get([1], 0)
+        \\    Ok({})
         \\}
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const validation = switch (roots[0].body) {
+        .pattern_validation => |validation| validation,
+        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+    };
+    try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
 
 test "hoist roots with non-concrete compile-time types are pruned" {
@@ -1465,7 +1540,7 @@ test "hoist roots are not selected inside top-level expects" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected for runtime-controlled branch bodies" {
+test "guarded hoist roots are selected for runtime-controlled branch bodies" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    if arg == 0.I64 {
@@ -1478,7 +1553,28 @@ test "hoist roots are not selected for runtime-controlled branch bodies" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expect(roots[0].guarded);
+}
+
+test "guarded function-typed destructure binders are not selected as callable roots" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    if arg == 0.I64 {
+        \\        (f, _) = (|n| n + 1.I64, 0.I64)
+        \\        f(arg)
+        \\    } else {
+        \\        arg
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        try std.testing.expect(root.value_kind != .callable_binding);
+    }
 }
 
 test "hoist roots selected for whole closed conditional expressions" {

@@ -8,7 +8,7 @@ platform ""
     }
     targets: {}
 
-import OsStr exposing [OsStr]
+import OsStr
 import Stdout
 
 main_for_host! : List(OsStr) => I32

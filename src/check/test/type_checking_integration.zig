@@ -2798,8 +2798,7 @@ test "check type - tag - args" {
 test "check type - tag union - tag typo" {
     // Polarity: `Color` in an output position is implicitly open for the
     // value's users, but the annotation still bounds the value's own body, so
-    // the unlisted tag is rejected—by the post-body audit rather than by
-    // unification, because the open row absorbed it.
+    // the unlisted tag is rejected at the expression that produces it.
     const source =
         \\main! = |_| {}
         \\
@@ -2810,19 +2809,19 @@ test "check type - tag union - tag typo" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This definition can produce the tag `Greeen` but the annotated tag union does not list it.
+        \\This expression produces the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
-        \\color : Color
+        \\color = Greeen
         \\```
-        \\        ^^^^^
+        \\        ^^^^^^
         \\
         \\It has the type:
         \\
-        \\    [Blue, Greeen, Green, Red]
+        \\    [Greeen]
         \\
         \\But the annotation says it should be:
         \\
-        \\    [Blue, Green, Red]
+        \\    Color
         \\
         \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
         \\**Hint:** Maybe `Greeen` should be `Green`?
@@ -2840,15 +2839,15 @@ test "check type - tag union - tag typo hint on an inline output union" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This definition can produce the tag `Greeen` but the annotated tag union does not list it.
+        \\This expression produces the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
-        \\to_color : Str -> [Red, Green, Blue]
+        \\to_color = |_| Greeen
         \\```
-        \\                  ^^^^^^^^^^^^^^^^^^
+        \\               ^^^^^^
         \\
         \\It has the type:
         \\
-        \\    [Blue, Greeen, Green, Red]
+        \\    [Greeen]
         \\
         \\But the annotation says it should be:
         \\
@@ -2864,22 +2863,22 @@ test "check type - tag union - tag typo hint on an inline output union" {
 test "check type - tag union - tag typo hint on an explicit open ext" {
     // An anonymous `..` in an output position is generated like absence, so
     // it carries the same hint. On a value binding it never warns redundant,
-    // so this is the audit's only problem.
+    // so this is the only problem.
     const source =
         \\color : [Red, Green, Blue, ..]
         \\color = Greeen
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This definition can produce the tag `Greeen` but the annotated tag union does not list it.
+        \\This expression produces the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
-        \\color : [Red, Green, Blue, ..]
+        \\color = Greeen
         \\```
-        \\        ^^^^^^^^^^^^^^^^^^^^^^
+        \\        ^^^^^^
         \\
         \\It has the type:
         \\
-        \\    [Blue, Greeen, Green, Red]
+        \\    [Greeen]
         \\
         \\But the annotation says it should be:
         \\
@@ -2905,19 +2904,19 @@ test "check type - tag union - no tag typo hint without a close match" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This definition can produce the tag `Purple` but the annotated tag union does not list it.
+        \\This expression produces the tag `Purple` but the annotated tag union does not list it.
         \\```roc
-        \\color : Color
+        \\color = Purple
         \\```
-        \\        ^^^^^
+        \\        ^^^^^^
         \\
         \\It has the type:
         \\
-        \\    [Blue, Green, Purple, Red]
+        \\    [Purple]
         \\
         \\But the annotation says it should be:
         \\
-        \\    [Blue, Green, Red]
+        \\    Color
         \\
         \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
         \\
@@ -7176,19 +7175,19 @@ test "check type - polarity - try may not flow an unlisted error into the annota
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This definition can produce the tag `InnerErr` but the annotated tag union does not list it.
+        \\This expression produces the tag `InnerErr` but the annotated tag union does not list it.
         \\```roc
-        \\outer : {} -> Try({}, [OuterErr])
+        \\    inner({})?
         \\```
-        \\                      ^^^^^^^^^^
+        \\    ^^^^^^^^^^
         \\
         \\It has the type:
         \\
-        \\    [InnerErr, OuterErr]
+        \\    Try({}, [InnerErr])
         \\
         \\But the annotation says it should be:
         \\
-        \\    [OuterErr]
+        \\    Try({}, [OuterErr])
         \\
         \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
         \\
@@ -7196,9 +7195,11 @@ test "check type - polarity - try may not flow an unlisted error into the annota
     );
 }
 
-test "check type - polarity - a rejected callback row audit keeps the solved type" {
-    // The callback result now opens. `?` relates its row to the enclosing
-    // result; the audit rejects the unlisted tag but preserves the solved row.
+test "check type - polarity - a rejected callback row keeps the annotated type" {
+    // The callback result opens, and `?` relates its row to the enclosing
+    // result, so `Err(NotAFunction)` would add a tag the callback's annotation
+    // does not list. That relation is rejected where it happens, and `run`
+    // keeps its annotated type.
     const source =
         \\run : ({} -> Try(I64, [WrongArity])) -> Try(I64, _)
         \\run = |fn| {
@@ -7209,7 +7210,7 @@ test "check type - polarity - a rejected callback row audit keeps the solved typ
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("Type Mismatch");
-    try test_env.assertDefTypeOptions("run", "({} -> Try(I64, [NotAFunction, WrongArity, ..a])) -> Try(I64, [NotAFunction, WrongArity, ..a])", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("run", "({} -> Try(I64, [WrongArity])) -> Try(I64, [NotAFunction])", .{ .allow_type_errors = true });
 }
 
 // record extension in type annotations //
@@ -9083,21 +9084,101 @@ test "check type - polarity - body may not extend the annotated output union" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This definition can produce the tag `Empty` but the annotated tag union does not list it.
+        \\This expression produces the tag `Empty` but the annotated tag union does not list it.
         \\```roc
-        \\parse : Str -> [Fail]
+        \\parse = |input| if Str.is_empty(input) Empty else Fail
         \\```
-        \\               ^^^^^^
+        \\                                       ^^^^^
         \\
         \\It has the type:
         \\
-        \\    [Empty, Fail]
+        \\    [Empty]
         \\
         \\But the annotation says it should be:
         \\
         \\    [Fail]
         \\
         \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
+        \\
+        \\
+    );
+}
+
+test "check type - polarity - a definition producing an unlisted tag keeps its annotated type" {
+    // The relation that would add `OtherErr` is refused where the body
+    // produces it, so the definition's type is the annotation's, matching
+    // the predeclared scheme that method dispatch instantiates (issue 11923).
+    const source =
+        \\Format := [Default].{
+        \\    parse_u8 : Format, {} -> Try(U8, [Bad])
+        \\    parse_u8 = |_, _| Err(OtherErr)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+    try test_env.assertDefTypeOptions("Test.Format.parse_u8", "Format, {} -> Try(U8, [Bad])", .{ .allow_type_errors = true });
+}
+
+test "check type - polarity - an annotated local keeps its enclosing definition's bound" {
+    // `r`'s weak bound ends with its own body, but `r`'s row shares a class
+    // with the row `run` bounds, so `run`'s bound still refuses `C`.
+    const source =
+        \\run : ({} -> [A, B]) -> U64
+        \\run = |fn| {
+        \\    r : [A, B]
+        \\    r = fn({})
+        \\    n = match fn({}) {
+        \\        A => 1
+        \\        B => 2
+        \\        C => 3
+        \\    }
+        \\    match r {
+        \\        A => n
+        \\        B => n + 1
+        \\    }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a pattern matching an unlisted tag on a bounded value" {
+    // `pick` returns `r`, so `r`'s row is the row `pick`'s annotation bounds.
+    const source =
+        \\run = |flag| {
+        \\    r = if flag A else B
+        \\    pick : {} -> [A, B]
+        \\    pick = |_| r
+        \\    n = match r {
+        \\        A => 1.U64
+        \\        B => 2
+        \\        C => 3
+        \\    }
+        \\    (pick({}), n)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeErrorMsg(
+        \\**Type Mismatch**
+        \\This pattern matches the tag `C` on a value an annotated definition produces, but that definition's annotated tag union does not list it.
+        \\```roc
+        \\        C => 3
+        \\```
+        \\        ^
+        \\
+        \\It has the type:
+        \\
+        \\    [C]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    [A, B]
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
+        \\**Hint:** Maybe `C` should be `B`?
         \\
         \\
     );

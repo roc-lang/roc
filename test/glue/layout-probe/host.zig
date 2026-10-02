@@ -42,8 +42,15 @@ fn stderrPrint(comptime fmt: []const u8, args: anytype) void {
     writeStderr(text);
 }
 
-fn allocRaw(length: usize, alignment: usize) ?*anyopaque {
-    const ptr = host_alloc.alloc(backing, length, alignment) orelse return null;
+/// `roc_alloc` and `roc_realloc` must not return to Roc without an
+/// allocation, so an allocation failure ends the program.
+fn allocationFailed() noreturn {
+    writeStderr("allocation failed\n");
+    std.process.abort();
+}
+
+fn allocRaw(length: usize, alignment: usize) *anyopaque {
+    const ptr = host_alloc.alloc(backing, length, alignment) orelse allocationFailed();
     alloc_count += 1;
     return ptr;
 }
@@ -54,15 +61,15 @@ fn deallocRaw(ptr: ?*anyopaque, alignment: usize) void {
     dealloc_count += 1;
 }
 
-fn reallocRaw(ptr: ?*anyopaque, length: usize, alignment: usize) ?*anyopaque {
+fn reallocRaw(ptr: ?*anyopaque, length: usize, alignment: usize) *anyopaque {
     const old = ptr orelse return allocRaw(length, alignment);
-    const answer = host_alloc.realloc(backing, old, length, alignment) orelse return null;
+    const answer = host_alloc.realloc(backing, old, length, alignment) orelse allocationFailed();
     alloc_count += 1;
     dealloc_count += 1;
     return answer;
 }
 
-fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_alloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     return allocRaw(length, alignment);
 }
 
@@ -70,7 +77,7 @@ fn roc_dealloc(ptr: ?*anyopaque, alignment: usize) callconv(.c) void {
     deallocRaw(ptr, alignment);
 }
 
-fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return reallocRaw(ptr, new_length, alignment);
 }
 

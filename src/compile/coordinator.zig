@@ -396,7 +396,7 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
 }
 
 const canonicalized_module_cache_magic = "roc-can-cache-v1";
-const canonicalized_module_entry_version: u32 = 2;
+const canonicalized_module_entry_version: u32 = 3;
 const canonicalized_module_entry_version_hash: [32]u8 = computeCanonicalizedModuleEntryVersionHash();
 
 // Header: magic, composite entry-version hash (32), canonicalized-module cache
@@ -1264,6 +1264,9 @@ pub const Coordinator = struct {
     /// Set only after the frontend coordinator loop has drained every task and
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
+    /// Set by checked-program finalization: whether it published a program,
+    /// which requires a checked app root.
+    checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// The checked modules whose `expect`s are the developer's own tests, in
@@ -1330,6 +1333,12 @@ pub const Coordinator = struct {
     total_typecheck_ns: u64,
     total_typecheck_diag_ns: u64,
     ctfe_timing: eval.CompileTimeFinalization.Timing,
+    /// Compile-time evaluation performed inside individual module checks.
+    module_ctfe_timing: eval.CompileTimeFinalization.Timing,
+    /// Wall time spent in `finishCheckedProgram`.
+    program_finalization_ns: u64 = 0,
+    /// Whether per-module compile-time lowering collects fine-grained timings.
+    detailed_lowering_timing: bool = false,
 
     /// Build statistics
     cache_hits: u32,
@@ -1423,6 +1432,7 @@ pub const Coordinator = struct {
             .total_typecheck_ns = 0,
             .total_typecheck_diag_ns = 0,
             .ctfe_timing = eval.CompileTimeFinalization.Timing.init(roc_ctx.std_io),
+            .module_ctfe_timing = eval.CompileTimeFinalization.Timing.init(roc_ctx.std_io),
             .cache_hits = 0,
             .cache_misses = 0,
             .canonicalized_cache_hits = 0,
@@ -1523,6 +1533,14 @@ pub const Coordinator = struct {
 
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
+    }
+
+    pub fn setDetailedLoweringTiming(self: *Coordinator, enabled: bool) void {
+        self.detailed_lowering_timing = enabled;
+        if (enabled) {
+            self.ctfe_timing.lowering.enableDetailedMonotypeBody();
+            self.module_ctfe_timing.lowering.enableDetailedMonotypeBody();
+        }
     }
 
     pub fn setWatchInputTracking(self: *Coordinator, enabled: bool) void {
@@ -2285,10 +2303,11 @@ pub const Coordinator = struct {
     /// Checked user errors remain explicit crash facts throughout finalization.
     pub fn finishCheckedProgram(self: *Coordinator, mode: compile_build.PostCheckPublicationMode) CoordinatorError!void {
         errdefer self.shutdown();
+        var finalization_timer = startStageTimer(self.roc_ctx.std_io);
+        defer self.program_finalization_ns += readStageTimer(self.roc_ctx.std_io, &finalization_timer);
         if (!self.frontend_complete) coordinatorInvariant("checked program finalization preceded frontend completion", .{});
-        if (mode == .executable_artifacts and self.findRootModule(.platform) != null and
-            (self.findRootModule(.app) != null or self.findRootModule(.default_app) != null))
-        {
+        self.checked_program = mode == .executable_artifacts and self.appRootChecked();
+        if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
             if (platform.evaluation_state == .prepared) {
@@ -2310,13 +2329,23 @@ pub const Coordinator = struct {
         } else {
             // Only a compilation that publishes executable artifacts has a
             // program: `roc check`, `roc build` and `roc run` all do.
-            const program_root = if (mode == .executable_artifacts and
-                (self.findRootModule(.app) != null or self.findRootModule(.default_app) != null))
-                self.executableRootCheckedArtifact()
-            else
-                null;
+            const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluatePreparedModules(true, null, null, program_root);
         }
+    }
+
+    /// Whether the last checked-program finalization published a program.
+    pub fn hasCheckedProgram(self: *const Coordinator) bool {
+        return self.checked_program;
+    }
+
+    /// Whether the app root finished checking. A root that failed (for
+    /// example as a dependent of an import cycle) has no checked artifact, so
+    /// the build has no program; every checked module still finishes its
+    /// independent compile-time work and every report is still emitted.
+    fn appRootChecked(self: *Coordinator) bool {
+        const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return false;
+        return app_root.mod.checkedArtifact() != null;
     }
 
     fn prepareExecutableArtifacts(self: *Coordinator) compile_package.PublishError!void {
@@ -2394,13 +2423,19 @@ pub const Coordinator = struct {
 
     /// Return timing totals for frontend checking and post-check evaluation.
     pub fn getTimingInfo(self: *const Coordinator) compile_package.TimingInfo {
+        var all_compile_time = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
+        all_compile_time.addSnapshot(self.ctfe_timing.snapshot());
+        all_compile_time.addSnapshot(self.module_ctfe_timing.snapshot());
         return .{
             .tokenize_parse_ns = self.total_parse_ns,
             .canonicalize_ns = self.total_canonicalize_ns,
             .canonicalize_diagnostics_ns = self.total_canonicalize_diag_ns,
             .type_checking_ns = self.total_typecheck_ns,
             .check_diagnostics_ns = self.total_typecheck_diag_ns,
+            .module_compile_time_evaluation_ns = self.module_ctfe_timing.snapshot().total_ns,
+            .program_finalization_ns = self.program_finalization_ns,
             .compile_time_evaluation = self.ctfe_timing.snapshot(),
+            .compile_time_counters = all_compile_time.snapshot(),
         };
     }
 
@@ -6134,6 +6169,7 @@ pub const Coordinator = struct {
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
+        if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
         const ctfe_timing = &local_ctfe_timing;
         const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
         // Import resolution runs inside the type-check task and records its
@@ -6167,7 +6203,7 @@ pub const Coordinator = struct {
 
         const check_and_publish_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
         const local_ctfe = local_ctfe_timing.snapshot();
-        self.ctfe_timing.addSnapshot(local_ctfe);
+        self.module_ctfe_timing.addSnapshot(local_ctfe);
         const type_check_ns = check_and_publish_ns -| local_ctfe.total_ns;
 
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);

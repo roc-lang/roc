@@ -191,6 +191,9 @@ pub const Store = struct {
     savepoint_baseline_slots: u32 = 0,
     savepoint_baseline_descs: u32 = 0,
     slot_trail: std.ArrayListUnmanaged(SlotUndo) = .empty,
+    /// Advances whenever a slot write can change which class a var resolves
+    /// to, so a caller that indexed resolved classes knows when to re-index.
+    slot_generation: u64 = 0,
     desc_trail: std.ArrayListUnmanaged(DescUndo) = .empty,
     root_meta_trail: std.ArrayListUnmanaged(RootMetaUndo) = .empty,
     union_rank_trail: std.ArrayListUnmanaged(UnionRankUndo) = .empty,
@@ -511,6 +514,7 @@ pub const Store = struct {
             si -= 1;
             const u = self.slot_trail.items[si];
             self.slots.set(u.idx, u.old);
+            self.slot_generation += 1;
         }
         self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
 
@@ -569,6 +573,7 @@ pub const Store = struct {
             try self.slot_trail.append(self.gpa, .{ .idx = idx, .old = self.slots.get(idx) });
         }
         self.slots.set(idx, val);
+        self.slot_generation += 1;
     }
 
     /// In-place descriptor write. See setSlot.
@@ -814,6 +819,24 @@ pub const Store = struct {
         std.debug.assert(resolved.desc.content == .flex);
         var desc = resolved.desc;
         desc.flags.annotation_tag_ext = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Bound an annotated definition's implicitly opened row (design.md
+    /// "Polarity"). The bound travels with the row's equivalence class.
+    pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.flags.bounded_row_ext = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// End the bound on a row every use shares: a weak value binding's row is
+    /// bounded only while its own right-hand side is checked.
+    pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.flags.bounded_row_ext = false;
         try self.setDesc(resolved.desc_idx, desc);
     }
 
@@ -1605,6 +1628,7 @@ pub const Store = struct {
         var merged_desc = new_desc;
         merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
             (a_data.desc.flags.annotation_tag_ext or b_data.desc.flags.annotation_tag_ext);
+        merged_desc.flags.bounded_row_ext = a_data.desc.flags.bounded_row_ext or b_data.desc.flags.bounded_row_ext;
         const merged_is_empty_tag_union = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {

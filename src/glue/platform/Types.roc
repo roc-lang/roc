@@ -1,9 +1,9 @@
-import TypeId exposing [TypeId]
-import ModuleTypeInfo exposing [ModuleTypeInfo]
-import FunctionInfo exposing [FunctionInfo]
-import HostedFunctionInfo exposing [HostedFunctionInfo]
-import TypeInfo exposing [TypeInfo]
-import ProvidesEntry exposing [ProvidesEntry]
+import TypeId
+import ModuleTypeInfo
+import FunctionInfo
+import HostedFunctionInfo
+import TypeInfo
+import ProvidesEntry
 
 ## Type information extracted from the platform module for glue generation
 Types := {

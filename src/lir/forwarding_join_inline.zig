@@ -99,6 +99,8 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
     const proc_body = proc.body orelse return null;
     var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator);
     defer incoming_edges.deinit();
+    var forwarded = try forwardedJoins(store, proc_body, allocator);
+    defer forwarded.deinit();
 
     var walk = try body_clone.ReachableStmts.initWithAllocator(store, proc_body, allocator);
     defer walk.deinit();
@@ -109,6 +111,10 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         const outer_params = store.getLocalSpan(outer.params);
         if (outer_params.len != 1) continue;
         const outer_param = GuardedList.at(outer_params, 0);
+        // Only a join that some reachable one-parameter join forwards into
+        // can be selected below; every other join is settled without walking
+        // its body and remainder.
+        if (!forwarded.contains(.{ .join = outer.id, .param = outer_param })) continue;
 
         // Before ARC, moving a continuation that consumes an owning value can
         // change the dominance facts ARC uses to certify the join parameter's
@@ -181,6 +187,38 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
 }
 
 const IncomingEdges = collections.DenseMap(LIR.CFStmtId, u32);
+
+const ForwardTarget = struct { join: LIR.JoinPointId, param: LIR.LocalId };
+
+/// Each join parameter that a reachable one-parameter join's body forwards
+/// its own parameter into (`forwardsToJoin`).
+fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!std.AutoHashMap(ForwardTarget, void) {
+    var targets = std.AutoHashMap(ForwardTarget, void).init(allocator);
+    errdefer targets.deinit();
+    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const node = store.getCFStmt(stmt_id);
+        if (node != .join) continue;
+        const params = store.getLocalSpan(node.join.params);
+        if (params.len != 1) continue;
+        const source = GuardedList.at(params, 0);
+        const first = store.getCFStmt(node.join.body);
+        const target: LIR.LocalId, const terminal_id = if (first == .assign_ref) blk: {
+            const assign = first.assign_ref;
+            if (assign.op != .local or assign.op.local != source) continue;
+            break :blk .{ assign.target, assign.next };
+        } else if (first == .set_local) blk: {
+            const set = first.set_local;
+            if (set.value != source or set.mode != .initialize_join_param) continue;
+            break :blk .{ set.target, set.next };
+        } else continue;
+        const terminal = store.getCFStmt(terminal_id);
+        if (terminal != .jump) continue;
+        try targets.put(.{ .join = terminal.jump.target, .param = target }, {});
+    }
+    return targets;
+}
 
 fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!IncomingEdges {
     var counts = IncomingEdges.init(allocator);

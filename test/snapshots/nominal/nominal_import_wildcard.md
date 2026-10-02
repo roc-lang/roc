@@ -149,17 +149,17 @@ green = Green
 (can-ir
 	(d-let
 		(p-assign (ident "red"))
-		(e-tag (name "Red"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "blue"))
-		(e-tag (name "Blue"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "green"))
-		(e-tag (name "Green"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "Color")

@@ -473,12 +473,14 @@ pub const BoolRootEvent = union(enum) {
 };
 
 /// Outcome of evaluating a bool-returning test root: passed (bool), crashed
-/// (message), or failed because a `?` operator evaluated an Err inside the
-/// expect (message plus the source region of the `?` expression).
+/// (message), failed because a `?` operator evaluated an Err inside the
+/// expect (message plus the source region of the `?` expression), or stopped
+/// at code checking rejected, whose problem checking already reported.
 pub const BoolRootEvalOutcome = union(enum) {
     passed: bool,
     crashed: []const u8,
     expect_err: ExpectErrFailure,
+    checked_error,
 };
 
 /// Complete result for one bool-returning test root. `events` is a structured,
@@ -564,6 +566,7 @@ fn deinitBoolRootEvalOutcome(allocator: Allocator, outcome: BoolRootEvalOutcome)
         .passed => {},
         .crashed => |message| allocator.free(message),
         .expect_err => |failure| allocator.free(failure.message),
+        .checked_error => {},
     }
 }
 
@@ -1013,6 +1016,19 @@ pub fn compileInspectedProgram(
     return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, null, null);
 }
 
+/// Compile a program with inspect wrapping, lowering it with `specialization_strategy`.
+pub fn compileInspectedProgramWithStrategy(
+    allocator: Allocator,
+    io: std.Io,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    specialization_strategy: base.SpecializationStrategy,
+) Error!CompiledProgram {
+    const resources = try parseInspectedProgramImpl(allocator, source_kind, source, imports, null, null);
+    return lowerInspectedProgramWithStrategy(allocator, io, resources, specialization_strategy);
+}
+
 /// Parse, check, and publish an inspect-wrapped program without lowering it.
 pub fn parseAndCanonicalizeInspectedProgram(
     allocator: Allocator,
@@ -1100,16 +1116,30 @@ pub fn lowerInspectedProgram(
     io: std.Io,
     resources: ParsedResources,
 ) Error!CompiledProgram {
+    return lowerInspectedProgramWithStrategy(allocator, io, resources, .lss);
+}
+
+/// `lowerInspectedProgram` with an explicit specialization strategy.
+pub fn lowerInspectedProgramWithStrategy(
+    allocator: Allocator,
+    io: std.Io,
+    resources: ParsedResources,
+    specialization_strategy: base.SpecializationStrategy,
+) Error!CompiledProgram {
     var owned_resources = resources;
     errdefer cleanupParseAndCanonical(allocator, owned_resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, io, &owned_resources, .native);
+    const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &owned_resources, .native, .{
+        .specialization_strategy = specialization_strategy,
+    });
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
     }
 
-    const wasm_lowered = try lowerParsedProgramToLir(allocator, io, &owned_resources, .u32);
+    const wasm_lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &owned_resources, .u32, .{
+        .specialization_strategy = specialization_strategy,
+    });
     errdefer {
         var owned = wasm_lowered;
         owned.deinit(allocator);
@@ -1390,7 +1420,7 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
 
         var node = switch (root.payload) {
             .const_node => |const_node| const_node,
-            .pending, .fn_value, .discarded, .expect => return error.Internal,
+            .pending, .fn_value, .discarded, .expect, .runtime => return error.Internal,
         };
         while (true) {
             switch (resources.checked_artifact.const_store.get(node)) {
@@ -1404,6 +1434,7 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
                 .tuple,
                 .record,
                 .crash,
+                .checked_error,
                 .tag,
                 .fn_value,
                 => return error.Internal,
@@ -2977,7 +3008,7 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         }
 
         const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
-        const batch = runBoolRootCalls(allocator, calls, true, max_workers, null, null);
+        const batch = runBoolRootCalls(allocator, calls, max_workers, null, null);
         if (timing) |timings| timings.finish(root_execution_started_ns, .root_execution);
         return batch;
     }
@@ -3040,7 +3071,6 @@ fn callBoolRoot(
     tables: boxy_runtime.BoxyTables,
     target: BoolRootCallTarget,
     root: BoolRoot,
-    longjmp_on_crash: bool,
     call_index: usize,
     event_callback: ?BoolRootEventCallback,
     expect_passed: []u64,
@@ -3048,7 +3078,6 @@ fn callBoolRoot(
 ) Error!BoolRootEvalResult {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
-    runtime_env.setLongjmpOnCrash(longjmp_on_crash);
     var event_forwarder: RuntimeHostEventForwarder = undefined;
     if (event_callback) |callback| {
         event_forwarder = .{
@@ -3082,6 +3111,9 @@ fn callBoolRoot(
     const ret_buf = try boolRootRetBuffer(allocator, layouts, root.ret_layout);
     defer allocator.free(ret_buf);
 
+    // Both backends record a crash at code checking rejected through the
+    // in-process host; clear any stale record first.
+    _ = builtins.in_process_host.takeCheckedErrorReached();
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), RuntimeHostEnv.rocExpectObserved);
@@ -3111,6 +3143,9 @@ fn callBoolRoot(
     const outcome: BoolRootEvalOutcome = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
         .crashed => blk: {
+            // Both backends record a crash at code checking rejected through
+            // the in-process host's `roc_checked_error_reached`.
+            if (builtins.in_process_host.takeCheckedErrorReached()) break :blk .checked_error;
             // Both backends record the `?` region through the in-process
             // host's `roc_expect_err_region` before crashing.
             const expect_err_region: ?struct { start: u32, end: u32 } = if (builtins.in_process_host.takeExpectErrRegion()) |region|
@@ -3163,7 +3198,6 @@ const BoolRootCall = struct {
 const BoolRootWorkerState = struct {
     allocator: Allocator,
     calls: []const BoolRootCall,
-    longjmp_on_crash: bool,
     next_call: std.atomic.Value(usize),
     results: []?BoolRootEvalResult,
     errors: []?Error,
@@ -3201,7 +3235,6 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
             call.tables,
             call.target,
             call.root,
-            state.longjmp_on_crash,
             index,
             state.event_callback,
             state.worker_expect_passed[expect_start..expect_end],
@@ -3234,7 +3267,6 @@ fn optimizedTestWorkerCount(root_count: usize, max_workers: ?usize) usize {
 fn runBoolRootCalls(
     allocator: Allocator,
     calls: []const BoolRootCall,
-    longjmp_on_crash: bool,
     max_workers: ?usize,
     completion_callback: ?BoolRootCompletionCallback,
     event_callback: ?BoolRootEventCallback,
@@ -3275,7 +3307,6 @@ fn runBoolRootCalls(
     var state = BoolRootWorkerState{
         .allocator = allocator,
         .calls = calls,
-        .longjmp_on_crash = longjmp_on_crash,
         .next_call = std.atomic.Value(usize).init(0),
         .results = slots,
         .errors = errors,
@@ -3620,11 +3651,6 @@ fn executeLlvmBoolRootModules(
         };
     }
 
-    var longjmp_on_crash = true;
-    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
-        longjmp_on_crash = false;
-    }
-
     const calls = try allocator.alloc(BoolRootCall, total_roots);
     defer allocator.free(calls);
     var call_index: usize = 0;
@@ -3645,7 +3671,7 @@ fn executeLlvmBoolRootModules(
         expect_site_base += module.expect_site_count;
     }
 
-    return runBoolRootCalls(allocator, calls, longjmp_on_crash, max_workers, completion_callback, event_callback);
+    return runBoolRootCalls(allocator, calls, max_workers, completion_callback, event_callback);
 }
 
 fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!EvalRunResult {
@@ -3763,13 +3789,8 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         ) };
     } else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.Crash, error.DivisionByZero => {
-            const message: ?[]u8 = switch (runtime_env.crashState()) {
-                .crashed => |msg| try allocator.dupe(u8, msg),
-                .did_not_crash => null,
-            };
-            outcome = .{ .aborted = .{ .kind = .crash, .message = message } };
-        },
+        error.Crash => outcome = .{ .aborted = .{ .kind = .crash, .message = try allocator.dupe(u8, interp.getCrashMessage()) } },
+        error.DivisionByZero => outcome = .{ .aborted = .{ .kind = .crash, .message = null } },
         error.RuntimeError => outcome = .{ .aborted = .{ .kind = .runtime_error, .message = null } },
         error.ComptimeExhaustiveness => outcome = .{ .aborted = .{ .kind = .comptime_exhaustiveness, .message = null } },
         error.ExpectErr => {

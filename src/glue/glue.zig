@@ -626,9 +626,6 @@ fn runGlueSpecPlugin(
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
 
     runtime_env.resetObservation();
-    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
-        runtime_env.setLongjmpOnCrash(false);
-    }
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
 
@@ -3804,7 +3801,7 @@ const GlueRocValueWriter = struct {
         };
     }
 
-    fn tagIndex(self: *const GlueRocValueWriter, tag_union_type_name: []const u8, tag_name: []const u8) u16 {
+    fn tagIndex(self: *const GlueRocValueWriter, tag_union_type_name: []const u8, tag_name: []const u8) u32 {
         return self.schemas.tagUnion(tag_union_type_name).tagDiscriminant(tag_name) orelse
             glueInvariant("glue schema tag union '{s}' missing tag '{s}'", .{ tag_union_type_name, tag_name });
     }
@@ -3901,7 +3898,7 @@ const GlueRocValueWriter = struct {
         self.writeValue(slot.ptr, T, value);
     }
 
-    fn variantPayloadLayout(self: *const GlueRocValueWriter, tag_union_layout_idx: layout.Idx, tag_index: u16) layout.Idx {
+    fn variantPayloadLayout(self: *const GlueRocValueWriter, tag_union_layout_idx: layout.Idx, tag_index: u32) layout.Idx {
         const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
@@ -3913,7 +3910,7 @@ const GlueRocValueWriter = struct {
         return info.variants.get(tag_index).payload_layout;
     }
 
-    fn writeTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]u8, tag_union_layout_idx: layout.Idx, tag_index: u16) void {
+    fn writeTagDiscriminant(self: *const GlueRocValueWriter, tag_union_base: [*]u8, tag_union_layout_idx: layout.Idx, tag_index: u32) void {
         const tag_union_layout = self.layouts.getLayout(tag_union_layout_idx);
         if (tag_union_layout.tag != .tag_union) {
             glueInvariant("glue expected tag-union layout, got {s}", .{@tagName(tag_union_layout.tag)});
@@ -5137,14 +5134,14 @@ test "glue platform schema lock rejects field rename addition and type mutation"
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const mutations = [_]struct { path: []const u8, source: []const u8 }{
-        .{ .path = "Types.roc", .source = "import ModuleTypeInfo exposing [ModuleTypeInfo]\nimport TypeInfo exposing [TypeInfo]\nimport ProvidesEntry exposing [ProvidesEntry]\nTypes := { modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), types : List(TypeInfo), added : U64 }" },
-        .{ .path = "ProvidesEntry.roc", .source = "import ProvidedExport exposing [ProvidedExport]\nProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str, type_id : U64 }" },
-        .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature exposing [FunctionSignature]\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
+        .{ .path = "Types.roc", .source = "import ModuleTypeInfo\nimport TypeInfo\nimport ProvidesEntry\nTypes := { modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), types : List(TypeInfo), added : U64 }" },
+        .{ .path = "ProvidesEntry.roc", .source = "import ProvidedExport\nProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str, type_id : U64 }" },
+        .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
         .{ .path = "FunctionSignature.roc", .source = "FunctionSignature := { args : List(U64), result : U64 }" },
-        .{ .path = "CallableSignature.roc", .source = "import FunctionSignature exposing [FunctionSignature]\nCallableSignature := [Known(FunctionSignature), Opaque(U64)]" },
-        .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
-        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
-        .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
+        .{ .path = "CallableSignature.roc", .source = "import FunctionSignature\nCallableSignature := [Known(FunctionSignature), Opaque(U64)]" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
+        .{ .path = "TypeInfo.roc", .source = "import HostRcPlan\nimport TypeRepr\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
+        .{ .path = "TypeInfo.roc", .source = "import AbiLayout\nimport HostRcPlan\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
         .{ .path = "RecordField.roc", .source = "RecordField := { is_padding : Bool, name : Str, type_id : U32 }" },
         .{ .path = "HostRcPlan.roc", .source = "HostRcPlan := [RcNoop(U64), RcRefcounted]" },
     };
@@ -5166,8 +5163,8 @@ test "glue platform schema lock rejects field rename addition and type mutation"
         try tmp.dir.writeFile(io, .{ .sub_path = mutation_path, .data = mutation.source });
         try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
             \\app [make_glue] { pf: platform "platform/main.roc" }
-            \\import pf.Types exposing [Types]
-            \\import pf.File exposing [File]
+            \\import pf.Types
+            \\import pf.File
             \\make_glue : List(Types) -> Try(List(File), Str)
             \\make_glue = |input| {
             \\    dbg input
