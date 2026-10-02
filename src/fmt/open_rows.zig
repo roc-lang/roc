@@ -118,6 +118,8 @@ pub const OpenRows = struct {
     /// Names a platform header `provides` to the host; their annotations keep
     /// their rows as written.
     provided_names: std.StringHashMapUnmanaged(void),
+    /// Reused worklist for walking destructuring patterns.
+    pattern_worklist: std.ArrayList(AST.Pattern.Idx) = .empty,
 
     /// Index the file's declarations, imports and header.
     pub fn init(gpa: Allocator, ast: *const AST) Allocator.Error!OpenRows {
@@ -197,6 +199,7 @@ pub const OpenRows = struct {
         self.type_decls.deinit(self.gpa);
         self.external_names.deinit(self.gpa);
         self.provided_names.deinit(self.gpa);
+        self.pattern_worklist.deinit(self.gpa);
         self.redundant.deinit(self.gpa);
     }
 
@@ -214,7 +217,7 @@ pub const OpenRows = struct {
             const anno = stmt.type_anno;
             if (anno.is_var) continue;
             const next: ?AST.Statement.Idx = if (index + 1 < statements.len) statements[index + 1] else null;
-            if (!self.annotationGeneralizesRegardless(anno.name, next, scope)) continue;
+            if (!try self.annotationGeneralizesRegardless(anno.name, next, scope)) continue;
             try self.markAnnotation(anno.anno, anno.where);
         }
     }
@@ -224,7 +227,7 @@ pub const OpenRows = struct {
     /// is not a host boundary (`Check.collectHostBoundaryAnnotations`). A
     /// value binding does not: on a value, `..` is the opt-in to a quantified
     /// row.
-    fn annotationGeneralizesRegardless(self: *const OpenRows, name_tok: Token.Idx, next: ?AST.Statement.Idx, scope: StatementScope) bool {
+    fn annotationGeneralizesRegardless(self: *OpenRows, name_tok: Token.Idx, next: ?AST.Statement.Idx, scope: StatementScope) Allocator.Error!bool {
         const name = self.tokenName(name_tok);
         // A platform's provided definitions are host-boundary annotations.
         if (self.provided_names.contains(name)) return false;
@@ -240,6 +243,16 @@ pub const OpenRows = struct {
                     // its `..`.
                     return self.ast.store.getExpr(decl.body) == .lambda;
                 }
+                // At the top level, Can attaches the annotation to the def a
+                // destructured literal splits off for that name, which may be
+                // a value, so the `..` stays. Associated and block scopes
+                // attach only to a same-named ident; any other declaration
+                // leaves the annotation annotation-only.
+                if (scope == .file and self.destructuredLiteralShapesMatch(decl.pattern, decl.body) and
+                    try self.destructuredLiteralPatternBindsName(decl.pattern, name))
+                {
+                    return false;
+                }
             }
         }
 
@@ -250,6 +263,142 @@ pub const OpenRows = struct {
             // A block's annotation with no definition is not a definition.
             .block => false,
         };
+    }
+
+    /// Mirrors `Can.destructuredLiteralShapesMatch`: whether `pattern` is a
+    /// record or tuple pattern and `expr` a literal of the same kind with
+    /// exactly the pattern's fields, every field pattern a name or a nested
+    /// record or tuple pattern.
+    fn destructuredLiteralShapesMatch(self: *const OpenRows, pattern_idx: AST.Pattern.Idx, expr_idx: AST.Expr.Idx) bool {
+        const store = &self.ast.store;
+        switch (store.getPattern(pattern_idx)) {
+            .record => |pattern_record| {
+                const expr = store.getExpr(expr_idx);
+                if (expr != .record) return false;
+                if (expr.record.ext != null) return false;
+                const pattern_fields = store.patternRecordFieldSlice(pattern_record.fields);
+                const expr_fields = store.recordFieldSlice(expr.record.fields);
+                if (pattern_fields.len == 0 or pattern_fields.len != expr_fields.len) return false;
+                for (pattern_fields, 0..) |pattern_field_idx, pattern_index| {
+                    const pattern_field = store.getPatternRecordField(pattern_field_idx);
+                    if (pattern_field.rest) return false;
+                    const name_tok = pattern_field.name orelse return false;
+                    const name = self.tokenName(name_tok);
+                    if (pattern_field.value) |sub_pattern| {
+                        if (!self.destructuredLiteralFieldPatternIsBinding(sub_pattern)) return false;
+                    }
+                    for (pattern_fields[0..pattern_index]) |earlier_idx| {
+                        const earlier_tok = store.getPatternRecordField(earlier_idx).name orelse return false;
+                        if (std.mem.eql(u8, self.tokenName(earlier_tok), name)) return false;
+                    }
+                    if (!self.literalSuppliesField(expr_fields, name)) return false;
+                }
+                return true;
+            },
+            .tuple => |pattern_tuple| {
+                const expr = store.getExpr(expr_idx);
+                if (expr != .tuple) return false;
+                const item_patterns = store.patternSlice(pattern_tuple.patterns);
+                if (item_patterns.len == 0 or item_patterns.len != store.exprSlice(expr.tuple.items).len) return false;
+                for (item_patterns) |item_pattern| {
+                    if (!self.destructuredLiteralFieldPatternIsBinding(item_pattern)) return false;
+                }
+                return true;
+            },
+            .ident,
+            .var_ident,
+            .tag,
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .string,
+            .single_quote,
+            .list,
+            .list_rest,
+            .underscore,
+            .alternatives,
+            .as,
+            .malformed,
+            => return false,
+        }
+    }
+
+    fn destructuredLiteralFieldPatternIsBinding(self: *const OpenRows, pattern_idx: AST.Pattern.Idx) bool {
+        return switch (self.ast.store.getPattern(pattern_idx)) {
+            .ident, .record, .tuple => true,
+            .var_ident,
+            .tag,
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .string,
+            .single_quote,
+            .list,
+            .list_rest,
+            .underscore,
+            .alternatives,
+            .as,
+            .malformed,
+            => false,
+        };
+    }
+
+    /// Mirrors `Can.literalFieldSupplyingName`: exactly one field named
+    /// `name`, with a supplied value.
+    fn literalSuppliesField(self: *const OpenRows, expr_fields: []const AST.RecordField.Idx, name: []const u8) bool {
+        var found = false;
+        for (expr_fields) |field_idx| {
+            const field = self.ast.store.getRecordField(field_idx);
+            if (!std.mem.eql(u8, self.tokenName(field.name), name)) continue;
+            if (found) return false;
+            switch (field.value) {
+                .supplied => found = true,
+                .punned, .unset => return false,
+            }
+        }
+        return found;
+    }
+
+    /// Mirrors `Can.destructuredLiteralPatternBindsName`: whether the pattern
+    /// binds `name` as a field name or an identifier sub-pattern, at any
+    /// nesting of record and tuple patterns.
+    fn destructuredLiteralPatternBindsName(self: *OpenRows, root: AST.Pattern.Idx, name: []const u8) Allocator.Error!bool {
+        const store = &self.ast.store;
+        const pending = &self.pattern_worklist;
+        pending.clearRetainingCapacity();
+        try pending.append(self.gpa, root);
+        while (pending.pop()) |pattern_idx| {
+            switch (store.getPattern(pattern_idx)) {
+                .ident => |ident| if (std.mem.eql(u8, self.tokenName(ident.ident_tok), name)) return true,
+                .record => |record| for (store.patternRecordFieldSlice(record.fields)) |field_idx| {
+                    const field = store.getPatternRecordField(field_idx);
+                    if (field.value) |sub_pattern| {
+                        try pending.append(self.gpa, sub_pattern);
+                    } else if (field.name) |name_tok| {
+                        if (std.mem.eql(u8, self.tokenName(name_tok), name)) return true;
+                    }
+                },
+                .tuple => |tuple| for (store.patternSlice(tuple.patterns)) |item| try pending.append(self.gpa, item),
+                .var_ident,
+                .tag,
+                .int,
+                .frac,
+                .typed_int,
+                .typed_frac,
+                .string,
+                .single_quote,
+                .list,
+                .list_rest,
+                .underscore,
+                .alternatives,
+                .as,
+                .malformed,
+                => {},
+            }
+        }
+        return false;
     }
 
     fn markAnnotation(self: *OpenRows, anno_idx: AST.TypeAnno.Idx, where: ?AST.Collection.Idx) Allocator.Error!void {
@@ -294,25 +443,46 @@ pub const OpenRows = struct {
 
     /// `Check.generateAnnoTypeInPlace`, deciding only where an anonymous `..`
     /// is generated exactly as its absence would be.
+    /// One annotation position still to visit.
+    const WalkItem = struct {
+        anno: AST.TypeAnno.Idx,
+        ctx: Ctx,
+        polarity: Polarity,
+    };
+
+    /// Visit an annotation and every position nested in it. Pending positions
+    /// wait on a heap-backed stack, so annotation nesting never becomes native
+    /// call depth; visiting only sets marks and joins occurrence flags, so the
+    /// order positions are visited in does not matter.
     fn walk(self: *OpenRows, anno_idx: AST.TypeAnno.Idx, ctx: Ctx, polarity: Polarity, occurrences: ?*VarOccurrences) Allocator.Error!void {
+        var pending: std.ArrayList(WalkItem) = .empty;
+        defer pending.deinit(self.gpa);
+        try pending.append(self.gpa, .{ .anno = anno_idx, .ctx = ctx, .polarity = polarity });
+        while (pending.pop()) |item| try self.visit(item, occurrences, &pending);
+    }
+
+    fn visit(self: *OpenRows, item: WalkItem, occurrences: ?*VarOccurrences, pending: *std.ArrayList(WalkItem)) Allocator.Error!void {
+        const anno_idx = item.anno;
+        const ctx = item.ctx;
+        const polarity = item.polarity;
         switch (self.ast.store.getTypeAnno(anno_idx)) {
             .ty_var => |v| try noteOccurrence(self.gpa, occurrences, self.tokenName(v.tok), ctx),
             .underscore_type_var => |v| try noteOccurrence(self.gpa, occurrences, self.tokenName(v.tok), ctx),
             .underscore, .ty, .malformed => {},
-            .parens => |parens| try self.walk(parens.anno, ctx, polarity, occurrences),
+            .parens => |parens| try pending.append(self.gpa, .{ .anno = parens.anno, .ctx = ctx, .polarity = polarity }),
             .@"fn" => |func| {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try self.walk(arg, ctx.withReach(.nested), .neg, occurrences);
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx.withReach(.nested), .polarity = .neg });
                 }
                 const ret_reach = base.annotation_positions.functionReturnReach(ctx.reach);
-                try self.walk(func.ret, ctx.withReach(ret_reach), .pos, occurrences);
+                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx.withReach(ret_reach), .polarity = .pos });
             },
             .tag_union => |tag_union| {
                 const tags = self.ast.store.typeAnnoSlice(tag_union.tags);
                 for (tags) |tag_idx| {
                     switch (self.ast.store.getTypeAnno(tag_idx)) {
                         .apply => |tag| for (self.ast.store.typeAnnoSlice(tag.args)[1..]) |payload| {
-                            try self.walk(payload, ctx.withReach(.nested), polarity, occurrences);
+                            try pending.append(self.gpa, .{ .anno = payload, .ctx = ctx.withReach(.nested), .polarity = polarity });
                         },
                         .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {},
                     }
@@ -321,20 +491,20 @@ pub const OpenRows = struct {
                     .open => if (tags.len > 0 and polarity == .pos and outputOpens(ctx)) {
                         self.redundant.set(@intFromEnum(anno_idx));
                     },
-                    .named => |named| try self.walk(named.anno, ctx.withReach(.nested), polarity, occurrences),
+                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
                     .closed => {},
                 }
             },
             .tuple => |tuple| for (self.ast.store.typeAnnoSlice(tuple.annos)) |elem| {
-                try self.walk(elem, ctx.withReach(.nested), polarity, occurrences);
+                try pending.append(self.gpa, .{ .anno = elem, .ctx = ctx.withReach(.nested), .polarity = polarity });
             },
             .record => |record| {
                 for (self.ast.store.annoRecordFieldSlice(record.fields)) |field_idx| {
                     const field = self.ast.store.getAnnoRecordField(field_idx) catch continue;
-                    try self.walk(field.ty, ctx.withReach(.nested), polarity, occurrences);
+                    try pending.append(self.gpa, .{ .anno = field.ty, .ctx = ctx.withReach(.nested), .polarity = polarity });
                 }
                 switch (record.ext) {
-                    .named => |named| try self.walk(named.anno, ctx.withReach(.nested), polarity, occurrences),
+                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
                     .open, .closed => {},
                 }
             },
@@ -353,7 +523,7 @@ pub const OpenRows = struct {
                     const reach: Reach = if (reaches) |known| known[arg_index] else .nested;
                     const arg_ctx = if (positions != null) ctx.withReach(reach) else ctx.withReach(reach).withOpening(.as_written);
                     const arg_polarity = if (positions) |known| known[arg_index].polarity(polarity) else polarity;
-                    try self.walk(arg, arg_ctx, arg_polarity, occurrences);
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = arg_ctx, .polarity = arg_polarity });
                 }
             },
         }

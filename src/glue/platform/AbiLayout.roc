@@ -1,7 +1,7 @@
-import AbiLayoutDetails exposing [AbiLayoutDetails]
-import AbiFieldLayout exposing [AbiFieldLayout]
-import AbiTagLayout exposing [AbiTagLayout]
-import AbiWidth exposing [AbiWidth]
+import AbiLayoutDetails
+import AbiFieldLayout
+import AbiTagLayout
+import AbiWidth
 
 ## Exact compiler-emitted ABI layout metadata for one public glue type id.
 ##

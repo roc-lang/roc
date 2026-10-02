@@ -66,19 +66,19 @@ const Ranges = struct {
         }
         try self.multiple.append(allocator, range);
     }
-    fn appendSlice(self: *Ranges, allocator: Allocator, ranges: []const Range) Allocator.Error!void {
-        for (ranges) |range| try self.append(allocator, range);
-    }
     fn deinit(self: *Ranges, allocator: Allocator) void {
         self.multiple.deinit(allocator);
     }
 };
-/// A physical slot's size and disjoint occupied intervals.
+/// A physical slot's size.
 pub const Slot = struct {
     size: u32,
-    ranges: Ranges = .{},
-    cursor: usize = 0,
 };
+/// A slot's disjoint occupied intervals, keyed by start.
+const Reservations = std.Treap(Range, rangeOrder);
+fn rangeOrder(a: Range, b: Range) std.math.Order {
+    return std.math.order(a.start, b.start);
+}
 
 /// Start an empty procedure plan.
 pub fn init(allocator: Allocator) Self {
@@ -87,7 +87,6 @@ pub fn init(allocator: Allocator) Self {
 /// Release all procedure-owned analysis storage.
 pub fn deinit(self: *Self) void {
     for (self.values.items) |*v| v.ranges.deinit(self.allocator);
-    for (self.slots.items) |*s| s.ranges.deinit(self.allocator);
     self.locals.deinit();
     self.values.deinit(self.allocator);
     self.nodes.deinit(self.allocator);
@@ -276,18 +275,6 @@ fn valueLess(self: *Self, a: u32, b: u32) bool {
     const y = self.values.items[b].ranges.items()[0].start;
     return if (x == y) a < b else x < y;
 }
-fn overlaps(a: []const Range, b: []const Range) bool {
-    var i: usize = 0;
-    var j: usize = 0;
-    while (i < a.len and j < b.len) {
-        if (a[i].end <= b[j].start) {
-            i += 1;
-        } else if (b[j].end <= a[i].start) {
-            j += 1;
-        } else return true;
-    }
-    return false;
-}
 fn assignSlots(self: *Self) Allocator.Error!void {
     var order: std.ArrayList(u32) = .empty;
     defer order.deinit(self.allocator);
@@ -305,6 +292,11 @@ fn assignSlots(self: *Self) Allocator.Error!void {
         }
         classes.deinit();
     }
+    // Each slot's reservations; their nodes live only while slots are assigned.
+    var reservations: std.ArrayList(Reservations) = .empty;
+    defer reservations.deinit(self.allocator);
+    var nodes = std.heap.ArenaAllocator.init(self.allocator);
+    defer nodes.deinit();
     for (order.items) |index| {
         const value = &self.values.items[index];
         const ranges = value.ranges.items();
@@ -322,34 +314,63 @@ fn assignSlots(self: *Self) Allocator.Error!void {
         while (i > 0) {
             i -= 1;
             const slot_index = class.available.items[i];
-            const slot = &self.slots.items[slot_index];
-            while (slot.cursor < slot.ranges.items().len and slot.ranges.items()[slot.cursor].end <= start) slot.cursor += 1;
-            const remaining = slot.ranges.items()[slot.cursor..];
-            if (remaining.len > 0 and remaining[0].start <= start) {
-                _ = class.available.swapRemove(i);
-                try class.busy.push(self.allocator, .{ .end = remaining[0].end, .slot = slot_index });
-                continue;
+            const tree = &reservations.items[slot_index];
+            if (lastStartingBefore(tree, start + 1)) |covering| {
+                if (covering.key.end > start) {
+                    _ = class.available.swapRemove(i);
+                    try class.busy.push(self.allocator, .{ .end = covering.key.end, .slot = slot_index });
+                    continue;
+                }
             }
-            if (overlaps(remaining, ranges)) continue;
+            if (reservationsOverlap(tree, ranges)) continue;
             chosen = slot_index;
             _ = class.available.swapRemove(i);
-            // Retire past intervals before merging future reservations.
-            std.mem.copyForwards(Range, slot.ranges.mutableItems()[0..remaining.len], remaining);
-            slot.ranges.truncate(remaining.len);
-            slot.cursor = 0;
             break;
         }
         const slot_index = chosen orelse blk: {
             const next: u32 = @intCast(self.slots.items.len);
             try self.slots.append(self.allocator, .{ .size = value.size });
+            try reservations.append(self.allocator, .{});
             break :blk next;
         };
-        const slot = &self.slots.items[slot_index];
-        try slot.ranges.appendSlice(self.allocator, ranges);
-        compactRanges(&slot.ranges);
+        const tree = &reservations.items[slot_index];
+        for (ranges) |range| {
+            const reservation = try nodes.allocator().create(Reservations.Node);
+            var slot_entry = tree.getEntryFor(range);
+            std.debug.assert(slot_entry.node == null);
+            slot_entry.set(reservation);
+        }
         value.slot = slot_index;
-        try class.busy.push(self.allocator, .{ .end = slot.ranges.items()[0].end, .slot = slot_index });
+        // The value's own first range is the slot's earliest live reservation:
+        // an earlier one would have overlapped `start`.
+        try class.busy.push(self.allocator, .{ .end = ranges[0].end, .slot = slot_index });
     }
+}
+
+/// The reservation with the greatest start below `limit`.
+fn lastStartingBefore(tree: *const Reservations, limit: u32) ?*Reservations.Node {
+    var best: ?*Reservations.Node = null;
+    var current = tree.root;
+    while (current) |reservation| {
+        if (reservation.key.start < limit) {
+            best = reservation;
+            current = reservation.children[1];
+        } else {
+            current = reservation.children[0];
+        }
+    }
+    return best;
+}
+
+/// Whether sorted, disjoint `ranges` intersect a slot's reservations. The
+/// reservations are disjoint too, so only the last one starting before a
+/// range's end can reach into it.
+fn reservationsOverlap(tree: *const Reservations, ranges: []const Range) bool {
+    for (ranges) |range| {
+        const candidate = lastStartingBefore(tree, range.end) orelse continue;
+        if (candidate.key.end > range.start) return true;
+    }
+    return false;
 }
 
 fn testLocal(index: u32) lir.LocalId {

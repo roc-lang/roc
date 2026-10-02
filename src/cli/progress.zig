@@ -202,6 +202,14 @@ pub const Reporter = struct {
         self.endActiveLocked(subs);
     }
 
+    /// End the active phase with a breakdown, excluding `excluded_ns` of its
+    /// wall time that a separately reported phase accounts for.
+    pub fn endWithBreakdownExcluding(self: *Reporter, subs: []const SubTiming, excluded_ns: u64) void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        self.endActiveExcludingLocked(subs, excluded_ns);
+    }
+
     /// End the active phase with aggregate/interleaved subtimings while keeping
     /// its wall-time parent row visible even when no memory sample was recorded.
     pub fn endWithParentBreakdown(self: *Reporter, subs: []const SubTiming) void {
@@ -292,9 +300,13 @@ pub const Reporter = struct {
     }
 
     fn endActiveLocked(self: *Reporter, subs: []const SubTiming) void {
+        self.endActiveExcludingLocked(subs, 0);
+    }
+
+    fn endActiveExcludingLocked(self: *Reporter, subs: []const SubTiming, excluded_ns: u64) void {
         const idx = self.active orelse return;
         self.sampleMemoryLocked();
-        self.phases[idx].end_ns = self.elapsedNs();
+        self.phases[idx].end_ns = @max(self.phases[idx].start_ns, self.elapsedNs() -| excluded_ns);
         const n = @min(subs.len, self.phases[idx].sub.len);
         for (subs[0..n], 0..) |s, i| self.phases[idx].sub[i] = s;
         self.phases[idx].sub_len = @intCast(n);

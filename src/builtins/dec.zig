@@ -379,7 +379,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal addition overflowed!");
-            unreachable; // The host should handle the crash
         } else {
             return answer.value;
         }
@@ -414,7 +413,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal subtraction overflowed!");
-            unreachable; // The host should handle the crash
         } else {
             return answer.value;
         }
@@ -579,7 +577,6 @@ pub const RocDec = extern struct {
             );
         } else if (base.num <= 0) {
             roc_ops.crash("Decimal power is undefined for non-positive base and fractional exponent!");
-            unreachable;
         } else {
             const log_base = decLnPositive(base, roc_ops);
             const scaled_exponent = RocDec.mul(log_base, exponent, roc_ops);
@@ -594,7 +591,6 @@ pub const RocDec = extern struct {
         // sqrt(-n) is an error
         if (self.num < 0) {
             roc_ops.crash("Decimal square root of a negative number!");
-            unreachable;
         }
 
         return decSqrtNonNegative(self);
@@ -609,7 +605,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal multiplication overflowed!");
-            unreachable; // The host should handle the crash
         } else {
             return answer.value;
         }
@@ -703,7 +698,6 @@ pub const RocDec = extern struct {
     pub fn asin(self: RocDec, roc_ops: *RocOps) RocDec {
         if (self.num > RocDec.one_point_zero.num or self.num < RocDec.neg_one_point_zero.num) {
             roc_ops.crash("Decimal asin input is outside [-1, 1]!");
-            unreachable;
         }
         if (self.num == RocDec.one_point_zero.num) return RocDec.half_pi;
         if (self.num == RocDec.neg_one_point_zero.num) return RocDec{ .num = -RocDec.half_pi.num };
@@ -927,7 +921,6 @@ fn decRemKnownNonZero(self: RocDec, other: RocDec) RocDec {
 fn decLnPositive(value: RocDec, roc_ops: *RocOps) RocDec {
     if (value.num <= 0) {
         roc_ops.crash("Decimal log is undefined for non-positive input!");
-        unreachable;
     }
 
     var reduced = value;
@@ -1436,7 +1429,6 @@ pub fn fromF64C(
         return dec.num;
     } else {
         roc_ops.crash("Decimal conversion from f64 failed!");
-        unreachable;
     }
 }
 
@@ -1450,7 +1442,6 @@ pub fn fromF32C(
         return dec.num;
     } else {
         roc_ops.crash("Decimal conversion from f32!");
-        unreachable;
     }
 }
 
@@ -1545,7 +1536,6 @@ pub fn negateC(
 ) callconv(.c) i128 {
     return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
         roc_ops.crash("Decimal negation overflow!");
-        unreachable;
     };
 }
 
@@ -1557,7 +1547,6 @@ pub fn absC(
 ) callconv(.c) i128 {
     const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
         roc_ops.crash("Decimal absolute value overflow!");
-        unreachable;
     };
     return result.num;
 }

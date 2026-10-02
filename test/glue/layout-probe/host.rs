@@ -6,6 +6,7 @@
 mod abi;
 
 use core::ffi::c_void;
+use core::ptr::NonNull;
 use core::fmt::{self, Write};
 
 unsafe extern "C" {
@@ -120,19 +121,19 @@ fn fail(message: &str) {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_alloc(length: usize, alignment: usize) -> *mut c_void {
+pub extern "C" fn roc_alloc(length: usize, alignment: usize) -> NonNull<c_void> {
     let total = length + alignment - 1 + core::mem::size_of::<usize>();
     let raw = unsafe { malloc(total.max(1)) as *mut u8 };
     if raw.is_null() {
         fail("malloc failed");
-        return core::ptr::null_mut();
+        exit_failure();
     }
     let aligned = align_forward(unsafe { raw.add(core::mem::size_of::<usize>()) } as usize, alignment);
     unsafe {
         *((aligned - core::mem::size_of::<usize>()) as *mut usize) = raw as usize;
         ALLOC_COUNT += 1;
     }
-    aligned as *mut c_void
+    unsafe { NonNull::new_unchecked(aligned as *mut c_void) }
 }
 
 #[no_mangle]
@@ -148,7 +149,7 @@ pub extern "C" fn roc_dealloc(ptr: *mut c_void, _alignment: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_realloc(ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+pub extern "C" fn roc_realloc(ptr: *mut c_void, new_length: usize, alignment: usize) -> NonNull<c_void> {
     if !ptr.is_null() {
         roc_dealloc(ptr, alignment);
     }

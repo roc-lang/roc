@@ -1101,6 +1101,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .duplicate_pattern_binder = .{
+            .ident = rand_ident_idx(),
+            .duplicate_region = rand_region(),
+            .original_region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .duplicate_tag = .{
             .tag_name = rand_ident_idx(),
             .duplicate_region = rand_region(),
@@ -1280,6 +1288,21 @@ test "NodeStore round trip - Diagnostics" {
         .return_outside_fn = .{
             .region = rand_region(),
             .context = .return_statement,
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .control_flow_in_expect = .{
+            .region = rand_region(),
+            .kind = .try_suffix,
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .var_reassigned_in_expect = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+            .declaration_region = rand_region(),
         },
     });
 

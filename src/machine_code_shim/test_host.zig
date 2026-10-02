@@ -27,14 +27,16 @@ comptime {
     @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed });
 }
 
-fn rocAlloc(_: usize, _: usize) callconv(.c) ?*anyopaque {
-    return null;
+var allocation: [16]u8 align(16) = undefined;
+
+fn rocAlloc(_: usize, _: usize) callconv(.c) *anyopaque {
+    return @ptrCast(&allocation);
 }
 
 fn rocDealloc(_: *anyopaque, _: usize) callconv(.c) void {}
 
-fn rocRealloc(_: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
-    return null;
+fn rocRealloc(ptr: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
+    return ptr;
 }
 
 fn rocDbg(_: [*]const u8, _: usize) callconv(.c) void {}

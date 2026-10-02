@@ -1016,3 +1016,287 @@ test "exhaustive - tuple with list and integer patterns" {
     // This should be exhaustive - patterns 1 and 3 together cover all lists
     try test_env.assertLastDefType("I64");
 }
+
+// Repro for https://github.com/roc-lang/roc/issues/11939
+// [True, ..], [.., False], and [] leave lists such as [False, True] uncovered.
+test "non-exhaustive - prefix and suffix list patterns missing a mixed list" {
+    const source =
+        \\classify : List(Bool) -> Str
+        \\classify = |flags| match flags {
+        \\    [True, ..] => "starts with true"
+        \\    [.., False] => "ends with false"
+        \\    [] => "empty"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Non Exhaustive Match");
+}
+
+// Lists of every length at least `max_prefix + max_suffix` must be checked with
+// prefix and suffix elements in separate columns, so prefix and suffix patterns
+// never stand in for each other.
+
+test "exhaustive - prefix and suffix list patterns with the mixed lists covered" {
+    const source =
+        \\classify : List(Bool) -> Str
+        \\classify = |flags| match flags {
+        \\    [True, ..] => "starts with true"
+        \\    [.., False] => "ends with false"
+        \\    [False, .., True] => "false then true"
+        \\    [] => "empty"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "non-exhaustive - prefix and suffix list patterns report the uncovered mixed lists" {
+    const source =
+        \\classify : List(Bool) -> Str
+        \\classify = |flags| match flags {
+        \\    [True, ..] => "starts with true"
+        \\    [.., False] => "ends with false"
+        \\    [] => "empty"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeErrorMsg(
+        \\**Non Exhaustive Match**
+        \\This match expression doesn't cover all possible cases.
+        \\```roc
+        \\classify = |flags| match flags {
+        \\```
+        \\                   ^^^^^
+        \\
+        \\The value being matched on has type:
+        \\        _List(Bool)_
+        \\
+        \\Missing patterns:
+        \\        [False, .., True]
+        \\
+        \\Hint: Add branches to handle these cases, or use `_` to match anything.
+        \\
+        \\
+    );
+}
+
+test "non-exhaustive - exact list pattern does not cover longer mixed lists" {
+    const source =
+        \\classify : List(Bool) -> Str
+        \\classify = |flags| match flags {
+        \\    [True, ..] => "starts with true"
+        \\    [.., False] => "ends with false"
+        \\    [False, True] => "false then true"
+        \\    [] => "empty"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeErrorMsg(
+        \\**Non Exhaustive Match**
+        \\This match expression doesn't cover all possible cases.
+        \\```roc
+        \\classify = |flags| match flags {
+        \\```
+        \\                   ^^^^^
+        \\
+        \\The value being matched on has type:
+        \\        _List(Bool)_
+        \\
+        \\Missing patterns:
+        \\        [False, _, .., True]
+        \\
+        \\Hint: Add branches to handle these cases, or use `_` to match anything.
+        \\
+        \\
+    );
+}
+
+test "non-exhaustive - longer prefix and suffix list patterns" {
+    const source =
+        \\classify : List(Bool) -> Str
+        \\classify = |flags| match flags {
+        \\    [True, True, ..] => "a"
+        \\    [.., False, False] => "b"
+        \\    [_, False, ..] => "c"
+        \\    [.., True, _] => "d"
+        \\    [] => "e"
+        \\    [_] => "f"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeErrorMsg(
+        \\**Non Exhaustive Match**
+        \\This match expression doesn't cover all possible cases.
+        \\```roc
+        \\classify = |flags| match flags {
+        \\```
+        \\                   ^^^^^
+        \\
+        \\The value being matched on has type:
+        \\        _List(Bool)_
+        \\
+        \\Missing patterns:
+        \\        [False, True]
+        \\
+        \\Hint: Add branches to handle these cases, or use `_` to match anything.
+        \\
+        \\
+    );
+}
+
+test "exhaustive - wildcard after prefix and suffix list patterns is not redundant" {
+    const source =
+        \\classify : List(Bool) -> Str
+        \\classify = |flags| match flags {
+        \\    [True, ..] => "starts with true"
+        \\    [.., False] => "ends with false"
+        \\    [] => "empty"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "exhaustive - prefix list pattern after prefix and suffix list patterns is not redundant" {
+    const source =
+        \\classify : List(Bool) -> Str
+        \\classify = |flags| match flags {
+        \\    [True, ..] => "starts with true"
+        \\    [.., False] => "ends with false"
+        \\    [] => "empty"
+        \\    [False, ..] => "starts with false"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "redundant - single-element list covered by prefix and suffix list patterns" {
+    const source =
+        \\classify : List(Bool) -> Str
+        \\classify = |flags| match flags {
+        \\    [True, ..] => "starts with true"
+        \\    [.., False] => "ends with false"
+        \\    [False, .., True] => "false then true"
+        \\    [] => "empty"
+        \\    [_] => "one"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeWarning("Redundant Pattern");
+}
+
+test "non-exhaustive - prefix and suffix patterns on a nested list" {
+    const source =
+        \\classify : List(List(Bool)) -> Str
+        \\classify = |rows| match rows {
+        \\    [[True, ..], ..] => "a"
+        \\    [[.., False], ..] => "b"
+        \\    [[], ..] => "c"
+        \\    [] => "d"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeErrorMsg(
+        \\**Non Exhaustive Match**
+        \\This match expression doesn't cover all possible cases.
+        \\```roc
+        \\classify = |rows| match rows {
+        \\```
+        \\                  ^^^^^
+        \\
+        \\The value being matched on has type:
+        \\        _List(List(Bool))_
+        \\
+        \\Missing patterns:
+        \\        [[False, .., True], ..]
+        \\
+        \\Hint: Add branches to handle these cases, or use `_` to match anything.
+        \\
+        \\
+    );
+}
+
+test "non-exhaustive - prefix and suffix list patterns inside a tuple" {
+    const source =
+        \\classify : (List(Bool), Bool) -> Str
+        \\classify = |pair| match pair {
+        \\    ([True, ..], True) => "a"
+        \\    ([.., False], _) => "b"
+        \\    ([], _) => "c"
+        \\    (_, False) => "d"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeErrorMsg(
+        \\**Non Exhaustive Match**
+        \\This match expression doesn't cover all possible cases.
+        \\```roc
+        \\classify = |pair| match pair {
+        \\```
+        \\                  ^^^^^
+        \\
+        \\The value being matched on has type:
+        \\        _(List(Bool), Bool)_
+        \\
+        \\Missing patterns:
+        \\        ([False, .., True], True)
+        \\
+        \\Hint: Add branches to handle these cases, or use `_` to match anything.
+        \\
+        \\
+    );
+}
+
+test "non-exhaustive - missing tuple reports the uncovered value of each element" {
+    const source =
+        \\classify : (Bool, Bool, Bool) -> Str
+        \\classify = |triple| match triple {
+        \\    (True, _, _) => "a"
+        \\    (False, True, _) => "b"
+        \\    (False, False, True) => "c"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeErrorMsg(
+        \\**Non Exhaustive Match**
+        \\This match expression doesn't cover all possible cases.
+        \\```roc
+        \\classify = |triple| match triple {
+        \\```
+        \\                    ^^^^^
+        \\
+        \\The value being matched on has type:
+        \\        _(Bool, Bool, Bool)_
+        \\
+        \\Missing patterns:
+        \\        (False, False, False)
+        \\
+        \\Hint: Add branches to handle these cases, or use `_` to match anything.
+        \\
+        \\
+    );
+}

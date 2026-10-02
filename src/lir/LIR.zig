@@ -546,7 +546,7 @@ pub const LocalSpan = extern struct {
 /// Span into flat u64 storage.
 pub const U64Span = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty u64 span.
     pub fn empty() U64Span {
@@ -582,8 +582,8 @@ pub const BoxyTagPayloadRead = struct {
 /// is the pre-order position among descriptor requirements rooted at the
 /// explicit argument.
 pub const ErasedArgDescKey = extern struct {
-    arg_index: u16,
-    descriptor_index: u16,
+    arg_index: u32,
+    descriptor_index: u32,
 };
 
 /// Capture-storage destination for one keyed erased-call argument descriptor.
@@ -611,9 +611,9 @@ pub const ErasedArgDescParam = extern struct {
     local: LocalId,
     /// For a parameter read from its parent, the descriptor index of that
     /// already-bound parent within the same explicit argument.
-    source_descriptor_index: u16,
+    source_descriptor_index: u32,
     /// Nested descriptor slot or tag payload position read from the parent.
-    source_nested_index: u16,
+    source_nested_index: u32,
     /// Tag whose payload a `tag_payload` read names.
     source_tag_name: BoxyNameId,
     read: ErasedArgDescRead,
@@ -699,6 +699,19 @@ pub const U32Span = extern struct {
     pub fn empty() U32Span {
         return .{ .start = 0, .len = 0 };
     }
+};
+
+/// One conditionally unique part of a proc's returned value, as stored in a
+/// `LirProcSpec.rc_ret_conditions` span: the whole return when `field` is
+/// `whole_value`, otherwise original struct field `field` (or bit 0 for a
+/// tag union's single payload), unique whenever every argument position in
+/// `params` was passed a unique value as its caller's last use.
+pub const RcRetCondition = packed struct(u32) {
+    field: u8,
+    params: u16,
+    reserved: u8 = 0,
+
+    pub const whole_value: u8 = 255;
 };
 
 /// Identifier of one interned erased-call argument layout plan.
@@ -804,7 +817,7 @@ fn strMatchDelimiter(source: []const u8, cursor: usize, delimiter: []const u8) ?
 /// Span into flat string-match-step storage.
 pub const StrMatchStepSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() StrMatchStepSpan {
         return .{ .start = 0, .len = 0 };
@@ -829,7 +842,7 @@ pub const StrMatchArm = struct {
 /// Span into flat string-match-arm storage.
 pub const StrMatchArmSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() StrMatchArmSpan {
         return .{ .start = 0, .len = 0 };
@@ -911,18 +924,18 @@ pub const RefOp = union(enum) {
     },
     field: struct {
         source: LocalId,
-        field_idx: u16,
+        field_idx: u32,
     },
     tag_payload: struct {
         source: LocalId,
-        payload_idx: u16,
-        variant_index: u16,
-        tag_discriminant: u16,
+        payload_idx: u32,
+        variant_index: u32,
+        tag_discriminant: u32,
     },
     tag_payload_struct: struct {
         source: LocalId,
-        variant_index: u16,
-        tag_discriminant: u16,
+        variant_index: u32,
+        tag_discriminant: u32,
     },
     list_reinterpret: struct {
         backing_ref: LocalId,
@@ -944,7 +957,7 @@ pub const CFSwitchBranch = struct {
 /// Span into flat switch-branch storage.
 pub const CFSwitchBranchSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty switch-branch span.
     pub fn empty() CFSwitchBranchSpan {
@@ -962,7 +975,7 @@ pub const JoinPoint = extern struct {
 /// Span into flat join-point storage.
 pub const JoinPointSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty join-point span.
     pub fn empty() JoinPointSpan {
@@ -1324,8 +1337,8 @@ pub const CFStmt = union(enum) {
     assign_tag: struct {
         target: LocalId,
         target_desc: ?BoxyDescRef = null,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?LocalId,
         next: CFStmtId,
     },
@@ -1338,8 +1351,8 @@ pub const CFStmt = union(enum) {
     store_tag: struct {
         dest: LocalId,
         tag_layout: layout.Idx,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?LocalId,
         next: CFStmtId,
     },
@@ -1384,7 +1397,7 @@ pub const CFStmt = union(enum) {
     incref: struct {
         value: LocalId,
         rc: RcHelper,
-        count: u16 = 1,
+        count: u32 = 1,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -1497,6 +1510,10 @@ pub const CFStmt = union(enum) {
         /// compile-time evaluation reports the literal's own diagnostic with
         /// `msg`, the conversion's error message.
         literal_rejection: ?LiteralRejectionSite = null,
+        /// Set when this crash is code checking rejected and already
+        /// reported: compile-time evaluation that reaches it discards the
+        /// result instead of reporting the problem a second time.
+        checked_error: bool = false,
     },
 };
 
@@ -1629,6 +1646,31 @@ pub const LirProcSpec = struct {
     rc_borrowed_params: u64 = 0,
     rc_ret_borrowed: bool = false,
     rc_ret_lenders: u64 = 0,
+    /// The uniqueness facts ARC solved for a base proc, which its callers'
+    /// uniqueness inference reads: borrowed positions the body only reads,
+    /// a return (or returned fields) whose allocation has count 1, and the
+    /// parts of the return that are unique when particular arguments were
+    /// passed unique dying values (each entry an `RcRetCondition`). An
+    /// object-cache entry carries them, and a body-less `external` proc gets
+    /// them back, so callers of a cached proc compile as they would against
+    /// its body.
+    rc_read_only_params: u64 = 0,
+    rc_ret_unique: bool = false,
+    rc_ret_unique_fields: u64 = 0,
+    rc_ret_conditions: U32Span = U32Span.empty(),
+    /// The inline plan inlines this proc's body at its direct calls, so it has
+    /// a procedure only where a call could not inline it or it is a value. A
+    /// program that takes a cache hit for it before inlining (a pack program
+    /// takes hits during specialization) could not inline it, so the object
+    /// cache never offers it.
+    inlined_at_calls: bool = false,
+    /// Set by ARC on a solved base proc when a call to it may demand an
+    /// ownership variant emitted from its body (an owned field take, outcome
+    /// restitution, a same-SCC tail transfer, or, under mode specialization,
+    /// a born-unique seed or an owned return). An object-cache entry carries
+    /// only the base signature and no body, so a proc with this bit set is
+    /// never offered as one.
+    rc_variant_demandable: bool = false,
 };
 
 /// Identifier of a stored LirPattern.
@@ -1645,7 +1687,7 @@ pub const LirPatternId = enum(u32) {
 /// Span into flat pattern-id storage.
 pub const LirPatternSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() LirPatternSpan {
         return .{ .start = 0, .len = 0 };
@@ -1676,7 +1718,7 @@ pub const LirPattern = union(enum) {
     },
     str_literal: StringLiteral.Idx,
     tag: struct {
-        discriminant: u16,
+        discriminant: u32,
         union_layout: layout.Idx,
         args: LirPatternSpan,
     },
