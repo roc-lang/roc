@@ -1494,6 +1494,11 @@ pub const LowLevel = enum(u16) {
 
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
+            // Valid UTF-8 retains and shares the borrowed list allocation;
+            // invalid UTF-8 allocates replacement bytes. Neither path consumes
+            // the list, and a shared result is not born unique.
+            .str_from_utf8_lossy => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
+
             .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .list_drop_at,
@@ -1596,7 +1601,6 @@ pub const LowLevel = enum(u16) {
             .str_split_on => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_repeat,
-            .str_from_utf8_lossy,
             .str_with_capacity,
             .str_inspect,
             .u8_to_str,
