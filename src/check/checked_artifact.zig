@@ -18627,8 +18627,23 @@ const EvidencePass = struct {
         vars: artifact_serialize.Span,
         params: artifact_serialize.Span,
     };
+    /// Each dispatcher root's params within one schema, in param order.
+    /// Composite scheme requirements are matched by their exact relation
+    /// instead, so they are not indexed.
+    const DispatcherParams = std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32));
+    const no_dispatcher_params: DispatcherParams = .{};
+    /// One level of an evidence chain: a schema's params and their index.
+    const ChainLevel = struct {
+        params: []const EvidenceParam,
+        by_dispatcher: *const DispatcherParams,
+
+        const empty: ChainLevel = .{ .params = &.{}, .by_dispatcher = &no_dispatcher_params };
+    };
     const SchemeSchema = struct {
         params: []EvidenceParam,
+        by_dispatcher: *const DispatcherParams,
+        /// The nodes `params` name their paths by.
+        path_nodes: []const static_dispatch.EvidencePathNode,
         identity_vars: []const Var,
         published: ?PublishedScheme = null,
     };
@@ -18709,7 +18724,10 @@ const EvidencePass = struct {
     callable_contract_buckets: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(artifact_serialize.Span)) = .{},
     site_evidence: std.ArrayList(static_dispatch.SiteEvidenceEntry),
     evidence_params_pool: std.ArrayList(static_dispatch.EvidenceParamRecord),
-    evidence_param_paths: std.ArrayList(static_dispatch.EvidencePathStep),
+    evidence_path_nodes: std.ArrayList(static_dispatch.EvidencePathNode),
+    /// Scheme path node -> published path node, for the scheme being published.
+    published_path_nodes: std.ArrayList(u32),
+    published_path_chain: std.ArrayList(u32),
     evidence_param_callables: std.ArrayList(CheckedTypeId),
     scheme_vars_pool: std.ArrayList(CheckedTypeId),
     site_substitutions: std.ArrayList(CheckedTypeId),
@@ -18723,7 +18741,7 @@ const EvidencePass = struct {
     /// vector, so consumers cannot retain aliases into `enum_scratch`.
     enumerated_path_arena: std.heap.ArenaAllocator,
     /// Scratch backing for the chain currently being resolved against.
-    chain_scratch: std.ArrayList([]const EvidenceParam),
+    chain_scratch: std.ArrayList(ChainLevel),
     /// Per-plan / per-iterator-plan visited flags: a plan reachable from two
     /// templates (const body + entry wrapper) resolves once, and the final
     /// sweep resolves whatever no template reached (chain-free).
@@ -18735,7 +18753,7 @@ const EvidencePass = struct {
     /// The param chain in scope while resolving a site's evidence entries, so
     /// a fresh var that settled onto an enclosing where-var forwards as
     /// `constraint(depth, k)`. Index 0 is the innermost generalized callable.
-    current_chain: []const []const EvidenceParam = &.{},
+    current_chain: []const ChainLevel = &.{},
 
     const EvidenceParam = dispatch_evidence.EvidenceParam;
 
@@ -18799,7 +18817,9 @@ const EvidencePass = struct {
             .evidence_refs = .empty,
             .site_evidence = .empty,
             .evidence_params_pool = .empty,
-            .evidence_param_paths = .empty,
+            .evidence_path_nodes = .empty,
+            .published_path_nodes = .empty,
+            .published_path_chain = .empty,
             .evidence_param_callables = .empty,
             .scheme_vars_pool = .empty,
             .site_substitutions = .empty,
@@ -18838,7 +18858,9 @@ const EvidencePass = struct {
         self.callable_contract_buckets.deinit(self.allocator);
         self.site_evidence.deinit(self.allocator);
         self.evidence_params_pool.deinit(self.allocator);
-        self.evidence_param_paths.deinit(self.allocator);
+        self.evidence_path_nodes.deinit(self.allocator);
+        self.published_path_nodes.deinit(self.allocator);
+        self.published_path_chain.deinit(self.allocator);
         self.evidence_param_callables.deinit(self.allocator);
         self.scheme_vars_pool.deinit(self.allocator);
         self.site_substitutions.deinit(self.allocator);
@@ -18894,44 +18916,44 @@ const EvidencePass = struct {
             scope.evidence_params = schema.params;
         }
         self.templates.evidence_params_pool = try self.evidence_params_pool.toOwnedSlice(self.allocator);
-        self.templates.evidence_param_paths = try self.evidence_param_paths.toOwnedSlice(self.allocator);
+        self.templates.evidence_path_nodes = try self.evidence_path_nodes.toOwnedSlice(self.allocator);
         self.templates.evidence_param_callables = try self.evidence_param_callables.toOwnedSlice(self.allocator);
         self.templates.scheme_vars_pool = try self.scheme_vars_pool.toOwnedSlice(self.allocator);
 
         for (self.templates.templates.items, 0..) |*template, template_index| {
-            try self.enumerateTemplateParams(template.*, &template_defs, &params);
+            const template_level = try self.templateChainLevel(template.*, &template_defs);
 
             const plan_start = template.static_dispatch_plans.start;
             const plan_refs = self.plan_table.template_refs[plan_start .. plan_start + template.static_dispatch_plans.len];
             for (plan_refs, 0..) |plan_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_start + i], params.items);
+                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_start + i], template_level);
                 try self.resolvePlan(plan_id, chain, false);
             }
 
             const iter_span = self.template_iterator_refs.spans[template_index];
             for (self.template_iterator_refs.pool[iter_span.start .. iter_span.start + iter_span.len], 0..) |iter_plan_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], params.items);
+                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], template_level);
                 try self.resolveIteratorPlan(iter_plan_id, chain, false);
             }
 
             const value_ref_start = template.resolved_value_refs.start;
             const value_refs = self.resolved_value_refs.template_refs[value_ref_start .. value_ref_start + template.resolved_value_refs.len];
             for (value_refs, 0..) |ref_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_ref_start + i], params.items);
+                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_ref_start + i], template_level);
                 try self.emitSiteEvidence(ref_id, chain);
             }
 
             const scheme_use_span = self.template_iterator_refs.scheme_use_spans[template_index];
             const scheme_use_sites = self.template_iterator_refs.scheme_use_sites[scheme_use_span.start .. scheme_use_span.start + scheme_use_span.len];
             for (scheme_use_sites, 0..) |site, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_use_span.start + i], params.items);
+                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_use_span.start + i], template_level);
                 try self.emitSchemeUseSiteEvidence(site.record_idx, @intFromEnum(site.checked_expr), chain);
             }
 
             const scope_site_span = self.template_iterator_refs.scope_site_spans[template_index];
             const scope_sites = self.template_iterator_refs.scope_sites[scope_site_span.start .. scope_site_span.start + scope_site_span.len];
             for (scope_sites) |site| {
-                try self.emitScopeConstructionEvidence(site, params.items);
+                try self.emitScopeConstructionEvidence(site, template_level);
             }
         }
 
@@ -18945,31 +18967,31 @@ const EvidencePass = struct {
         {
             const plan_span = self.template_iterator_refs.default_plan_refs;
             for (self.plan_table.template_refs[plan_span.start .. plan_span.start + plan_span.len], 0..) |plan_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_span.start + i], &.{});
+                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_span.start + i], .empty);
                 try self.resolvePlan(plan_id, chain, false);
             }
 
             const iter_span = self.template_iterator_refs.default_iterator_refs;
             for (self.template_iterator_refs.pool[iter_span.start .. iter_span.start + iter_span.len], 0..) |iter_plan_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], &.{});
+                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], .empty);
                 try self.resolveIteratorPlan(iter_plan_id, chain, false);
             }
 
             const value_span = self.template_iterator_refs.default_value_refs;
             for (self.resolved_value_refs.template_refs[value_span.start .. value_span.start + value_span.len], 0..) |ref_id, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_span.start + i], &.{});
+                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_span.start + i], .empty);
                 try self.emitSiteEvidence(ref_id, chain);
             }
 
             const scheme_span = self.template_iterator_refs.default_scheme_uses;
             for (self.template_iterator_refs.scheme_use_sites[scheme_span.start .. scheme_span.start + scheme_span.len], 0..) |site, i| {
-                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_span.start + i], &.{});
+                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_span.start + i], .empty);
                 try self.emitSchemeUseSiteEvidence(site.record_idx, @intFromEnum(site.checked_expr), chain);
             }
 
             const scope_span = self.template_iterator_refs.default_scope_sites;
             for (self.template_iterator_refs.scope_sites[scope_span.start .. scope_span.start + scope_span.len]) |site| {
-                try self.emitScopeConstructionEvidence(site, &.{});
+                try self.emitScopeConstructionEvidence(site, .empty);
             }
         }
 
@@ -19174,7 +19196,7 @@ const EvidencePass = struct {
         if (schema.published) |published| return published;
         const published = PublishedScheme{
             .vars = try self.appendSchemeVars(scheme_root),
-            .params = try self.appendEvidenceParams(schema.params),
+            .params = try self.appendEvidenceParams(schema.params, schema.path_nodes),
         };
         for (schema.params, 0..) |*param, index| param.published_index = published.params.start + @as(u32, @intCast(index));
         self.schemas_by_root.getPtr(self.schemeOwner(scheme_root)).?.published = published;
@@ -19233,6 +19255,17 @@ const EvidencePass = struct {
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
         };
+    }
+
+    /// The template's own params as the outermost evidence chain level.
+    fn templateChainLevel(
+        self: *EvidencePass,
+        template: CheckedProcedureTemplate,
+        template_defs: *const std.AutoHashMap(u32, Var),
+    ) Allocator.Error!ChainLevel {
+        const scheme_var = self.templateEvidenceSchemeVar(template, template_defs) orelse return .empty;
+        const schema = try self.schemeSchema(scheme_var);
+        return .{ .params = schema.params, .by_dispatcher = schema.by_dispatcher };
     }
 
     fn enumerateTemplateParams(
@@ -19578,13 +19611,22 @@ const EvidencePass = struct {
         try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.enum_scratch, &params);
         const arena = self.enumerated_path_arena.allocator();
         for (params.items) |*param| {
-            param.path = try arena.dupe(static_dispatch.EvidencePathStep, param.path);
             param.callable_contracts = try arena.dupe(types.StaticDispatchConstraint, param.callable_contracts);
         }
         const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
         errdefer self.allocator.free(identity_vars);
+        const by_dispatcher = try arena.create(DispatcherParams);
+        by_dispatcher.* = .{};
+        for (params.items, 0..) |param, index| {
+            if (param.source == .scheme_requirement) continue;
+            const entry = try by_dispatcher.getOrPut(arena, self.types.resolveVar(param.dispatcher_var).var_);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(arena, @intCast(index));
+        }
         const schema = SchemeSchema{
             .params = try arena.dupe(EvidenceParam, params.items),
+            .by_dispatcher = by_dispatcher,
+            .path_nodes = try arena.dupe(static_dispatch.EvidencePathNode, self.enum_scratch.paramPathNodes()),
             .identity_vars = identity_vars,
         };
         try self.schemas_by_root.put(owner, schema);
@@ -19598,7 +19640,7 @@ const EvidencePass = struct {
     /// The param chain at `scope_id`: the scope's own params first (depth 0),
     /// each enclosing local scope outward, then the template's params. The
     /// returned slice aliases `chain_scratch` and is valid until the next call.
-    fn chainFor(self: *EvidencePass, scope_ref: DispatchScope, template_params: []const EvidenceParam) Allocator.Error![]const []const EvidenceParam {
+    fn chainFor(self: *EvidencePass, scope_ref: DispatchScope, template_level: ChainLevel) Allocator.Error![]const ChainLevel {
         self.chain_scratch.clearRetainingCapacity();
         var current: ?DispatchScopeId = switch (scope_ref) {
             .root => null,
@@ -19606,10 +19648,11 @@ const EvidencePass = struct {
         };
         while (current) |id| {
             const scope = self.template_iterator_refs.scopes[@intFromEnum(id)];
-            try self.chain_scratch.append(self.allocator, try self.paramsForScope(id, scope.scheme_var));
+            const schema = try self.schemeSchema(scope.scheme_var);
+            try self.chain_scratch.append(self.allocator, .{ .params = schema.params, .by_dispatcher = schema.by_dispatcher });
             current = scope.parent;
         }
-        try self.chain_scratch.append(self.allocator, template_params);
+        try self.chain_scratch.append(self.allocator, template_level);
         return self.chain_scratch.items;
     }
 
@@ -19617,12 +19660,18 @@ const EvidencePass = struct {
         return (try self.schemeSchema(scheme_var)).params;
     }
 
-    fn appendEvidenceParams(self: *EvidencePass, params: []const EvidenceParam) Allocator.Error!artifact_serialize.Span {
+    fn appendEvidenceParams(
+        self: *EvidencePass,
+        params: []const EvidenceParam,
+        path_nodes: []const static_dispatch.EvidencePathNode,
+    ) Allocator.Error!artifact_serialize.Span {
         const idents = self.module.identStoreConst();
         const pool_start: u32 = @intCast(self.evidence_params_pool.items.len);
+        self.published_path_nodes.clearRetainingCapacity();
+        try self.published_path_nodes.appendNTimes(self.allocator, static_dispatch.no_evidence_path_node, path_nodes.len);
         for (params) |param| {
             const source: static_dispatch.EvidenceParamSource = switch (param.source) {
-                .scheme_callable => if (param.path.len == 0) explicit: {
+                .scheme_callable => if (param.path_len == 0) explicit: {
                     if (self.pathlessDefaultPhaseForParam(param)) |phase| break :explicit .{ .explicit_default = phase };
                     break :explicit .scheme_callable;
                 } else .scheme_callable,
@@ -19645,28 +19694,13 @@ const EvidencePass = struct {
                 .erased_row_remainder => .erased_row_remainder,
                 .scheme_requirement => .scheme_requirement,
             };
-            const published_path: []const static_dispatch.EvidencePathStep = switch (source) {
-                .scheme_callable, .constraint_callable => param.path,
-                .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
+            const published_path: static_dispatch.EvidencePath = switch (source) {
+                .scheme_callable, .constraint_callable => .{
+                    .last = try self.publishPathNode(path_nodes, param.path_node),
+                    .len = param.path_len,
+                },
+                .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => .{},
             };
-            const path_start: u32 = @intCast(self.evidence_param_paths.items.len);
-            for (published_path) |path_step| {
-                var converted = path_step;
-                switch (path_step.stepKind()) {
-                    .record_field => converted.data = @intFromEnum(try self.names.internRecordFieldIdent(idents, @bitCast(path_step.data))),
-                    .tag_payload_tag => converted.data = @intFromEnum(try self.names.internTagIdent(idents, @bitCast(path_step.data))),
-                    .fn_arg,
-                    .fn_ret,
-                    .alias_arg,
-                    .alias_backing,
-                    .nominal_arg,
-                    .nominal_backing,
-                    .tuple_elem,
-                    .tag_payload_index,
-                    => {},
-                }
-                try self.evidence_param_paths.append(self.allocator, converted);
-            }
             const contract_start: u32 = @intCast(self.evidence_param_callables.items.len);
             for (param.callable_contracts) |contract| {
                 try self.evidence_param_callables.append(self.allocator, self.checked_types.rootForSourceVar(self.module, contract.fn_var) orelse
@@ -19683,10 +19717,55 @@ const EvidencePass = struct {
                 .runtime_dictionary = source == .constraint_callable or static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
-                .path = .{ .start = path_start, .len = @intCast(published_path.len) },
+                .path = published_path,
             });
         }
         return .{ .start = pool_start, .len = @intCast(params.len) };
+    }
+
+    /// Publish the scheme path ending at `scheme_node` in canonical names,
+    /// sharing the prefixes this scheme already published, and return its
+    /// published last node.
+    fn publishPathNode(
+        self: *EvidencePass,
+        path_nodes: []const static_dispatch.EvidencePathNode,
+        scheme_node: u32,
+    ) Allocator.Error!u32 {
+        const no_node = static_dispatch.no_evidence_path_node;
+        if (scheme_node == no_node) return no_node;
+        const idents = self.module.identStoreConst();
+        const published = self.published_path_nodes.items;
+        self.published_path_chain.clearRetainingCapacity();
+        var node = scheme_node;
+        while (node != no_node and published[node] == no_node) {
+            try self.published_path_chain.append(self.allocator, node);
+            node = path_nodes[node].parent;
+        }
+        var parent = if (node == no_node) no_node else published[node];
+        var i = self.published_path_chain.items.len;
+        while (i > 0) {
+            i -= 1;
+            const next = self.published_path_chain.items[i];
+            var converted = path_nodes[next].step;
+            switch (converted.stepKind()) {
+                .record_field => converted.data = @intFromEnum(try self.names.internRecordFieldIdent(idents, @bitCast(converted.data))),
+                .tag_payload_tag => converted.data = @intFromEnum(try self.names.internTagIdent(idents, @bitCast(converted.data))),
+                .fn_arg,
+                .fn_ret,
+                .alias_arg,
+                .alias_backing,
+                .nominal_arg,
+                .nominal_backing,
+                .tuple_elem,
+                .tag_payload_index,
+                => {},
+            }
+            const published_node: u32 = @intCast(self.evidence_path_nodes.items.len);
+            try self.evidence_path_nodes.append(self.allocator, .{ .parent = parent, .step = converted });
+            published[next] = published_node;
+            parent = published_node;
+        }
+        return published[scheme_node];
     }
 
     fn pathlessDefaultPhaseForParam(self: *EvidencePass, param: EvidenceParam) ?NumericDefaultPhase {
@@ -19741,7 +19820,7 @@ const EvidencePass = struct {
     /// the target slot, while their checked plans retain the per-call shape.
     fn chainParamIndex(
         self: *EvidencePass,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
         dispatcher_root: Var,
         method: canonical.MethodNameId,
         constraint_fn_var: ?Var,
@@ -19750,8 +19829,8 @@ const EvidencePass = struct {
         callable_relation: CallableRelation,
         callable_contract: ?u32 = null,
     } {
-        for (chain, 0..) |params, depth| {
-            if (try self.paramIndexFor(params, dispatcher_root, method, constraint_fn_var)) |match| {
+        for (chain, 0..) |level, depth| {
+            if (try self.paramIndexFor(level, dispatcher_root, method, constraint_fn_var)) |match| {
                 return .{
                     .index = .{ .depth = @intCast(depth), .index = @intCast(match.index) },
                     .callable_relation = match.callable_relation,
@@ -19829,7 +19908,7 @@ const EvidencePass = struct {
     /// The canonical param index of one dispatch obligation.
     fn paramIndexFor(
         self: *EvidencePass,
-        params: []const EvidenceParam,
+        level: ChainLevel,
         dispatcher_root: Var,
         method: canonical.MethodNameId,
         constraint_fn_var: ?Var,
@@ -19843,12 +19922,14 @@ const EvidencePass = struct {
             self.types.resolveVar(fn_var).var_
         else
             null;
+        const params = level.params;
+        // Composite requirements are matched by their exact scheme relation
+        // before structural dispatch, so the index omits them. A shared
+        // receiver/method is insufficient.
+        const candidates = level.by_dispatcher.get(dispatcher_root) orelse return null;
         var same_method_fallback: ?u32 = null;
-        for (params, 0..) |param, k| {
-            // Composite requirements are matched by their exact scheme relation
-            // before structural dispatch. A shared receiver/method is insufficient.
-            if (param.source == .scheme_requirement) continue;
-            if (self.types.resolveVar(param.dispatcher_var).var_ != dispatcher_root) continue;
+        for (candidates.items) |k| {
+            const param = params[k];
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
             if (constraint_fn_root) |fn_root| {
@@ -19902,7 +19983,7 @@ const EvidencePass = struct {
         return .independent_per_use;
     }
 
-    fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
+    fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const ChainLevel, commit_unpinned: bool) Allocator.Error!void {
         const raw = @intFromEnum(plan_id);
         const plan = &self.plan_table.plans[raw];
         if (self.plan_resolved[raw]) return;
@@ -19955,7 +20036,7 @@ const EvidencePass = struct {
         }
     }
 
-    fn resolveIteratorPlan(self: *EvidencePass, plan_id: static_dispatch.IteratorForPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
+    fn resolveIteratorPlan(self: *EvidencePass, plan_id: static_dispatch.IteratorForPlanId, chain: []const ChainLevel, commit_unpinned: bool) Allocator.Error!void {
         const raw = @intFromEnum(plan_id);
         const plan = &self.plan_table.iterator_for_plans[raw];
         if (self.iterator_plan_resolved[raw]) return;
@@ -19999,7 +20080,7 @@ const EvidencePass = struct {
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         return switch (try self.resolveObligationStep(dispatcher_var, dispatcher_ty, method, structural_kind, constraint_fn_var, chain, commit_unpinned)) {
@@ -20030,7 +20111,7 @@ const EvidencePass = struct {
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var_in: ?Var,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
         commit_unpinned_in: bool,
     ) Allocator.Error!ObligationStep {
         var dispatcher_var = dispatcher_var_in;
@@ -20048,8 +20129,8 @@ const EvidencePass = struct {
             // A structural receiver may still own a generic codec requirement.
             // Its exact scheme relation takes precedence over its current shape.
             if (structural_kind == .parser or structural_kind == .encoder) if (constraint_fn_var) |fn_var| {
-                for (chain, 0..) |params, depth| {
-                    for (params, 0..) |param, index| {
+                for (chain, 0..) |level, depth| {
+                    for (level.params, 0..) |param, index| {
                         if (param.source != .scheme_requirement) continue;
                         if (self.types.resolveVar(param.constraint.fn_var).var_ != self.types.resolveVar(fn_var).var_) continue;
                         if (try self.names.internMethodIdent(self.module.identStoreConst(), param.constraint.fn_name) != method) continue;
@@ -20172,12 +20253,12 @@ const EvidencePass = struct {
         method: canonical.MethodNameId,
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
         commit_unpinned: bool,
     ) Allocator.Error!ObligationStep {
         if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
             const independent_callable = match.callable_relation != .exact;
-            const owner = chain[match.index.depth][match.index.index].published_index orelse
+            const owner = chain[match.index.depth].params[match.index.index].published_index orelse
                 checkedArtifactInvariant("forwarded evidence owner was not published", .{});
             const schema = self.templates.evidence_params_pool[owner];
             return .{ .resolved = .{ .evidence_dependent = .{
@@ -20402,14 +20483,7 @@ const EvidencePass = struct {
         table: *const CheckedProcedureTemplateTable,
         template: *const CheckedProcedureTemplate,
     ) ProcedureEvidenceSchema {
-        return procedureEvidenceSchemaFromSlices(table.evidenceParams(template), table.evidence_param_paths);
-    }
-
-    fn procedureEvidenceSchemaFromSlices(
-        params: []const static_dispatch.EvidenceParamRecord,
-        paths: []const static_dispatch.EvidencePathStep,
-    ) ProcedureEvidenceSchema {
-        return static_dispatch.procedureEvidenceSchema(params, paths);
+        return static_dispatch.procedureEvidenceSchema(table.evidenceParams(template));
     }
 
     fn procedureEvidenceSchema(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceSchema {
@@ -21019,7 +21093,7 @@ const EvidencePass = struct {
     /// Publish site evidence for one value reference within the current
     /// template: how each of the referenced scheme's obligations was
     /// satisfied at that use.
-    fn emitSiteEvidence(self: *EvidencePass, ref_id: ResolvedValueRefId, chain: []const []const EvidenceParam) Allocator.Error!void {
+    fn emitSiteEvidence(self: *EvidencePass, ref_id: ResolvedValueRefId, chain: []const ChainLevel) Allocator.Error!void {
         const rec = self.resolved_value_refs.records[@intFromEnum(ref_id)];
         const site_key = @intFromEnum(rec.expr);
         if (self.site_seen.contains(site_key)) return;
@@ -21117,7 +21191,7 @@ const EvidencePass = struct {
         self: *EvidencePass,
         record_idx: u32,
         site_key: u32,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
     ) Allocator.Error!void {
         if (self.site_seen.contains(site_key)) return;
 
@@ -21139,7 +21213,7 @@ const EvidencePass = struct {
                 entries.appendAssumeCapacity(evidence);
                 continue;
             }
-            if (param.path.len == 0 or param.source == .constraint_callable) {
+            if (param.path_len == 0 or param.source == .constraint_callable) {
                 entries.appendAssumeCapacity((try self.evidenceForRecordParam(pairs, param, true)).?);
                 continue;
             }
@@ -21170,7 +21244,7 @@ const EvidencePass = struct {
         self: *EvidencePass,
         record_idx: u32,
         site_key: u32,
-        chain: []const []const EvidenceParam,
+        chain: []const ChainLevel,
     ) Allocator.Error!void {
         if (self.site_seen.contains(site_key)) return;
 
@@ -21226,7 +21300,7 @@ const EvidencePass = struct {
     fn emitScopeConstructionEvidence(
         self: *EvidencePass,
         site: CollectedScopeConstructionSite,
-        template_params: []const EvidenceParam,
+        template_level: ChainLevel,
     ) Allocator.Error!void {
         const site_key = @intFromEnum(site.checked_expr);
         if (self.site_seen.contains(site_key)) return;
@@ -21244,7 +21318,7 @@ const EvidencePass = struct {
             .{ .generalized = parent }
         else
             .root;
-        self.current_chain = try self.chainFor(parent_scope, template_params);
+        self.current_chain = try self.chainFor(parent_scope, template_level);
         defer self.current_chain = &.{};
 
         const scope_params = try self.paramsForScope(site.scope, scope.scheme_var);
@@ -21252,7 +21326,7 @@ const EvidencePass = struct {
         defer entries.deinit(self.allocator);
         try entries.ensureTotalCapacity(self.allocator, scope_params.len);
         for (scope_params) |param| {
-            if ((param.path.len > 0 and param.source != .constraint_callable) or param.source == .scheme_requirement) {
+            if ((param.path_len > 0 and param.source != .constraint_callable) or param.source == .scheme_requirement) {
                 const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
                 entries.appendAssumeCapacity(.{
@@ -21299,20 +21373,18 @@ const EvidencePass = struct {
 };
 
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
-    var path_steps = [_]static_dispatch.EvidencePathStep{ undefined, undefined };
     var params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .callable_ty = @enumFromInt(3), .slot = 0, .runtime_dictionary = true, .structural = .encoder, .path = .{ .start = 0, .len = 1 } },
-        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .callable_ty = @enumFromInt(4), .slot = 1, .runtime_dictionary = true, .path = .{ .start = 1, .len = 1 } },
+        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .callable_ty = @enumFromInt(3), .slot = 0, .runtime_dictionary = true, .structural = .encoder, .path = .{ .last = 0, .len = 1 } },
+        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .callable_ty = @enumFromInt(4), .slot = 1, .runtime_dictionary = true, .path = .{ .last = 1, .len = 1 } },
     };
     const table = CheckedProcedureTemplateTable{
         .evidence_params_pool = params[0..],
-        .evidence_param_paths = path_steps[0..],
     };
     var template: CheckedProcedureTemplate = undefined;
     template.evidence_params = .{ .start = 0, .len = 2 };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.from_callable,
-        EvidencePass.procedureEvidenceSchemaFromSlices(table.evidenceParams(&template), table.evidence_param_paths),
+        static_dispatch.procedureEvidenceSchema(table.evidenceParams(&template)),
     );
 
     var pathless_params = params;
@@ -21320,11 +21392,10 @@ test "procedure evidence schema positively classifies callable paths and pathles
     pathless_params[1].source = .erased_row_remainder;
     const pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = pathless_params[0..],
-        .evidence_param_paths = path_steps[0..],
     };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
-        EvidencePass.procedureEvidenceSchemaFromSlices(pathless_table.evidenceParams(&template), pathless_table.evidence_param_paths),
+        static_dispatch.procedureEvidenceSchema(pathless_table.evidenceParams(&template)),
     );
 
     var target_params = [_]static_dispatch.EvidenceParamRecord{params[0]};
@@ -21332,13 +21403,13 @@ test "procedure evidence schema positively classifies callable paths and pathles
     target_params[0].path = .{};
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.from_target,
-        EvidencePass.procedureEvidenceSchemaFromSlices(&target_params, &.{}),
+        static_dispatch.procedureEvidenceSchema(&target_params),
     );
 
-    target_params[0].path = .{ .start = 0, .len = 1 };
+    target_params[0].path = .{ .last = 0, .len = 1 };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
-        EvidencePass.procedureEvidenceSchemaFromSlices(&target_params, path_steps[0..1]),
+        static_dispatch.procedureEvidenceSchema(&target_params),
     );
 
     var mixed_params = [_]static_dispatch.EvidenceParamRecord{ params[0], params[1] };
@@ -21346,24 +21417,23 @@ test "procedure evidence schema positively classifies callable paths and pathles
     mixed_params[1].path = .{};
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
-        EvidencePass.procedureEvidenceSchemaFromSlices(&mixed_params, path_steps[0..1]),
+        static_dispatch.procedureEvidenceSchema(&mixed_params),
     );
 
     var defaulted_pathless_params = pathless_params;
     defaulted_pathless_params[1].source = .{ .explicit_default = .mono_specialization };
     const defaulted_pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = defaulted_pathless_params[0..],
-        .evidence_param_paths = path_steps[0..],
     };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.from_callable,
-        EvidencePass.procedureEvidenceSchemaFromSlices(defaulted_pathless_table.evidenceParams(&template), defaulted_pathless_table.evidence_param_paths),
+        static_dispatch.procedureEvidenceSchema(defaulted_pathless_table.evidenceParams(&template)),
     );
 
     template.evidence_params = .{};
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.none,
-        EvidencePass.procedureEvidenceSchemaFromSlices(table.evidenceParams(&template), table.evidence_param_paths),
+        static_dispatch.procedureEvidenceSchema(table.evidenceParams(&template)),
     );
 }
 
@@ -22606,8 +22676,9 @@ pub const CheckedProcedureTemplateTable = struct {
     promoted: []PromotedProcedureTemplateEntry = &.{},
     /// Flat pool backing each template's `evidence_params` span.
     evidence_params_pool: []static_dispatch.EvidenceParamRecord = &.{},
-    /// Flat pool backing each evidence param's `path` span.
-    evidence_param_paths: []static_dispatch.EvidencePathStep = &.{},
+    /// Nodes of every evidence param's `path`; a parent precedes its
+    /// children, and the paths of one published param vector share prefixes.
+    evidence_path_nodes: []static_dispatch.EvidencePathNode = &.{},
     evidence_param_callables: []CheckedTypeId = &.{},
     /// Flat pool backing template and scope `scheme_vars` ranges.
     scheme_vars_pool: []CheckedTypeId = &.{},
@@ -22635,7 +22706,7 @@ pub const CheckedProcedureTemplateTable = struct {
         by_def: SerializedSlice(static_dispatch.ProcedureTemplateLookupEntry) = .{},
         promoted: SerializedSlice(PromotedProcedureTemplateEntry) = .{},
         evidence_params_pool: SerializedSlice(static_dispatch.EvidenceParamRecord) = .{},
-        evidence_param_paths: SerializedSlice(static_dispatch.EvidencePathStep) = .{},
+        evidence_path_nodes: SerializedSlice(static_dispatch.EvidencePathNode) = .{},
         evidence_param_callables: SerializedSlice(CheckedTypeId) = .{},
         scheme_vars_pool: SerializedSlice(CheckedTypeId) = .{},
         dispatch_ref_scopes: SerializedSlice(DispatchScope) = .{},
@@ -22949,7 +23020,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.promoted);
         self.templates.deinit(allocator);
         allocator.free(self.evidence_params_pool);
-        allocator.free(self.evidence_param_paths);
+        allocator.free(self.evidence_path_nodes);
         allocator.free(self.evidence_param_callables);
         allocator.free(self.scheme_vars_pool);
         allocator.free(self.dispatch_ref_scopes);
@@ -22983,10 +23054,17 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.evidence_params_pool[template.evidence_params.start .. template.evidence_params.start + template.evidence_params.len];
     }
 
-    /// The param's dispatcher path over the scheme callable (empty =
-    /// pathless).
-    pub fn evidenceParamPath(self: *const CheckedProcedureTemplateTable, param: static_dispatch.EvidenceParamRecord) []const static_dispatch.EvidencePathStep {
-        return self.evidence_param_paths[param.path.start .. param.path.start + param.path.len];
+    /// Replace `out`'s contents with the param's dispatcher path over the
+    /// scheme callable, root first (empty = pathless).
+    pub fn evidenceParamPath(
+        self: *const CheckedProcedureTemplateTable,
+        allocator: Allocator,
+        param: static_dispatch.EvidenceParamRecord,
+        out: *std.ArrayListUnmanaged(static_dispatch.EvidencePathStep),
+    ) Allocator.Error![]const static_dispatch.EvidencePathStep {
+        out.clearRetainingCapacity();
+        try dispatch_evidence.appendPathSteps(allocator, self.evidence_path_nodes, param.path.last, param.path.len, out);
+        return out.items;
     }
 
     pub fn specializationRelations(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SpecializationInterfaceRelation {
@@ -34024,25 +34102,22 @@ pub const CheckedModuleArtifact = struct {
         return null;
     }
 
-    fn evidencePathGrammarFailure(path: []const static_dispatch.EvidencePathStep) ?DispatchEvidenceFailure.Kind {
-        var path_index: usize = 0;
-        while (path_index < path.len) {
-            const path_step = path[path_index];
-            const kind = path_step.kindOrNull() orelse return .evidence_param_path_invalid_kind;
-            path_index += 1;
-            switch (kind) {
-                .fn_ret, .alias_backing, .nominal_backing => {
-                    if (path_step.data != 0) return .evidence_param_path_invalid_shape;
-                },
-                .tag_payload_tag => {
-                    if (path_index >= path.len) return .evidence_param_path_invalid_shape;
-                    const payload_kind = path[path_index].kindOrNull() orelse return .evidence_param_path_invalid_kind;
-                    if (payload_kind != .tag_payload_index) return .evidence_param_path_invalid_shape;
-                    path_index += 1;
-                },
-                .tag_payload_index => return .evidence_param_path_invalid_shape,
-                .fn_arg, .alias_arg, .nominal_arg, .tuple_elem, .record_field => {},
-            }
+    /// Check one published path node: a known step kind with its fixed data,
+    /// a parent earlier in the pool, and a tag label paired with exactly a
+    /// payload-index step.
+    fn evidencePathNodeFailure(nodes: []const static_dispatch.EvidencePathNode, index: usize) ?DispatchEvidenceFailure.Kind {
+        const node = nodes[index];
+        const kind = node.step.kindOrNull() orelse return .evidence_param_path_invalid_kind;
+        const parent_kind: ?static_dispatch.EvidencePathStep.Kind = if (node.parent == static_dispatch.no_evidence_path_node)
+            null
+        else if (node.parent < index)
+            nodes[node.parent].step.kindOrNull() orelse return .evidence_param_path_invalid_kind
+        else
+            return .evidence_param_path_out_of_bounds;
+        if ((kind == .tag_payload_index) != (parent_kind == .tag_payload_tag)) return .evidence_param_path_invalid_shape;
+        switch (kind) {
+            .fn_ret, .alias_backing, .nominal_backing => if (node.step.data != 0) return .evidence_param_path_invalid_shape,
+            .fn_arg, .alias_arg, .nominal_arg, .tuple_elem, .record_field, .tag_payload_tag, .tag_payload_index => {},
         }
         return null;
     }
@@ -34127,82 +34202,89 @@ pub const CheckedModuleArtifact = struct {
         return null;
     }
 
-    /// Verify that a normalized path selects a real component of the
-    /// template's published checked callable. This mirrors Monotype's path
-    /// vocabulary while resolving row labels across complete logical rows.
-    fn checkedEvidencePathResolves(
-        self: *const CheckedModuleArtifact,
-        start_ty: CheckedTypeId,
-        path: []const static_dispatch.EvidencePathStep,
-    ) bool {
-        const view = self.checked_types.view();
-        var ty = start_ty;
-        var path_index: usize = 0;
-        while (path_index < path.len) {
-            const path_step = path[path_index];
-            const kind = path_step.kindOrNull() orelse return false;
-            path_index += 1;
-            const payload = checkedPayloadOrNull(view, ty) orelse return false;
-            switch (kind) {
-                .fn_arg => {
-                    if (payload != .function) return false;
-                    if (path_step.data >= payload.function.args.len) return false;
-                    ty = payload.function.args[path_step.data];
-                },
-                .fn_ret => {
-                    if (payload != .function) return false;
-                    ty = payload.function.ret;
-                },
-                .alias_arg => {
-                    if (payload != .alias) return false;
-                    if (path_step.data >= payload.alias.args.len) return false;
-                    ty = payload.alias.args[path_step.data];
-                },
-                .alias_backing => {
-                    if (payload != .alias) return false;
-                    ty = payload.alias.backing;
-                },
-                .nominal_arg => {
-                    if (payload != .nominal) return false;
-                    if (path_step.data >= payload.nominal.args.len) return false;
-                    ty = payload.nominal.args[path_step.data];
-                },
-                .nominal_backing => {
-                    if (payload != .nominal) return false;
-                    ty = view.nominalBackingTemplateForPayload(payload.nominal) orelse return false;
-                },
-                .tuple_elem => {
-                    if (payload != .tuple) return false;
-                    if (path_step.data >= payload.tuple.len) return false;
-                    ty = payload.tuple[path_step.data];
-                },
-                .record_field => {
-                    if (path_step.data >= self.canonical_names.recordFieldLabelCount()) return false;
-                    ty = checkedEvidenceRecordFieldChild(
-                        view,
-                        &self.canonical_names,
-                        ty,
-                        @enumFromInt(path_step.data),
-                    ) orelse return false;
-                },
-                .tag_payload_tag => {
-                    if (path_index >= path.len) return false;
-                    const payload_step = path[path_index];
-                    if (payload_step.kindOrNull() != .tag_payload_index) return false;
-                    path_index += 1;
-                    if (path_step.data >= self.canonical_names.tagLabelCount()) return false;
-                    ty = checkedEvidenceTagPayloadChild(
-                        view,
-                        &self.canonical_names,
-                        ty,
-                        @enumFromInt(path_step.data),
-                        payload_step.data,
-                    ) orelse return false;
-                },
-                .tag_payload_index => return false,
-            }
+    /// Applies one published path node to the checked type its parent selects.
+    /// This mirrors Monotype's path vocabulary while resolving row labels
+    /// across complete logical rows.
+    const CheckedEvidencePathStepper = struct {
+        artifact: *const CheckedModuleArtifact,
+
+        pub fn apply(
+            self: CheckedEvidencePathStepper,
+            ty: CheckedTypeId,
+            nodes: []const static_dispatch.EvidencePathNode,
+            node: u32,
+        ) Allocator.Error!?CheckedTypeId {
+            return self.artifact.checkedEvidencePathNodeType(ty, nodes, node);
         }
-        return true;
+    };
+
+    fn checkedEvidencePathNodeType(
+        self: *const CheckedModuleArtifact,
+        ty: CheckedTypeId,
+        nodes: []const static_dispatch.EvidencePathNode,
+        node: u32,
+    ) ?CheckedTypeId {
+        const view = self.checked_types.view();
+        const path_step = nodes[node].step;
+        const kind = path_step.kindOrNull() orelse return null;
+        switch (kind) {
+            .fn_arg => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .function) return null;
+                if (path_step.data >= payload.function.args.len) return null;
+                return payload.function.args[path_step.data];
+            },
+            .fn_ret => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .function) return null;
+                return payload.function.ret;
+            },
+            .alias_arg => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .alias) return null;
+                if (path_step.data >= payload.alias.args.len) return null;
+                return payload.alias.args[path_step.data];
+            },
+            .alias_backing => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .alias) return null;
+                return payload.alias.backing;
+            },
+            .nominal_arg => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .nominal) return null;
+                if (path_step.data >= payload.nominal.args.len) return null;
+                return payload.nominal.args[path_step.data];
+            },
+            .nominal_backing => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .nominal) return null;
+                return view.nominalBackingTemplateForPayload(payload.nominal);
+            },
+            .tuple_elem => {
+                const payload = checkedPayloadOrNull(view, ty) orelse return null;
+                if (payload != .tuple) return null;
+                if (path_step.data >= payload.tuple.len) return null;
+                return payload.tuple[path_step.data];
+            },
+            .record_field => {
+                if (path_step.data >= self.canonical_names.recordFieldLabelCount()) return null;
+                return checkedEvidenceRecordFieldChild(view, &self.canonical_names, ty, @enumFromInt(path_step.data));
+            },
+            // The tag label selects nothing until its payload index does.
+            .tag_payload_tag => {
+                _ = checkedPayloadOrNull(view, ty) orelse return null;
+                return ty;
+            },
+            .tag_payload_index => {
+                const parent = nodes[node].parent;
+                if (parent == static_dispatch.no_evidence_path_node) return null;
+                const tag_step = nodes[parent].step;
+                if (tag_step.kindOrNull() != .tag_payload_tag) return null;
+                if (tag_step.data >= self.canonical_names.tagLabelCount()) return null;
+                return checkedEvidenceTagPayloadChild(view, &self.canonical_names, ty, @enumFromInt(tag_step.data), path_step.data);
+            },
+        }
     }
 
     /// Public `validateDispatchEvidence` function.
@@ -34215,7 +34297,7 @@ pub const CheckedModuleArtifact = struct {
     /// reported here at the boundary (in debug builds, where `verifyComplete`
     /// runs)—not a lowering panic. Returns the first failure found, or
     /// null when the artifact is total.
-    pub fn validateDispatchEvidence(self: *const CheckedModuleArtifact) ?DispatchEvidenceFailure {
+    pub fn validateDispatchEvidence(self: *const CheckedModuleArtifact) Allocator.Error!?DispatchEvidenceFailure {
         const table = &self.static_dispatch_plans;
         const type_view = self.checked_types.view();
 
@@ -34803,35 +34885,50 @@ pub const CheckedModuleArtifact = struct {
             if (@intFromEnum(callable) >= self.checked_types.payloads.items.len)
                 return .{ .kind = .callable_contract_out_of_bounds, .index = @intCast(i) };
         }
+        const path_nodes = templates.evidence_path_nodes;
+        for (0..path_nodes.len) |i| {
+            if (evidencePathNodeFailure(path_nodes, i)) |kind| return .{ .kind = kind, .index = @intCast(i) };
+        }
+        const allocator = self.owningAllocator();
+        const path_depths = try allocator.alloc(u32, path_nodes.len);
+        defer allocator.free(path_depths);
+        for (path_nodes, 0..) |node, i| {
+            path_depths[i] = if (node.parent == static_dispatch.no_evidence_path_node) 1 else path_depths[node.parent] + 1;
+        }
         for (templates.evidence_params_pool, 0..) |param, i| {
             if (@as(u64, param.callable_contracts.start) + param.callable_contracts.len > templates.evidence_param_callables.len)
                 return .{ .kind = .callable_contract_out_of_bounds, .index = @intCast(i) };
-            if (@as(u64, param.path.start) + param.path.len > templates.evidence_param_paths.len) {
+            const path_in_bounds = if (param.path.len == 0)
+                param.path.last == static_dispatch.no_evidence_path_node
+            else
+                param.path.last < path_nodes.len and path_depths[param.path.last] == param.path.len;
+            if (!path_in_bounds) {
                 return .{ .kind = .evidence_param_path_out_of_bounds, .index = @intCast(i), .method = param.method };
             }
             if (@intFromEnum(param.callable_ty) >= self.checked_types.payloads.items.len) {
                 return .{ .kind = .evidence_param_callable_type_out_of_bounds, .index = @intCast(i), .method = param.method };
             }
-            const path = templates.evidenceParamPath(param);
-            if (evidencePathGrammarFailure(path)) |kind| {
-                return .{ .kind = kind, .index = @intCast(i), .method = param.method };
+            if (param.path.len != 0 and path_nodes[param.path.last].step.kindOrNull() == .tag_payload_tag) {
+                return .{ .kind = .evidence_param_path_invalid_shape, .index = @intCast(i), .method = param.method };
             }
         }
+        var path_memo: dispatch_evidence.PathMemo(CheckedTypeId) = .{};
+        defer path_memo.deinit(allocator);
+        const path_stepper = CheckedEvidencePathStepper{ .artifact = self };
         for (templates.templates.items) |template| {
             const params = templates.evidenceParams(&template);
             for (params, 0..) |param, param_offset| {
-                const path = templates.evidenceParamPath(param);
                 const source_root = switch (param.source) {
                     .scheme_callable => template.checked_fn_root,
                     .constraint_callable => |source| source.callable_ty,
                     .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
-                        if (path.len != 0) {
+                        if (param.path.len != 0) {
                             return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         }
                         continue;
                     },
                 };
-                if (!self.checkedEvidencePathResolves(source_root, path)) {
+                if (try path_memo.resolve(allocator, path_nodes, param.path.last, @intFromEnum(source_root), source_root, path_stepper) == null) {
                     return .{
                         .kind = .evidence_param_path_diverges_from_checked_type,
                         .index = template.evidence_params.start + @as(u32, @intCast(param_offset)),
@@ -34846,16 +34943,15 @@ pub const CheckedModuleArtifact = struct {
             }
             const params = templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
             for (params, 0..) |param, param_offset| {
-                const path = templates.evidenceParamPath(param);
                 const source_root = switch (param.source) {
                     .scheme_callable => scope.scheme_root,
                     .constraint_callable => |source| source.callable_ty,
                     .scheme_requirement, .use_site_only, .explicit_default, .erased_row_remainder => {
-                        if (path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
+                        if (param.path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         continue;
                     },
                 };
-                if (!self.checkedEvidencePathResolves(source_root, path)) {
+                if (try path_memo.resolve(allocator, path_nodes, param.path.last, @intFromEnum(source_root), source_root, path_stepper) == null) {
                     return .{
                         .kind = .evidence_param_path_diverges_from_checked_type,
                         .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)),
@@ -34971,7 +35067,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        if (self.validateDispatchEvidence()) |failure| {
+        if (try self.validateDispatchEvidence()) |failure| {
             const expr_idx: ?u32 = if (failure.expr) |expr| @intFromEnum(expr) else null;
             const method_text: []const u8 = if (failure.method) |method| self.canonical_names.methodNameText(method) else "<none>";
             std.debug.panic(
@@ -40054,8 +40150,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xFF, 0xD1, 0x96, 0xE3, 0x3B, 0xD1, 0xA7, 0x90, 0xB9, 0xEC, 0xC0, 0xC2, 0x97, 0x12, 0x35, 0x79,
-        0x18, 0x0A, 0x17, 0x64, 0xBC, 0x83, 0xC0, 0xBA, 0xE2, 0xCD, 0x42, 0xC5, 0xCC, 0xD2, 0xE9, 0x8A,
+        0xD3, 0x61, 0x5D, 0xB8, 0x8A, 0x3C, 0x1D, 0xA0, 0x30, 0xE5, 0x74, 0xF0, 0x05, 0x02, 0x59, 0x38,
+        0x58, 0x76, 0xE6, 0x97, 0x4D, 0x93, 0xD3, 0xA3, 0xD1, 0x10, 0x54, 0x0D, 0x69, 0xE2, 0x23, 0xB9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

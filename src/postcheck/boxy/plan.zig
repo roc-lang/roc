@@ -13472,7 +13472,7 @@ const Builder = struct {
         const evidence = self.workerEvidenceParams(worker.source) orelse return false;
         for (self.plan.workerEvidenceDescriptorParamSlice(worker.evidence_descs)) |mapping| {
             const param = evidence.params[mapping.evidence_index];
-            if (evidence.view.checked_procedure_templates.evidenceParamPath(param).len == 0) return true;
+            if (param.path.len == 0) return true;
         }
         return false;
     }
@@ -14258,7 +14258,9 @@ const Builder = struct {
         }
         const param = worker_evidence.params[evidence_index];
         const path_view = worker_evidence.view;
-        const path = path_view.checked_procedure_templates.evidenceParamPath(param);
+        var path_steps = std.ArrayListUnmanaged(static_dispatch.EvidencePathStep).empty;
+        defer path_steps.deinit(self.allocator);
+        const path = try path_view.checked_procedure_templates.evidenceParamPath(self.allocator, param, &path_steps);
         const call_path: []const static_dispatch.EvidencePathStep = switch (param.source) {
             .scheme_callable => path,
             .scheme_requirement, .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
