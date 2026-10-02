@@ -430,6 +430,10 @@ pub const ConstValue = union(enum) {
     tuple: []const ConstNodeId,
     record: []const ConstNodeId,
     crash: ConstStr,
+    /// A value whose evaluation reached code checking rejected and already
+    /// reported. Using it crashes with the message, as code checking
+    /// rejected does.
+    checked_error: ConstStr,
     tag: struct {
         tag_name: []const u8,
         payloads: []const ConstNodeId,
@@ -458,6 +462,7 @@ const StoredValue = union(enum) {
     tuple: ConstRange,
     record: ConstRange,
     crash: ConstStr,
+    checked_error: ConstStr,
     tag: struct { tag_name: ConstRange, payloads: ConstRange },
     nominal: struct { named_type: NamedType, backing: ConstNodeId },
     fn_value: ConstFnId,
@@ -953,6 +958,7 @@ pub const ConstStore = struct {
             .scalar => |s| .{ .scalar = s },
             .str => |s| .{ .str = s },
             .crash => |s| .{ .crash = s },
+            .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
@@ -1138,6 +1144,7 @@ pub const ConstStore = struct {
             .scalar => |s| .{ .scalar = s },
             .str => |s| .{ .str = s },
             .crash => |s| .{ .crash = s },
+            .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
@@ -1322,7 +1329,7 @@ pub const ConstStore = struct {
                 switch (self.get(node.id)) {
                     .pending => constStoreInvariant("completed store contains a pending node"),
                     .zst, .scalar => {},
-                    .str, .crash => |str| {
+                    .str, .crash, .checked_error => |str| {
                         _ = self.strBytes(str);
                     },
                     .fn_value => |fn_id| try pending.append(self.allocator, .{ .fn_value = .{ .id = fn_id, .delayed_depth = node.delayed_depth } }),

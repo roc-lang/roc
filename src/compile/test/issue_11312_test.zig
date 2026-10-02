@@ -1,9 +1,9 @@
 //! Regression tests for issue #11312: a `crash` whose message is not a `Str`
 //! reports the type mismatch once. The crash itself becomes the checked
-//! runtime error, and a compile-time root whose evaluation can call into code
-//! checking replaced with a runtime error is never requested, so the problem
-//! is not reported a second time as a compile-time crash. Independent roots
-//! are still evaluated.
+//! runtime error, and a compile-time root whose evaluation reaches code
+//! checking rejected discards its result without reporting the problem a
+//! second time as a compile-time crash. Independent roots are still
+//! evaluated.
 //! repro for https://github.com/roc-lang/roc/issues/11312
 
 const std = @import("std");
@@ -23,8 +23,10 @@ const independent_defs =
 ;
 
 /// Checks `source` as a module and expects exactly one type mismatch and no
-/// other error. The root whose source is `blocked_expr` must not be requested,
-/// while the independent `good` and `fine` roots are evaluated.
+/// other error. A compile-time constant whose source is `blocked_expr` reaches
+/// that rejected code, so it stores the crash rather than a value; a top-level
+/// expect is evaluated only by `roc test`. The independent `good` and `fine`
+/// roots are evaluated.
 fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr: []const u8) RecoveryError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -64,19 +66,18 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
         const expr = artifact.checked_bodies.expr(root.expr);
         const expr_source = module_source[expr.source_region.start.offset..expr.source_region.end.offset];
         if (std.mem.eql(u8, expr_source, blocked_expr)) {
-            try std.testing.expect(artifact.compileTimeRootReachesCheckedError(root));
-            try std.testing.expectEqual(.ineligible, root.request_eligibility);
-            for (artifact.root_requests.compile_time_requests) |request| {
-                try std.testing.expect(request.compile_time_root != root.id);
+            if (root.kind != .expect) {
+                try std.testing.expect(root.payload == .const_node);
+                try std.testing.expect(artifact.const_store.get(root.payload.const_node) == .checked_error);
             }
             found_blocked = true;
         }
         const is_good = std.mem.eql(u8, expr_source, "123.U64");
         const is_fine = std.mem.eql(u8, expr_source, "helper(1.U64)");
         if (is_good or is_fine) {
-            try std.testing.expect(!artifact.compileTimeRootReachesCheckedError(root));
             try std.testing.expectEqual(.eligible, root.request_eligibility);
             try std.testing.expect(root.payload == .const_node);
+            try std.testing.expect(artifact.const_store.get(root.payload.const_node) != .checked_error);
             found_good = found_good or is_good;
             found_fine = found_fine or is_fine;
         }
@@ -86,7 +87,7 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
     try std.testing.expect(found_fine);
 }
 
-test "issue 11312: a root calling a function whose crash message is not a Str is not evaluated" {
+test "issue 11312: a root calling a function whose crash message is not a Str reports its problem once" {
     try expectRecovery(
         \\poly = || {
         \\    crash YYYYY
@@ -97,7 +98,7 @@ test "issue 11312: a root calling a function whose crash message is not a Str is
     , null, "poly() == poly()");
 }
 
-test "issue 11366: an expect calling a function with an erroneous inline expect is not evaluated" {
+test "issue 11366: an expect calling a function with an erroneous inline expect reports its problem once" {
     try expectRecovery(
         \\xs : List(U64)
         \\xs = [1, 2, 3]
@@ -110,7 +111,7 @@ test "issue 11366: an expect calling a function with an erroneous inline expect 
     , null, "f(1) == 1");
 }
 
-test "issue 11366: an expect calling an imported function with an erroneous inline expect is not evaluated" {
+test "issue 11366: an expect calling an imported function with an erroneous inline expect reports its problem once" {
     try expectRecovery(
         \\import Broken
         \\expect Broken.f(1) == 1
@@ -126,7 +127,7 @@ test "issue 11366: an expect calling an imported function with an erroneous inli
     , "Broken.f(1) == 1");
 }
 
-test "issue 11312: a root calling a function whose crash message is erroneous is not evaluated" {
+test "issue 11312: a root calling a function whose crash message is erroneous reports its problem once" {
     try expectRecovery(
         \\f : U64 -> Str
         \\f = |_| "m"
@@ -139,7 +140,7 @@ test "issue 11312: a root calling a function whose crash message is erroneous is
     , null, "poly() == poly()");
 }
 
-test "issue 11312: a root calling a function whose body contains a rejected call is not evaluated" {
+test "issue 11312: a root calling a function whose body contains a rejected call reports its problem once" {
     try expectRecovery(
         \\f : U64 -> Str
         \\f = |_| "m"
@@ -152,7 +153,7 @@ test "issue 11312: a root calling a function whose body contains a rejected call
     , null, "poly() == poly()");
 }
 
-test "issue 11312: a root reading a constant that calls into checked-error code is not evaluated" {
+test "issue 11312: a root reading a constant that calls into checked-error code reports its problem once" {
     try expectRecovery(
         \\poly = || {
         \\    crash YYYYY
@@ -164,7 +165,7 @@ test "issue 11312: a root reading a constant that calls into checked-error code 
     , null, "first == \"x\"");
 }
 
-test "issue 11312: a root calling an imported function whose crash message is not a Str is not evaluated" {
+test "issue 11312: a root calling an imported function whose crash message is not a Str reports its problem once" {
     try expectRecovery(
         \\import Broken
         \\result = Broken.poly({}) == "x"
@@ -181,7 +182,7 @@ test "issue 11312: a root calling an imported function whose crash message is no
     , "Broken.poly({}) == \"x\"");
 }
 
-test "issue 11312: a root dispatching to a method whose crash message is not a Str is not evaluated" {
+test "issue 11312: a root dispatching to a method whose crash message is not a Str reports its problem once" {
     try expectRecovery(
         \\Thing := [Thing].{
         \\    describe : Thing -> Str
@@ -197,11 +198,296 @@ test "issue 11312: a root dispatching to a method whose crash message is not a S
     , null, "thing.describe() == \"x\"");
 }
 
-test "issue 11312: a root reading an annotated constant whose initializer was rejected is not evaluated" {
+test "issue 11312: a root reading an annotated constant whose initializer was rejected reports its problem once" {
     try expectRecovery(
         \\bad : U64
         \\bad = "bad"
         \\result = bad + 1
         \\
     , null, "bad + 1");
+}
+
+// repro for https://github.com/roc-lang/roc/issues/11923
+// The `parser_for` codec call reaches `Format.parse_u8` through the format's
+// method, whose type mismatch is reported once. `roc test` counts the expect
+// as a compiler error when its evaluation reaches that rejected code
+// (test/cli/issue_11923_codec_reaches_unlisted_tag.roc).
+test "issue 11923: an expect reaching an erroneous format method through a codec reports its problem once" {
+    try expectRecovery(
+        \\Format := [Default].{
+        \\    parse_u8 : Format, {} -> Try({ value : U8, rest : {} }, [Bad])
+        \\    parse_u8 = |_, _| Err(OtherErr)
+        \\}
+        \\expect (U8.parser_for(Format.Default))({}) == Err(Bad)
+        \\
+    , null, "(U8.parser_for(Format.Default))({}) == Err(Bad)");
+}
+
+test "issue 11923: a root whose call-site evidence selects an erroneous method reports its problem once" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    describe : Thing -> Str
+        \\    describe = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\f = |x| x.describe()
+        \\thing : Thing
+        \\thing = Thing
+        \\result = f(thing) == "x"
+        \\
+    , null, "f(thing) == \"x\"");
+}
+
+test "issue 11923: a root whose structural equality reaches an erroneous is_eq reports its problem once" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    is_eq : Thing, Thing -> Bool
+        \\    is_eq = |_, _| {
+        \\        crash YYYYY
+        \\        Bool.True
+        \\    }
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\result = [thing] == [thing]
+        \\
+    , null, "[thing] == [thing]");
+}
+
+test "issue 11923: an expect reaching an erroneous format method through a generic codec call reports its problem once" {
+    try expectRecovery(
+        \\Format := [Default].{
+        \\    parse_u8 : Format, {} -> Try({ value : U8, rest : {} }, [Bad])
+        \\    parse_u8 = |_, _| Err(OtherErr)
+        \\}
+        \\p = |fmt| U8.parser_for(fmt)
+        \\expect (p(Format.Default))({}) == Err(Bad)
+        \\
+    , null, "(p(Format.Default))({}) == Err(Bad)");
+}
+
+test "issue 11923: a root dispatching to a method alias of a constrained procedure with an erroneous requirement reports its problem once" {
+    try expectRecovery(
+        \\Other := [Other].{
+        \\    describe : Other -> Str
+        \\    describe = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\show_both : Thing, a -> Str where [a.describe : a -> Str]
+        \\show_both = |_, x| x.describe()
+        \\Thing := [Thing].{
+        \\    show = show_both
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\other : Other
+        \\other = Other
+        \\result = thing.show(other) == "x"
+        \\
+    , null, "thing.show(other) == \"x\"");
+}
+
+test "issue 11923: a root reaching a method alias through call-site evidence reports its problem once" {
+    try expectRecovery(
+        \\Other := [Other].{
+        \\    describe : Other -> Str
+        \\    describe = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\Thing := [Thing].{
+        \\    show = Thing.show_impl
+        \\    show_impl : Thing, a -> Str where [a.describe : a -> Str]
+        \\    show_impl = |_, x| x.describe()
+        \\}
+        \\call_show = |t, o| t.show(o)
+        \\thing : Thing
+        \\thing = Thing
+        \\other : Other
+        \\other = Other
+        \\result = call_show(thing, other) == "x"
+        \\
+    , null, "call_show(thing, other) == \"x\"");
+}
+
+test "issue 11923: a root dispatching to a monomorphic method alias of a constrained procedure reports its problem once" {
+    try expectRecovery(
+        \\Other := [Other].{
+        \\    describe : Other -> Str
+        \\    describe = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\show_any : Thing, a -> Str where [a.describe : a -> Str]
+        \\show_any = |_, x| x.describe()
+        \\Thing := [Thing].{
+        \\    show : Thing, Other -> Str
+        \\    show = show_any
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\other : Other
+        \\other = Other
+        \\result = thing.show(other) == "x"
+        \\
+    , null, "thing.show(other) == \"x\"");
+}
+
+test "issue 11923: a root reaching a monomorphic method alias through call-site evidence reports its problem once" {
+    try expectRecovery(
+        \\Other := [Other].{
+        \\    describe : Other -> Str
+        \\    describe = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\show_any : Thing, a -> Str where [a.describe : a -> Str]
+        \\show_any = |_, x| x.describe()
+        \\Thing := [Thing].{
+        \\    show : Thing, Other -> Str
+        \\    show = show_any
+        \\}
+        \\call_show = |t, o| t.show(o)
+        \\thing : Thing
+        \\thing = Thing
+        \\other : Other
+        \\other = Other
+        \\result = call_show(thing, other) == "x"
+        \\
+    , null, "call_show(thing, other) == \"x\"");
+}
+
+test "issue 11923: a root reaching an imported monomorphic method alias of a constrained procedure reports its problem once" {
+    try expectRecovery(
+        \\import Broken exposing [Thing, Other]
+        \\thing : Thing
+        \\thing = Thing.Thing
+        \\other : Other
+        \\other = Other.Other
+        \\result = thing.show(other) == "x"
+        \\
+    ,
+        \\module [Thing, Other]
+        \\
+        \\Other := [Other].{
+        \\    describe : Other -> Str
+        \\    describe = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\show_any : Thing, a -> Str where [a.describe : a -> Str]
+        \\show_any = |_, x| x.describe()
+        \\Thing := [Thing].{
+        \\    show : Thing, Other -> Str
+        \\    show = show_any
+        \\}
+        \\
+    , "thing.show(other) == \"x\"");
+}
+
+test "issue 11923: a root reaching an erroneous is_eq through a record element of List.contains reports its problem once" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    is_eq : Thing, Thing -> Bool
+        \\    is_eq = |_, _| {
+        \\        crash YYYYY
+        \\        Bool.True
+        \\    }
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\result = [{ a: 1, t: thing }].contains({ a: 1, t: thing })
+        \\
+    , null, "[{ a: 1, t: thing }].contains({ a: 1, t: thing })");
+}
+
+test "issue 11923: a root reaching an erroneous is_eq through a tuple element of List.contains reports its problem once" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    is_eq : Thing, Thing -> Bool
+        \\    is_eq = |_, _| {
+        \\        crash YYYYY
+        \\        Bool.True
+        \\    }
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\result = [(1, thing)].contains((1, thing))
+        \\
+    , null, "[(1, thing)].contains((1, thing))");
+}
+
+test "issue 11923: a root reaching an erroneous is_eq through record equality reports its problem once" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    is_eq : Thing, Thing -> Bool
+        \\    is_eq = |_, _| {
+        \\        crash YYYYY
+        \\        Bool.True
+        \\    }
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\result = { a: 1, t: thing } == { a: 1, t: thing }
+        \\
+    , null, "{ a: 1, t: thing } == { a: 1, t: thing }");
+}
+
+test "issue 11923: a root reaching an erroneous to_hash through a record key reports its problem once" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    is_eq : Thing, Thing -> Bool
+        \\    is_eq = |_, _| Bool.True
+        \\    to_hash : Thing, Hasher -> Hasher
+        \\    to_hash = |_, h| {
+        \\        crash YYYYY
+        \\        h
+        \\    }
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\result = Dict.empty().insert({ t: thing }, 1.U64).len()
+        \\
+    , null, "Dict.empty().insert({ t: thing }, 1.U64).len()");
+}
+
+test "issue 11923: a root reaching an erroneous to_inspect reports its problem once" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    to_inspect : Thing -> Str
+        \\    to_inspect = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\result = Str.inspect(thing)
+        \\
+    , null, "Str.inspect(thing)");
+}
+
+test "issue 11923: a root reaching an erroneous to_inspect through a generic function reports its problem once" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    to_inspect : Thing -> Str
+        \\    to_inspect = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\show = |x| Str.inspect(x)
+        \\thing : Thing
+        \\thing = Thing
+        \\result = show(thing)
+        \\
+    , null, "show(thing)");
 }

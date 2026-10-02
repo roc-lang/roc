@@ -59,9 +59,9 @@ comptime {
     }, .default);
 }
 
-fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     canonical_alloc_counts[0] += 1;
-    return host_alloc.alloc(wasm_allocator, length, alignment);
+    return host_alloc.alloc(wasm_allocator, length, alignment) orelse @trap();
 }
 
 fn rocDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
@@ -69,10 +69,10 @@ fn rocDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     host_alloc.dealloc(wasm_allocator, ptr, alignment);
 }
 
-fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     canonical_alloc_counts[0] += 1;
     canonical_alloc_counts[1] += 1;
-    return host_alloc.realloc(wasm_allocator, ptr, new_length, alignment);
+    return host_alloc.realloc(wasm_allocator, ptr, new_length, alignment) orelse @trap();
 }
 
 fn rocDbg(bytes: [*]const u8, len: usize) callconv(.c) void {

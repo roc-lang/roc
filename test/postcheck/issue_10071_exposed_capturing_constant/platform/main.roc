@@ -21,7 +21,7 @@ platform ""
         wasm32: { inputs: [app], output: Archive },
     }
 
-import Elem exposing [Elem]
+import Elem
 import Browser
 import HostValue
 import Http

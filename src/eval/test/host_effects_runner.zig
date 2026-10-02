@@ -346,7 +346,10 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         .proc_id = lowered.mainProc(),
         .arg_layouts = arg_layouts,
     }) catch |err| switch (err) {
-        error.Crash => return runtime_env.snapshot(allocator),
+        error.Crash => {
+            runtime_env.noteCrash(interp.getCrashMessage());
+            return runtime_env.snapshot(allocator);
+        },
         error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,

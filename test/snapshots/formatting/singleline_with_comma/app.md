@@ -72,8 +72,8 @@ app [
 	a1!,
 	a2!,
 ] {
-	pf: platform "../basic-cli/main.roc",
 	a: "a",
+	pf: platform "../basic-cli/main.roc",
 }
 ~~~
 # CANONICALIZE

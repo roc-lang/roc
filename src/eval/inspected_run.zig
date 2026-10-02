@@ -696,9 +696,6 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
-    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
-        runtime_env.setLongjmpOnCrash(false);
-    }
 
     const boxy_installed = try installBoxyGlobal(allocator, program, runtime_env.get_ops());
     defer if (boxy_installed) boxy_abi.deinitGlobal();

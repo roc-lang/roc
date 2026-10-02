@@ -132,7 +132,7 @@ const codec_chain_prelude =
 
 fn codecChain(comptime n: usize) []const u8 {
     return codec_chain_prelude ++
-        "probe : State -> Try(" ++ repeat("Wrap({ x : ", n) ++ "U64" ++ repeat(" })", n) ++ ", [FormatError])\n" ++
+        "probe : State -> Try(" ++ repeat("Wrap({ x : ", n) ++ "U64" ++ repeat(" })", n) ++ ", [FormatError, MissingRequiredField(Str)])\n" ++
         "probe = |input| parse(input)\n\n" ++
         "main = match probe(State.Done) {\n    Ok(_) => \"ok\"\n    Err(_) => \"err\"\n}\n";
 }

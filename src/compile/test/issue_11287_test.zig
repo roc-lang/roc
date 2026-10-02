@@ -27,7 +27,7 @@ fn expectHostedArgKeepsCheckedHostAbiLayout(store: *const lir.LirStore, layouts:
         try std.testing.expectEqual(layout.LayoutTag.tag_union, arg.tag);
         const info = layouts.getTagUnionInfo(arg);
         try std.testing.expectEqual(@as(u32, 32), info.byte_size);
-        try std.testing.expectEqual(@as(u16, 24), info.discriminant_offset);
+        try std.testing.expectEqual(@as(u32, 24), info.discriminant_offset);
     }
     try std.testing.expectEqual(@as(usize, 1), found);
 }
@@ -53,7 +53,7 @@ fn expectReturnAbi(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.L
             try std.testing.expectEqual(layout.LayoutTag.tag_union, value.tag);
             const info = result.layouts.getTagUnionInfo(value);
             try std.testing.expectEqual(@as(u32, 32), info.byte_size);
-            try std.testing.expectEqual(@as(u16, 24), info.discriminant_offset);
+            try std.testing.expectEqual(@as(u32, 24), info.discriminant_offset);
             found += 1;
         }
     }
@@ -64,7 +64,7 @@ fn expectReturnAbi(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.L
     try std.testing.expectEqual(layout.LayoutTag.tag_union, value.tag);
     const info = result.layouts.getTagUnionInfo(value);
     try std.testing.expectEqual(@as(u32, 32), info.byte_size);
-    try std.testing.expectEqual(@as(u16, 24), info.discriminant_offset);
+    try std.testing.expectEqual(@as(u32, 24), info.discriminant_offset);
 }
 
 test "issue 11287: LSS hosted and exported results keep the checked host ABI" {
@@ -209,7 +209,7 @@ fn expectHostedArg32(store: *const lir.LirStore, layouts: *const layout.Store) h
         try std.testing.expectEqual(layout.LayoutTag.tag_union, value.tag);
         const info = layouts.getTagUnionInfo(value);
         try std.testing.expectEqual(@as(u32, 16), info.byte_size);
-        try std.testing.expectEqual(@as(u16, 12), info.discriminant_offset);
+        try std.testing.expectEqual(@as(u32, 12), info.discriminant_offset);
         found += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), found);

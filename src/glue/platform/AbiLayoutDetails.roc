@@ -1,5 +1,5 @@
-import AbiRecordLayout exposing [AbiRecordLayout]
-import AbiTagUnionLayout exposing [AbiTagUnionLayout]
+import AbiRecordLayout
+import AbiTagUnionLayout
 
 ## Shape-specific ABI metadata emitted by src/glue/glue.zig from LIR layouts.
 AbiLayoutDetails := [

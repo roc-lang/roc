@@ -3105,159 +3105,6 @@ EndOfFile,
 						(e-ident (raw "h"))
 						(e-ident (raw "foo"))))))))
 ~~~
-# FORMATTED
-~~~roc
-# Thnt!
-app [main!] { pf: platform "c" }
-
-import pf.Stdout exposing [line!, e!]
-
-import Stdot # Cose
-
-
-
-
-# Cere
-# Anre
-
-# Ag
-
-#
-
-
-
-line : ( # Cpen
-	Bar, #
-	Baz, # m
-) # Co
-
-Some(a) : { foo : Ok(a), bar : g }
-
-Ml(a) : { # d
-	bar : Som, # Afld
-}
-
-Soine(a) : { # d
-	bar : Som,
-}
-#
-# se
-
-Func(a) : Maybe(a), a -> Maybe(a)
-
-ane = |num| if num 2 else 5
-
-add_one : U64 -> U64
-ne = |num| {
-	other = 1
-	if num {
-		dbg # bug
-			() # r
-		0
-	} else {
-		dbg 123
-		other
-	}
-}
-
-match_time = |
-	a, # rg
-	b,
-| # As
-	match a {
-		lue | Red => {
-			x
-			x
-		}
-		Blue => 1
-		"foo" => # ent
-			00
-		"foo" | "bar" => 20
-		[1, 2, 3, .. as rest] # t
-			=> ment
-		[1, 2 | 5, 3, .. as rest] => 123
-		[] => 1
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
-		{ # Afpen
-			oo #
-				: # ue
-					1, # eld
-			ar: 2,
-			..,
-		} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			o: 1,
-		} => 212
-		Ok(123) => 12
-	}
-
-expect # Cord
-	blah == 1 # nt
-
-main! : (String) -> Result({}, _)
-
-ma = |_| { # Yee
-	world = "d"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return # d
-		tag
-	
-	match_time(...)
-	nc(
-		dbg # bug
-			2,
-	)
-	crash "Unrnt"
-	tag_ = Ok(number)
-	i = "H, ${world}"
-	t = [
-		add_one(
-			dbg # Afist
-				er, # afarg
-		),
-		456, # ee
-	]
-	for n in list {
-		line!("Ag ${n} to ${er}")
-			+ n
-	}
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world), ned }
-	tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])
-	mle = (
-		123,
-		"World",
-		ag1,
-		Ok(world), # nt
-		(ne, tuple),
-		[1, 2, 3],
-	)
-	b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	le = (arg1)?.od()?.ned()?.recd?
-	line!(
-		"Ho${ #
-			r(number) # xpr
-		} ",
-	)
-} # Cocl
-
-y : {}
-
-e = {}
-
-t : V((a, c))
-
-expect {
-	f = 1
-	h == foo
-}
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
@@ -3368,7 +3215,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1399) (dispatcher-var 280)
+						(e-interpolation (constraint-fn-var 1400) (dispatcher-var 280)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3396,11 +3243,11 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1589)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1590)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1586)
+										(e-dispatch-call (method "times") (constraint-fn-var 1587)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3415,18 +3262,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1622)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1623)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1612)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1613)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1649)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1650)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1639)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1640)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3441,11 +3288,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1686)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1687)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1683)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1684)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3460,12 +3307,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1761)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1762)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1724)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1725)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

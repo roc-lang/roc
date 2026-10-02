@@ -150,7 +150,7 @@ pub const Inventory = struct {
                     },
                     .expr, .expect, .dbg => |expr| try stack.append(self.allocator, .{ .expr = expr }),
                     .return_ => |ret| try stack.append(self.allocator, .{ .expr = ret.value }),
-                    .uninitialized, .crash => {},
+                    .uninitialized, .crash, .checked_error => {},
                 },
                 .expr => |expr_id| {
                     if (@import("builtin").is_test) self.expr_visits += 1;
@@ -177,7 +177,6 @@ pub const Inventory = struct {
                             try Ast.appendChildren(self.allocator, self.program, expr_id, &stack);
                         },
                         .lambda, .def_ref, .fn_def => Common.invariant("pre-lift expression in loop exit demand"),
-                        .inline_expects_enabled,
                         .unit,
                         .@"unreachable",
                         .int_lit,
@@ -187,6 +186,7 @@ pub const Inventory = struct {
                         .str_lit,
                         .bytes_lit,
                         .crash,
+                        .checked_error,
                         .comptime_exhaustiveness_failed,
                         .uninitialized,
                         .block,

@@ -142,8 +142,8 @@ const TagBuild = struct {
 
 const TagBuildSite = struct {
     stmt: LIR.CFStmtId,
-    variant_index: u16,
-    discriminant: u16,
+    variant_index: u32,
+    discriminant: u32,
     payload: ?LIR.LocalId,
 };
 

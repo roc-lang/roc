@@ -19,17 +19,23 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 /// One specialization the pack can serve: its reservation-time key, the
-/// artifact holding its procedure, and the ownership signature ARC solved
-/// for that procedure, which the linking program adopts as fixed.
+/// artifact holding its procedure, and the ownership signature and
+/// uniqueness facts ARC solved for that procedure, which the linking program
+/// adopts as fixed.
 pub const SpecEntry = struct {
     key: [32]u8,
     artifact: u32,
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
+    rc_read_only_params: u64,
+    rc_ret_unique: bool,
+    rc_ret_unique_fields: u64,
+    /// Each entry an `lir.LIR.RcRetCondition`.
+    rc_ret_conditions: []const u32,
 };
 
 /// A pack read back from its bytes.
@@ -179,6 +185,11 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         try writer.wide(spec.rc_borrowed_params);
         try writer.byte(@intFromBool(spec.rc_ret_borrowed));
         try writer.wide(spec.rc_ret_lenders);
+        try writer.wide(spec.rc_read_only_params);
+        try writer.byte(@intFromBool(spec.rc_ret_unique));
+        try writer.wide(spec.rc_ret_unique_fields);
+        try writer.word(@intCast(spec.rc_ret_conditions.len));
+        for (spec.rc_ret_conditions) |condition| try writer.word(condition);
     }
 
     return try bytes.toOwnedSlice(allocator);
@@ -355,7 +366,18 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 else => return error.MalformedPack,
             },
             .rc_ret_lenders = try reader.wide(),
+            .rc_read_only_params = try reader.wide(),
+            .rc_ret_unique = switch (try reader.byte()) {
+                0 => false,
+                1 => true,
+                else => return error.MalformedPack,
+            },
+            .rc_ret_unique_fields = try reader.wide(),
+            .rc_ret_conditions = &.{},
         };
+        const conditions = try arena_allocator.alloc(u32, try reader.word());
+        for (conditions) |*condition| condition.* = try reader.word();
+        spec.rc_ret_conditions = conditions;
         if (spec.artifact >= artifact_count) return error.MalformedPack;
     }
     if (reader.offset != bytes.len) return error.MalformedPack;
@@ -517,7 +539,17 @@ test "pack bytes round-trip every artifact field and spec entry" {
     var set = ProcArtifact.Set{ .arena = arena, .artifacts = artifacts };
     defer set.deinit();
     const specs = [_]SpecEntry{
-        .{ .key = [_]u8{0xab} ** 32, .artifact = 0, .rc_borrowed_params = 0b101, .rc_ret_borrowed = true, .rc_ret_lenders = 1 },
+        .{
+            .key = [_]u8{0xab} ** 32,
+            .artifact = 0,
+            .rc_borrowed_params = 0b101,
+            .rc_ret_borrowed = true,
+            .rc_ret_lenders = 1,
+            .rc_read_only_params = 0b100,
+            .rc_ret_unique = true,
+            .rc_ret_unique_fields = 0b10,
+            .rc_ret_conditions = &.{ 0x0001_02ff, 0x0000_0403 },
+        },
     };
 
     const bytes = try write(testing.allocator, &set, &specs);
@@ -533,6 +565,10 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqualSlices(u8, &specs[0].key, &pack.specs[0].key);
     try testing.expectEqual(specs[0].rc_borrowed_params, pack.specs[0].rc_borrowed_params);
     try testing.expect(pack.specs[0].rc_ret_borrowed);
+    try testing.expectEqual(specs[0].rc_read_only_params, pack.specs[0].rc_read_only_params);
+    try testing.expect(pack.specs[0].rc_ret_unique);
+    try testing.expectEqual(specs[0].rc_ret_unique_fields, pack.specs[0].rc_ret_unique_fields);
+    try testing.expectEqualSlices(u32, specs[0].rc_ret_conditions, pack.specs[0].rc_ret_conditions);
     const proc = pack.set.artifacts[0];
     try testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(7).bytes, &proc.kind.proc.bytes);
     try testing.expectEqualSlices(u8, artifacts[0].code, proc.code);

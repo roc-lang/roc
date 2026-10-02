@@ -114,9 +114,6 @@ EndOfFile,
 	(statements
 		(s-malformed (tag "import_exposing_no_close"))))
 ~~~
-# FORMATTED
-~~~roc
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir (empty true))

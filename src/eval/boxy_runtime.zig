@@ -599,7 +599,7 @@ pub const BoxyRuntime = struct {
     pub fn requireBoxyTagVariantByDiscriminant(
         self: *const BoxyRuntime,
         desc: *const LirProgram.BoxyTypeDesc,
-        discriminant: u16,
+        discriminant: u32,
     ) LirProgram.BoxyTagVariant {
         if (self.findBoxyTagVariantByDiscriminant(desc, discriminant)) |variant| return variant;
         self.invariantFailed(
@@ -617,7 +617,7 @@ pub const BoxyRuntime = struct {
     pub fn findBoxyTagVariantByDiscriminant(
         self: *const BoxyRuntime,
         desc: *const LirProgram.BoxyTypeDesc,
-        discriminant: u16,
+        discriminant: u32,
     ) ?LirProgram.BoxyTagVariant {
         for (self.requireBoxyTagVariants(desc.tag_variants)) |variant| {
             if (variant.discriminant == discriminant) return variant;
@@ -625,9 +625,9 @@ pub const BoxyRuntime = struct {
         return null;
     }
 
-    pub fn boxyTagExtDiscriminant(self: *const BoxyRuntime, desc: *const LirProgram.BoxyTypeDesc) ?u16 {
+    pub fn boxyTagExtDiscriminant(self: *const BoxyRuntime, desc: *const LirProgram.BoxyTypeDesc) ?u32 {
         if (desc.tag_ext_desc == null) return null;
-        if (desc.tag_variants.len > std.math.maxInt(u16)) {
+        if (desc.tag_variants.len > std.math.maxInt(u32)) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: boxy tag descriptor had too many variants for row-extension discriminant: {d}",
                 .{desc.tag_variants.len},
@@ -639,7 +639,7 @@ pub const BoxyRuntime = struct {
     pub fn requireBoxyTagPayloadLayout(
         self: *const BoxyRuntime,
         union_layout: layout_mod.Idx,
-        discriminant: u16,
+        discriminant: u32,
     ) layout_mod.Idx {
         const union_layout_val = self.layout_store.getLayout(union_layout);
         if (union_layout_val.tag == .zst) {
@@ -858,7 +858,7 @@ pub const BoxyRuntime = struct {
         };
     }
 
-    pub fn tagPayloadLayout(self: *const BoxyRuntime, union_layout: layout_mod.Idx, discriminant: u16) layout_mod.Idx {
+    pub fn tagPayloadLayout(self: *const BoxyRuntime, union_layout: layout_mod.Idx, discriminant: u32) layout_mod.Idx {
         const l = self.layout_store.getLayout(union_layout);
         return switch (l.tag) {
             .tag_union => blk: {
@@ -888,23 +888,7 @@ pub const BoxyRuntime = struct {
     }
 
     pub fn layoutNeedsBoxyStructuralDesc(self: *const BoxyRuntime, layout_idx: layout_mod.Idx) bool {
-        const value_layout = self.layout_store.getLayout(layout_idx);
-        return switch (value_layout.tag) {
-            .erased_box,
-            .box,
-            .list,
-            .list_of_zst,
-            .struct_,
-            .tag_union,
-            => true,
-            .scalar => value_layout.getScalar().tag == .vector,
-            .box_of_zst,
-            .closure,
-            .erased_callable,
-            .zst,
-            .ptr,
-            => false,
-        };
+        return self.layout_store.layoutTakesBoxyStructuralDesc(layout_idx);
     }
 
     pub fn boxyDynamicPayloadAllocationContainsRc(desc: *const LirProgram.BoxyTypeDesc) bool {
@@ -1074,7 +1058,7 @@ pub const BoxyRuntime = struct {
     fn missingPresenceSlotDiscriminant(
         self: *const BoxyRuntime,
         desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!u16 {
+    ) Error!u32 {
         const present_discriminant = desc.presence_slot_present_discriminant orelse {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: a source struct omitted a non-optional target field",
@@ -1082,7 +1066,7 @@ pub const BoxyRuntime = struct {
             );
         };
         const variants = self.requireBoxyTagVariants(desc.tag_variants);
-        var missing_discriminant: ?u16 = null;
+        var missing_discriminant: ?u32 = null;
         var found_present = false;
         for (variants) |variant| {
             if (variant.discriminant == present_discriminant) {
@@ -1140,7 +1124,7 @@ pub const BoxyRuntime = struct {
         const missing_discriminant = try self.missingPresenceSlotDiscriminant(desc);
         const tag_base = self.resolveBoxyTagBaseValue(value, layout_idx, desc);
         const actual_discriminant = if (self.helper.sizeOf(tag_base.layout) == 0)
-            @as(u16, 0)
+            @as(u32, 0)
         else
             self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
         if (actual_discriminant != missing_discriminant) {
@@ -1719,11 +1703,13 @@ pub const BoxyRuntime = struct {
         const target_variants = try self.scratch.dupe(LirProgram.BoxyTagVariant, self.requireBoxyTagVariants(target.tag_variants));
         defer self.scratch.free(target_variants);
         if (target_variants.len != 0) {
+            var source_variants = try self.adapterSourceTagVariants(hooks, source);
+            defer source_variants.deinit(self.scratch);
             const variants_start = self.runtime_boxy_tag_variants.items.len;
             try self.runtime_boxy_tag_variants.appendNTimes(self.scratch, undefined, target_variants.len);
             for (target_variants, 0..) |target_variant, variant_index| {
                 var specialized = target_variant;
-                const source_variant = try self.findAdapterSourceTagVariant(hooks, source, target_variant.name);
+                const source_variant = source_variants.get(target_variant.name);
                 const target_payloads = try self.scratch.dupe(LirProgram.BoxyTagPayloadDesc, self.requireBoxyTagPayloadDescs(target_variant.payload_descs));
                 defer self.scratch.free(target_payloads);
                 if (target_payloads.len != 0) {
@@ -1735,20 +1721,19 @@ pub const BoxyRuntime = struct {
                     const payload_start = self.runtime_boxy_tag_payload_descs.items.len;
                     try self.runtime_boxy_tag_payload_descs.appendNTimes(self.scratch, undefined, target_payloads.len);
                     for (target_payloads, 0..) |target_payload, payload_index| {
+                        // An inline source value supplies a target presence
+                        // slot's Present payload. The payload keeps the target's
+                        // storage; the source only completes its erased children.
                         const wraps_presence_payload = source.presence_slot_present_discriminant == null and
                             target.presence_slot_present_discriminant == target_variant.discriminant and
                             target_payload.payload_index == 0;
-                        var target_child = if (wraps_presence_payload)
-                            source
-                        else
-                            try hooks.resolveDescRef(target_payload.desc);
+                        var target_child = try hooks.resolveDescRef(target_payload.desc);
                         var source_child: ?*const LirProgram.BoxyTypeDesc = if (wraps_presence_payload) source else null;
                         for (source_payloads) |source_payload| {
                             if (source_payload.payload_index != target_payload.payload_index) continue;
                             source_child = try hooks.resolveDescRef(source_payload.desc);
                             break;
                         }
-                        if (wraps_presence_payload) changed.* = true;
                         if (source_child == null and source_variant != null) {
                             return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: source tag variant was missing payload descriptor {d}",
@@ -1790,17 +1775,40 @@ pub const BoxyRuntime = struct {
         return id;
     }
 
-    fn findAdapterSourceTagVariant(
+    /// The tag variants an adapter source provides by name, from `desc` and
+    /// then its extension chain; the nearest descriptor's variant wins.
+    fn adapterSourceTagVariants(
         self: *const BoxyRuntime,
         hooks: anytype,
-        root_desc: *const LirProgram.BoxyTypeDesc,
-        name: LIR.BoxyNameId,
-    ) Error!?LirProgram.BoxyTagVariant {
-        var desc = root_desc;
+        desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!std.AutoHashMapUnmanaged(LIR.BoxyNameId, LirProgram.BoxyTagVariant) {
+        var variants: std.AutoHashMapUnmanaged(LIR.BoxyNameId, LirProgram.BoxyTagVariant) = .empty;
+        errdefer variants.deinit(self.scratch);
+        // Brent's cycle detection: `anchor` jumps to the walk position at
+        // each power-of-two step count, so a cyclic chain meets it again.
+        var current = desc;
+        var anchor = desc;
+        var steps_since_anchor: usize = 0;
+        var anchor_interval: usize = 1;
         while (true) {
-            if (self.findLocalBoxyTagVariant(desc, name)) |variant| return variant;
-            const ext_ref = desc.tag_ext_desc orelse return null;
-            desc = try hooks.resolveDescRef(ext_ref);
+            for (self.requireBoxyTagVariants(current.tag_variants)) |variant| {
+                const entry = try variants.getOrPut(self.scratch, variant.name);
+                if (!entry.found_existing) entry.value_ptr.* = variant;
+            }
+            const ext_ref = current.tag_ext_desc orelse return variants;
+            current = try hooks.resolveDescRef(ext_ref);
+            if (current == anchor) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: boxy adapter source tag extension chain formed a cycle",
+                    .{},
+                );
+            }
+            steps_since_anchor += 1;
+            if (steps_since_anchor == anchor_interval) {
+                anchor = current;
+                anchor_interval *= 2;
+                steps_since_anchor = 0;
+            }
         }
     }
 
@@ -2097,7 +2105,7 @@ pub const BoxyRuntime = struct {
         hooks: anytype,
         desc: *const LirProgram.BoxyTypeDesc,
         data_ptr: [*]u8,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         try self.performBoxyLayoutDrop(hooks, .{ .ptr = data_ptr }, desc.payload_layout, desc, .decref, count, atomicity);
@@ -2110,7 +2118,7 @@ pub const BoxyRuntime = struct {
         layout_idx: layout_mod.Idx,
         desc: ?*const LirProgram.BoxyTypeDesc,
         op: RcOp,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         const layout_val = self.layout_store.getLayout(layout_idx);
@@ -2139,7 +2147,7 @@ pub const BoxyRuntime = struct {
         layout_idx: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
         op: RcOp,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         const layout_val = self.layout_store.getLayout(layout_idx);
@@ -2218,7 +2226,7 @@ pub const BoxyRuntime = struct {
         list_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
         op: RcOp,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         const rl = self.valueToRocListForLayout(val, list_layout);
@@ -2270,7 +2278,7 @@ pub const BoxyRuntime = struct {
         struct_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
         op: RcOp,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         const struct_layout_val = self.layout_store.getLayout(struct_layout);
@@ -2294,11 +2302,11 @@ pub const BoxyRuntime = struct {
         union_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
         op: RcOp,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         const tag_base = self.resolveTagUnionBaseValue(val, union_layout);
-        const discriminant: u16 = @intCast(self.helper.readTagDiscriminant(tag_base.value, tag_base.layout));
+        const discriminant: u32 = @intCast(self.helper.readTagDiscriminant(tag_base.value, tag_base.layout));
         const actual_payload_layout = self.requireBoxyTagPayloadLayout(tag_base.layout, discriminant);
         if (self.helper.sizeOf(actual_payload_layout) == 0) return;
 
@@ -2510,7 +2518,7 @@ pub const BoxyRuntime = struct {
         }
 
         const result_base = self.resolveBoxyTagBaseValue(result, result_layout, target_desc);
-        const result_discriminant: u16 = if (self.helper.sizeOf(result_base.layout) == 0)
+        const result_discriminant: u32 = if (self.helper.sizeOf(result_base.layout) == 0)
             0
         else
             @intCast(self.helper.readTagDiscriminant(result_base.value, result_base.layout));
@@ -2704,8 +2712,8 @@ pub const BoxyRuntime = struct {
                 if (result_layout_val.tag != .tag_union and result_layout_val.tag != .box) return;
                 const source_base = self.resolveBoxyTagBaseValue(source, source_layout, source_desc);
                 const result_base = self.resolveTagUnionBaseValue(result, result_layout);
-                const source_disc: u16 = @intCast(self.helper.readTagDiscriminant(source_base.value, source_base.layout));
-                const result_disc: u16 = @intCast(self.helper.readTagDiscriminant(result_base.value, result_base.layout));
+                const source_disc: u32 = @intCast(self.helper.readTagDiscriminant(source_base.value, source_base.layout));
+                const result_disc: u32 = @intCast(self.helper.readTagDiscriminant(result_base.value, result_base.layout));
 
                 if (self.boxyTagExtDiscriminant(source_desc)) |source_ext_discriminant| {
                     if (source_disc == source_ext_discriminant) {
@@ -3168,7 +3176,7 @@ pub const BoxyRuntime = struct {
         tag_layout: layout_mod.Idx,
     ) Error!RawBoxyTagPayloadRead {
         const discriminant = if (self.helper.sizeOf(tag_layout) == 0)
-            @as(u16, 0)
+            @as(u32, 0)
         else
             self.helper.readTagDiscriminant(tag_value, tag_layout);
         const payload_layout = self.requireBoxyTagPayloadLayout(tag_layout, discriminant);
@@ -3389,7 +3397,7 @@ pub const BoxyRuntime = struct {
     ) Error!Value {
         const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
         const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
-            @as(u16, 0)
+            @as(u32, 0)
         else
             self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
         if (source_desc.presence_slot_present_discriminant) |present_discriminant| {
@@ -3774,6 +3782,41 @@ pub const BoxyRuntime = struct {
             return;
         }
 
+        // Materialization adapts exactly one presence-slot side to its Present
+        // payload, so the payload is what corresponds to the other side.
+        const source_presence_desc: ?*const LirProgram.BoxyTypeDesc = if (source_desc) |desc|
+            if (desc.presence_slot_present_discriminant != null) desc else null
+        else
+            null;
+        const target_presence_desc: ?*const LirProgram.BoxyTypeDesc = if (target_desc) |desc|
+            if (desc.presence_slot_present_discriminant != null) desc else null
+        else
+            null;
+        if (source_presence_desc != null and target_presence_desc == null) {
+            const present = try self.presentSlotPayload(hooks, source, source_layout, source_presence_desc.?);
+            return try self.retainBorrowedMaterializedValue(
+                hooks,
+                present.value,
+                present.layout,
+                present.desc,
+                target,
+                target_layout,
+                target_desc,
+            );
+        }
+        if (target_presence_desc != null and source_presence_desc == null) {
+            const present = try self.presentSlotPayload(hooks, target, target_layout, target_presence_desc.?);
+            return try self.retainBorrowedMaterializedValue(
+                hooks,
+                source,
+                source_layout,
+                source_desc,
+                present.value,
+                present.layout,
+                present.desc,
+            );
+        }
+
         if ((source_layout_val.tag == .list or source_layout_val.tag == .list_of_zst) and
             (target_layout_val.tag == .list or target_layout_val.tag == .list_of_zst))
         {
@@ -3864,6 +3907,48 @@ pub const BoxyRuntime = struct {
         try self.performBoxyLayoutDrop(hooks, target, target_layout, target_desc, .incref, 1, .atomic);
     }
 
+    const PresentSlotPayload = struct {
+        value: Value,
+        layout: layout_mod.Idx,
+        desc: ?*const LirProgram.BoxyTypeDesc,
+    };
+
+    /// The Present payload of a presence slot whose value materialization
+    /// adapted to or from an inline required value; that adaptation only
+    /// exists for a present slot.
+    fn presentSlotPayload(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        slot: Value,
+        slot_layout: layout_mod.Idx,
+        slot_desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!PresentSlotPayload {
+        const present_discriminant = slot_desc.presence_slot_present_discriminant.?;
+        const slot_base = self.resolveBoxyTagBaseValue(slot, slot_layout, slot_desc);
+        const discriminant: u16 = if (self.helper.sizeOf(slot_base.layout) == 0)
+            0
+        else
+            @intCast(self.helper.readTagDiscriminant(slot_base.value, slot_base.layout));
+        if (discriminant != present_discriminant) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: a missing optional slot corresponded to an inline required value",
+                .{},
+            );
+        }
+        const variant = self.requireBoxyTagVariantByDiscriminant(slot_desc, present_discriminant);
+        if (variant.payload_count != 1) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot Present variant had {d} payloads instead of one",
+                .{variant.payload_count},
+            );
+        }
+        return .{
+            .value = slot_base.value,
+            .layout = self.requireBoxyTagPayloadLayout(slot_base.layout, present_discriminant),
+            .desc = try self.wholeTagPayloadDesc(hooks, variant),
+        };
+    }
+
     fn retainBorrowedTagMaterialization(
         self: *const BoxyRuntime,
         hooks: anytype,
@@ -3882,11 +3967,11 @@ pub const BoxyRuntime = struct {
             self.resolveBoxyTagBaseValue(target, target_layout, desc)
         else
             self.resolveTagUnionBaseValue(target, target_layout);
-        const source_discriminant: u16 = if (self.helper.sizeOf(source_base.layout) == 0)
+        const source_discriminant: u32 = if (self.helper.sizeOf(source_base.layout) == 0)
             0
         else
             @intCast(self.helper.readTagDiscriminant(source_base.value, source_base.layout));
-        const target_discriminant: u16 = if (self.helper.sizeOf(target_base.layout) == 0)
+        const target_discriminant: u32 = if (self.helper.sizeOf(target_base.layout) == 0)
             0
         else
             @intCast(self.helper.readTagDiscriminant(target_base.value, target_base.layout));
@@ -4591,7 +4676,7 @@ pub const BoxyRuntime = struct {
     ) Error!Value {
         const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
         const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
-            @as(u16, 0)
+            @as(u32, 0)
         else
             self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
         if (source_desc.presence_slot_present_discriminant) |present_discriminant| {
@@ -4881,7 +4966,7 @@ pub const BoxyRuntime = struct {
         if (actual_layout_val.tag == .tag_union and expected_layout_val.tag == .tag_union) {
             const target = try self.allocTagValue(hooks, expected_layout);
             const discriminant = if (self.helper.sizeOf(actual_layout) == 0)
-                @as(u16, 0)
+                @as(u32, 0)
             else
                 self.helper.readTagDiscriminant(value, actual_layout);
 
@@ -5038,7 +5123,7 @@ pub const BoxyRuntime = struct {
         const actual_base = self.resolveTagUnionBaseValue(value, actual_layout);
         const target = try self.allocTagValue(hooks, expected_layout);
         const discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
-            @as(u16, 0)
+            @as(u32, 0)
         else
             self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
 
@@ -5098,7 +5183,7 @@ pub const BoxyRuntime = struct {
         }
         const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
         const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
-            @as(u16, 0)
+            @as(u32, 0)
         else
             self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
         if (self.boxyTagExtDiscriminant(source_desc)) |ext_discriminant| {
@@ -5614,7 +5699,7 @@ pub const BoxyRuntime = struct {
         const missing_discriminant = try self.missingPresenceSlotDiscriminant(desc);
         const tag_base = self.resolveBoxyTagBaseValue(value, layout_idx, desc);
         const discriminant = if (self.helper.sizeOf(tag_base.layout) == 0)
-            @as(u16, 0)
+            @as(u32, 0)
         else
             self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
         if (discriminant == missing_discriminant) {
@@ -6157,18 +6242,18 @@ pub const BoxyRuntime = struct {
 
     /// Perform a concrete (descriptor-free) refcount operation on a value of
     /// the given layout, walking aggregates per the layout store's RC plans.
-    pub fn performConcreteRc(self: *const BoxyRuntime, hooks: anytype, op: RcOp, layout_idx: layout_mod.Idx, val: Value, count: u16, atomicity: RcAtomicity) void {
+    pub fn performConcreteRc(self: *const BoxyRuntime, hooks: anytype, op: RcOp, layout_idx: layout_mod.Idx, val: Value, count: u32, atomicity: RcAtomicity) void {
         const helper = self.rcHelperForLayout(op, layout_idx);
         self.performRcHelperIfNeeded(hooks, helper, val, count, atomicity);
     }
 
-    pub fn performRcHelperIfNeeded(self: *const BoxyRuntime, hooks: anytype, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
+    pub fn performRcHelperIfNeeded(self: *const BoxyRuntime, hooks: anytype, helper: layout_mod.RcHelper, val: Value, count: u32, atomicity: RcAtomicity) void {
         const plan = hooks.rcPlanFor(helper);
         if (plan == .noop) return;
         self.performRcPlan(hooks, plan, val, count, atomicity);
     }
 
-    pub fn performRcPlan(self: *const BoxyRuntime, hooks: anytype, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u16, atomicity: RcAtomicity) void {
+    pub fn performRcPlan(self: *const BoxyRuntime, hooks: anytype, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u32, atomicity: RcAtomicity) void {
         trace.log("performRawRcPlan: plan={s} val.ptr={*}", .{ @tagName(rc_plan), val.ptr });
         const utils = builtins.utils;
         switch (rc_plan) {
@@ -6307,7 +6392,8 @@ pub const BoxyRuntime = struct {
                         0 => 0,
                         1 => val.offset(disc_offset).read(u8),
                         2 => val.offset(disc_offset).read(u16),
-                        else => return,
+                        4 => val.offset(disc_offset).read(u32),
+                        else => unreachable, // a u32 variant count needs at most 4 bytes
                     };
                 };
 
@@ -6332,7 +6418,7 @@ pub const BoxyRuntime = struct {
         rl: builtins.list.RocList,
         list_plan: layout_mod.RcListPlan,
         child_key: layout_mod.RcHelperKey,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) void {
         if (rl.getAllocationDataPtr(self.roc_ops)) |source| {
@@ -6351,7 +6437,7 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         data_ptr: ?[*]u8,
         op: layout_mod.RcOp,
-        count: u16,
+        count: u32,
     ) void {
         if (data_ptr == null) return;
         if (!builtins.utils.isUnique(data_ptr, self.roc_ops)) return;
@@ -6367,7 +6453,7 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         data_ptr: ?[*]u8,
         _: layout_mod.RcOp,
-        _: u16,
+        _: u32,
     ) void {
         const ptr = data_ptr orelse return;
         const payload = builtins.erased_callable.payloadPtr(ptr);

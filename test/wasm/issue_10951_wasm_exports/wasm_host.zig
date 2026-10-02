@@ -11,7 +11,7 @@ const host_alloc = @import("host_alloc");
 var heap: [1024 * 1024]u8 align(16) = undefined;
 var allocator: std.heap.FixedBufferAllocator = .init(&heap);
 
-fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     return host_alloc.alloc(allocator.allocator(), length, alignment) orelse @trap();
 }
 
@@ -19,7 +19,7 @@ fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     host_alloc.dealloc(allocator.allocator(), ptr, alignment);
 }
 
-fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     return host_alloc.realloc(allocator.allocator(), ptr, new_length, alignment) orelse @trap();
 }
 

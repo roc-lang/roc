@@ -873,6 +873,24 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Bound an annotated definition's implicitly opened row (design.md
+    /// "Polarity"). The bound travels with the row's equivalence class.
+    pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.flags.bounded_row_ext = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// End the bound on a row every use shares: a weak value binding's row is
+    /// bounded only while its own right-hand side is checked.
+    pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.flags.bounded_row_ext = false;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
     /// The declared rule a `dangerousSetVarRedirect` call site bends the solved
     /// graph under. A redirect outside ordinary unification is indistinguishable
     /// at review time from a change to the language's typing rules, so every call
@@ -1022,6 +1040,7 @@ pub const Store = struct {
             ident,
             backing_var,
             args,
+            @intCast(args.len),
             origin_module,
             source_decl,
             false,
@@ -1033,10 +1052,12 @@ pub const Store = struct {
         ident: TypeIdent,
         backing_var: Var,
         args: []const Var,
+        source_arg_count: u32,
         origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
         builtin_origin: bool,
     ) std.mem.Allocator.Error!Content {
+        std.debug.assert(source_arg_count <= args.len);
         const packed_source_decl = try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin);
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
@@ -1049,6 +1070,7 @@ pub const Store = struct {
             .alias = Alias{
                 .ident = ident,
                 .vars = .{ .nonempty = span },
+                .source_arg_count = source_arg_count,
                 .origin_module = origin_module,
                 .source_decl = packed_source_decl,
             },
@@ -1308,18 +1330,28 @@ pub const Store = struct {
         return self.vars.get(alias.vars.nonempty.start).*;
     }
 
-    /// Get the arg vars for this alias type
+    /// Source arguments only; hidden row parameters are not source arity.
     pub fn sliceAliasArgs(self: *const Self, alias: Alias) []Var {
         std.debug.assert(alias.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(alias.vars.nonempty);
-        return slice[1..];
+        return slice[1..][0..alias.source_arg_count];
     }
 
-    /// Get the an iterator arg vars for this alias type
+    /// All alias parameters, including hidden implicit-row parameters.
+    pub fn sliceAliasAllArgs(self: *const Self, alias: Alias) []Var {
+        return self.vars.sliceRange(alias.vars.nonempty)[1..];
+    }
+
+    pub fn sliceAliasHiddenArgs(self: *const Self, alias: Alias) []Var {
+        return self.sliceAliasAllArgs(alias)[alias.source_arg_count..];
+    }
+
+    /// Iterate source arguments only.
     pub fn iterAliasArgs(self: *const Self, alias: Alias) VarSafeList.Iterator {
         std.debug.assert(alias.vars.nonempty.count > 0);
         var span = alias.vars.nonempty;
         span.dropFirstElem();
+        span.count = alias.source_arg_count;
         return self.vars.iterRange(span);
     }
 
@@ -1647,6 +1679,7 @@ pub const Store = struct {
         var merged_desc = new_desc;
         merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
             (a_data.desc.flags.annotation_tag_ext or b_data.desc.flags.annotation_tag_ext);
+        merged_desc.flags.bounded_row_ext = a_data.desc.flags.bounded_row_ext or b_data.desc.flags.bounded_row_ext;
         const merged_is_empty_tag_union = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {
@@ -2752,6 +2785,17 @@ test "Store comprehensive CompactWriter roundtrip" {
     const tag_union_content = try original.mkTagUnion(&[_]Tag{ tag1, tag2 }, tag_union_ext);
     const tag_union_var = try original.freshFromContent(tag_union_content);
 
+    const alias_content = try original.mkAliasWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = list_ident_idx },
+        tag_union_var,
+        &.{ flex, tag_union_ext },
+        1,
+        builtin_module_idx,
+        null,
+        false,
+    );
+    const alias_var = try original.freshFromContent(alias_content);
+
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -2835,6 +2879,12 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqual(arg2, tag2_args[1]);
 
     try std.testing.expectEqual(tag_union_ext, tag_union.ext);
+    const alias = deserialized.resolveVar(alias_var).desc.content.alias;
+    try std.testing.expectEqual(@as(u32, 1), alias.source_arg_count);
+    try std.testing.expectEqualSlices(Var, &.{flex}, deserialized.sliceAliasArgs(alias));
+    try std.testing.expectEqualSlices(Var, &.{tag_union_ext}, deserialized.sliceAliasHiddenArgs(alias));
+    const backing = deserialized.resolveVar(deserialized.getAliasBackingVar(alias)).desc.content.structure.tag_union;
+    try std.testing.expectEqual(backing.ext, deserialized.sliceAliasHiddenArgs(alias)[0]);
 }
 
 test "SlotStore.Serialized roundtrip" {

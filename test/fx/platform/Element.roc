@@ -1,4 +1,4 @@
-import NodeB exposing [NodeB]
+import NodeB
 import Stdout
 
 Element := [

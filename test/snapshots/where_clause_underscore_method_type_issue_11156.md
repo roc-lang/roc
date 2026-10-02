@@ -92,9 +92,9 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "str")))
-			(e-dispatch-call (method "map_err") (constraint-fn-var 301)
+			(e-dispatch-call (method "map_err") (constraint-fn-var 298)
 				(receiver
-					(e-call (constraint-fn-var 298)
+					(e-call (constraint-fn-var 295)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -116,7 +116,7 @@ NO CHANGE
 					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 349)
+		(e-call (constraint-fn-var 346)
 			(e-lookup-local
 				(p-assign (ident "where_clause_underscore_method_type_issue_11156.Blub.parse")))
 			(e-string
@@ -136,12 +136,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Try(a, [ParseError]) where [a.parser_for : Encoding.JsonEncoding -> (Encoding.JsonState -> Try({ rest: Encoding.JsonState, value: a }, [InvalidJson(Str), ..errs]))]"))
+		(patt (type "Str -> Try(a, [ParseError]) where [a.parser_for : Encoding.JsonEncoding -> (Encoding.JsonState -> Try({ rest: Encoding.JsonState, value: a }, [InvalidJson(Str)]))]"))
 		(patt (type "Try({ hi: Dec }, [ParseError])")))
 	(type_decls
 		(nominal (type "Blub")
 			(ty-header (name "Blub"))))
 	(expressions
-		(expr (type "Str -> Try(a, [ParseError]) where [a.parser_for : Encoding.JsonEncoding -> (Encoding.JsonState -> Try({ rest: Encoding.JsonState, value: a }, [InvalidJson(Str), ..errs]))]"))
+		(expr (type "Str -> Try(a, [ParseError]) where [a.parser_for : Encoding.JsonEncoding -> (Encoding.JsonState -> Try({ rest: Encoding.JsonState, value: a }, [InvalidJson(Str)]))]"))
 		(expr (type "Try({ hi: Dec }, [ParseError])"))))
 ~~~

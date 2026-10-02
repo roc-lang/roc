@@ -57,6 +57,7 @@ pub fn handler(comptime ServerType: type) type {
             const formatted = formatSource(self.allocator, text) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ParseError,
+                error.ParsingFailed,
                 error.WriteFailed,
                 => {
                     std.log.err("formatting failed: {s}", .{@errorName(err)});
@@ -124,7 +125,7 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) FormatSourceEr
     defer ast.deinit();
 
     // Check for parse errors - if there are errors, return the original source
-    if (ast.parse_diagnostics.items.len > 0) {
+    if (ast.hasErrors()) {
         return error.ParseError;
     }
 
@@ -137,4 +138,8 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) FormatSourceEr
     try fmt.formatAstWithOptions(ast.*, &result.writer, .{ .compiler_version = build_options.compiler_version });
 
     return try result.toOwnedSlice();
+}
+
+test "bidi source produces no LSP formatting edit" {
+    try std.testing.expectError(error.ParseError, formatSource(std.testing.allocator, "value = 1 # \u{2066}"));
 }

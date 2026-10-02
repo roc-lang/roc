@@ -1811,7 +1811,10 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
     }
 
     const output = try eval.Inspected.finalizedComptimeReplStr(&resources);
-    return .{ .output = try self.allocator.dupe(u8, output) };
+    var visible = std.Io.Writer.Allocating.init(self.allocator);
+    defer visible.deinit();
+    try base.bidi.writeVisible(&visible.writer, output);
+    return .{ .output = try visible.toOwnedSlice() };
 }
 
 fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const ModuleSource, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
@@ -3795,4 +3798,35 @@ test "Repl - representative all-backends coverage (incl. wasm)" {
     try expectAllBackends("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
     try expectAllBackends("U8.from_str(\"42\")", "Ok(42)");
     try expectAllBackends("F64.to_str(2.5)", "\"2.5\"");
+}
+
+test "Repl bidi rejection preserves definitions and escaped values remain legal" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    const config = reporting.ReportingConfig.initForTesting();
+    for (base.bidi.controls) |control| {
+        const source = try std.mem.concat(testing.allocator, u8, &.{ "unsafe = 42 # ", control.utf8 });
+        defer testing.allocator.free(source);
+        const rejected = try repl.stepLanguageWithConfig(source, config);
+        defer rejected.deinit(testing.allocator);
+        try testing.expect(rejected == .diagnostic);
+        try testing.expectEqual(@as(usize, 0), repl.definitions.count());
+        var iter = base.bidi.Iterator{ .bytes = rejected.diagnostic.message };
+        try testing.expect(iter.next() == null);
+        const literal = try std.fmt.allocPrint(testing.allocator, "\"\\u({X})\"", .{control.codepoint});
+        defer testing.allocator.free(literal);
+        const inspected = try repl.stepWithConfig(literal, config);
+        defer inspected.deinit(testing.allocator);
+        try testing.expect(inspected == .output);
+        var displayed = base.bidi.Iterator{ .bytes = inspected.output };
+        try testing.expect(displayed.next() == null);
+        const escaped = try std.fmt.allocPrint(testing.allocator, "\"\\u({X})\".count_utf8_bytes()", .{control.codepoint});
+        defer testing.allocator.free(escaped);
+        const result = try repl.stepWithConfig(escaped, config);
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .output);
+        const expected = try std.fmt.allocPrint(testing.allocator, "{d}", .{control.utf8.len});
+        defer testing.allocator.free(expected);
+        try testing.expectEqualStrings(expected, result.output);
+    }
 }

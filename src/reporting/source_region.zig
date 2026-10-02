@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const testing = std.testing;
+const bidi = @import("base").bidi;
 
 const document = @import("document.zig");
 
@@ -162,7 +163,9 @@ pub fn printUnderlineGap(writer: anytype, line: []const u8, col_position: u32, s
     if (col_position == 1) {
         try printLeadingWhitespace(writer, line, start_column);
     } else {
-        try printSpaces(writer, start_column - col_position);
+        const start = @min(line.len, col_position -| 1);
+        const end = @min(line.len, start_column -| 1);
+        try printSpaces(writer, @intCast(displayWidth(line[start..end])));
     }
 }
 
@@ -216,6 +219,11 @@ pub fn displayWidth(bytes: []const u8) usize {
     var w: usize = 0;
     var i: usize = 0;
     while (i < bytes.len) {
+        if (bidi.at(bytes[i..])) |control| {
+            w += control.visible.len;
+            i += control.utf8.len;
+            continue;
+        }
         const first = bytes[i];
         if (first == '\t') {
             w += 1;
@@ -266,6 +274,13 @@ pub fn printLeadingWhitespace(writer: anytype, line: []const u8, target_column: 
     const chars_to_print = target_column - 1;
     var i: u32 = 0;
     while (i < chars_to_print) : (i += 1) {
+        if (i < line.len) {
+            if (bidi.at(line[i..])) |control| {
+                try printSpaces(writer, @intCast(control.visible.len));
+                i += @intCast(control.utf8.len - 1);
+                continue;
+            }
+        }
         if (i < line.len) {
             const char = line[i];
             if (char == '\t') {

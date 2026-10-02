@@ -29,23 +29,23 @@ const BuildSite = struct {
     /// the jump the edge may release values the arm no longer needs; those
     /// statements are carried over to the redirected edge unchanged.
     edge_jump: LIR.CFStmtId,
-    variant_index: u16,
-    discriminant: u16,
+    variant_index: u32,
+    discriminant: u32,
     payload: ?LIR.LocalId,
 };
 
-fn variantKey(variant_index: u16, discriminant: u16) u32 {
-    return (@as(u32, variant_index) << 16) | discriminant;
+fn variantKey(variant_index: u32, discriminant: u32) u64 {
+    return (@as(u64, variant_index) << 32) | discriminant;
 }
 
 /// First-producer order is retained even though identity lookup is indexed.
 const Variants = struct {
-    indices: std.AutoHashMap(u32, usize),
+    indices: std.AutoHashMap(u64, usize),
     builds: std.ArrayList(BuildSite) = .empty,
     targets: std.ArrayList(LIR.CFStmtId) = .empty,
 
     fn init(allocator: Allocator) Variants {
-        return .{ .indices = std.AutoHashMap(u32, usize).init(allocator) };
+        return .{ .indices = std.AutoHashMap(u64, usize).init(allocator) };
     }
 
     fn deinit(self: *Variants) void {
@@ -124,7 +124,7 @@ const VariantDest = struct {
 
 const BranchRewriter = struct {
     param: LIR.LocalId,
-    variant_index: u16,
+    variant_index: u32,
     payload: LIR.LocalId,
     payload_layout: layout_mod.Idx,
     layouts: *const layout_mod.Store,
@@ -1209,7 +1209,7 @@ fn variantPayloadLayout(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     param: LIR.LocalId,
-    variant_index: u16,
+    variant_index: u32,
 ) ?layout_mod.Idx {
     const tag_layout = layouts.getLayout(store.getLocal(param).layout_idx);
     const info = layouts.getTagUnionInfo(tag_layout);
@@ -1459,7 +1459,7 @@ const TestGraph = struct {
         return @enumFromInt(self.next_join);
     }
 
-    fn tag(self: *TestGraph, param: LIR.LocalId, variant: u16, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn tag(self: *TestGraph, param: LIR.LocalId, variant: u32, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         return self.store.addCFStmt(.{ .assign_tag = .{
             .target = param,
             .variant_index = variant,

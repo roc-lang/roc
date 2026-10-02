@@ -34,7 +34,7 @@ pub const Plan = struct {
     /// in reverse canonical order so the first field is expanded next.
     fn appendLayout(self: *Plan, layouts: *const layout.Store, root: layout.Idx, root_offset: u32) std.mem.Allocator.Error!void {
         const Pending = struct { layout_idx: layout.Idx, offset: u32 };
-        const Field = struct { index: u16, layout_idx: layout.Idx, offset: u32 };
+        const Field = struct { index: u32, layout_idx: layout.Idx, offset: u32 };
         var pending: std.ArrayList(Pending) = .empty;
         defer pending.deinit(self.allocator);
         var fields: std.ArrayList(Field) = .empty;

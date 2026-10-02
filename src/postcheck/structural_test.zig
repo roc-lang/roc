@@ -80,13 +80,13 @@ test "post-check row entries carry checked label ids until LIR indices" {
 
     const lir_field = unionPayloadType(LIR.RefOp, "field");
     const lir_payload = unionPayloadType(LIR.RefOp, "tag_payload");
-    try std.testing.expect(structFieldType(lir_field, "field_idx") == u16);
-    try std.testing.expect(structFieldType(lir_payload, "payload_idx") == u16);
+    try std.testing.expect(structFieldType(lir_field, "field_idx") == u32);
+    try std.testing.expect(structFieldType(lir_payload, "payload_idx") == u32);
 }
 
 test "Monotype record expression lowering does not keep mutable field-store slices across child lowering" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const lower_record_expr = sourceSliceBetween(lower_source, "fn lowerRecordExpr", "fn recordUpdateFieldValue");
+    const lower_record_expr = sourceSliceBetween(lower_source, "fn lowerRecordExpr(", "fn lowerRecordExprAtNode(");
 
     try expectContains(lower_record_expr, "const target_fields");
     try expectContains(lower_record_expr, "const target_field_count");
@@ -678,7 +678,7 @@ test "Monotype structural equality result probes remain graph-native" {
         "fn structuralEqualityOperandType",
         "fn prepareStructuralEqNode",
     );
-    try expectContains(equality_source, "fn structuralEqualityExprResultNode");
+    try expectContains(equality_source, "fn structuralDerivationExprResultNode");
     try expectContains(equality_source, "try self.callResultTypeNode");
     try expectContains(equality_source, "try self.dispatchResultTypeNode");
     try expectContains(equality_source, "try self.lookupExprTypeNode");
@@ -692,9 +692,26 @@ test "Monotype structural equality result probes remain graph-native" {
         "const StructuralBinaryOperands = struct",
     );
     try expectContains(dispatch_equality, "self.graph.functionNodes(callable_node)");
-    try expectContains(dispatch_equality, "self.graph.typeIsResolved(fn_nodes.args[0])");
+    try expectContains(dispatch_equality, "self.structuralDerivationOperandFromNode(fn_nodes.args[0])");
     try expectContains(dispatch_equality, "deferStructuralEqOperandsAtNode");
     try expectNotContains(dispatch_equality, "resolvedTypeViewForNode(callable_node)");
+
+    const dispatch_hash = sourceSliceBetween(
+        lower_source,
+        "fn finishStructuralHashAtNode(",
+        "fn deferStructuralSerializationAtNode(",
+    );
+    try expectContains(dispatch_hash, "self.structuralDerivationOperandFromNode(fn_nodes.args[0])");
+    try expectContains(dispatch_hash, "deferStructuralDerivationOperandsAtNode");
+
+    const direct_hash = sourceSliceBetween(
+        lower_source,
+        "fn stepDirectStructural(",
+        "fn directStructuralOperandCell(",
+    );
+    try expectContains(direct_hash, "self.structuralHashOperandType(h)");
+    try expectContains(direct_hash, "deferStructuralDerivationOperandsAtNode");
+    try expectNotContains(direct_hash, "lowerExprType(");
 }
 
 test "Monotype loop carries remain graph-native through headers and backedges" {

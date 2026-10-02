@@ -481,8 +481,8 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     const StrFromUtf8LayoutInfo = struct {
-        ok_tag: u16,
-        err_tag: u16,
+        ok_tag: u32,
+        err_tag: u32,
         outer_disc_offset: u32,
         outer_disc_size: u32,
         err_index_offset: u32,
@@ -1690,14 +1690,10 @@ pub const MonoLlvmCodeGen = struct {
         try self.addGeneratedFunctionStackProbeAttrs(&attrs);
         try attrs.addFnAttr(.cold, builder);
         try attrs.addFnAttr(.@"noinline", builder);
-        // Linux AArch64 eval tests return from crash callbacks to avoid
-        // longjmping through LLVM-generated frames. Every other target lowers
-        // `emitCrashBytes` to `unreachable`, so tell LLVM this cold helper does
-        // not return; otherwise the hot caller must conservatively preserve
-        // state for a control-flow edge that cannot happen.
-        if (!(self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux)) {
-            try attrs.addFnAttr(.noreturn, builder);
-        }
+        // The helper ends in `emitCrashTerminator`, so it never returns; saying
+        // so keeps the hot caller from preserving state for an edge that
+        // cannot happen.
+        try attrs.addFnAttr(.noreturn, builder);
         func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
 
         self.runtime_error_func = func;
@@ -3576,8 +3572,14 @@ pub const MonoLlvmCodeGen = struct {
             .jump => |jump_stmt| try self.emitJump(jump_stmt),
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
             .crash => |crash_stmt| switch (crash_stmt.msg) {
-                .literal => |literal| try self.emitCrashBytes(self.store.getString(literal)),
-                .local => |local| try self.emitCrashLocal(local),
+                .literal => |literal| if (crash_stmt.checked_error)
+                    try self.emitCheckedErrorCrashBytes(self.store.getString(literal))
+                else
+                    try self.emitCrashBytes(self.store.getString(literal)),
+                .local => |local| if (crash_stmt.checked_error)
+                    try self.emitCheckedErrorCrashLocal(local)
+                else
+                    try self.emitCrashLocal(local),
             },
             .expect_err => |expect_err_stmt| {
                 try self.materializeLocalIfDeferred(expect_err_stmt.message);
@@ -4569,13 +4571,13 @@ pub const MonoLlvmCodeGen = struct {
             const ptr_ty = try self.ptrType();
             try self.callBoxyVoid(
                 "roc_boxy_drop",
-                &.{ ptr_ty, .i32, ptr_ty, .i8, .i16, .i8 },
+                &.{ ptr_ty, .i32, ptr_ty, .i8, .i32, .i8 },
                 &.{
                     capture,
                     try self.boxyInt(.i32, @intFromEnum(entry.capture_layout)),
                     desc,
                     try self.boxyInt(.i8, @intFromEnum(layout.RcOp.decref)),
-                    try self.boxyInt(.i16, 1),
+                    try self.boxyInt(.i32, 1),
                     try self.boxyInt(.i8, @intFromEnum(RcAtomicity.atomic)),
                 },
             );
@@ -4642,7 +4644,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitTagLiteral(self: *MonoLlvmCodeGen, target: LocalId, discriminant: u16, payload: ?LocalId) Error!void {
+    fn emitTagLiteral(self: *MonoLlvmCodeGen, target: LocalId, discriminant: u32, payload: ?LocalId) Error!void {
         try self.prepareLocalWrite(target);
         if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
         const allocated = try self.allocAggregateTarget(target);
@@ -4678,7 +4680,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitStoreTag(self: *MonoLlvmCodeGen, dest: LocalId, tag_layout: layout.Idx, discriminant: u16, payload: ?LocalId) Error!void {
+    fn emitStoreTag(self: *MonoLlvmCodeGen, dest: LocalId, tag_layout: layout.Idx, discriminant: u32, payload: ?LocalId) Error!void {
         if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
 
         const dst = try self.loadPointer(self.slot(dest).ptr);
@@ -4733,12 +4735,15 @@ pub const MonoLlvmCodeGen = struct {
         }
         switch (op) {
             .num_plus, .num_minus, .num_times => unreachable,
+            // LIR lowering splits this into an alias and `list_prefetch`.
+            .list_prefetched => unreachable,
             .list_sort_with => try self.emitListSortWith(target, arg_locals, unique_args),
             .bool_not => {
                 const value = try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr);
                 const not_value = (self.wip orelse return error.CompilationFailed).not(value, "") catch return error.OutOfMemory;
                 try self.storeBool(self.slot(target).ptr, not_value);
             },
+            .bool_likely => try self.storeBool(self.slot(target).ptr, try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr)),
             .num_is_eq => try self.storeBool(self.slot(target).ptr, try self.emitValueEqual(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(GuardedList.at(arg_locals, 1)).ptr, self.localLayout(GuardedList.at(arg_locals, 0)))),
             .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => try self.emitNumericCompare(target, op, arg_locals),
             .compare => try self.emitNumericOrderCompare(target, arg_locals),
@@ -4858,6 +4863,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.rocListLenOffset())), self.localLayout(target)),
             .list_capacity => try self.emitListCapacity(target, GuardedList.at(arg_locals, 0)),
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
+            .list_prefetch => try self.emitListPrefetch(arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
             .list_append_unsafe => try self.emitListAppendUnsafe(target, arg_locals),
             .list_concat => try self.emitListConcat(target, arg_locals, unique_args),
@@ -4869,7 +4875,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
             .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
-            .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
+            .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_clear => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
@@ -4883,7 +4889,8 @@ pub const MonoLlvmCodeGen = struct {
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
             .list_map_write_unsafe => try self.emitListMapWriteUnsafe(target, arg_locals),
             .list_reverse => try self.emitListReverse(target, arg_locals, unique_args),
-            .list_reserve => try self.emitListReserve(target, arg_locals, unique_args),
+            .list_reserve => try self.emitListReserve(target, "roc_boxy_list_reserve", builtinSymbol(LowLevelBuiltins.listOp(.list_reserve)), arg_locals, unique_args),
+            .list_reserve_for_append => try self.emitListReserve(target, "roc_boxy_list_reserve_for_append", builtinSymbol(LowLevelBuiltins.listOp(.list_reserve_for_append)), arg_locals, unique_args),
             .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
             .list_first, .list_last => try self.emitListFirstLast(target, op, arg_locals),
             .str_is_eq => try self.emitStrIsEq(target, arg_locals),
@@ -7366,7 +7373,7 @@ pub const MonoLlvmCodeGen = struct {
         source: StrMatchSource,
         start_ptr: LlvmBuilder.Value,
         end_ptr: LlvmBuilder.Value,
-        pending_rc_count: u16,
+        pending_rc_count: u32,
         pending_rc_atomicity: RcAtomicity,
     };
 
@@ -8284,12 +8291,12 @@ pub const MonoLlvmCodeGen = struct {
         return wip.bin(.sub, try self.loadUsize(capture.end_ptr), try self.loadUsize(capture.start_ptr), "") catch return error.OutOfMemory;
     }
 
-    fn noteDeferredStrCaptureIncref(self: *MonoLlvmCodeGen, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn noteDeferredStrCaptureIncref(self: *MonoLlvmCodeGen, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         var capture = self.deferredStrCapture(local) orelse return error.CompilationFailed;
         if (count == 0) return;
         if (capture.pending_rc_count != 0 and capture.pending_rc_atomicity != atomicity) return error.CompilationFailed;
-        const total: u32 = @as(u32, capture.pending_rc_count) + count;
-        if (total > std.math.maxInt(u16)) return error.CompilationFailed;
+        const total: u64 = @as(u64, capture.pending_rc_count) + count;
+        if (total > std.math.maxInt(u32)) return error.OutOfMemory;
         capture.pending_rc_count = @intCast(total);
         capture.pending_rc_atomicity = atomicity;
         self.deferred_str_captures[@intFromEnum(local)] = capture;
@@ -8413,24 +8420,14 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = ok_block };
     }
 
-    /// Linux AArch64 evaluation reports crashes to the host and returns instead
-    /// of longjmping through LLVM frames. The host discards the failed result,
-    /// but the return must still satisfy the active function's ABI, including
-    /// fastcc scalar and aggregate results. Helpers may have a different return
-    /// type from the enclosing Roc procedure, so consume the function signature.
+    /// End the block after a call that hands a crash to the host. The host
+    /// never returns from `roc_crashed`; the trap makes a host that returns
+    /// anyway terminate the process here, since `unreachable` alone emits no
+    /// instruction and execution would run into whatever code follows.
     fn emitCrashTerminator(self: *MonoLlvmCodeGen) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
-            const ret_ty = wip.function.typeOf(builder).functionReturn(builder);
-            if (ret_ty == .void) {
-                _ = wip.retVoid() catch return error.OutOfMemory;
-            } else {
-                _ = wip.ret(builder.zeroInitValue(ret_ty) catch return error.OutOfMemory) catch return error.OutOfMemory;
-            }
-        } else {
-            _ = wip.@"unreachable"() catch return error.OutOfMemory;
-        }
+        _ = wip.callIntrinsic(.normal, .none, .trap, &.{}, &.{}, "") catch return error.OutOfMemory;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
     }
 
     fn emitCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
@@ -8440,6 +8437,37 @@ pub const MonoLlvmCodeGen = struct {
             builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
         )) {
             try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        }
+        try self.emitCrashTerminator();
+    }
+
+    /// Crash at code checking rejected, through the builtin that records the
+    /// fact before crashing.
+    fn emitCheckedErrorCrashBytes(self: *MonoLlvmCodeGen, msg: []const u8) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const msg_ptr = try self.staticBytes(msg);
+        const msg_len = builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory;
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg_ptr, msg_len)) {
+            try self.callBuiltinVoid(
+                builtinSymbol(.checked_error_crashed),
+                &.{ try self.ptrType(), self.ptrSizedIntType() },
+                &.{ msg_ptr, msg_len },
+            );
+        }
+        try self.emitCrashTerminator();
+    }
+
+    /// Crash at code checking rejected with a runtime message, through the
+    /// builtin that records the fact before crashing.
+    fn emitCheckedErrorCrashLocal(self: *MonoLlvmCodeGen, message: LocalId) Error!void {
+        try self.materializeLocalIfDeferred(message);
+        const msg = try self.emitStrMatchSourceShape(self.slot(message).ptr);
+        if (!try self.emitDefaultPlatformCrashWithFrames(msg.bytes, msg.len)) {
+            try self.callBuiltinVoid(
+                builtinSymbol(.checked_error_crash_str),
+                &.{try self.ptrType()},
+                &.{self.slot(message).ptr},
+            );
         }
         try self.emitCrashTerminator();
     }
@@ -10046,7 +10074,7 @@ pub const MonoLlvmCodeGen = struct {
         const elem_layout = abi.elem_layout_idx orelse return null;
         const elem_layout_value = self.layoutValue(elem_layout);
         const elem_is_erased_box = elem_layout_value.tag == .erased_box;
-        if (!elem_is_erased_box and elem_layout_value.tag != .box) return null;
+        if (!self.layouts().layoutTakesBoxyStructuralDesc(elem_layout)) return null;
 
         for (list_locals) |local| {
             if (self.store.getLocal(local).boxy_desc) |desc| {
@@ -10135,6 +10163,35 @@ pub const MonoLlvmCodeGen = struct {
             .i8,
             builder.intValue(.i8, @intFromEnum(mode)) catch return error.OutOfMemory,
         );
+    }
+
+    /// Hint that the item at an index is about to be read or written. The
+    /// address is computed without an in-bounds claim, since the index need
+    /// not lie inside the list and the hint never touches memory.
+    fn emitListPrefetch(self: *MonoLlvmCodeGen, args: anytype) Error!void {
+        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        if (abi.elem_size == 0) return;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
+        const idx = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
+        const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const addr = wip.gep(.normal, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
+        // Arguments after the address: prepare for a write, keep in every
+        // cache level, data cache.
+        _ = wip.callIntrinsic(
+            .normal,
+            .none,
+            .prefetch,
+            &.{try self.ptrType()},
+            &.{
+                addr,
+                builder.intValue(.i32, 1) catch return error.OutOfMemory,
+                builder.intValue(.i32, 3) catch return error.OutOfMemory,
+                builder.intValue(.i32, 1) catch return error.OutOfMemory,
+            },
+            "",
+        ) catch return error.OutOfMemory;
     }
 
     fn emitListGetUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10421,7 +10478,9 @@ pub const MonoLlvmCodeGen = struct {
             const tag = wip.bin(.@"and", cap, one, "") catch return error.OutOfMemory;
             const is_plain = wip.icmp(.eq, tag, zero, "") catch return error.OutOfMemory;
             const needed = wip.bin(.add, len, eight, "") catch return error.OutOfMemory;
-            const fits = wip.icmp(.uge, cap, needed, "") catch return error.OutOfMemory;
+            const capacity_shift = builder.intValue(word, builtins.list.RocList.capacity_shift) catch return error.OutOfMemory;
+            const capacity = wip.bin(.lshr, cap, capacity_shift, "") catch return error.OutOfMemory;
+            const fits = wip.icmp(.uge, capacity, needed, "") catch return error.OutOfMemory;
             const take_fast = wip.bin(.@"and", is_plain, fits, "") catch return error.OutOfMemory;
             const fast = wip.block(0, "append_le_bytes_fast") catch return error.OutOfMemory;
             const slow = wip.block(0, "append_le_bytes_slow") catch return error.OutOfMemory;
@@ -10557,6 +10616,8 @@ pub const MonoLlvmCodeGen = struct {
             break :blk ListSlice{ .start = safe_start, .len = count };
         } else if (op == .list_sublist or op == .list_sublist_borrowed)
             try self.loadSublistStartLen(GuardedList.at(args, 1))
+        else if (op == .list_clear)
+            ListSlice{ .start = zero, .len = zero }
         else
             return error.UnsupportedLowLevel;
 
@@ -10805,7 +10866,11 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeIntToLayout(self.slot(target).ptr, owned, self.localLayout(target));
     }
 
-    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+    /// Emit `list_reserve` or `list_reserve_for_append`. Both leave a list that
+    /// already has the requested spare untouched; they differ only in the
+    /// capacity their builtin (`boxy_symbol` or `builtin_symbol`) picks when
+    /// the list has to grow.
+    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_symbol: []const u8, args: anytype, unique_args: u64) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         // A list of zero-sized elements owns no allocation, so it carries a
         // length and nothing else and a reserve cannot change anything
@@ -10827,8 +10892,8 @@ pub const MonoLlvmCodeGen = struct {
 
         // The no-growth outcome is the hot one, so its checks are emitted
         // inline where this backend controls their shape; growth and shared
-        // lists fall through to the builtin. This mirrors listReserve's fast
-        // path exactly: exclusive ownership and spare <= capacity - length,
+        // lists fall through to the builtin. This mirrors the builtins' shared
+        // fast path exactly: exclusive ownership and spare <= capacity - length,
         // where a seamless slice's capacity is its visible window length.
         const list_ptr = self.slot(GuardedList.at(args, 0)).ptr;
         const bytes = try self.loadPointer(list_ptr);
@@ -10891,13 +10956,13 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = slow_block };
-        try self.emitListReserveCall(target, args, unique_args);
+        try self.emitListReserveCall(target, boxy_symbol, builtin_symbol, args, unique_args);
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = merge_block };
     }
 
-    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_symbol: []const u8, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
         const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
@@ -10915,9 +10980,9 @@ pub const MonoLlvmCodeGen = struct {
         }
         try self.appendUpdateModeArg(&call_args, unique_args);
         if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_reserve", call_args.types.items, call_args.values.items);
+            try self.callBoxyVoid(boxy_symbol, call_args.types.items, call_args.values.items);
         } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_reserve)), call_args.types.items, call_args.values.items);
+            try self.callBuiltinOut(builtin_symbol, call_args.types.items, call_args.values.items);
         }
     }
 
@@ -11496,7 +11561,7 @@ pub const MonoLlvmCodeGen = struct {
         helper: lir.LIR.RcHelper,
         op: layout.RcOp,
         local: LocalId,
-        count: u16,
+        count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
         switch (helper) {
@@ -11505,13 +11570,13 @@ pub const MonoLlvmCodeGen = struct {
                 const ptr_ty = try self.ptrType();
                 try self.callBoxyVoid(
                     "roc_boxy_drop",
-                    &.{ ptr_ty, .i32, ptr_ty, .i8, .i16, .i8 },
+                    &.{ ptr_ty, .i32, ptr_ty, .i8, .i32, .i8 },
                     &.{
                         try self.boxyValuePtr(local),
                         try self.boxyInt(.i32, @intFromEnum(self.localLayout(local))),
                         try self.resolveBoxyDesc(desc),
                         try self.boxyInt(.i8, @intFromEnum(op)),
-                        try self.boxyInt(.i16, count),
+                        try self.boxyInt(.i32, count),
                         try self.boxyInt(.i8, @intFromEnum(atomicity)),
                     },
                 );
@@ -11523,7 +11588,7 @@ pub const MonoLlvmCodeGen = struct {
     /// wider than this pass their own slot pointer as before.
     const rc_arg_scratch_size = 64;
 
-    fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
 
@@ -11539,7 +11604,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitConcreteRcForLocal(helper_key, local, count, atomicity);
     }
 
-    fn emitConcreteRcForLocal(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+    fn emitConcreteRcForLocal(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
 
@@ -12329,7 +12394,7 @@ pub const MonoLlvmCodeGen = struct {
         return data.discriminant_offset.get(self.layouts().targetUsize());
     }
 
-    fn writeTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, discriminant: u16) Error!void {
+    fn writeTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, discriminant: u32) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const layout_val = self.layoutValue(layout_idx);
@@ -12353,7 +12418,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.normal, store_value, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@max(data.discriminant_size, 1))) catch return error.OutOfMemory;
     }
 
-    fn tagPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, discriminant: u16) layout.Idx {
+    fn tagPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, discriminant: u32) layout.Idx {
         var tag_layout = self.layoutValue(layout_idx);
         if (tag_layout.tag == .box) tag_layout = self.layoutValue(tag_layout.getIdx());
         if (tag_layout.tag != .tag_union) return .zst;
@@ -12369,8 +12434,8 @@ pub const MonoLlvmCodeGen = struct {
         const tu_data = self.layouts().getTagUnionData(ret_layout_val.getTagUnion().idx);
         const variants = self.layouts().getTagUnionVariants(tu_data);
 
-        var ok_disc: ?u16 = null;
-        var err_disc: ?u16 = null;
+        var ok_disc: ?u32 = null;
+        var err_disc: ?u32 = null;
         var err_record_idx: ?layout.StructIdx = null;
         var inner_disc_offset: u32 = 0;
         var inner_disc_size: u32 = 0;
@@ -12522,7 +12587,7 @@ pub const MonoLlvmCodeGen = struct {
         return field.layout;
     }
 
-    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u16, struct_idx: layout.StructIdx } {
+    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u32, struct_idx: layout.StructIdx } {
         const variants = self.layouts().getTagUnionVariants(inner_tu);
         for (0..variants.len) |i| {
             const payload = variants.get(@intCast(i)).payload_layout;
@@ -12823,9 +12888,9 @@ pub const MonoLlvmCodeGen = struct {
                 return builder.structType(.normal, field_types) catch return error.OutOfMemory;
             },
             .integer => {
-                var byte_size: u16 = 0;
+                var byte_size: u32 = 0;
                 for (registers.pieces) |piece| byte_size = @max(byte_size, piece.offset + piece.size);
-                return builder.intType(@as(u24, byte_size) * 8) catch return error.OutOfMemory;
+                return builder.intType(@as(u24, @intCast(byte_size)) * 8) catch return error.OutOfMemory;
             },
             .array => {
                 std.debug.assert(registers.pieces.len > 0);
@@ -13734,7 +13799,7 @@ test "LLVM erased callable explicit arguments exclude capture and reuse" {
     try std.testing.expectError(error.CompilationFailed, MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 1));
 }
 
-test "LLVM crash exits respect fastcc result types" {
+test "LLVM crash exits trap on every target and result type" {
     const allocator = std.testing.allocator;
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
@@ -13742,7 +13807,7 @@ test "LLVM crash exits respect fastcc result types" {
         const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
         var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
         defer codegen.deinit();
-        var builder = try codegen.createBuilder("crash_returns");
+        var builder = try codegen.createBuilder("crash_exits");
         defer builder.deinit();
         codegen.builder = &builder;
         defer codegen.builder = null;
@@ -13779,18 +13844,16 @@ test "LLVM crash exits respect fastcc result types" {
                 }
                 const instructions = entry.ptrConst(&wip).instructions.items;
                 const terminal = wip.instructions.get(@intFromEnum(instructions[instructions.len - 1]));
-                if (arch != .aarch64) {
-                    try std.testing.expectEqual(.@"unreachable", terminal.tag);
-                } else if (ret_ty == .void) {
-                    try std.testing.expectEqual(.@"ret void", terminal.tag);
-                } else {
-                    try std.testing.expectEqual(.ret, terminal.tag);
-                    const value: LlvmBuilder.Value = @enumFromInt(terminal.data);
-                    try std.testing.expectEqual(ret_ty, value.typeOfWip(&wip));
-                }
+                try std.testing.expectEqual(.@"unreachable", terminal.tag);
                 try codegen.finishCurrentWipFunction();
             }
         }
+        // A host that returns from `roc_crashed` must hit a trap rather than
+        // run into whatever code follows: every crash exit calls it.
+        var ir: std.Io.Writer.Allocating = .init(allocator);
+        defer ir.deinit();
+        try builder.print(&ir.writer);
+        try std.testing.expectEqual(result_types.len * 2, std.mem.count(u8, ir.written(), "call void @llvm.trap()"));
     }
 }
 
