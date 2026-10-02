@@ -2208,6 +2208,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const callable_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     return try self.generateListSortWith(list_local, list_loc, callable_loc, ll);
                 },
+                // A hint only; this backend emits no code for it.
+                .list_prefetch => return .{ .immediate_i64 = 0 },
                 .list_len => {
                     // List is a (ptr, len, capacity) triple - length is at offset 8
                     std.debug.assert(args.len >= 1);
@@ -7540,6 +7542,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_last,
                 .list_capacity,
                 .list_len,
+                .list_prefetch,
                 .list_map_can_reuse,
                 .list_map_cast_unsafe,
                 .list_map_extract_unsafe,
