@@ -758,12 +758,13 @@ fn callableValue(
 }
 
 /// Whether `expr_id` is a substitutable read: a leaf, or an access or
-/// callable whose operands all are. Operands are checked on a work stack.
+/// callable whose operands all are. An access continues with its single
+/// operand; a callable's further operands wait on a work stack.
 fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_id: Ast.ExprId) Allocator.Error!bool {
     var stack: std.ArrayList(Ast.ExprId) = .empty;
     defer stack.deinit(allocator);
-    try stack.append(allocator, expr_id);
-    while (stack.pop()) |id| switch (program.getExpr(id).data) {
+    var next: ?Ast.ExprId = expr_id;
+    while (next orelse stack.pop()) |id| switch (program.getExpr(id).data) {
         .local,
         .unit,
         .int_lit,
@@ -774,15 +775,16 @@ fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_i
         .bytes_lit,
         .static_data_candidate,
         .comptime_value,
-        => {},
+        => next = null,
         .fn_ref => |fn_ref| {
+            next = null;
             const operand_count: usize = @intCast(fn_ref.captures.len);
             for (0..operand_count) |index| {
                 try stack.append(allocator, program.captureOperandAt(fn_ref.captures, index).value);
             }
         },
-        .field_access => |field| try stack.append(allocator, field.receiver),
-        .tuple_access => |access| try stack.append(allocator, access.tuple),
+        .field_access => |field| next = field.receiver,
+        .tuple_access => |access| next = access.tuple,
         .typed_boundary,
         .@"unreachable",
         .list,
