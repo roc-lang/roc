@@ -59,6 +59,16 @@ pub const LowLevel = enum(u16) {
     list_len,
     list_capacity,
     list_get_unsafe,
+    /// `List.prefetched`: the same list, with a hint that the item at an
+    /// index is about to be read or written. LIR lowering splits it into
+    /// `list_prefetch` on the list and an alias of the list, so no later
+    /// stage sees this operation.
+    list_prefetched,
+    /// The hint half of `list_prefetched`, created only by LIR lowering. It
+    /// reads nothing and changes nothing; a backend with no prefetch
+    /// instruction emits no code for it, and an index outside the list is
+    /// harmless.
+    list_prefetch,
     list_append_unsafe,
     list_concat,
     list_append_range_within,
@@ -854,7 +864,7 @@ pub const LowLevel = enum(u16) {
     /// operands retain their ordinary allocation-lifetime requirements.
     /// Kept as static operation data rather than widening every LIR statement.
     pub fn representationArgs(self: LowLevel) u64 {
-        if (self == .list_len or self == .list_capacity) return argMask(&.{0});
+        if (self == .list_len or self == .list_capacity or self == .list_prefetch) return argMask(&.{0});
         return 0;
     }
 
@@ -967,6 +977,10 @@ pub const LowLevel = enum(u16) {
             // reuse query, forcing ARC to preserve every later use first.
             // List.map, List.update, and loop promotion use this transfer.
             .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
+
+            // The same list; LIR lowering replaces it with an alias, so this
+            // describes the source-level operation only.
+            .list_prefetched => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
 
             // Reads the prepared list's refcount (and slice bit) without
             // changing it. List.map additionally gates this result on item
@@ -1088,6 +1102,7 @@ pub const LowLevel = enum(u16) {
             .str_get_utf8_byte_unsafe,
             .list_len,
             .list_capacity,
+            .list_prefetch,
             .list_slack_unique,
             .bool_not,
             .dict_pseudo_seed,

@@ -8161,6 +8161,19 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        // The prefetched list is the list it was given, at an index inside
+        // it or far past its end.
+        .name = "low_level - prefetched returns its list unchanged",
+        .source =
+        \\{
+        \\x = List.prefetched([1.U8, 2, 3], 1)
+        \\y = List.prefetched(x, 1000000)
+        \\(List.len(y), List.get(y, 1), y == [1, 2, 3])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, Ok(2), True)" },
+    },
+    .{
         .name = "low_level - U64.to_f64 reads the source as unsigned",
         .source = "F64.to_bits(U64.to_f64(18446744073709551615))",
         .expected = .{ .inspect_str = "4895412794951729152" },

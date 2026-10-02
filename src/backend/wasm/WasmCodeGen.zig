@@ -12091,6 +12091,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .simd_clmul_hi => return self.emitSimdLowLevel(.simd_clmul_hi, ll, args),
 
         .num_plus, .num_minus, .num_times => unreachable,
+        // LIR lowering splits this into an alias and `list_prefetch`.
+        .list_prefetched => unreachable,
         // Numeric operations (arithmetic, comparisons, shifts)
         .num_int_add_wrap,
         .num_int_add_crash_on_overflow,
@@ -12576,6 +12578,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // List operations
+        // A hint only: WebAssembly has no prefetch, so the result is the
+        // empty value and nothing else is emitted.
+        .list_prefetch => {
+            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        },
         .list_len => {
             // Load length from RocList struct (offset 4)
             try self.emitProcLocal(GuardedList.at(args, 0));
@@ -15929,6 +15937,8 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_len,
         .list_capacity,
         .list_get_unsafe,
+        .list_prefetch,
+        .list_prefetched,
         .list_append_unsafe,
         .list_concat,
         .list_with_capacity,

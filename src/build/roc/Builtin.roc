@@ -4250,6 +4250,27 @@ Builtin :: [].{
 			Try.Err(OutOfBounds)
 		}
 
+		## Returns the list unchanged, hinting to the processor that the item
+		## at the given index is about to be read or written so it can start
+		## bringing that memory into its cache.
+		##
+		## This is a no-op as far as the program's results go: it reads
+		## nothing, changes nothing, and an index past the end of the list is
+		## fine. Its only possible effect is on speed, and that effect can go
+		## either way. A hint for memory that was about to be loaded anyway,
+		## or that is never used, costs time; a hint issued too late does
+		## nothing. Only use it together with careful measurement, and keep it
+		## only where the measurement shows it helping.
+		##
+		## It tends to pay off when the index is unpredictable, the list is
+		## much larger than the cache, and the index is known some steps
+		## before the item is used, as with a hash table's next bucket.
+		## ```roc
+		## expect List.prefetched([10.U64, 20, 30], 1) == [10, 20, 30]
+		## ```
+		prefetched : List(item), U64 -> List(item)
+		prefetched = |list, index| list_prefetched(list, index)
+
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
 		## Returns an item from a list at the given index.
 		##
@@ -24609,6 +24630,11 @@ append_utf8_code_point = |out, code_point|
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler: the same list, with a hint that the item at this
+# index is about to be used. It reads nothing, and an index outside the list
+# is harmless.
+list_prefetched : List(item), U64 -> List(item)
 
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)

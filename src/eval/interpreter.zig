@@ -6164,6 +6164,8 @@ pub const Interpreter = struct {
 
         return switch (ll.op) {
             .num_plus, .num_minus, .num_times => unreachable,
+            // LIR lowering splits this into an alias and `list_prefetch`.
+            .list_prefetched => unreachable,
             .list_sort_with => self.evalListSortWith(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             // ── String ops ──
             .str_is_eq => blk: {
@@ -6571,6 +6573,8 @@ pub const Interpreter = struct {
             },
 
             // ── List ops ──
+            // A hint only: nothing to do, and nothing to return.
+            .list_prefetch => Value.zst,
             .list_len => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);
