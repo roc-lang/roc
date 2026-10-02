@@ -105,6 +105,7 @@ pub fn run(
         );
         output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
         output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
+        output.platform_requirement_filling = owned.platform_requirement_filling;
         name_store = undefined;
         types = undefined;
         const_fn_evidence = undefined;

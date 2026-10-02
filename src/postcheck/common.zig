@@ -72,6 +72,16 @@ pub const CheckedModules = struct {
 /// the same `lowering_modules` table and the same ids into it.
 pub const LoweringModuleId = LIR.LoweringModuleId;
 
+/// How the program's app fills its platform's requirements: the app module
+/// whose values fill them, and the relation key naming that filling. Which
+/// app procedure a platform requirement resolves to is not determined by the
+/// platform's source or types, so a procedure whose code reaches one digests
+/// the relation into its identity (`Lifted.Program.fnSourceDigest`).
+pub const PlatformRequirementFilling = struct {
+    app_artifact: [32]u8,
+    relation: [32]u8,
+};
+
 /// The source literal a `literal_rejected` expression reports; see
 /// `LIR.LiteralRejectionSite`.
 pub const LiteralRejectionSite = LIR.LiteralRejectionSite;

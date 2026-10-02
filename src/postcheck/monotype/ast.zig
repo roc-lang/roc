@@ -1691,6 +1691,9 @@ pub const ProgramBuilder = struct {
     /// lowered and never appended to afterwards, so the rows that carry a
     /// module-local checked id name their owner explicitly.
     lowering_modules: ProgramList(checked.ModuleId, "lowering_modules") = .empty,
+    /// See `Common.PlatformRequirementFilling`; null when no module of the
+    /// input has platform requirements filled by an app.
+    platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),

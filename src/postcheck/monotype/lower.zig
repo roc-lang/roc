@@ -754,6 +754,7 @@ pub fn run(
         defer finalization_timing_scope.end();
         program.next_symbol = builder.symbols.coordinator.next;
         builder.stampSingleSourceCalls();
+        program.platform_requirement_filling = builder.platformRequirementFilling();
         try program.sealRemainingCaptureIdentities();
         try recordComptimeValueReads(allocator, &program);
         program.freeze();
@@ -9346,6 +9347,26 @@ const Builder = struct {
     /// whether its module's source calls it at exactly one site, wherever it
     /// was created: a fresh specialization or a restored function value. The
     /// two records of one function carry the same template.
+    /// How the input's app fills its platform's requirements, if any module
+    /// of the input has platform requirements bound to an app.
+    fn platformRequirementFilling(self: *Builder) ?Common.PlatformRequirementFilling {
+        var filling: ?Common.PlatformRequirementFilling = null;
+        for (self.moduleViews()) |*view| {
+            for (view.platform_required_bindings.bindings) |binding| {
+                const this: Common.PlatformRequirementFilling = .{
+                    .app_artifact = binding.app_value.artifact.bytes,
+                    .relation = binding.relation.bytes,
+                };
+                if (filling) |existing| {
+                    if (!std.meta.eql(existing, this)) Common.invariant("one lowering input had two platform/app requirement relations");
+                } else {
+                    filling = this;
+                }
+            }
+        }
+        return filling;
+    }
+
     fn stampSingleSourceCalls(self: *Builder) void {
         for (0..self.program.fnCount()) |raw| {
             const id: Ast.FnId = @enumFromInt(@as(u32, @intCast(raw)));

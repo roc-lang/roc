@@ -466,6 +466,20 @@ does not carry. The pack encoder renames every carried program-numbered datum
 `roc__h` content name and records the references to it as `shared`; capture
 keeps program names, so only a pack write pays for the hashing.
 
+A `ProcIdentity` names the same code in every program only because everything
+that decides a procedure's code is digested into it: its checked source, its
+evidence, and its solved types (`postcheck/proc_identity.zig`). Those also
+decide every procedure it references, except across a platform requirement:
+which app value fills a platform's requirement is chosen by the app, not by
+the platform's source or types. So a function that references a function of
+the app from outside the app (which only a requirement can), or references a
+function that does, digests the program's platform/app relation key into its
+identity (`Lifted.Program.fnReachesPlatformRequirement`). The relation key is a
+function of the app's artifact key, which the app's own procedure identities
+already digest, so such a platform procedure is shared exactly as widely as
+the app procedures it reaches; every other platform procedure keeps one
+identity across apps.
+
 ## Checking Effects And Const Roots
 
 Checking owns Roc effect validation, compile-time evaluation eligibility, and

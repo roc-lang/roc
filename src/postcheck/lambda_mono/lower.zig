@@ -139,6 +139,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .comptime_sites = lifted.comptime_sites,
             .comptime_value_roots = lifted.comptime_value_roots,
             .lowering_modules = lifted.lowering_modules,
+            .platform_requirement_filling = lifted.platform_requirement_filling,
             .source_files = moved.source_files.unsafeRawItemsForView(),
             .expr_locs = lifted.expr_locs,
             .expr_regions = lifted.expr_regions,

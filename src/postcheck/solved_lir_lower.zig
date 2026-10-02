@@ -14634,6 +14634,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .comptime_value_roots = comptime_value_roots,
         .comptime_sites = Lifted.ProgramList(Lifted.ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
         .lowering_modules = lowering_modules,
+        .platform_requirement_filling = view.platform_requirement_filling,
         .source_files = Lifted.ProgramList(base.SourceFileEntry, "source_files").fromArrayList(source_files),
         .expr_locs = expr_locs,
         .expr_regions = expr_regions,
