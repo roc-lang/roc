@@ -11324,6 +11324,12 @@ const Lowerer = struct {
         default_is_cold: bool,
     ) Common.LowerError!LIR.CFStmtId {
         if (self.isZstLocal(source)) return body;
+        // A union with one variant holds that variant: there is nothing to test.
+        const source_layout = self.result.layouts.getLayout(self.result.store.getLocal(source).layout_idx);
+        if (source_layout.tag == .tag_union and self.result.layouts.getTagUnionInfo(source_layout).variants.len == 1) {
+            if (discriminant != 0) Common.invariant("discriminant switch tested a variant its one-variant union lacks");
+            return body;
+        }
         const disc_local = try self.addLocalForLayout(.u16);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = discriminant, .body = body }};
         const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
