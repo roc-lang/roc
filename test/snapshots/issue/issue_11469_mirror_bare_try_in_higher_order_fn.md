@@ -231,7 +231,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "execute")))
-			(e-call (constraint-fn-var 410)
+			(e-call (constraint-fn-var 409)
 				(e-lookup-local
 					(p-assign (ident "mirror_transaction")))
 				(e-lookup-local
@@ -283,7 +283,7 @@ NO CHANGE
 									(e-empty_record)))))))))
 	(d-let
 		(p-assign (ident "mirror_main"))
-		(e-call (constraint-fn-var 430)
+		(e-call (constraint-fn-var 429)
 			(e-runtime-error (tag "erroneous_value_use"))
 			(e-lambda
 				(args
