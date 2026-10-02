@@ -8,9 +8,7 @@ type=expr
 { age: 42, name = "Alice" }
 ~~~
 # EXPECTED
-UNEXPECTED TYPE SYNTAX - error_malformed_syntax_2.md:1:8:1:10
-UNEXPECTED EXPRESSION SYNTAX - error_malformed_syntax_2.md:1:10:1:11
-DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
+RECORD FIELD USES ASSIGNMENT - error_malformed_syntax_2.md:1:17:1:18
 # PROBLEMS
 ~~~clojure
 (reports
