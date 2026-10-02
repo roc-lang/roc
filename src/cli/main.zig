@@ -1253,22 +1253,20 @@ fn generateRandomSuffix(ctx: *CliCtx) Allocator.Error![]u8 {
     return suffix;
 }
 
-/// Create a unique temporary directory under roc/{version}/{random}/.
+/// Create a unique scratch directory under {cache}/{version}/tmp/{random}/.
 /// Returns the path to the directory (allocated from arena, no need to free).
-/// Uses system temp directory to avoid race conditions when cache is cleared.
-pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || error{FailedToCreateUniqueTempDir})![]const u8 {
-    // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.coreCtx(), ctx.arena);
+pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || error{ FailedToCreateUniqueTempDir, NoHomeDirectory })![]const u8 {
+    const cache_config = cache_config_mod.CacheConfig{ .roc_ctx = ctx.coreCtx() };
+    const scratch_dir = try cache_config.getScratchDir(ctx.arena);
 
-    // Ensure the roc/{version} directory exists
-    // makePath automatically handles PathAlreadyExists internally
-    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, version_temp_dir);
+    // createDirPath treats an already-existing directory as success
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, scratch_dir);
 
     // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
     while (attempt < 6) : (attempt += 1) {
         const random_suffix = try generateRandomSuffix(ctx);
-        const dir_path = try std.fs.path.join(ctx.arena, &.{ version_temp_dir, random_suffix });
+        const dir_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, random_suffix });
 
         // Try to create the directory
         std.Io.Dir.cwd().createDir(ctx.io.std_io, dir_path, .default_dir) catch |err| switch (err) {
@@ -1337,122 +1335,6 @@ pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_hand
     });
     try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
     try fd_file.sync(ctx.io.std_io);
-}
-
-/// Create the temporary directory structure for fd communication.
-/// Returns the path to the executable in the temp directory (allocated from arena, no need to free).
-/// Uses the standard roc/{version}/{random}/ structure in the system temp directory.
-/// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
-pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) Allocator.Error![]const u8 {
-    // Get the version-specific temp directory: {temp}/roc/{version}
-    const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.coreCtx(), ctx.arena);
-
-    // Ensure the roc/{version} directory exists
-    // makePath automatically handles PathAlreadyExists internally
-    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, version_temp_dir);
-
-    // Try to create a unique subdirectory with random suffix
-    var attempt: u8 = 0;
-    while (attempt < 6) : (attempt += 1) {
-        const random_suffix = try generateRandomSuffix(ctx);
-        const temp_dir_path = try std.fs.path.join(ctx.arena, &.{ version_temp_dir, random_suffix });
-
-        // The coordination file path is the directory path with .txt appended
-        const dir_name_with_txt = try std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir_path});
-
-        // Try to create the directory
-        std.Io.Dir.cwd().createDir(ctx.io.std_io, temp_dir_path, .default_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {
-                // Directory already exists, try again with a new random suffix
-                continue;
-            },
-            error.AccessDenied,
-            error.BadPathName,
-            error.Canceled,
-            error.DiskQuota,
-            error.FileNotFound,
-            error.LinkQuotaExceeded,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.PermissionDenied,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemResources,
-            error.Unexpected,
-            => return err,
-        };
-
-        // Try to create the fd file
-        const fd_file = std.Io.Dir.cwd().createFile(ctx.io.std_io, dir_name_with_txt, .{ .exclusive = true }) catch |err| switch (err) {
-            error.PathAlreadyExists => {
-                // File already exists, remove the directory and try again
-                std.Io.Dir.cwd().deleteDir(ctx.io.std_io, temp_dir_path) catch {};
-                continue;
-            },
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.Canceled,
-            error.DeviceBusy,
-            error.FileBusy,
-            error.FileLocksUnsupported,
-            error.FileNotFound,
-            error.FileTooBig,
-            error.IsDir,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.Unexpected,
-            error.WouldBlock,
-            => {
-                // Clean up directory on other errors
-                std.Io.Dir.cwd().deleteDir(ctx.io.std_io, temp_dir_path) catch {};
-                return err;
-            },
-        };
-        // Note: We'll close this explicitly later, before spawning the child
-
-        // Write shared memory info to file (POSIX only - Windows uses command line args)
-        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
-            shm_handle.fd,
-            shm_handle.size,
-            shm_handle.page_size,
-        });
-
-        try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
-
-        // IMPORTANT: Flush and close the file explicitly before spawning child process
-        // On Windows, having the file open can prevent child process access
-        try fd_file.sync(ctx.io.std_io); // Ensure data is written to disk
-        fd_file.close(ctx.io.std_io);
-
-        // Create hardlink to executable in temp directory with display name
-        const temp_exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name });
-
-        // Try to create a hardlink first (more efficient than copying)
-        createHardlink(ctx, exe_path, temp_exe_path) catch {
-            // If hardlinking fails for any reason, fall back to copying
-            // Common reasons: cross-device link, permissions, file already exists
-            try std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), temp_exe_path, ctx.io.std_io, .{});
-        };
-
-        return temp_exe_path;
-    }
-
-    // Failed after 6 attempts
-    return error.FailedToCreateUniqueTempDir;
 }
 
 var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .{
@@ -1574,7 +1456,7 @@ fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
 fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io) void {
     // Start background cache cleanup on a separate thread.
     // This is a fire-and-forget thread that:
-    // - Cleans up stale temp directories (>5 min old)
+    // - Cleans up stale scratch directories (>5 min old)
     // - Cleans up old persistent cache files (>30 days old)
     // - Exits automatically when done
     //
@@ -1582,18 +1464,17 @@ fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io)
     // cleanup completes, the OS will automatically terminate the cleanup thread.
     // This ensures cleanup never delays compilation or execution.
     //
-    // Resolve the temp/cache locations here using the same resolver the cache
-    // writer uses, so cleanup can never target a different directory than where
+    // Resolve the cache root here using the same resolver the cache writer
+    // uses, so cleanup can never target a different directory than where
     // artifacts are written. The background thread itself is CoreCtx-free and
-    // allocation-free; it only borrows these base paths (copied in by value).
+    // allocation-free; it only borrows this path (copied in by value).
     const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-    const temp_base: []const u8 = cache_config_mod.getTempDir(cleanup_ctx, arena) catch "";
     const cache_base: []const u8 = blk: {
         const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
         break :blk cfg.getEffectiveCacheDir(arena) catch "";
     };
-    if (temp_base.len != 0 or cache_base.len != 0) {
-        if (compile.CacheCleanup.startBackgroundCleanup(temp_base, cache_base, std_io)) |_| {
+    if (cache_base.len != 0) {
+        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io)) |_| {
             // Thread started successfully, will run in background.
         } else |_| {
             // Non-fatal: cleanup failure shouldn't prevent compilation.
@@ -15759,6 +15640,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             error.NameTooLong,
             error.NetworkNotFound,
             error.NoDevice,
+            error.NoHomeDirectory,
             error.NoSpaceLeft,
             error.NotDir,
             error.PathAlreadyExists,

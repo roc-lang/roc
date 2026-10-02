@@ -10,6 +10,10 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
+/// Name of the per-version subdirectory that holds per-invocation scratch
+/// directories (see `CacheConfig.getScratchDir`).
+pub const scratch_dir_name = "tmp";
+
 const CacheOs = enum { windows, macos, other };
 
 fn cacheOs(os: std.Target.Os.Tag) CacheOs {
@@ -404,6 +408,20 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
     }
 
+    /// Get the scratch directory for per-invocation build outputs and runtime
+    /// executables. Each invocation creates its own unique subdirectory here.
+    ///
+    /// This lives under the user's own cache root rather than the system temp
+    /// directory, so no other user can create or rename entries along the path,
+    /// and executables built here are on the same filesystem as the exe cache
+    /// they get hardlinked into.
+    pub fn getScratchDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, scratch_dir_name });
+    }
+
     /// Get the test cache directory (for cached test results).
     pub fn getTestCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
@@ -575,32 +593,6 @@ pub fn getCacheDirName() []const u8 {
         .windows => "Roc",
         .macos, .other => "roc",
     };
-}
-
-/// Get the temporary directory for runtime executables.
-/// This is in the system temp dir, not the persistent cache.
-pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = switch (cacheOs(builtin.target.os.tag)) {
-        .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
-            roc_ctx.getEnvVar("TMP", allocator) catch
-            try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        .macos, .other => roc_ctx.getEnvVar("TMPDIR", allocator) catch
-            try allocator.dupe(u8, "/tmp"),
-    };
-    defer allocator.free(temp_base);
-
-    return std.fs.path.join(allocator, &[_][]const u8{ temp_base, "roc" });
-}
-
-/// Get the version-specific temporary directory for runtime executables.
-pub fn getVersionTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = try getTempDir(roc_ctx, allocator);
-    defer allocator.free(temp_base);
-
-    const version_dir = try getCompilerVersionDir(allocator);
-    defer allocator.free(version_dir);
-
-    return std.fs.path.join(allocator, &[_][]const u8{ temp_base, version_dir });
 }
 
 /// Get a compiler version-specific directory name.
