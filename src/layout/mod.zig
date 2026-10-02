@@ -19,6 +19,7 @@ const std = @import("std");
 pub const Layout = @import("layout.zig").Layout;
 pub const rc_helper = @import("rc_helper.zig");
 pub const Digests = @import("digest.zig").Digests;
+pub const DigestCache = @import("digest.zig").DigestCache;
 pub const LayoutDigest = @import("digest.zig").Digest;
 pub const digestSymbolHex = @import("digest.zig").symbolHex;
 pub const LayoutTag = @import("layout.zig").LayoutTag;

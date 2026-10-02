@@ -7126,6 +7126,7 @@ pub fn build(b: *std.Build) void {
         "canonicalize",
         "typecheck",
         "build",
+        "build-errors",
     };
     for (names) |name| {
         add_fuzz_target(
@@ -8552,6 +8553,12 @@ fn addLlvmSupportToStep(
     });
 }
 
+/// The most recently configured compile step that links the embedded LLVM
+/// libraries, when the build host is Windows. Each such step waits for the
+/// previous one there: several of their links at once exhaust a hosted
+/// Windows runner's memory.
+var windows_llvm_link_chain: ?*Step = null;
+
 fn addLlvmLinkSupportToStep(
     b: *std.Build,
     step: *Step.Compile,
@@ -8562,6 +8569,10 @@ fn addLlvmLinkSupportToStep(
     zstd: *Dependency,
 ) !bool {
     const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return false;
+    if (b.graph.host.result.os.tag == .windows) {
+        if (windows_llvm_link_chain) |previous| step.step.dependOn(previous);
+        windows_llvm_link_chain = &step.step;
+    }
     step.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
     step.root_module.addIncludePath(.{ .cwd_relative = llvm_paths.include });
     try addStaticLlvmOptionsToModule(step.root_module);

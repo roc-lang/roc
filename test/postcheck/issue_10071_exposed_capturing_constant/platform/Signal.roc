@@ -1,5 +1,5 @@
-import HostValue exposing [HostValue]
-import Capability exposing [Capability]
+import HostValue
+import Capability
 import Node
 
 Signal(a) := { expr : Box(Node.SignalExpr), cap : Capability(a) }.{

@@ -1,4 +1,4 @@
-import AbiWidth exposing [AbiWidth]
+import AbiWidth
 
 ## Exact committed layout for one ABI-visible record field.
 ##

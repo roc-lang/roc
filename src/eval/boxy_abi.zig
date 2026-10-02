@@ -567,7 +567,6 @@ fn leave(g: *GlobalBoxyRuntime) void {
 
 fn abiCrash(g: *GlobalBoxyRuntime, comptime what: []const u8) noreturn {
     g.runtime.roc_ops.crash("boxy runtime " ++ what ++ " failed");
-    unreachable;
 }
 
 /// Fixed-buffer message builder for the crash paths below.
@@ -642,7 +641,6 @@ fn abiCrashMissingDescriptorCapture(
     message.str("; supplied capture ids=");
     message.uintList(g.capture_ids);
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashNullErasedArgDescriptor(
@@ -659,7 +657,6 @@ fn abiCrashNullErasedArgDescriptor(
     message.uint(key.descriptor_index);
     message.str(")");
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashMissingErasedArgDescriptor(
@@ -678,7 +675,6 @@ fn abiCrashMissingErasedArgDescriptor(
     message.str("); supplied keys=");
     message.keyList(supplied_keys);
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn abiCrashDuplicateErasedArgDescriptor(
@@ -695,7 +691,6 @@ fn abiCrashDuplicateErasedArgDescriptor(
     message.uint(key.descriptor_index);
     message.str(")");
     g.runtime.roc_ops.crash(message.text());
-    unreachable;
 }
 
 fn layoutIdx(raw: u32) layout_mod.Idx {
@@ -718,6 +713,9 @@ const BoxyListElementContext = struct {
     g: *GlobalBoxyRuntime,
     elem_layout: layout_mod.Idx,
     elem_desc: *const BoxyTypeDesc,
+    /// Whether the item layout holds refcounted values, which decides the
+    /// allocation header every list builtin reads.
+    elements_refcounted: bool,
 };
 
 const NativeListElementContext = struct {
@@ -775,6 +773,7 @@ fn boxyListElementContext(
         .g = g,
         .elem_layout = resolved_elem_layout,
         .elem_desc = elem_desc,
+        .elements_refcounted = hooks(g).layoutContainsRc(resolved_elem_layout),
     };
 }
 
@@ -1377,7 +1376,7 @@ pub fn roc_boxy_drop(
     value_layout: u32,
     desc: ?*const BoxyTypeDesc,
     op: u8,
-    count: u16,
+    count: u32,
     atomicity: u8,
 ) callconv(.c) void {
     const g = requireGlobal();
@@ -1441,7 +1440,7 @@ pub fn roc_boxy_list_concat(
         .{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap },
         alignment,
         element_width,
-        true,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),
@@ -1474,7 +1473,7 @@ pub fn roc_boxy_list_prepend(
         alignment,
         element,
         element_width,
-        true,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),
@@ -1507,7 +1506,7 @@ pub fn roc_boxy_list_sublist(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
         element_width,
-        true,
+        ctx.elements_refcounted,
         start,
         len,
         @ptrCast(&ctx),
@@ -1538,7 +1537,7 @@ pub fn roc_boxy_list_drop_at(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
         element_width,
-        true,
+        ctx.elements_refcounted,
         index,
         @ptrCast(&ctx),
         &boxyListElementIncref,
@@ -1580,7 +1579,7 @@ pub fn roc_boxy_list_replace(
         index,
         element,
         element_width,
-        true,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),
@@ -1615,7 +1614,7 @@ pub fn roc_boxy_list_set(
         index,
         element,
         element_width,
-        true,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),
@@ -1650,7 +1649,7 @@ pub fn roc_boxy_list_swap(
         element_width,
         index_1,
         index_2,
-        true,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),
@@ -1681,7 +1680,7 @@ pub fn roc_boxy_list_reverse(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
         element_width,
-        true,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),
@@ -1824,7 +1823,40 @@ pub fn roc_boxy_list_reserve(
         alignment,
         spare,
         element_width,
-        true,
+        ctx.elements_refcounted,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        g.runtime.roc_ops,
+    );
+}
+
+/// Grow list capacity ahead of an append while preserving descriptor-governed
+/// elements.
+pub fn roc_boxy_list_reserve_for_append(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    spare: u64,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listReserveForAppend(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        spare,
+        element_width,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),
@@ -1854,7 +1886,7 @@ pub fn roc_boxy_list_release_excess_capacity(
         .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
         alignment,
         element_width,
-        true,
+        ctx.elements_refcounted,
         @ptrCast(&ctx),
         &boxyListElementIncref,
         @ptrCast(&ctx),

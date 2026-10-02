@@ -411,6 +411,7 @@ const Printer = struct {
                     try writeIndent(indent, writer);
                     try writer.print("incref l{d} x{d} ", .{ @intFromEnum(s.value), s.count });
                     try writeRcHelper(s.rc, writer);
+                    try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -418,6 +419,7 @@ const Printer = struct {
                     try writeIndent(indent, writer);
                     try writer.print("decref l{d} ", .{@intFromEnum(s.value)});
                     try writeRcHelper(s.rc, writer);
+                    try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -429,6 +431,7 @@ const Printer = struct {
                         @intFromEnum(s.value),
                     });
                     try writeRcHelper(s.rc, writer);
+                    try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -436,6 +439,7 @@ const Printer = struct {
                     try writeIndent(indent, writer);
                     try writer.print("free l{d} ", .{@intFromEnum(s.value)});
                     try writeRcHelper(s.rc, writer);
+                    try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -645,6 +649,12 @@ fn writeLayout(layouts: *const layout_mod.Store, idx: layout_mod.Idx, writer: *s
     try writer.print("{s}#{d}", .{ @tagName(layouts.getLayout(idx).tag), raw });
 }
 
+/// Atomic is the default every consumer may assume, so only a
+/// single-threaded count update is marked.
+fn writeAtomicity(atomicity: LIR.RcAtomicity, writer: *std.Io.Writer) Error!void {
+    if (atomicity == .single_thread) try writer.writeAll(" single_thread");
+}
+
 fn writeRcHelper(helper: LIR.RcHelper, writer: *std.Io.Writer) Error!void {
     switch (helper) {
         .concrete => |rc| try writer.print("rc=concrete({s},{d})", .{ @tagName(rc.op), @intFromEnum(rc.layout_idx) }),
@@ -687,6 +697,190 @@ fn writeIndent(indent: usize, writer: *std.Io.Writer) Error!void {
 /// Convert an intentional fixture-table position while preserving enum inference.
 fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
+}
+
+/// A fingerprint of a proc's LIR that is the same in every program that
+/// lowers the same procedure the same way: the debug text with every
+/// program-numbered reference renamed. A referenced proc is named by its
+/// content identity; locals, joins, static data, layouts, descriptors,
+/// dictionaries, and the remaining store-numbered ids are renumbered in order
+/// of first appearance, each in its own namespace. The object cache's
+/// diagnostics compare these across programs.
+pub fn procFingerprint(
+    gpa: std.mem.Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    proc_id: LIR.LirProcSpecId,
+) Error!u64 {
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    try writeProc(gpa, store, layouts, proc_id, &text.writer);
+    const source = text.written();
+
+    var canonical: std.Io.Writer.Allocating = .init(gpa);
+    defer canonical.deinit();
+    var names = std.StringHashMap(std.AutoHashMap(u64, u32)).init(gpa);
+    defer {
+        var iter = names.valueIterator();
+        while (iter.next()) |map| map.deinit();
+        names.deinit();
+    }
+
+    var index: usize = 0;
+    while (index < source.len) {
+        const at_boundary = index == 0 or !isIdentByte(source[index - 1]);
+        if (at_boundary) {
+            if (try canonicalReference(gpa, store, source, index, &names, &canonical.writer)) |next| {
+                index = next;
+                continue;
+            }
+        }
+        try canonical.writer.writeByte(source[index]);
+        index += 1;
+    }
+    return std.hash.Wyhash.hash(0, canonical.written());
+}
+
+fn isIdentByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
+fn digitsEnd(source: []const u8, start: usize) usize {
+    var end = start;
+    while (end < source.len and std.ascii.isDigit(source[end])) end += 1;
+    return end;
+}
+
+/// Rewrites the program-numbered reference starting at `start`, if one does,
+/// and returns where it ends.
+fn canonicalReference(
+    gpa: std.mem.Allocator,
+    store: *const LirStore,
+    source: []const u8,
+    start: usize,
+    names: *std.StringHashMap(std.AutoHashMap(u64, u32)),
+    writer: *std.Io.Writer,
+) Error!?usize {
+    // `l12`, `j3`, `p7`, and `static_data s4`.
+    const letter = source[start];
+    if (letter == 'l' or letter == 'j' or letter == 'p' or
+        (letter == 's' and std.mem.endsWith(u8, source[0..start], "static_data ")))
+    {
+        const end = digitsEnd(source, start + 1);
+        if (end > start + 1 and (end == source.len or !isIdentByte(source[end]))) {
+            const value = std.fmt.parseInt(u64, source[start + 1 .. end], 10) catch return null;
+            if (letter == 'p') {
+                const identity = store.getProcSpec(@enumFromInt(@as(u32, @intCast(value)))).identity;
+                try writer.print("p{s}", .{&identity.symbolHex()});
+            } else {
+                try writer.print("{c}{d}", .{ letter, try canonicalId(gpa, names, source[start .. start + 1], value) });
+            }
+            return end;
+        }
+    }
+    // `list#26`, `desc#3`, `dict#1`, and `rc=concrete(decref,26)`; a
+    // `runtime#N` index is a position, not a store id.
+    var word_end = start;
+    while (word_end < source.len and isIdentByte(source[word_end])) word_end += 1;
+    const word = source[start..word_end];
+    if (word.len == 0) return null;
+    if (word_end < source.len and source[word_end] == '#' and !std.mem.eql(u8, word, "runtime")) {
+        const end = digitsEnd(source, word_end + 1);
+        if (end == word_end + 1) return null;
+        const value = std.fmt.parseInt(u64, source[word_end + 1 .. end], 10) catch return null;
+        const namespace: []const u8 = if (std.mem.eql(u8, word, "desc") or std.mem.eql(u8, word, "dict")) word else "layout";
+        try writer.print("{s}#{d}", .{ word, try canonicalId(gpa, names, namespace, value) });
+        return end;
+    }
+    if (std.mem.eql(u8, word, "concrete") and word_end < source.len and source[word_end] == '(') {
+        const comma = std.mem.findScalarPos(u8, source, word_end, ',') orelse return null;
+        const end = digitsEnd(source, comma + 1);
+        if (end == comma + 1) return null;
+        const value = std.fmt.parseInt(u64, source[comma + 1 .. end], 10) catch return null;
+        try writer.print("{s},{d}", .{ source[start..comma], try canonicalId(gpa, names, "layout", value) });
+        return end;
+    }
+    // `name=`, `adapter=`, `method=`, and `site=` carry store ids.
+    for ([_][]const u8{ "name", "adapter", "method", "site" }) |key| {
+        if (!std.mem.eql(u8, word, key) or word_end >= source.len or source[word_end] != '=') continue;
+        const end = digitsEnd(source, word_end + 1);
+        if (end == word_end + 1) return null;
+        const value = std.fmt.parseInt(u64, source[word_end + 1 .. end], 10) catch return null;
+        try writer.print("{s}={d}", .{ key, try canonicalId(gpa, names, key, value) });
+        return end;
+    }
+    return null;
+}
+
+fn canonicalId(
+    gpa: std.mem.Allocator,
+    names: *std.StringHashMap(std.AutoHashMap(u64, u32)),
+    namespace: []const u8,
+    value: u64,
+) Error!u32 {
+    const space = try names.getOrPut(namespace);
+    if (!space.found_existing) space.value_ptr.* = std.AutoHashMap(u64, u32).init(gpa);
+    const entry = try space.value_ptr.getOrPut(value);
+    if (!entry.found_existing) entry.value_ptr.* = @intCast(space.value_ptr.count() - 1);
+    return entry.value_ptr.*;
+}
+
+test "proc fingerprint ignores program numbering but not content" {
+    const allocator = std.testing.allocator;
+    var layouts = try layout_mod.Store.init(allocator, .u64);
+    defer layouts.deinit();
+
+    const Program = struct {
+        fn build(store: *LirStore, padding: usize, callee_identity: u8) std.mem.Allocator.Error!LIR.LirProcSpecId {
+            // Unrelated locals and procs first shift every program-wide number.
+            for (0..padding) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
+            for (0..padding) |index| {
+                _ = try store.addProcSpec(.{
+                    .name = .none,
+                    .identity = LIR.ProcIdentity.forTest(@intCast(100 + index)),
+                    .args = .empty(),
+                    .body = null,
+                    .ret_layout = .u64,
+                }, .none);
+            }
+            const callee = try store.addProcSpec(.{
+                .name = .none,
+                .identity = LIR.ProcIdentity.forTest(callee_identity),
+                .args = .empty(),
+                .body = null,
+                .ret_layout = .str,
+            }, .none);
+            const value = try store.addLocal(.{ .layout_idx = .str });
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+            const call = try store.addCFStmt(.{ .assign_call = .{
+                .target = value,
+                .proc = callee,
+                .args = try store.addLocalSpan(&.{}),
+                .next = ret,
+            } }, .test_fixture);
+            return try store.addProcSpec(.{
+                .name = .none,
+                .identity = LIR.ProcIdentity.forTest(1),
+                .args = .empty(),
+                .body = call,
+                .ret_layout = .str,
+            }, .none);
+        }
+    };
+
+    var first = LirStore.init(allocator);
+    defer first.deinit();
+    var second = LirStore.init(allocator);
+    defer second.deinit();
+    var other_callee = LirStore.init(allocator);
+    defer other_callee.deinit();
+    const first_proc = try Program.build(&first, 0, 7);
+    const second_proc = try Program.build(&second, 3, 7);
+    const other_proc = try Program.build(&other_callee, 0, 8);
+
+    const first_print = try procFingerprint(allocator, &first, &layouts, first_proc);
+    try std.testing.expectEqual(first_print, try procFingerprint(allocator, &second, &layouts, second_proc));
+    try std.testing.expect(first_print != try procFingerprint(allocator, &other_callee, &layouts, other_proc));
 }
 
 test "debug print includes boxy RC helper descriptor references" {

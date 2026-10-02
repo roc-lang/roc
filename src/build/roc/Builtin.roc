@@ -746,7 +746,7 @@ Builtin :: [].{
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len)
+				var $out = u8_list_reserve_for_append(out, len)
 				var $index = 0
 
 				while $index < len {
@@ -760,7 +760,7 @@ Builtin :: [].{
 			append_json_quoted_string : List(U8), Str -> List(U8)
 			append_json_quoted_string = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len + 2)
+				var $out = u8_list_reserve_for_append(out, len + 2)
 				var $index = 0
 
 				$out = u8_append($out, 34)
@@ -3151,11 +3151,11 @@ Builtin :: [].{
 						Unknown => Unknown
 					},
 					||
-					# Once `remaining_first` is exhausted it is kept (not swapped
-					# for `range_done()`) so `make`'s inner-iterator argument keeps
-					# a single monomorphic type for the whole chain. An exhausted
-					# iterator reports length 0 and its `next` stays `Done`, so this
-					# is length- and result-equivalent.
+						# Once `remaining_first` is exhausted it is kept (not swapped
+						# for `range_done()`) so `make`'s inner-iterator argument keeps
+						# a single monomorphic type for the whole chain. An exhausted
+						# iterator reports length 0 and its `next` stays `Done`, so this
+						# is length- and result-equivalent.
 						match Iter.next(remaining_first) {
 							Done =>
 								match Iter.next(remaining_second) {
@@ -3973,13 +3973,10 @@ Builtin :: [].{
 		## }
 		## ```
 		##
-		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
-		## trusts the request rather than rounding it up. If the list is not shared and
-		## already has room for `spare` more items, it does nothing. Otherwise it asks
-		## the allocator to grow the list to that size. The one exception is reserving
-		## a single item beyond the current capacity: that is indistinguishable from an
-		## ordinary [List.append] outgrowing the list, so the capacity grows
-		## geometrically instead of by one.
+		## `reserve(spare)` aims for a capacity of exactly `List.len(list) + spare`
+		## items; it trusts the request rather than rounding it up. If the list is not
+		## shared and already has room for `spare` more items, it does nothing.
+		## Otherwise it asks the allocator to grow the list to that size.
 		##
 		## Note that the reserve above sits before the loop. Because [List.reserve] aims
 		## for the exact size requested, it is a poor fit for use inside one: a reserve
@@ -4111,7 +4108,7 @@ Builtin :: [].{
 		## ```
 		append : List(a), a -> List(a)
 		append = |list, item| {
-			reserved = List.reserve(list, 1)
+			reserved = list_reserve_for_append(list, 1)
 			list_append_unsafe(reserved, item)
 		}
 
@@ -4217,6 +4214,17 @@ Builtin :: [].{
 		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
 
 		## Add a single item to the beginning of a list.
+		##
+		## This is usually O(n), because every existing item has to move over by
+		## one to make room at the front. To build up a list one item at a time,
+		## `append` is much faster; if you need the items in the opposite order,
+		## `reverse` the list once at the end.
+		##
+		## The one exception is a list that is unique (nothing else refers to it)
+		## and has had items removed from its front, for example by `drop_first`.
+		## Removing items from the front leaves free space there, so prepending
+		## onto such a list is O(1). This makes a pop-then-push pattern like
+		## `list.drop_first(1).prepend(item)` fast.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
 		##
@@ -4244,7 +4252,7 @@ Builtin :: [].{
 		## expect [100, 200, 300].get(5) == Err(OutOfBounds)
 		## ```
 		get : List(item), U64 -> Try(item, [OutOfBounds])
-		get = |list, index| if index < List.len(list) {
+		get = |list, index| if bool_likely(index < List.len(list)) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
 			Try.Err(OutOfBounds)
@@ -4310,7 +4318,7 @@ Builtin :: [].{
 		## ```
 		set : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		set = |list, index, value|
-			if index < List.len(list) {
+			if bool_likely(index < List.len(list)) {
 				Ok(list_set_unsafe(list, index, value))
 			} else {
 				Err(OutOfBounds)
@@ -5043,9 +5051,7 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3].clear() == []
 		## ```
 		clear : List(a) -> List(a)
-		clear = |list| {
-			List.take_first(list, 0)
-		}
+		clear = |list| list_clear(list)
 
 		## Returns the given number of items from the end of the list.
 		## ```roc
@@ -5397,10 +5403,6 @@ Builtin :: [].{
 		## expect !Bool.False == Bool.True
 		## ```
 		not : Bool -> Bool
-		not = |bool| match bool {
-			Bool.True => Bool.False
-			Bool.False => Bool.True
-		}
 
 		## Returns `Bool.True` if the two booleans are the same, and `Bool.False` if they are different.
 		is_eq : Bool, Bool -> Bool
@@ -19233,14 +19235,14 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-					# Compare the index against a limit rather than subtracting from it.
-					# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-					# reads repeatedly hoists them out and keeps just the one comparison of
-					# `start` against a precomputed bound. Subtracting the other way round --
-					# `len - start < 16` -- reads the same but depends on `start`, so all of it
-					# stays in the loop.
-					#
-					# Wrapping is safe because the first check has already ruled out `len < 16`.
+						# Compare the index against a limit rather than subtracting from it.
+						# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+						# reads repeatedly hoists them out and keeps just the one comparison of
+						# `start` against a precomputed bound. Subtracting the other way round --
+						# `len - start < 16` -- reads the same but depends on `start`, so all of it
+						# stays in the loop.
+						#
+						# Wrapping is safe because the first check has already ruled out `len < 16`.
 						if len >= 16 and start <= len.minus_wrap(16) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
@@ -23258,12 +23260,12 @@ u8_repeat = |byte, count| {
 }
 
 u8_append : List(U8), U8 -> List(U8)
-u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve(list, 1), byte)
+u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve_for_append(list, 1), byte)
 
 u8_concat : List(U8), List(U8) -> List(U8)
 u8_concat = |left, right| {
 	len = u8_list_len(right)
-	var $out = u8_list_reserve(left, len)
+	var $out = u8_list_reserve_for_append(left, len)
 	var $index = 0
 
 	while $index < len {
@@ -23416,6 +23418,8 @@ i128_from_le_bytes_unchecked : List(U8), U64 -> I128
 u8_list_append_unsafe : List(U8), U8 -> List(U8)
 
 u8_list_reserve : List(U8), U64 -> List(U8)
+
+u8_list_reserve_for_append : List(U8), U64 -> List(U8)
 
 dec_sqrt_unsafe : Dec -> Dec
 
@@ -24631,6 +24635,10 @@ append_utf8_code_point = |out, code_point|
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
 
+# Implemented by the compiler: the same Bool, marking the branch it decides as
+# the one taken in the common case, so the other branch is laid out cold.
+bool_likely : Bool -> Bool
+
 # Implemented by the compiler: the same list, with a hint that the item at this
 # index is about to be used. It reads nothing, and an index outside the list
 # is harmless.
@@ -24709,6 +24717,11 @@ list_map_write_unsafe : List(output), U64, output -> List(output)
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
 
+# Implemented by the compiler, ensures at least spare additional items of
+# capacity ahead of appending them. Unlike list_reserve, growth takes at least
+# the next geometric capacity step, so a run of appends stays amortized-linear.
+list_reserve_for_append : List(item), U64 -> List(item)
+
 # Implemented by the compiler. Appends count items copied from the list
 # itself beginning at start, reading through freshly appended items. The
 # caller has already verified start is in bounds and count is nonzero.
@@ -24729,6 +24742,10 @@ list_append_le_bytes : List(U8), U64, U64 -> List(U8)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
+
+# Implemented by the compiler: removes every item, keeping the allocation and
+# its capacity when the list is uniquely owned
+list_clear : List(item) -> List(item)
 
 # Implemented by the compiler. Consumes the list and sorts it stably using the
 # boxed comparator. The comparator allocation is borrowed for the whole call.

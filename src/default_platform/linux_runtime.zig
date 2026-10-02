@@ -241,7 +241,14 @@ fn defaultExit(code: u8) callconv(.c) noreturn {
     linux.exit_group(code);
 }
 
-fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+/// `roc_alloc` and `roc_realloc` never return null, so allocation failure
+/// crashes the program instead.
+fn outOfMemory() noreturn {
+    const message = "out of memory";
+    rocCrashed(message.ptr, message.len);
+}
+
+fn rocAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     const byte_alignment = normalizedAlignment(alignment);
     const prefix = alignForward(allocation_header_size, byte_alignment);
     const raw_len = prefix + length;
@@ -249,13 +256,13 @@ fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     // baseline builds use BSR, without LLVM's REP-prefixed BSF encoding.
     std.debug.assert(std.math.isPowerOfTwo(byte_alignment));
     const raw_alignment: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, byte_alignment));
-    const raw = heap.rawAlloc(raw_len, raw_alignment, @returnAddress()) orelse return null;
+    const raw = heap.rawAlloc(raw_len, raw_alignment, @returnAddress()) orelse outOfMemory();
     const user = raw + prefix;
     storeAllocationHeader(user, prefix, raw_len, raw_alignment);
     return @ptrCast(user);
 }
 
-fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const old_user: [*]u8 = @ptrCast(ptr);
     const prefix = allocationHeaderValue(old_user, 0);
     const old_raw_len = allocationHeaderValue(old_user, 1);
@@ -267,7 +274,7 @@ fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c)
         return ptr;
     }
 
-    const new_ptr = rocAlloc(new_length, alignment) orelse return null;
+    const new_ptr = rocAlloc(new_length, alignment);
     const new_user: [*]u8 = @ptrCast(new_ptr);
     const copy_len = @min(old_raw_len - prefix, new_length);
     var i: usize = 0;

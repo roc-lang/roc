@@ -190,10 +190,17 @@ fn rocDefaultCrashedWithFrames(
     rocCrashed(bytes, len);
 }
 
-fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+/// `roc_alloc` and `roc_realloc` never return null, so allocation failure
+/// crashes the program instead.
+fn outOfMemory() noreturn {
+    const message = "out of memory";
+    rocCrashed(message.ptr, message.len);
+}
+
+fn rocAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     const byte_alignment = normalizedAlignment(alignment);
     const total = length + byte_alignment + @sizeOf(AllocationHeader);
-    const raw_any = c.malloc(total) orelse return null;
+    const raw_any = c.malloc(total) orelse outOfMemory();
     const raw: [*]u8 = @ptrCast(raw_any);
     const user_addr = alignForward(@intFromPtr(raw) + @sizeOf(AllocationHeader), byte_alignment);
     const user: [*]u8 = @ptrFromInt(user_addr);
@@ -201,10 +208,10 @@ fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return @ptrCast(user);
 }
 
-fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const old_user: [*]u8 = @ptrCast(ptr);
     const old_header = allocationHeader(old_user).*;
-    const new_ptr = rocAlloc(new_length, alignment) orelse return null;
+    const new_ptr = rocAlloc(new_length, alignment);
     const new_user: [*]u8 = @ptrCast(new_ptr);
 
     const copy_len = @min(old_header.len, new_length);

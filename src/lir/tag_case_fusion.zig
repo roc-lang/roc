@@ -29,23 +29,23 @@ const BuildSite = struct {
     /// the jump the edge may release values the arm no longer needs; those
     /// statements are carried over to the redirected edge unchanged.
     edge_jump: LIR.CFStmtId,
-    variant_index: u16,
-    discriminant: u16,
+    variant_index: u32,
+    discriminant: u32,
     payload: ?LIR.LocalId,
 };
 
-fn variantKey(variant_index: u16, discriminant: u16) u32 {
-    return (@as(u32, variant_index) << 16) | discriminant;
+fn variantKey(variant_index: u32, discriminant: u32) u64 {
+    return (@as(u64, variant_index) << 32) | discriminant;
 }
 
 /// First-producer order is retained even though identity lookup is indexed.
 const Variants = struct {
-    indices: std.AutoHashMap(u32, usize),
+    indices: std.AutoHashMap(u64, usize),
     builds: std.ArrayList(BuildSite) = .empty,
     targets: std.ArrayList(LIR.CFStmtId) = .empty,
 
     fn init(allocator: Allocator) Variants {
-        return .{ .indices = std.AutoHashMap(u32, usize).init(allocator) };
+        return .{ .indices = std.AutoHashMap(u64, usize).init(allocator) };
     }
 
     fn deinit(self: *Variants) void {
@@ -124,7 +124,7 @@ const VariantDest = struct {
 
 const BranchRewriter = struct {
     param: LIR.LocalId,
-    variant_index: u16,
+    variant_index: u32,
     payload: LIR.LocalId,
     payload_layout: layout_mod.Idx,
     layouts: *const layout_mod.Store,
@@ -157,33 +157,16 @@ const BranchRewriter = struct {
         return LIR.RcHelper.fromConcrete(helper);
     }
 
-    /// Retargeted releases keep the ARC origin of the release they copy; the
-    /// rewritten payload read carries this pass's kind.
-    pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, _: LIR.CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!?LIR.CFStmtId {
+    /// Claim releases of the matched union and reads of its payload.
+    pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, _: LIR.CFStmtId, stmt: LIR.CFStmt, _: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         switch (stmt) {
             .decref => |release| {
-                if (!self.namesUnion(release.value)) return null;
-                const next = try cloner.cloneStmt(release.next);
-                const rc = self.payloadRelease() orelse return next;
-                return try cloner.store.addCFStmt(.{ .decref = .{
-                    .value = self.payload,
-                    .rc = rc,
-                    .atomicity = release.atomicity,
-                    .next = next,
-                } }, origin);
+                if (!self.namesUnion(release.value)) return .none;
+                return body_clone.Intercept.one(release.next);
             },
             .decref_if_initialized => |release| {
-                if (!self.namesUnion(release.value)) return null;
-                const next = try cloner.cloneStmt(release.next);
-                const rc = self.payloadRelease() orelse return next;
-                return try cloner.store.addCFStmt(.{ .decref_if_initialized = .{
-                    .cond = try cloner.mapLocal(release.cond),
-                    .cond_mask = release.cond_mask,
-                    .value = self.payload,
-                    .rc = rc,
-                    .atomicity = release.atomicity,
-                    .next = next,
-                } }, origin);
+                if (!self.namesUnion(release.value)) return .none;
+                return body_clone.Intercept.one(release.next);
             },
             .assign_ref => {},
             .init_uninitialized,
@@ -227,34 +210,80 @@ const BranchRewriter = struct {
             .assign_boxy_tag_payload,
             .boxy_tag_match,
             .assign_call_dict,
-            => return null,
+            => return .none,
         }
         const assign = stmt.assign_ref;
         if (assign.op == .tag_payload_struct) {
             const payload = assign.op.tag_payload_struct;
-            if (payload.source != self.param) return null;
+            if (payload.source != self.param) return .none;
             std.debug.assert(payload.variant_index == self.variant_index);
             try cloner.local_map.put(assign.target, self.payload);
-            return try cloner.cloneStmt(assign.next);
+            return body_clone.Intercept.one(assign.next);
         }
-        if (assign.op != .tag_payload) return null;
+        if (assign.op != .tag_payload) return .none;
         const payload = assign.op.tag_payload;
-        if (payload.source != self.param) return null;
+        if (payload.source != self.param) return .none;
         std.debug.assert(payload.variant_index == self.variant_index);
-        const op: LIR.RefOp = if (self.layouts.getLayout(self.payload_layout).tag == .struct_)
-            .{ .field = .{
-                .source = self.payload,
-                .field_idx = payload.payload_idx,
-            } }
-        else blk: {
-            std.debug.assert(payload.payload_idx == 0);
-            break :blk .{ .local = self.payload };
-        };
-        return try cloner.store.addCFStmt(.{ .assign_ref = .{
-            .target = try cloner.mapLocal(assign.target),
-            .op = op,
-            .next = try cloner.cloneStmt(assign.next),
-        } }, fusionOrigin(origin));
+        _ = try cloner.mapLocal(assign.target);
+        return body_clone.Intercept.one(assign.next);
+    }
+
+    /// Build the replacement for a statement `interceptStmt` claimed, once
+    /// its successor's clone is available. Retargeted releases keep the ARC
+    /// origin of the release they copy; the rewritten payload read carries
+    /// this pass's kind.
+    pub fn finishIntercept(
+        self: *BranchRewriter,
+        cloner: anytype,
+        _: LIR.CFStmtId,
+        stmt: LIR.CFStmt,
+        origin: LIR.StmtOrigin,
+        cloned: []const LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
+        const next = cloned[0];
+        switch (stmt) {
+            .decref => |release| {
+                const rc = self.payloadRelease() orelse return next;
+                return try cloner.store.addCFStmt(.{ .decref = .{
+                    .value = self.payload,
+                    .rc = rc,
+                    .atomicity = release.atomicity,
+                    .next = next,
+                } }, origin);
+            },
+            .decref_if_initialized => |release| {
+                const rc = self.payloadRelease() orelse return next;
+                return try cloner.store.addCFStmt(.{ .decref_if_initialized = .{
+                    .cond = try cloner.mapLocal(release.cond),
+                    .cond_mask = release.cond_mask,
+                    .value = self.payload,
+                    .rc = rc,
+                    .atomicity = release.atomicity,
+                    .next = next,
+                } }, origin);
+            },
+            .assign_ref => |assign| switch (assign.op) {
+                .tag_payload_struct => return next,
+                .tag_payload => |payload| {
+                    const op: LIR.RefOp = if (self.layouts.getLayout(self.payload_layout).tag == .struct_)
+                        .{ .field = .{
+                            .source = self.payload,
+                            .field_idx = payload.payload_idx,
+                        } }
+                    else blk: {
+                        std.debug.assert(payload.payload_idx == 0);
+                        break :blk .{ .local = self.payload };
+                    };
+                    return try cloner.store.addCFStmt(.{ .assign_ref = .{
+                        .target = try cloner.mapLocal(assign.target),
+                        .op = op,
+                        .next = next,
+                    } }, fusionOrigin(origin));
+                },
+                .local, .discriminant, .field, .list_reinterpret, .nominal => unreachable,
+            },
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => unreachable,
+        }
     }
 };
 
@@ -1166,7 +1195,7 @@ fn variantPayloadLayout(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     param: LIR.LocalId,
-    variant_index: u16,
+    variant_index: u32,
 ) ?layout_mod.Idx {
     const tag_layout = layouts.getLayout(store.getLocal(param).layout_idx);
     const info = layouts.getTagUnionInfo(tag_layout);
@@ -1312,70 +1341,84 @@ fn redirectProducerEdge(
     edge_jump: LIR.CFStmtId,
     target: LIR.JoinPointId,
 ) ResourceError!LIR.CFStmtId {
-    if (start == edge_jump) return try store.addCFStmt(.{ .jump = .{ .target = target } }, fusionOrigin(store.stmtOrigin(edge_jump)));
-    const stmt = store.getCFStmt(start);
-    switch (stmt) {
-        .decref => |release| {
-            const next = try redirectProducerEdge(store, release.next, edge_jump, target);
-            var copy = release;
-            copy.next = next;
-            return try store.addCFStmt(.{ .decref = copy }, store.stmtOrigin(start));
-        },
-        .incref => |retain| {
-            const next = try redirectProducerEdge(store, retain.next, edge_jump, target);
-            var copy = retain;
-            copy.next = next;
-            return try store.addCFStmt(.{ .incref = copy }, store.stmtOrigin(start));
-        },
-        .decref_if_initialized => |release| {
-            const next = try redirectProducerEdge(store, release.next, edge_jump, target);
-            var copy = release;
-            copy.next = next;
-            return try store.addCFStmt(.{ .decref_if_initialized = copy }, store.stmtOrigin(start));
-        },
-        .init_uninitialized,
-        .assign_ref,
-        .assign_literal,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        .store_struct,
-        .store_tag,
-        .set_local,
-        .debug,
-        .expect,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
-        .free,
-        .switch_stmt,
-        .switch_initialized_payload,
-        .str_match,
-        .str_match_set,
-        .loop_continue,
-        .loop_break,
-        .join,
-        .jump,
-        .ret,
-        .crash,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
-        => unreachable,
+    // The edge's releases are copied innermost first, so each copy's
+    // continuation exists before it.
+    var chain = std.ArrayList(LIR.CFStmtId).empty;
+    defer chain.deinit(store.allocator);
+    var cursor = start;
+    while (cursor != edge_jump) {
+        try chain.append(store.allocator, cursor);
+        cursor = switch (store.getCFStmt(cursor)) {
+            .decref => |release| release.next,
+            .incref => |retain| retain.next,
+            .decref_if_initialized => |release| release.next,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            => unreachable,
+        };
     }
+    var next = try store.addCFStmt(.{ .jump = .{ .target = target } }, fusionOrigin(store.stmtOrigin(edge_jump)));
+    while (chain.pop()) |stmt_id| {
+        const origin = store.stmtOrigin(stmt_id);
+        next = switch (store.getCFStmt(stmt_id)) {
+            .decref => |release| blk: {
+                var copy = release;
+                copy.next = next;
+                break :blk try store.addCFStmt(.{ .decref = copy }, origin);
+            },
+            .incref => |retain| blk: {
+                var copy = retain;
+                copy.next = next;
+                break :blk try store.addCFStmt(.{ .incref = copy }, origin);
+            },
+            .decref_if_initialized => |release| blk: {
+                var copy = release;
+                copy.next = next;
+                break :blk try store.addCFStmt(.{ .decref_if_initialized = copy }, origin);
+            },
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => unreachable,
+        };
+    }
+    return next;
 }
 
 test "tag case fusion declarations are referenced" {
@@ -1402,7 +1445,7 @@ const TestGraph = struct {
         return @enumFromInt(self.next_join);
     }
 
-    fn tag(self: *TestGraph, param: LIR.LocalId, variant: u16, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn tag(self: *TestGraph, param: LIR.LocalId, variant: u32, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         return self.store.addCFStmt(.{ .assign_tag = .{
             .target = param,
             .variant_index = variant,

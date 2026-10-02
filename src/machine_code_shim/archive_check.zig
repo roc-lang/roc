@@ -46,6 +46,9 @@ const imports = symbols.runtime_set ++ .{
     // Referenced weakly by the builtins; a platform executable leaves it
     // undefined and the `?`-in-expect region goes unrecorded.
     symbols.roc_expect_err_region,
+    // Referenced weakly by the builtins; a platform executable leaves it
+    // undefined and a crash at code checking rejected goes unrecorded.
+    symbols.roc_checked_error_reached,
 };
 
 // Explicit OS ABI dependencies, not symbols discovered from the built archive.

@@ -229,6 +229,8 @@ pub const BuildEnv = struct {
     /// Whether `compileDiscovered` validates that the selected platform target's
     /// declared link files exist before type checking.
     validate_target_files_for_selected_target: bool = false,
+    /// Collect fine-grained compile-time lowering timings and counters.
+    detailed_lowering_timing: bool = false,
 
     /// Controls which checked-artifact publication work runs after ordinary
     /// checking has completed.
@@ -243,7 +245,9 @@ pub const BuildEnv = struct {
 
     /// Whether executable artifacts were published for this build. User
     /// diagnostics do not change this: checked recovery nodes remain valid
-    /// lowering input and crash only if execution reaches them.
+    /// lowering input and crash only if execution reaches them. A build whose
+    /// app root never finished checking (for example because it depends on an
+    /// import cycle) has no program to publish.
     executable_artifacts_finalized: bool = false,
 
     /// Compiler role to assign to the root module of this build.
@@ -493,6 +497,11 @@ pub const BuildEnv = struct {
 
     pub fn setValidateTargetFilesForSelectedTarget(self: *BuildEnv, enabled: bool) void {
         self.validate_target_files_for_selected_target = enabled;
+    }
+
+    pub fn setDetailedLoweringTiming(self: *BuildEnv, enabled: bool) void {
+        if (self.coordinator) |coordinator| coordinator.setDetailedLoweringTiming(enabled);
+        self.detailed_lowering_timing = enabled;
     }
 
     pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
@@ -815,6 +824,7 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
         self.coordinator = coord;
     }
@@ -1178,7 +1188,7 @@ pub const BuildEnv = struct {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        self.executable_artifacts_finalized = self.post_check_publication_mode == .executable_artifacts;
+        self.executable_artifacts_finalized = coord.hasCheckedProgram();
 
         try self.resolvePlatformTargetConfigConstants();
 
@@ -3478,6 +3488,10 @@ pub const BuildEnv = struct {
 
         var total: usize = 0;
         for (modules) |mod| {
+            // A module that never finished checking (for example, a member of
+            // an import cycle) is not part of any built artifact, and its
+            // canonical tree still holds unresolved import references.
+            if (mod.semantic.checked_artifact == null) continue;
             var regions = std.ArrayList(base.Region).empty;
             defer regions.deinit(self.gpa);
 

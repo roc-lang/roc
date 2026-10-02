@@ -95,11 +95,11 @@ NO CHANGE
 		(p-assign (ident "rDsult"))
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 231)
+				(e-call (constraint-fn-var 232)
 					(e-lookup-local
 						(p-assign (ident "poly")))))
 			(rhs
-				(e-call (constraint-fn-var 236)
+				(e-call (constraint-fn-var 237)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

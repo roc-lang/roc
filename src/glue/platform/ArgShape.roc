@@ -1,7 +1,7 @@
-import AbiLayout exposing [AbiLayout]
-import AbiFieldLayout exposing [AbiFieldLayout]
-import HostedFunctionInfo exposing [HostedFunctionInfo]
-import TypeTable exposing [TypeTable]
+import AbiLayout
+import AbiFieldLayout
+import HostedFunctionInfo
+import TypeTable
 
 ## Shared ABI argument-shape classification for glue generators.
 ##

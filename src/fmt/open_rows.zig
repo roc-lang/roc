@@ -443,25 +443,46 @@ pub const OpenRows = struct {
 
     /// `Check.generateAnnoTypeInPlace`, deciding only where an anonymous `..`
     /// is generated exactly as its absence would be.
+    /// One annotation position still to visit.
+    const WalkItem = struct {
+        anno: AST.TypeAnno.Idx,
+        ctx: Ctx,
+        polarity: Polarity,
+    };
+
+    /// Visit an annotation and every position nested in it. Pending positions
+    /// wait on a heap-backed stack, so annotation nesting never becomes native
+    /// call depth; visiting only sets marks and joins occurrence flags, so the
+    /// order positions are visited in does not matter.
     fn walk(self: *OpenRows, anno_idx: AST.TypeAnno.Idx, ctx: Ctx, polarity: Polarity, occurrences: ?*VarOccurrences) Allocator.Error!void {
+        var pending: std.ArrayList(WalkItem) = .empty;
+        defer pending.deinit(self.gpa);
+        try pending.append(self.gpa, .{ .anno = anno_idx, .ctx = ctx, .polarity = polarity });
+        while (pending.pop()) |item| try self.visit(item, occurrences, &pending);
+    }
+
+    fn visit(self: *OpenRows, item: WalkItem, occurrences: ?*VarOccurrences, pending: *std.ArrayList(WalkItem)) Allocator.Error!void {
+        const anno_idx = item.anno;
+        const ctx = item.ctx;
+        const polarity = item.polarity;
         switch (self.ast.store.getTypeAnno(anno_idx)) {
             .ty_var => |v| try noteOccurrence(self.gpa, occurrences, self.tokenName(v.tok), ctx),
             .underscore_type_var => |v| try noteOccurrence(self.gpa, occurrences, self.tokenName(v.tok), ctx),
             .underscore, .ty, .malformed => {},
-            .parens => |parens| try self.walk(parens.anno, ctx, polarity, occurrences),
+            .parens => |parens| try pending.append(self.gpa, .{ .anno = parens.anno, .ctx = ctx, .polarity = polarity }),
             .@"fn" => |func| {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try self.walk(arg, ctx.withReach(.nested), .neg, occurrences);
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx.withReach(.nested), .polarity = .neg });
                 }
                 const ret_reach = base.annotation_positions.functionReturnReach(ctx.reach);
-                try self.walk(func.ret, ctx.withReach(ret_reach), .pos, occurrences);
+                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx.withReach(ret_reach), .polarity = .pos });
             },
             .tag_union => |tag_union| {
                 const tags = self.ast.store.typeAnnoSlice(tag_union.tags);
                 for (tags) |tag_idx| {
                     switch (self.ast.store.getTypeAnno(tag_idx)) {
                         .apply => |tag| for (self.ast.store.typeAnnoSlice(tag.args)[1..]) |payload| {
-                            try self.walk(payload, ctx.withReach(.nested), polarity, occurrences);
+                            try pending.append(self.gpa, .{ .anno = payload, .ctx = ctx.withReach(.nested), .polarity = polarity });
                         },
                         .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => {},
                     }
@@ -470,20 +491,20 @@ pub const OpenRows = struct {
                     .open => if (tags.len > 0 and polarity == .pos and outputOpens(ctx)) {
                         self.redundant.set(@intFromEnum(anno_idx));
                     },
-                    .named => |named| try self.walk(named.anno, ctx.withReach(.nested), polarity, occurrences),
+                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
                     .closed => {},
                 }
             },
             .tuple => |tuple| for (self.ast.store.typeAnnoSlice(tuple.annos)) |elem| {
-                try self.walk(elem, ctx.withReach(.nested), polarity, occurrences);
+                try pending.append(self.gpa, .{ .anno = elem, .ctx = ctx.withReach(.nested), .polarity = polarity });
             },
             .record => |record| {
                 for (self.ast.store.annoRecordFieldSlice(record.fields)) |field_idx| {
                     const field = self.ast.store.getAnnoRecordField(field_idx) catch continue;
-                    try self.walk(field.ty, ctx.withReach(.nested), polarity, occurrences);
+                    try pending.append(self.gpa, .{ .anno = field.ty, .ctx = ctx.withReach(.nested), .polarity = polarity });
                 }
                 switch (record.ext) {
-                    .named => |named| try self.walk(named.anno, ctx.withReach(.nested), polarity, occurrences),
+                    .named => |named| try pending.append(self.gpa, .{ .anno = named.anno, .ctx = ctx.withReach(.nested), .polarity = polarity }),
                     .open, .closed => {},
                 }
             },
@@ -502,7 +523,7 @@ pub const OpenRows = struct {
                     const reach: Reach = if (reaches) |known| known[arg_index] else .nested;
                     const arg_ctx = if (positions != null) ctx.withReach(reach) else ctx.withReach(reach).withOpening(.as_written);
                     const arg_polarity = if (positions) |known| known[arg_index].polarity(polarity) else polarity;
-                    try self.walk(arg, arg_ctx, arg_polarity, occurrences);
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = arg_ctx, .polarity = arg_polarity });
                 }
             },
         }

@@ -198,17 +198,24 @@ fn defaultExit(code: u8) callconv(.c) noreturn {
     rawExit(code);
 }
 
-fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+/// `roc_alloc` and `roc_realloc` never return null, so allocation failure
+/// crashes the program instead.
+fn outOfMemory() noreturn {
+    const message = "out of memory";
+    rocCrashed(message.ptr, message.len);
+}
+
+fn rocAlloc(length: usize, alignment: usize) callconv(.c) *anyopaque {
     const byte_alignment = normalizedAlignment(alignment);
     const prefix = alignForward(allocation_header_size, byte_alignment);
     const raw_len = prefix + length;
-    const raw = heapAlloc(raw_len) orelse return null;
+    const raw = heapAlloc(raw_len) orelse outOfMemory();
     const user = raw + prefix;
     storeAllocationHeader(user, prefix, raw_len);
     return @ptrCast(user);
 }
 
-fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const old_user: [*]u8 = @ptrCast(ptr);
     const prefix = allocationHeaderValue(old_user, 0);
     const old_raw_len = allocationHeaderValue(old_user, 1);
@@ -218,7 +225,7 @@ fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c)
         return ptr;
     }
 
-    const new_ptr = rocAlloc(new_length, alignment) orelse return null;
+    const new_ptr = rocAlloc(new_length, alignment);
     const new_user: [*]u8 = @ptrCast(new_ptr);
     const copy_len = @min(old_raw_len - prefix, new_length);
     var i: usize = 0;
