@@ -4173,9 +4173,10 @@ pub const tests = [_]TestCase{
     },
     .{
         // repro for https://github.com/roc-lang/roc/issues/11861
-        // Using that caller with a concrete format validates the derived
-        // encoder relation there and reports the mismatched value.
-        .name = "issue 11861: using a generic caller of a derived encoder_for reports a mismatched value",
+        // The derived encoder_for call relates its signature to the call, so
+        // the encoder takes an `A`, and the record literal passed to it is
+        // checked against `A` and constructs one.
+        .name = "issue 11861: using a generic caller of a derived encoder_for encodes the value it constructs",
         .source_kind = .module,
         .source =
         \\A := { x : U64 }.{
@@ -4192,7 +4193,7 @@ pub const tests = [_]TestCase{
         \\main : Str
         \\main = Json.to_str(B.W)
         ,
-        .expected = .{ .problem_and_crash = {} },
+        .expected = .{ .inspect_str = "\"{\\\"x\\\":1}\"" },
     },
     .{
         // repro for https://github.com/roc-lang/roc/issues/11770
