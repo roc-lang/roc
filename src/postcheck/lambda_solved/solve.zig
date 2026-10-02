@@ -2859,44 +2859,60 @@ const Solver = struct {
         rhs: Type.Span,
         capture_pairs: *std.ArrayList(DeferredSpanPair),
     ) Allocator.Error!Type.Span {
-        const left_index = try self.lambdaSetIndex(lhs);
+        // The merge keeps one set's members in order and appends the other's
+        // missing members. The kept set is one that can grow in place at the
+        // end of the member pool, so growing a long set by a few members never
+        // copies it.
+        const keep_rhs = !self.lambdaSetGrowsInPlace(lhs) and self.lambdaSetGrowsInPlace(rhs);
+        const kept = if (keep_rhs) rhs else lhs;
+        const other = if (keep_rhs) lhs else rhs;
+        const kept_index = try self.lambdaSetIndex(kept);
         var added = std.ArrayList(Type.FnMember).empty;
         defer added.deinit(self.allocator);
         var added_positions = std.AutoHashMapUnmanaged(Common.Symbol, usize).empty;
         defer added_positions.deinit(self.allocator);
 
-        for (0..rhs.count()) |i| {
-            const right_member = self.program.types.memberItem(rhs, i);
-            const left_captures = if (left_index.position(right_member.lambda, lhs)) |position|
-                self.program.types.memberItem(lhs, position).captures
-            else if (added_positions.get(right_member.lambda)) |position|
+        for (0..other.count()) |i| {
+            const other_member = self.program.types.memberItem(other, i);
+            const kept_captures = if (kept_index.position(other_member.lambda, kept)) |position|
+                self.program.types.memberItem(kept, position).captures
+            else if (added_positions.get(other_member.lambda)) |position|
                 added.items[position].captures
             else {
-                try added_positions.put(self.allocator, right_member.lambda, added.items.len);
-                try added.append(self.allocator, right_member);
+                try added_positions.put(self.allocator, other_member.lambda, added.items.len);
+                try added.append(self.allocator, other_member);
                 continue;
             };
-            try capture_pairs.append(self.allocator, .{
-                .lhs = left_captures,
-                .rhs = right_member.captures,
+            try capture_pairs.append(self.allocator, if (keep_rhs) .{
+                .lhs = other_member.captures,
+                .rhs = kept_captures,
+            } else .{
+                .lhs = kept_captures,
+                .rhs = other_member.captures,
             });
         }
 
-        // Every right member already sits in the left set: the merge is the
-        // left set itself.
-        if (added.items.len == 0) return lhs;
-        // A left set at the end of the member pool grows in place. Every set
+        // Every other member already sits in the kept set: the merge is the
+        // kept set itself.
+        if (added.items.len == 0) return kept;
+        // A kept set at the end of the member pool grows in place. Every set
         // sharing its start stays a prefix of it, so they all read the same
         // stored members.
-        if (lhs.count() != 0 and @as(usize, lhs.start) + lhs.count() == self.program.types.fn_members.items.len) {
+        if (self.lambdaSetGrowsInPlace(kept)) {
             _ = try self.program.types.addMembers(added.items);
-            return .{ .start = lhs.start, .len = @intCast(lhs.count() + added.items.len) };
+            return .{ .start = kept.start, .len = @intCast(kept.count() + added.items.len) };
         }
-        var members = try std.ArrayList(Type.FnMember).initCapacity(self.allocator, lhs.count() + added.items.len);
+        var members = try std.ArrayList(Type.FnMember).initCapacity(self.allocator, kept.count() + added.items.len);
         defer members.deinit(self.allocator);
-        for (0..lhs.count()) |i| members.appendAssumeCapacity(self.program.types.memberItem(lhs, i));
+        for (0..kept.count()) |i| members.appendAssumeCapacity(self.program.types.memberItem(kept, i));
         members.appendSliceAssumeCapacity(added.items);
         return try self.program.types.addMembers(members.items);
+    }
+
+    /// Whether `span` is a nonempty set ending at the end of the member pool,
+    /// so members appended to the pool extend it.
+    fn lambdaSetGrowsInPlace(self: *const Solver, span: Type.Span) bool {
+        return span.count() != 0 and @as(usize, span.start) + span.count() == self.program.types.fn_members.items.len;
     }
 
     const LambdaSetIndex = struct {

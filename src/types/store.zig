@@ -107,6 +107,50 @@ const NominalDeclIndexEntry = struct {
     }
 };
 
+/// Watched class descriptors. A write to one advances `generation` and drops
+/// every watch, so each memo that recorded the generation it read under sees
+/// the change, whichever owner registered the written class.
+const ClassWatch = struct {
+    watched: std.DynamicBitSetUnmanaged = .{},
+    watched_list: std.ArrayListUnmanaged(u32) = .empty,
+    generation: u64 = 0,
+    /// Whether the watches belong to an earlier generation.
+    stale: bool = false,
+
+    fn deinit(self: *ClassWatch, gpa: Allocator) void {
+        self.watched.deinit(gpa);
+        self.watched_list.deinit(gpa);
+    }
+
+    fn watch(self: *ClassWatch, gpa: Allocator, desc_idx: DescStore.Idx) Allocator.Error!void {
+        if (self.stale) {
+            for (self.watched_list.items) |index| self.watched.unset(index);
+            self.watched_list.clearRetainingCapacity();
+            self.stale = false;
+        }
+        const index: u32 = @intFromEnum(desc_idx);
+        if (index >= self.watched.bit_length) try self.watched.resize(gpa, @max(index + 1, self.watched.bit_length * 2), false);
+        if (self.watched.isSet(index)) return;
+        try self.watched_list.append(gpa, index);
+        self.watched.set(index);
+    }
+
+    fn noteWrite(self: *ClassWatch, desc_idx: DescStore.Idx) void {
+        if (self.stale) return;
+        const index: u32 = @intFromEnum(desc_idx);
+        if (index < self.watched.bit_length and self.watched.isSet(index)) self.advance();
+    }
+
+    fn noteRollback(self: *ClassWatch) void {
+        if (!self.stale and self.watched_list.items.len != 0) self.advance();
+    }
+
+    fn advance(self: *ClassWatch) void {
+        self.generation += 1;
+        self.stale = true;
+    }
+};
+
 /// Reperents either type data *or* a symlink to another type variable
 pub const Slot = union(enum) {
     root: DescStore.Idx,
@@ -178,6 +222,10 @@ pub const Store = struct {
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
     /// relocated; capacity persists across instantiations against this store.
     instantiate_scratch: instantiate.Scratch = .{},
+
+    /// Classes callers' memos depend on. Runtime-only: never serialized,
+    /// cloned, or relocated.
+    class_watch: ClassWatch = .{},
 
     /// Undo trail for speculative unification. While a probe is active
     /// (`savepoint_active`), every in-place write to a slot, descriptor, checked
@@ -279,6 +327,7 @@ pub const Store = struct {
 
         // instantiation worklist scratch
         self.instantiate_scratch.deinit(self.gpa);
+        self.class_watch.deinit(self.gpa);
 
         // speculation undo trail
         self.slot_trail.deinit(self.gpa);
@@ -483,6 +532,7 @@ pub const Store = struct {
 
     /// Undo everything done since `savepoint` was created.
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
+        self.class_watch.noteRollback();
         // Replay journaled in-place writes in reverse so each pre-existing entry
         // lands back on its original value.
         var di = self.desc_trail.items.len;
@@ -572,6 +622,14 @@ pub const Store = struct {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_slots) {
             try self.slot_trail.append(self.gpa, .{ .idx = idx, .old = self.slots.get(idx) });
         }
+        switch (self.slots.get(idx)) {
+            .root => |desc_idx| self.class_watch.noteWrite(desc_idx),
+            .redirect => {},
+        }
+        switch (val) {
+            .root => |desc_idx| self.class_watch.noteWrite(desc_idx),
+            .redirect => {},
+        }
         self.slots.set(idx, val);
         self.slot_generation += 1;
     }
@@ -581,6 +639,7 @@ pub const Store = struct {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_descs) {
             try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
         }
+        self.class_watch.noteWrite(idx);
         self.descs.set(idx, val);
     }
 
@@ -589,7 +648,22 @@ pub const Store = struct {
         if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_descs) {
             try self.root_meta_trail.append(self.gpa, .{ .idx = idx, .old = self.getRootMeta(idx) });
         }
+        self.class_watch.noteWrite(idx);
         self.root_metas.set(rootMetaIdx(idx), val);
+    }
+
+    /// Watch the class `var_` resolves to: any later write to its descriptor,
+    /// its checked representative, or which storage slot roots it, and any
+    /// rollback, advances `classWatchGeneration`.
+    pub fn watchClass(self: *Self, var_: Var) Allocator.Error!void {
+        try self.class_watch.watch(self.gpa, self.resolveVar(var_).desc_idx);
+    }
+
+    /// Advances whenever a watched class may have changed. A memo whose
+    /// classes were all watched under one generation is unchanged while the
+    /// generation is.
+    pub fn classWatchGeneration(self: *const Self) u64 {
+        return self.class_watch.generation;
     }
 
     fn setUnionRank(self: *Self, storage_var: Var, rank: u8) Allocator.Error!void {

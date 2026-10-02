@@ -2439,6 +2439,10 @@ const CheckedMonoRequestFrame = struct {
     ops_start: usize,
     ops_end: usize,
     next: usize,
+    /// The graph structure epoch at which neither root contained generated-
+    /// private evidence. While the epoch is unchanged no class has changed,
+    /// so no component of either root contains any either.
+    public_at_epoch: ?u32,
 };
 
 fn relateCheckedMonoRequestNodeAt(
@@ -2458,7 +2462,7 @@ fn relateCheckedMonoRequestNodeAt(
         };
         frames.deinit(allocator);
     }
-    try beginCheckedMonoRequestPair(graph, checked_node, request_node, row_width, seen, &ops, &frames);
+    try beginCheckedMonoRequestPair(graph, checked_node, request_node, row_width, null, seen, &ops, &frames);
     while (frames.items.len > 0) {
         const top = frames.items.len - 1;
         const frame = &frames.items[top];
@@ -2470,8 +2474,9 @@ fn relateCheckedMonoRequestNodeAt(
         }
         const op = ops.items[frame.next];
         frame.next += 1;
+        const public_at_epoch = frame.public_at_epoch;
         switch (op) {
-            .relate => |pair| try beginCheckedMonoRequestPair(graph, pair.checked, pair.request, row_width, seen, &ops, &frames),
+            .relate => |pair| try beginCheckedMonoRequestPair(graph, pair.checked, pair.request, row_width, public_at_epoch, seen, &ops, &frames),
             .field_kind => |fields| graph.relateRecordFieldKind(fields.checked, fields.request),
             .join_container => |pair| try graph.joinRelatedRequestContainer(pair.checked, pair.request),
             .named_instances => |pair| try graph.relateNamedInstances(pair.checked, pair.request),
@@ -2490,6 +2495,8 @@ fn beginCheckedMonoRequestPair(
     checked_node: NodeId,
     request_node: NodeId,
     row_width: solve.RowWidthRelation,
+    /// The enclosing pair's `public_at_epoch`, whose roots reach these.
+    enclosing_public_at_epoch: ?u32,
     seen: *std.AutoHashMap(CheckedMonoRequestPair, void),
     ops: *std.ArrayList(CheckedMonoRequestOp),
     frames: *std.ArrayList(CheckedMonoRequestFrame),
@@ -2499,12 +2506,15 @@ fn beginCheckedMonoRequestPair(
     const request_root = graph.rootNode(request_node);
     if (checked_root == request_root) return;
 
-    if (try graph.containsGeneratedPrivate(checked_root) or
-        try graph.containsGeneratedPrivate(request_root))
-    {
-        try relateRequestComponentAtWidth(graph, checked_root, request_root, row_width);
-        return;
+    if (enclosing_public_at_epoch != graph.structure_epoch) {
+        if (try graph.containsGeneratedPrivate(checked_root) or
+            try graph.containsGeneratedPrivate(request_root))
+        {
+            try relateRequestComponentAtWidth(graph, checked_root, request_root, row_width);
+            return;
+        }
     }
+    const public_at_epoch = graph.structure_epoch;
 
     const roots: CheckedMonoRequestPair = .{ .checked = checked_root, .request = request_root };
     const entry = try seen.getOrPut(roots);
@@ -2634,7 +2644,13 @@ fn beginCheckedMonoRequestPair(
         .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
     };
     if (!structural) try ops.append(allocator, .{ .unify = roots });
-    frames.appendAssumeCapacity(.{ .pair = roots, .ops_start = ops_start, .ops_end = ops.items.len, .next = ops_start });
+    frames.appendAssumeCapacity(.{
+        .pair = roots,
+        .ops_start = ops_start,
+        .ops_end = ops.items.len,
+        .next = ops_start,
+        .public_at_epoch = public_at_epoch,
+    });
 }
 
 fn sameNamedValueDefinition(left: anytype, right: anytype) bool {

@@ -770,6 +770,9 @@ const Lowerer = struct {
     /// through this digest, so the child stays visible to recursion analysis.
     type_layout_digests: collections.DenseMap(Type.TypeId, layout.GraphDigest),
     named_layout_index: std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage),
+    /// Each laid-out type's `RepresentationShape`, so a named layout lookup
+    /// compares only candidates whose shapes can be equivalent.
+    representation_shapes: collections.DenseMap(Type.TypeId, RepresentationShape),
     layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
     const_type_map: collections.DenseMap(Type.TypeId, const_store.ConstTypeId),
@@ -1025,6 +1028,7 @@ const Lowerer = struct {
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
             .type_layout_digests = collections.DenseMap(Type.TypeId, layout.GraphDigest).init(allocator),
             .named_layout_index = std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
+            .representation_shapes = collections.DenseMap(Type.TypeId, RepresentationShape).init(allocator),
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
             .const_type_map = collections.DenseMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
@@ -1151,6 +1155,7 @@ const Lowerer = struct {
         self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
+        self.representation_shapes.deinit();
         self.type_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -1215,6 +1220,7 @@ const Lowerer = struct {
         self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
+        self.representation_shapes.deinit();
         self.type_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -12972,10 +12978,12 @@ const Lowerer = struct {
             .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return null,
         };
         const candidates = self.named_layout_index.get(namedRepresentationKey(named)) orelse return null;
+        const shape = try self.representationShape(ty);
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
         defer visited.deinit();
         for (candidates.items) |other_ty| {
             if (other_ty == ty) continue;
+            if (!std.meta.eql(try self.representationShape(other_ty), shape)) continue;
             visited.clearRetainingCapacity();
             if (try self.representationTypesEquivalent(ty, other_ty, &visited)) {
                 const layout_idx = self.type_layouts.get(other_ty) orelse
@@ -12984,6 +12992,168 @@ const Lowerer = struct {
             }
         }
         return null;
+    }
+
+    /// A summary of a type that representation-equivalent types share. A type
+    /// that reaches a cycle unfolds to an infinite tree and so is equivalent
+    /// only to other such types; a finite type's hash covers its structure
+    /// over exactly the parts `representationTypesEquivalent` compares.
+    const RepresentationShape = union(enum) {
+        finite: u64,
+        cyclic,
+    };
+
+    /// One type whose shape is waiting on its components' shapes.
+    const RepresentationShapeFrame = struct {
+        ty: Type.TypeId,
+        children_start: usize,
+        next: usize,
+    };
+
+    fn representationShape(self: *Lowerer, root: Type.TypeId) Common.LowerError!RepresentationShape {
+        if (self.representation_shapes.get(root)) |shape| return shape;
+        var children: std.ArrayList(Type.TypeId) = .empty;
+        defer children.deinit(self.allocator);
+        var frames: std.ArrayList(RepresentationShapeFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        var on_stack = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer on_stack.deinit();
+        var reaches_cycle = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer reaches_cycle.deinit();
+
+        try self.pushRepresentationShapeFrame(&frames, &children, &on_stack, root);
+        while (frames.items.len > 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next < children.items.len) {
+                const child = children.items[frame.next];
+                frame.next += 1;
+                if (on_stack.contains(child)) {
+                    try reaches_cycle.put(frame.ty, {});
+                } else if (self.representation_shapes.get(child)) |shape| {
+                    if (shape == .cyclic) try reaches_cycle.put(frame.ty, {});
+                } else {
+                    try self.pushRepresentationShapeFrame(&frames, &children, &on_stack, child);
+                }
+                continue;
+            }
+            const finished = frames.pop().?;
+            _ = on_stack.remove(finished.ty);
+            const shape: RepresentationShape = if (reaches_cycle.contains(finished.ty))
+                .cyclic
+            else
+                .{ .finite = try self.finiteRepresentationShapeHash(finished.ty, children.items[finished.children_start..]) };
+            children.shrinkRetainingCapacity(finished.children_start);
+            try self.representation_shapes.put(finished.ty, shape);
+            if (shape == .cyclic) if (frames.items.len > 0) {
+                try reaches_cycle.put(frames.items[frames.items.len - 1].ty, {});
+            };
+        }
+        return self.representation_shapes.get(root).?;
+    }
+
+    fn pushRepresentationShapeFrame(
+        self: *Lowerer,
+        frames: *std.ArrayList(RepresentationShapeFrame),
+        children: *std.ArrayList(Type.TypeId),
+        on_stack: *collections.DenseMap(Type.TypeId, void),
+        ty: Type.TypeId,
+    ) Common.LowerError!void {
+        try on_stack.put(ty, {});
+        const children_start = children.items.len;
+        try self.appendRepresentationShapeChildren(children, ty);
+        try frames.append(self.allocator, .{ .ty = ty, .children_start = children_start, .next = children_start });
+    }
+
+    /// The component types `representationTypesEquivalent` compares, in a
+    /// fixed order.
+    fn appendRepresentationShapeChildren(self: *Lowerer, children: *std.ArrayList(Type.TypeId), ty: Type.TypeId) Common.LowerError!void {
+        switch (self.types.get(ty)) {
+            .primitive, .zst, .erased_capture_ptr => {},
+            .list, .box => |elem| try children.append(self.allocator, elem),
+            .tuple => |elems| try self.appendTypeSpan(children, elems),
+            .record => |fields| {
+                const field_span = self.types.fieldSpan(fields);
+                for (0..field_span.len) |index| try children.append(self.allocator, GuardedList.at(field_span, index).ty);
+            },
+            .capture_record => |fields| {
+                const field_span = self.types.captureFieldSpan(fields);
+                for (0..field_span.len) |index| try children.append(self.allocator, GuardedList.at(field_span, index).ty);
+            },
+            .tag_union => |tags| {
+                const tag_span = self.types.tagSpan(tags);
+                for (0..tag_span.len) |index| try self.appendTypeSpan(children, GuardedList.at(tag_span, index).payloads);
+            },
+            .callable => |variants| try self.appendVariantCaptureTypes(children, variants),
+            .erased_fn => |erased| try self.appendVariantCaptureTypes(children, erased.members),
+            .named => |named| {
+                try self.appendTypeSpan(children, named.args);
+                if (named.backing) |backing| try children.append(self.allocator, backing.ty);
+            },
+        }
+    }
+
+    fn appendVariantCaptureTypes(self: *Lowerer, children: *std.ArrayList(Type.TypeId), variants: Type.Span) Common.LowerError!void {
+        const variant_span = self.types.fnVariantSpan(variants);
+        for (0..variant_span.len) |index| {
+            if (GuardedList.at(variant_span, index).capture_ty) |capture_ty| try children.append(self.allocator, capture_ty);
+        }
+    }
+
+    /// Hash a finite type from its own compared data and its components'
+    /// finite shapes, given in `appendRepresentationShapeChildren` order.
+    fn finiteRepresentationShapeHash(self: *Lowerer, ty: Type.TypeId, children: []const Type.TypeId) Common.LowerError!u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        const content = self.types.get(ty);
+        std.hash.autoHash(&hasher, std.meta.activeTag(content));
+        switch (content) {
+            .primitive => |primitive| std.hash.autoHash(&hasher, primitive),
+            .zst, .erased_capture_ptr, .list, .box => {},
+            .tuple => |elems| std.hash.autoHash(&hasher, elems.len),
+            .record => |fields| {
+                const field_span = self.types.fieldSpan(fields);
+                std.hash.autoHash(&hasher, field_span.len);
+                for (0..field_span.len) |index| std.hash.autoHash(&hasher, GuardedList.at(field_span, index).name);
+            },
+            .capture_record => |fields| std.hash.autoHash(&hasher, self.types.captureFieldSpan(fields).len),
+            .tag_union => |tags| {
+                const tag_span = self.types.tagSpan(tags);
+                std.hash.autoHash(&hasher, tag_span.len);
+                for (0..tag_span.len) |index| {
+                    const tag = GuardedList.at(tag_span, index);
+                    std.hash.autoHash(&hasher, tag.name);
+                    std.hash.autoHash(&hasher, tag.checked_name);
+                    std.hash.autoHash(&hasher, tag.payloads.len);
+                }
+            },
+            .callable => |variants| self.hashVariantShapes(&hasher, variants),
+            .erased_fn => |erased| {
+                hasher.update(erased.source_fn_ty.bytes[0..]);
+                self.hashVariantShapes(&hasher, erased.members);
+            },
+            .named => |named| {
+                std.hash.autoHash(&hasher, named.kind);
+                std.hash.autoHash(&hasher, named.def.source_decl);
+                std.hash.autoHash(&hasher, named.builtin_owner);
+                std.hash.autoHash(&hasher, named.args.len);
+                std.hash.autoHash(&hasher, named.backing != null);
+            },
+        }
+        for (children) |child| {
+            const child_shape = self.representation_shapes.get(child) orelse
+                Common.invariant("finite representation shape hashed before its component");
+            std.hash.autoHash(&hasher, child_shape.finite);
+        }
+        return hasher.final();
+    }
+
+    fn hashVariantShapes(self: *Lowerer, hasher: *std.hash.Wyhash, variants: Type.Span) void {
+        const variant_span = self.types.fnVariantSpan(variants);
+        std.hash.autoHash(hasher, variant_span.len);
+        for (0..variant_span.len) |index| {
+            const variant = GuardedList.at(variant_span, index);
+            std.hash.autoHash(hasher, variant.source);
+            std.hash.autoHash(hasher, variant.capture_ty != null);
+        }
     }
 
     /// Public equivalence compares the checked interface of two Lambda Mono

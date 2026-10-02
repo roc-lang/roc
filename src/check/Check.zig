@@ -1045,6 +1045,16 @@ pending_function_effect_dependencies: std.ArrayListUnmanaged(Var),
 function_effect_dependency_frame_starts: std.ArrayListUnmanaged(usize),
 /// Reusable sparse memo for one directed function-effect graph query.
 function_effect_resolution: collections.DenseMap(Var, FunctionEffectResolution),
+/// Roots in `function_effect_resolution` whose state was read through a root
+/// the query was still visiting, so it may omit effects reachable only
+/// through that root.
+function_effect_partial: collections.DenseMap(Var, void),
+/// Exact function-effect states kept across queries. Every root an entry's
+/// state was read from is a watched class of the type store, so an entry is
+/// dropped with all the others before any query after one of them changes.
+function_effect_settled: collections.DenseMap(Var, FunctionEffectState),
+/// The type store's class-watch generation `function_effect_settled` holds.
+function_effect_settled_generation: u64,
 /// Scratch for `beginCommitProbe`: the caller env's var-pool length per rank
 /// at probe start, restored on a failed probe's rollback. One buffer suffices
 /// because commit-probes never nest. The type store's trail-based savepoints
@@ -3187,6 +3197,9 @@ fn initAssumePrepared(
         .pending_function_effect_dependencies = .empty,
         .function_effect_dependency_frame_starts = .empty,
         .function_effect_resolution = collections.DenseMap(Var, FunctionEffectResolution).init(gpa),
+        .function_effect_partial = collections.DenseMap(Var, void).init(gpa),
+        .function_effect_settled = collections.DenseMap(Var, FunctionEffectState).init(gpa),
+        .function_effect_settled_generation = 0,
         .probe_var_pool_lens = .empty,
         .where_method_use_record_by_fn_var = rehydrated_where_method_uses,
     };
@@ -3420,6 +3433,8 @@ pub fn deinit(self: *Self) void {
     self.pending_function_effect_dependencies.deinit(self.gpa);
     self.function_effect_dependency_frame_starts.deinit(self.gpa);
     self.function_effect_resolution.deinit();
+    self.function_effect_partial.deinit();
+    self.function_effect_settled.deinit();
     self.probe_var_pool_lens.deinit(self.gpa);
 }
 
@@ -13041,7 +13056,7 @@ fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
         // Finalization runs after the last type mutation, so one memo serves
         // every watcher. Ordinary effect queries clear this cache because roots
         // may change between calls; no such invalidation is possible here.
-        self.function_effect_resolution.clearRetainingCapacity();
+        self.beginFunctionEffectQuery();
 
         for (self.expect_dispatch_effect_watchers.items) |watcher| {
             const fn_root = self.types.resolveVar(watcher.fn_var).var_;
@@ -13100,14 +13115,27 @@ fn varIsEffectfulFunction(self: *Self, var_: Var) Allocator.Error!bool {
     return try self.functionEffectState(var_) == .effectful;
 }
 
-/// Resolve the directed effect formula carried by a function type. The memo is
-/// per query because union-find roots can change after any subsequent
-/// unification. A visiting back-edge contributes no effect by itself; this is
+/// Resolve the directed effect formula carried by a function type. The memo of
+/// every state is per query, because union-find roots can change after any
+/// subsequent unification; `function_effect_settled` keeps the exact states
+/// only while every class they were read from is unchanged. A visiting
+/// back-edge contributes no effect by itself; this is
 /// the SCC base case, while any positive or unresolved dependency reachable
 /// outside the cycle still propagates back to every caller in the cycle.
 fn functionEffectState(self: *Self, var_: Var) Allocator.Error!FunctionEffectState {
-    self.function_effect_resolution.clearRetainingCapacity();
+    self.beginFunctionEffectQuery();
     return self.functionEffectStateHelp(var_);
+}
+
+/// Clear the per-query memo, and drop every settled state once a class one of
+/// them was read from has changed.
+fn beginFunctionEffectQuery(self: *Self) void {
+    self.function_effect_resolution.clearRetainingCapacity();
+    self.function_effect_partial.clearRetainingCapacity();
+    if (self.types.classWatchGeneration() != self.function_effect_settled_generation) {
+        self.function_effect_settled.clearRetainingCapacity();
+        self.function_effect_settled_generation = self.types.classWatchGeneration();
+    }
 }
 
 /// A function type whose effect depends on the effects of other types still
@@ -13119,12 +13147,16 @@ const FunctionEffectFrame = struct {
     deps: ?Var.SafeList.Range,
     index: u32 = 0,
     result: FunctionEffectState = .pure,
+    /// Whether a state this frame read came through a root still being
+    /// visited.
+    partial: bool = false,
 };
 
 fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffectState {
     var frames: std.ArrayList(FunctionEffectFrame) = .empty;
     defer frames.deinit(self.gpa);
     var input: ?FunctionEffectState = null;
+    var input_partial = false;
     var next: ?Var = var_;
     while (true) {
         if (next) |current| {
@@ -13133,6 +13165,10 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
             const root = resolved.var_;
             if (self.function_effect_resolution.get(root)) |memo| {
                 input = memo.state();
+                input_partial = memo == .visiting or self.function_effect_partial.contains(root);
+            } else if (self.function_effect_settled.get(root)) |settled| {
+                input = settled;
+                input_partial = false;
             } else {
                 try self.function_effect_resolution.put(root, .visiting);
                 const state: ?FunctionEffectState = switch (resolved.desc.content) {
@@ -13162,8 +13198,9 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
                     },
                 };
                 if (state) |finished| {
-                    try self.recordFunctionEffectState(root, finished);
+                    try self.recordFunctionEffectState(root, finished, false);
                     input = finished;
+                    input_partial = false;
                 }
             }
             if (next != null) continue;
@@ -13173,6 +13210,7 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
         input = null;
         if (frames.items.len == 0) return dep_state;
         const top = &frames.items[frames.items.len - 1];
+        top.partial = top.partial or input_partial;
         const finished: ?FunctionEffectState = if (top.deps) |deps| blk: {
             switch (dep_state) {
                 .effectful => break :blk .effectful,
@@ -13188,19 +13226,29 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
         } else dep_state;
         if (finished) |state| {
             const root = top.root;
+            // Every state is at most the exact one, so an effectful state is
+            // exact even when read through a root still being visited.
+            const partial = top.partial and state != .effectful;
             _ = frames.pop();
-            try self.recordFunctionEffectState(root, state);
+            try self.recordFunctionEffectState(root, state, partial);
             input = state;
+            input_partial = partial;
         }
     }
 }
 
-fn recordFunctionEffectState(self: *Self, root: Var, state: FunctionEffectState) Allocator.Error!void {
+fn recordFunctionEffectState(self: *Self, root: Var, state: FunctionEffectState, partial: bool) Allocator.Error!void {
     try self.function_effect_resolution.put(root, switch (state) {
         .pure => .pure,
         .effectful => .effectful,
         .unresolved => .unresolved,
     });
+    if (partial) {
+        try self.function_effect_partial.put(root, {});
+    } else {
+        try self.types.watchClass(root);
+        try self.function_effect_settled.put(root, state);
+    }
 }
 
 fn recordCurrentFunctionEffectDependency(self: *Self, function_var: Var) Allocator.Error!void {
