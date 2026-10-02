@@ -3971,6 +3971,9 @@ pub const DeferredConstraintCheck = struct {
     /// epoch when it was last re-deferred; while the epoch is unchanged the
     /// obligation would be re-deferred exactly as before.
     waiting_epoch: u32 = 0,
+    /// Set on the copy a drain retains because the obligation still waits
+    /// exactly as on its last pass.
+    retained_unchanged: bool = false,
 
     pub const SafeList = MkSafeList(@This());
 };

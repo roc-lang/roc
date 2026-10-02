@@ -515,6 +515,15 @@ draining_numeric_default_pass: bool = false,
 /// is pushed or popped, or a top-level def's checking status changes. It
 /// starts at one so a fresh obligation's zero never matches.
 waiting_context_epoch: u32 = 1,
+/// Keys of the waiting-obligation contexts each change since checking began,
+/// in order (see `WaitingTrigger`). An env's clean queue prefix replays the
+/// keys logged since it last looked to find the first entry that may wait
+/// differently now.
+waiting_trigger_log: std.ArrayListUnmanaged(u64) = .empty,
+/// Advances on a change that may alter every waiting obligation's context:
+/// the outermost frame, whether at most one frame is active, a numeric
+/// default pass, or clearing every frame.
+waiting_trigger_generation: u64 = 0,
 /// The failure expression of the queued entry that first consumed each
 /// relation in `settled_static_dispatch_constraint_fns`: the use a failure of
 /// that relation was attributed to.
@@ -1082,9 +1091,39 @@ fn topLevelPattern(self: *const Self, pattern: CIR.Pattern.Idx) ?DefProcessed {
     return self.top_level_ptrns.items[nodeSlot(pattern)];
 }
 
-fn setTopLevelPattern(self: *Self, pattern: CIR.Pattern.Idx, value: DefProcessed) void {
+fn setTopLevelPattern(self: *Self, pattern: CIR.Pattern.Idx, value: DefProcessed) Allocator.Error!void {
     self.top_level_ptrns.items[nodeSlot(pattern)] = value;
     self.waiting_context_epoch +%= 1;
+    try self.waiting_trigger_log.append(self.gpa, WaitingTrigger.pattern(pattern));
+}
+
+/// A key naming one input of waiting obligations' contexts: a target def's
+/// status (by its pattern), the frame position of a group or of the frame
+/// right above it, or a callable relation settling.
+const WaitingTrigger = struct {
+    fn pattern(p: CIR.Pattern.Idx) u64 {
+        return (@as(u64, 1) << 32) | @intFromEnum(p);
+    }
+
+    fn group(g: u32) u64 {
+        return (@as(u64, 2) << 32) | g;
+    }
+
+    fn fnVar(v: Var) u64 {
+        return (@as(u64, 3) << 32) | @intFromEnum(v);
+    }
+};
+
+/// Log the frame changes at stack index `index`: the group there moves, the
+/// frame below it gains or loses the top, and a change at one of the two
+/// lowest positions moves the outermost frame or whether at most one frame
+/// is active.
+fn logGroupFrameChange(self: *Self, index: usize, group_index: u32) Allocator.Error!void {
+    try self.waiting_trigger_log.append(self.gpa, WaitingTrigger.group(group_index));
+    if (index >= 1) {
+        try self.waiting_trigger_log.append(self.gpa, WaitingTrigger.group(self.group_stack.items[index - 1].group_index));
+    }
+    if (index <= 1) self.waiting_trigger_generation += 1;
 }
 
 fn patternIsTopLevelDef(self: *const Self, pattern: CIR.Pattern.Idx) bool {
@@ -3256,6 +3295,7 @@ pub fn deinit(self: *Self) void {
     self.settled_static_dispatch_constraint_fns.deinit(self.gpa);
     self.waiting_obligations.deinit(self.gpa);
     self.settled_static_dispatch_failure_exprs.deinit(self.gpa);
+    self.waiting_trigger_log.deinit(self.gpa);
     self.scheme_requirement_candidates.deinit(self.gpa);
     var scheme_candidate_indices = self.scheme_requirement_candidate_indices_by_owner.valueIterator();
     while (scheme_candidate_indices.next()) |indices| indices.deinit(self.gpa);
@@ -5478,6 +5518,17 @@ const Env = struct {
     /// Deferred static dispatch constraints - accumulated during type checking,
     /// then solved for at the end
     deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
+    /// How many leading deferred entries the last pass over them retained
+    /// as obligations waiting exactly as before. A drain leaves this prefix
+    /// in place, as that pass would retain each entry again, until a logged
+    /// trigger names one of them.
+    clean_len: usize = 0,
+    /// The position in `waiting_trigger_log` and the trigger generation this
+    /// env's clean prefix has accounted for.
+    clean_log_cursor: usize = 0,
+    clean_generation: u64 = 0,
+    /// Clean-prefix positions by the triggers that may change their entries.
+    clean_index: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(u32)) = .empty,
 
     fn init(
         gpa: std.mem.Allocator,
@@ -5496,6 +5547,21 @@ const Env = struct {
     fn deinit(self: *Env, gpa: std.mem.Allocator) void {
         self.var_pool.deinit();
         self.deferred_static_dispatch_constraints.deinit(gpa);
+        var lists = self.clean_index.valueIterator();
+        while (lists.next()) |list| list.deinit(gpa);
+        self.clean_index.deinit(gpa);
+    }
+
+    /// Forget the clean prefix.
+    fn clearClean(self: *Env) void {
+        self.clean_len = 0;
+        var lists = self.clean_index.valueIterator();
+        while (lists.next()) |list| list.clearRetainingCapacity();
+    }
+
+    /// Entries at `len` and beyond moved or left the queue.
+    fn truncateClean(self: *Env, len: usize) void {
+        if (len < self.clean_len) self.clean_len = len;
     }
 
     /// Resets internal state of env and set rank to generalized
@@ -5504,6 +5570,7 @@ const Env = struct {
         self.var_pool.clearRetainingCapacity();
         try self.var_pool.ensureRanksThrough(to);
         self.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.clearClean();
     }
 
     fn rank(self: *const Env) Rank {
@@ -9852,7 +9919,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         const def = self.cir.store.getDef(def_idx);
-        self.setTopLevelPattern(def.pattern, DefProcessed{
+        try self.setTopLevelPattern(def.pattern, DefProcessed{
             .def_idx = def_idx,
             .def_name = null,
             .status = .not_processed,
@@ -14567,7 +14634,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     // Make as processing
     const def_name = self.getPatternIdent(def.pattern);
     state.def_name = def_name;
-    self.setTopLevelPattern(def.pattern, .{
+    try self.setTopLevelPattern(def.pattern, .{
         .def_idx = def_idx,
         .def_name = def_name,
         .status = .processing,
@@ -14750,7 +14817,7 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
     }
 
     // Mark as processed
-    self.setTopLevelPattern(def.pattern, .{
+    try self.setTopLevelPattern(def.pattern, .{
         .def_idx = def_idx,
         .def_name = state.def_name,
         .status = .processed,
@@ -15859,7 +15926,7 @@ fn finishGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.
         self.group_stack.items[self.group_stack.items.len - 1].pending_predeclared_uses_top);
     std.debug.assert(self.try_row_fixpoints.items.len == state.try_row_fixpoint + 1);
     try self.popTryRowFixpoint(env);
-    self.popGroupFrame();
+    try self.popGroupFrame();
     self.group_states.items[state.group_index] = .checked;
     self.active_scheme_root = state.saved_active_scheme_root;
     return checkActivityDone(.none);
@@ -16012,16 +16079,19 @@ fn pushGroupFrame(self: *Self, frame: GroupFrame) std.mem.Allocator.Error!void {
     try self.group_frame_positions.ensureUnusedCapacity(self.gpa, 1);
     try self.group_stack.append(self.gpa, frame);
     self.group_frame_positions.putAssumeCapacityNoClobber(frame.group_index, self.group_stack.items.len - 1);
+    try self.logGroupFrameChange(self.group_stack.items.len - 1, frame.group_index);
 }
 
-fn popGroupFrame(self: *Self) void {
+fn popGroupFrame(self: *Self) Allocator.Error!void {
     self.waiting_context_epoch +%= 1;
+    try self.logGroupFrameChange(self.group_stack.items.len - 1, self.group_stack.items[self.group_stack.items.len - 1].group_index);
     const frame = self.group_stack.pop().?;
     _ = self.group_frame_positions.remove(frame.group_index);
 }
 
 fn clearGroupFrames(self: *Self) void {
     self.waiting_context_epoch +%= 1;
+    self.waiting_trigger_generation += 1;
     self.group_stack.shrinkRetainingCapacity(0);
     self.group_frame_positions.clearRetainingCapacity();
 }
@@ -30231,6 +30301,7 @@ const Probe = struct {
             // the type-store savepoint. Rewind the owning env before any later
             // pass can observe those now-invalid indices.
             env.deferred_static_dispatch_constraints.items.shrinkRetainingCapacity(self.deferred_constraints_len);
+            env.truncateClean(self.deferred_constraints_len);
         }
         self.check.regions.items.shrinkRetainingCapacity(self.regions_len);
         // Per-instantiation dispatchers recorded during the probe reference fresh
@@ -37226,6 +37297,7 @@ fn recordSettledDeferredDispatchRelation(
             continue;
         }
         try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
+        try self.waiting_trigger_log.append(self.gpa, WaitingTrigger.fnVar(constraint.fn_var));
         const failure_expr = try self.settled_static_dispatch_failure_exprs.getOrPut(self.gpa, constraint.fn_var);
         if (!failure_expr.found_existing) failure_expr.value_ptr.* = deferred.failure_expr;
     }
@@ -37327,6 +37399,58 @@ fn checkStaticDispatchConstraintsFrom(self: *Self, env: *Env, is_numeric_default
     }
 }
 
+/// Bring `env`'s clean prefix up to date with the triggers logged since it
+/// last looked: an entry a trigger names may wait differently now, so the
+/// prefix ends before it.
+fn syncCleanDeferredPrefix(self: *Self, env: *Env) void {
+    if (env.clean_generation != self.waiting_trigger_generation) {
+        env.clearClean();
+        env.clean_generation = self.waiting_trigger_generation;
+    }
+    const log = self.waiting_trigger_log.items;
+    if (env.clean_len != 0) {
+        for (log[env.clean_log_cursor..]) |key| {
+            const positions = env.clean_index.getPtr(key) orelse continue;
+            for (positions.items) |position| env.truncateClean(position);
+            positions.clearRetainingCapacity();
+            if (env.clean_len == 0) break;
+        }
+    }
+    if (env.clean_len == 0) env.clearClean();
+    env.clean_log_cursor = log.len;
+}
+
+/// Extend `env`'s clean prefix over the entries this pass retained unchanged,
+/// when they continue it, indexing each by the triggers that may change it.
+fn extendCleanDeferredPrefix(self: *Self, env: *Env, rebuilt_from: usize) Allocator.Error!void {
+    if (rebuilt_from != env.clean_len) return;
+    const items = env.deferred_static_dispatch_constraints.items.items;
+    while (env.clean_len < items.len) {
+        const entry = items[env.clean_len];
+        if (!entry.retained_unchanged) return;
+        const context = self.waiting_obligations.get(waitingObligationKey(entry)) orelse return;
+        const position: u32 = @intCast(env.clean_len);
+        const target_pattern = self.cir.store.getDef(context.target_def).pattern;
+        try self.indexCleanDeferredEntry(env, WaitingTrigger.pattern(target_pattern), position);
+        if (self.defGroupIndex(context.target_def)) |target_group| {
+            try self.indexCleanDeferredEntry(env, WaitingTrigger.group(target_group), position);
+        }
+        if (entry.owner_group_index) |owner_group| {
+            try self.indexCleanDeferredEntry(env, WaitingTrigger.group(owner_group), position);
+        }
+        for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
+            try self.indexCleanDeferredEntry(env, WaitingTrigger.fnVar(constraint.fn_var), position);
+        }
+        env.clean_len += 1;
+    }
+}
+
+fn indexCleanDeferredEntry(self: *Self, env: *Env, key: u64, position: u32) Allocator.Error!void {
+    const gop = try env.clean_index.getOrPut(self.gpa, key);
+    if (!gop.found_existing) gop.value_ptr.* = .empty;
+    try gop.value_ptr.append(self.gpa, position);
+}
+
 fn beginStaticDispatchDrain(self: *Self, is_numeric_default_pass: bool, start: usize) StaticDispatchDrain {
     return .{
         .start = start,
@@ -37357,10 +37481,23 @@ fn resumeStaticDispatchDrain(
     defer self.draining_numeric_default_pass = numeric_pass_before;
     // A waiting obligation re-deferred in one kind of pass says nothing about
     // the other kind.
-    if (is_numeric_default_pass) self.waiting_context_epoch +%= 1;
+    if (is_numeric_default_pass) {
+        self.waiting_context_epoch +%= 1;
+        self.waiting_trigger_generation += 1;
+    }
     defer if (is_numeric_default_pass) {
         self.waiting_context_epoch +%= 1;
+        self.waiting_trigger_generation += 1;
     };
+    // Leave the clean prefix in place: this pass would retain each of its
+    // obligations again unchanged.
+    if (drain.index == drain.start and drain.stopped_children == null and !self.commit_probe_active) {
+        self.syncCleanDeferredPrefix(env);
+        if (drain.start < env.clean_len) {
+            drain.start = env.clean_len;
+            drain.index = env.clean_len;
+        }
+    }
     const start = drain.start;
     const scratch_deferred_top = drain.scratch_top;
     errdefer self.abandonStaticDispatchDrain(drain);
@@ -37379,7 +37516,8 @@ fn resumeStaticDispatchDrain(
     // detectors, which reject an exact repeated state or a strictly grown
     // re-entry of the same binding before it can extend the queue further.
     while (drain.index < env.deferred_static_dispatch_constraints.items.items.len) : (drain.index += 1) {
-        const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[drain.index];
+        var deferred_constraint = env.deferred_static_dispatch_constraints.items.items[drain.index];
+        deferred_constraint.retained_unchanged = false;
         // A receiver's relation can be queued once by the unification that
         // grounded it and again through its instantiation dispatcher; when
         // both attribute a failure to the same use, the entry that reaches
@@ -37391,6 +37529,7 @@ fn resumeStaticDispatchDrain(
         {
             var retained = deferred_constraint;
             retained.waiting_epoch = self.waiting_context_epoch;
+            retained.retained_unchanged = true;
             try self.scratch_deferred_static_dispatch_constraints.append(retained);
             continue;
         }
@@ -38531,6 +38670,7 @@ fn resumeStaticDispatchDrain(
     }
 
     // Preserve the enclosing drain's prefix, if this is a method-local drain.
+    env.truncateClean(start);
     env.deferred_static_dispatch_constraints.items.shrinkRetainingCapacity(start);
 
     // Copy any flex constraints to try again later
@@ -38539,6 +38679,7 @@ fn resumeStaticDispatchDrain(
         self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
     );
     self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
+    if (!self.commit_probe_active) try self.extendCleanDeferredPrefix(env, start);
 
     // A failed commit-probe must leave checker side tables untouched along
     // with the solved graph. Normal solve passes can retire requirements whose
