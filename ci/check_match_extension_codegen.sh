@@ -92,9 +92,14 @@ cd "$repo_root"
 # each target. Both retain the guarded eight-byte load/compare loop, the
 # guarded byte tail, and the first-difference bit count. The byte tail's
 # out-of-bounds branches leave the hot loop.
+# A crash exit now ends in a trap after the call to the host's crash handler,
+# because a host must never return from `roc_crashed`. On x64musl that is one
+# `ud2`, 94 to 95. On arm64musl the crash exit used to return a zeroed result
+# to the caller, which needed its own epilogue; it is now the call and a `brk`,
+# 94 to 90. The compare, byte-tail, and fill loops are unchanged.
 expectations=(
-    "x64musl:94"
-    "arm64musl:94"
+    "x64musl:95"
+    "arm64musl:90"
 )
 
 failed=0
