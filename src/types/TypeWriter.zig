@@ -61,6 +61,11 @@ seen_count_var_occurrences: std.array_list.Managed(Var),
 seen_count_set: std.AutoHashMap(Var, void),
 /// Suspended steps of the occurrence-counting walk, innermost last.
 count_frames: std.array_list.Managed(CountFrame),
+/// Occurrence counts of every var reachable from `occurrence_counts_root`,
+/// from one counting walk. Naming asks about many vars of one root, so each
+/// root is counted once per write.
+occurrence_counts: std.AutoHashMap(Var, u32),
+occurrence_counts_root: ?Var = null,
 /// Children collected for the occurrence-counting frames in flight, one
 /// contiguous run per frame.
 count_pending: std.array_list.Managed(Var),
@@ -272,6 +277,7 @@ pub fn initFromParts(
         .seen_count_var_occurrences = try std.array_list.Managed(Var).initCapacity(gpa, 16),
         .seen_count_set = std.AutoHashMap(Var, void).init(gpa),
         .count_frames = try std.array_list.Managed(CountFrame).initCapacity(gpa, 16),
+        .occurrence_counts = std.AutoHashMap(Var, u32).init(gpa),
         .count_pending = try std.array_list.Managed(Var).initCapacity(gpa, 16),
         .ext_seen = std.AutoHashMap(Var, void).init(gpa),
         .next_name_index = 0,
@@ -301,6 +307,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.seen_count_var_occurrences.deinit();
     self.seen_count_set.deinit();
     self.count_frames.deinit();
+    self.occurrence_counts.deinit();
     self.count_pending.deinit();
     self.ext_seen.deinit();
     self.flex_var_names_map.deinit();
@@ -331,6 +338,8 @@ pub fn reset(self: *TypeWriter) void {
     self.count_pending.clearRetainingCapacity();
     clearMapIfUsed(Var, void, &self.seen_set);
     clearMapIfUsed(Var, void, &self.seen_count_set);
+    clearMapIfUsed(Var, u32, &self.occurrence_counts);
+    self.occurrence_counts_root = null;
     clearMapIfUsed(Var, void, &self.ext_seen);
     clearMapIfUsed(Var, FlexVarNameRange, &self.flex_var_names_map);
     self.flex_var_names.clearRetainingCapacity();
@@ -1400,15 +1409,28 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
     }
 }
 
-/// Count how many times a variable appears in a type, driving the count on
-/// the frame stack rather than the native one.
+/// Count how many times a variable appears in a type. One walk of `root_var`
+/// counts every var it reaches, and later questions about the same root read
+/// those counts.
+fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.mem.Allocator.Error!usize {
+    if (self.occurrence_counts_root != root_var) {
+        self.occurrence_counts_root = null;
+        clearMapIfUsed(Var, u32, &self.occurrence_counts);
+        try self.countAllOccurrences(root_var);
+        self.occurrence_counts_root = root_var;
+    }
+    return self.occurrence_counts.get(search_var) orelse 0;
+}
+
+/// Count every var's occurrences in `root_var`, driving the count on the
+/// frame stack rather than the native one.
 ///
 /// The seen set is a PATH set, not a global visited set: a var is recorded
 /// while its own subtree is being counted and released when that subtree
 /// finishes, so a node reachable by several distinct paths is counted once
 /// per path. That is what makes the count an occurrence count rather than a
 /// node count, and it is what the naming decisions here read.
-fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.mem.Allocator.Error!usize {
+fn countAllOccurrences(self: *TypeWriter, root_var: Var) std.mem.Allocator.Error!void {
     self.seen_count_var_occurrences.clearRetainingCapacity();
     self.count_frames.clearRetainingCapacity();
     self.count_pending.clearRetainingCapacity();
@@ -1423,14 +1445,13 @@ fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.me
         clearMapIfUsed(Var, void, &self.seen_count_set);
     }
 
-    var count: usize = 0;
-    if (!try self.countRequest(search_var, root_var, &count)) {
+    if (!try self.countRequest(root_var)) {
         while (self.count_frames.items.len > 0) {
             const frame = &self.count_frames.items[self.count_frames.items.len - 1];
             if (frame.idx < frame.count) {
                 const child = self.count_pending.items[frame.base + frame.idx];
                 frame.idx += 1;
-                _ = try self.countRequest(search_var, child, &count);
+                _ = try self.countRequest(child);
                 continue;
             }
             self.count_pending.shrinkRetainingCapacity(frame.base);
@@ -1438,13 +1459,12 @@ fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.me
             self.count_frames.items.len -= 1;
         }
     }
-    return count;
 }
 
 /// Visit one var of the occurrence count: tally it, then either finish it
 /// outright (returning true) or push the frame that will visit its children
 /// (returning false).
-fn countRequest(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize) std.mem.Allocator.Error!bool {
+fn countRequest(self: *TypeWriter, current_var: Var) std.mem.Allocator.Error!bool {
     if (@intFromEnum(current_var) >= self.types.slots.backing.len()) return true;
 
     const resolved = self.types.resolveVar(current_var);
@@ -1454,12 +1474,8 @@ fn countRequest(self: *TypeWriter, search_var: Var, current_var: Var, count: *us
         return true;
     }
 
-    // Count if this is the search var
-
-    // First, check if this is the var we are counting
-    if (resolved.var_ == search_var) {
-        count.* += 1;
-    }
+    const occurrences = try self.occurrence_counts.getOrPut(resolved.var_);
+    occurrences.value_ptr.* = if (occurrences.found_existing) occurrences.value_ptr.* + 1 else 1;
 
     // Check if we've already seen this var on the path we are on
     // This avoids infinite recursion

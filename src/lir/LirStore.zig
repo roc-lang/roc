@@ -1205,11 +1205,20 @@ pub fn getPatterns(self: *const Self) []const LirPattern {
     return self.patterns.unsafeRawItemsForView();
 }
 
+/// The 32-bit start and length of a span of `count` items appended after
+/// `existing` stored items. Storage past 32-bit positions has exhausted the
+/// representable memory.
+fn spanRange(existing: usize, count: usize) Allocator.Error!struct { start: u32, len: u32 } {
+    const end = std.math.add(usize, existing, count) catch return error.OutOfMemory;
+    if (end > std.math.maxInt(u32)) return error.OutOfMemory;
+    return .{ .start = @intCast(existing), .len = @intCast(count) };
+}
+
 /// Appends a slice of pattern ids and returns the span.
 pub fn addPatternSpan(self: *Self, ids: []const LirPatternId) Allocator.Error!LirPatternSpan {
-    const start: u32 = @intCast(self.pattern_ids.len() + if (self.body_coordinator != null) self.body_prefix.pattern_ids else 0);
+    const range = try spanRange(self.pattern_ids.len() + if (self.body_coordinator != null) self.body_prefix.pattern_ids else 0, ids.len);
     try self.pattern_ids.appendSlice(self.allocator, ids);
-    return .{ .start = start, .len = @intCast(ids.len) };
+    return .{ .start = range.start, .len = range.len };
 }
 
 /// Returns the pattern ids for a given span.
@@ -1405,9 +1414,9 @@ pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) vo
 pub fn addLocalSpan(self: *Self, ids: []const LocalId) Allocator.Error!LocalSpan {
     if (ids.len == 0) return LocalSpan.empty();
 
-    const start = @as(u32, @intCast(self.local_ids.len() + if (self.body_coordinator != null) self.body_prefix.local_ids else 0));
+    const range = try spanRange(self.local_ids.len() + if (self.body_coordinator != null) self.body_prefix.local_ids else 0, ids.len);
     try self.local_ids.appendSlice(self.allocator, ids);
-    return .{ .start = start, .len = @intCast(ids.len) };
+    return .{ .start = range.start, .len = range.len };
 }
 
 /// Resolves a local-id span to its stored slice.
@@ -1423,9 +1432,9 @@ pub fn getLocalSpan(self: *const Self, span: LocalSpan) StoreSpanBorrow(LocalId,
 pub fn addU64Span(self: *Self, values: []const u64) Allocator.Error!U64Span {
     if (values.len == 0) return U64Span.empty();
 
-    const start = @as(u32, @intCast(self.u64s.len() + if (self.body_coordinator != null) self.body_prefix.u64s else 0));
+    const range = try spanRange(self.u64s.len() + if (self.body_coordinator != null) self.body_prefix.u64s else 0, values.len);
     try self.u64s.appendSlice(self.allocator, values);
-    return .{ .start = start, .len = @intCast(values.len) };
+    return .{ .start = range.start, .len = range.len };
 }
 
 /// Resolves a u64 span to its stored slice.
@@ -1440,9 +1449,9 @@ pub fn getU64Span(self: *const Self, span: U64Span) StoreSpanBorrow(u64, "u64s")
 /// Stores u32 values and returns the corresponding flat-storage span.
 pub fn addU32Span(self: *Self, values: []const u32) Allocator.Error!U32Span {
     if (values.len == 0) return U32Span.empty();
-    const start: u32 = @intCast(self.u32s.len() + if (self.body_coordinator != null) self.body_prefix.u32s else 0);
+    const range = try spanRange(self.u32s.len() + if (self.body_coordinator != null) self.body_prefix.u32s else 0, values.len);
     try self.u32s.appendSlice(self.allocator, values);
-    return .{ .start = start, .len = @intCast(values.len) };
+    return .{ .start = range.start, .len = range.len };
 }
 
 /// Resolves a u32 span to its stored slice.
@@ -1645,9 +1654,9 @@ fn verifyCFStmtId(self: *const Self, id: CFStmtId) void {
 pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Allocator.Error!CFSwitchBranchSpan {
     if (branches.len == 0) return CFSwitchBranchSpan.empty();
 
-    const start = @as(u32, @intCast(self.cf_switch_branches.len() + if (self.body_coordinator != null) self.body_prefix.cf_switch_branches else 0));
+    const range = try spanRange(self.cf_switch_branches.len() + if (self.body_coordinator != null) self.body_prefix.cf_switch_branches else 0, branches.len);
     try self.cf_switch_branches.appendSlice(self.allocator, branches);
-    return .{ .start = start, .len = @intCast(branches.len) };
+    return .{ .start = range.start, .len = range.len };
 }
 
 /// Resolves a switch-branch span to its stored slice.
@@ -1681,9 +1690,9 @@ pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) StoreSpanBo
 pub fn addStrMatchSteps(self: *Self, steps: []const StrMatchStep) Allocator.Error!StrMatchStepSpan {
     if (steps.len == 0) return StrMatchStepSpan.empty();
 
-    const start = @as(u32, @intCast(self.str_match_steps.len() + if (self.body_coordinator != null) self.body_prefix.str_match_steps else 0));
+    const range = try spanRange(self.str_match_steps.len() + if (self.body_coordinator != null) self.body_prefix.str_match_steps else 0, steps.len);
     try self.str_match_steps.appendSlice(self.allocator, steps);
-    return .{ .start = start, .len = @intCast(steps.len) };
+    return .{ .start = range.start, .len = range.len };
 }
 
 /// Resolves a string-match-step span to its stored slice.
@@ -1699,9 +1708,9 @@ pub fn getStrMatchSteps(self: *const Self, span: StrMatchStepSpan) StoreSpanBorr
 pub fn addStrMatchArms(self: *Self, arms: []const StrMatchArm) Allocator.Error!StrMatchArmSpan {
     if (arms.len == 0) return StrMatchArmSpan.empty();
 
-    const start = @as(u32, @intCast(self.str_match_arms.len() + if (self.body_coordinator != null) self.body_prefix.str_match_arms else 0));
+    const range = try spanRange(self.str_match_arms.len() + if (self.body_coordinator != null) self.body_prefix.str_match_arms else 0, arms.len);
     try self.str_match_arms.appendSlice(self.allocator, arms);
-    return .{ .start = start, .len = @intCast(arms.len) };
+    return .{ .start = range.start, .len = range.len };
 }
 
 /// Resolves a string-match-arm span to its stored slice.
@@ -1735,9 +1744,9 @@ pub fn getStrMatchArmsMut(self: *Self, span: StrMatchArmSpan) StoreSpanBorrowMut
 pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.Error!JoinPointSpan {
     if (join_points.len == 0) return JoinPointSpan.empty();
 
-    const start = @as(u32, @intCast(self.join_points.len() + if (self.body_coordinator != null) self.body_prefix.join_points else 0));
+    const range = try spanRange(self.join_points.len() + if (self.body_coordinator != null) self.body_prefix.join_points else 0, join_points.len);
     try self.join_points.appendSlice(self.allocator, join_points);
-    return .{ .start = start, .len = @intCast(join_points.len) };
+    return .{ .start = range.start, .len = range.len };
 }
 
 /// Resolves a join-point span to its stored slice.

@@ -36,8 +36,8 @@ const DispatchScopeId = checked_ids.DispatchScopeId;
 /// when the constraint originated at a literal.
 pub fn requiresRuntimeDictionary(origin: types.StaticDispatchConstraint.Origin) bool {
     return if (origin.literalKind()) |kind| switch (kind) {
-        .numeral, .interpolation => false,
-        .quote => true,
+        .numeral => false,
+        .quote, .interpolation => true,
     } else true;
 }
 
@@ -709,10 +709,23 @@ pub const MethodRegistryEntry = struct {
     /// no target is what keeps a rejected method distinguishable from a method
     /// no view declares at all.
     target: ?MethodTarget,
-    /// Whether this is a `to_inspect` method that generic inspection uses for
-    /// its owner (design.md "Inspect Overrides"). Only `lookupInspectOverride`
-    /// reads it; ordinary method dispatch ignores it.
-    inspect_override: bool = false,
+    /// For a `to_inspect` method that generic inspection uses for its owner,
+    /// the checked instance of its type that inspection calls: `T -> Str`
+    /// (design.md "Inspect Overrides"). Only `lookupInspectOverride` reads it;
+    /// ordinary method dispatch ignores it.
+    inspect_override: ?CheckedTypeId = null,
+    /// The evidence of inspection's use of this override at
+    /// `inspect_override`, published with the module's dispatch evidence.
+    inspect_evidence: ?EvidenceNodeId = null,
+};
+
+/// The `to_inspect` method generic inspection calls for an owner, the checked
+/// `T -> Str` instance of its type that inspection calls it at, and that use's
+/// evidence in the declaring module's dispatch plan table.
+pub const InspectOverride = struct {
+    target: MethodTarget,
+    callable_ty: CheckedTypeId,
+    evidence: EvidenceNodeId,
 };
 
 /// Public `MethodRegistry` declaration.
@@ -744,12 +757,17 @@ pub const MethodRegistry = struct {
     /// The `to_inspect` target that generic inspection calls for `key.owner`,
     /// or null when the owner has no eligible override and inspection renders
     /// the value's default form. `key.method` names `to_inspect`.
-    pub fn lookupInspectOverride(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
+    pub fn lookupInspectOverride(self: *const MethodRegistry, key: MethodKey) ?InspectOverride {
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
         const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
-        if (!found.inspect_override) return null;
-        return found.target;
+        const callable_ty = found.inspect_override orelse return null;
+        return .{
+            .target = found.target orelse return null,
+            .callable_ty = callable_ty,
+            .evidence = found.inspect_evidence orelse
+                std.debug.panic("checked static dispatch registry invariant violated: inspect override had no published use evidence", .{}),
+        };
     }
 
     /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen
@@ -870,9 +888,11 @@ pub const MethodRegistry = struct {
                     .callable_ty = callable_ty,
                     .reached_through_alias = reached_through_alias,
                 },
-                .inspect_override = entry.key.methodIdent().eql(module_env.idents.to_inspect) and
-                    std.meta.activeTag(target_kind) != .structural and
-                    isInspectOverrideCallable(checked_types, method_owner, callable_ty),
+                .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
+                    std.meta.activeTag(target_kind) != .structural)
+                    try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
+                else
+                    null,
             });
         }
 
@@ -1498,8 +1518,8 @@ pub const EvidenceNodeId = enum(u32) { _ };
 /// callables outward from the reference (0 = the innermost generalized
 /// callable the reference appears in).
 pub const EvidenceChainIndex = struct {
-    depth: u16,
-    index: u16,
+    depth: u32,
+    index: u32,
 };
 
 /// Reference to an enclosing evidence slot. Explicit per-use callable
@@ -2951,10 +2971,26 @@ fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     return builtin_owner == .bool;
 }
 
-/// Whether a `to_inspect` method's type makes it the override generic
-/// inspection uses for `owner` (design.md "Inspect Overrides"): exactly
-/// `T -> Str`, where `T` is `owner` applied to distinct unconstrained type
-/// variables. Aliases are transparent names for the type they abbreviate.
+/// The checked `T -> Str` instance inspection calls a `to_inspect` method at,
+/// or null when the method is not the override generic inspection uses for
+/// `owner` (design.md "Inspect Overrides"). Checking recorded the instance of
+/// the method's type whose result is `Str`, if one exists.
+fn inspectOverrideCallableType(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    checked_types: anytype,
+    owner: MethodOwner,
+    def_idx: CIR.Def.Idx,
+) Allocator.Error!?CheckedTypeId {
+    const instance_var = module.moduleEnvConst().inspectOverrideInstance(def_idx) orelse return null;
+    const instance_ty = try checked_types.publishMethodCallableType(allocator, module, names, instance_var);
+    return if (isInspectOverrideCallable(checked_types, owner, instance_ty)) instance_ty else null;
+}
+
+/// Whether a `to_inspect` instance's type is exactly `T -> Str`, where `T` is
+/// `owner` applied to distinct unconstrained type variables. Aliases are
+/// transparent names for the type they abbreviate.
 fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callable_ty: CheckedTypeId) bool {
     const store = checked_types.store;
     const callable = store.payload(checkedTypeThroughAliases(checked_types, callable_ty));

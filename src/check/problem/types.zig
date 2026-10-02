@@ -634,6 +634,7 @@ pub const StaticDispatch = union(enum) {
     dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
     type_does_not_support_equality: TypeDoesNotSupportEquality,
     type_does_not_support_map: TypeDoesNotSupportMap,
+    undetermined_codec_type: UndeterminedCodecType,
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
 };
@@ -724,6 +725,19 @@ pub const TypeDoesNotSupportEquality = struct {
 /// Error when compiler-derived `map`/`map!` cannot select one direct tag
 /// payload to transform under the language's zero-sized-payload rules.
 pub const TypeDoesNotSupportMap = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
+};
+
+/// Error when a compiler-derived `parser_for` or `encoder_for` is used at a type
+/// that nothing in the program ever determines fully (for example the element
+/// type of `List.parser_for(format)` when the parsed list is never used), so
+/// there is no single codec to derive.
+pub const UndeterminedCodecType = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,

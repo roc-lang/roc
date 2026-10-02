@@ -1369,4 +1369,42 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "2" },
     },
+    .{
+        .name = "inspect: unannotated recursive local closure capturing an item inserted into a Set",
+        .source_kind = .module,
+        .source =
+        \\collect = |item| {
+        \\    loop = |n, values| {
+        \\        if n == 0 {
+        \\            values
+        \\        } else {
+        \\            loop(n - 1, values.insert(item))
+        \\        }
+        \\    }
+        \\    loop(1.U64, Set.empty())
+        \\}
+        \\
+        \\main = collect(A) == Set.from_list([A])
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: unannotated recursive local closure capturing a Dict it looks up",
+        .source_kind = .module,
+        .source =
+        \\path = |parents, start| {
+        \\    loop = |values, step| {
+        \\        updated = values.append(step)
+        \\        match parents.get(step) {
+        \\            Ok(previous) => loop(updated, previous)
+        \\            Err(KeyNotFound) => updated
+        \\        }
+        \\    }
+        \\    loop([], start)
+        \\}
+        \\
+        \\main = path(Dict.single({ x: 1.U64 }, { x: 0.U64 }), { x: 1.U64 }) == [{ x: 1.U64 }, { x: 0.U64 }]
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
 };

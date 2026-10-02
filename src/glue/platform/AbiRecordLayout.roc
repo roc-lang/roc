@@ -1,4 +1,4 @@
-import AbiFieldLayout exposing [AbiFieldLayout]
+import AbiFieldLayout
 
 ## Exact committed record layout details from src/layout/store.zig.
 AbiRecordLayout := { fields : List(AbiFieldLayout) }

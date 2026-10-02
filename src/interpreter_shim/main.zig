@@ -106,12 +106,6 @@ const EntrypointTable = struct {
     }
 };
 
-const ShimError = error{
-    ImageUnavailable,
-    InvalidEntrypoint,
-    OutOfMemory,
-};
-
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError || Allocator.Error;
 
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
@@ -157,17 +151,14 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     };
 }
 
-fn requireCoordinationRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
+fn requireCoordinationRuntimeState(ops: *RocOps) *RuntimeState {
     return switch (runtime_state.source) {
         .coordination => &runtime_state,
-        .embedded => {
-            ops.crash("LIR shim cannot use coordination after installing an embedded image");
-            return error.ImageUnavailable;
-        },
+        .embedded => ops.crash("LIR shim cannot use coordination after installing an embedded image"),
     };
 }
 
-fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
+fn ensureRuntimeState(ops: *RocOps) *RuntimeState {
     if (runtime_state_initialized.load(.acquire)) return requireCoordinationRuntimeState(ops);
 
     runtime_state_mutex.lockUncancelable(shimIo());
@@ -177,19 +168,18 @@ fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
 
     runtime_state = openRuntimeState(allocator()) catch {
         ops.crash("LIR shim could not map the compiled Roc image");
-        return error.ImageUnavailable;
     };
     runtime_state_initialized.store(true, .release);
     return &runtime_state;
 }
 
-fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) void {
+fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) noreturn {
     const message = switch (err) {
         error.OutOfMemory => "Roc interpreter ran out of memory",
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
-        error.Crash => return,
+        error.Crash => interpreter.getCrashMessage(),
         // expect_err statements only occur in top-level expect test roots,
         // never in platform entrypoints.
         error.ExpectErr => unreachable,
@@ -203,9 +193,8 @@ fn evaluateEntrypoint(
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
-) ShimError!void {
-    const state = try ensureRuntimeState(ops);
-    try evaluateEntrypointInState(state, entry_idx, ops, ret_ptr, arg_ptr);
+) void {
+    evaluateEntrypointInState(ensureRuntimeState(ops), entry_idx, ops, ret_ptr, arg_ptr);
 }
 
 fn evaluateEntrypointInState(
@@ -214,7 +203,7 @@ fn evaluateEntrypointInState(
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
-) ShimError!void {
+) void {
     const view = &state.view;
     const entrypoint = state.entrypoints.forOrdinal(entry_idx) orelse {
         if (builtin.mode == .Debug) {
@@ -233,7 +222,6 @@ fn evaluateEntrypointInState(
         shimIo(),
     ) catch {
         ops.crash("LIR shim could not initialize the LIR interpreter");
-        return error.OutOfMemory;
     };
     defer retained.release();
     retained.enter();
@@ -248,46 +236,35 @@ fn evaluateEntrypointInState(
         .ret_layout = entrypoint.ret_layout,
         .arg_ptr = arg_ptr,
         .ret_ptr = ret_ptr,
-    }) catch |err| {
-        reportEvalError(ops, interpreter, err);
-        return;
-    };
+    }) catch |err| reportEvalError(ops, interpreter, err);
 }
 
-fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) ShimError!lir.LirImage.ProgramView {
+fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) lir.LirImage.ProgramView {
     if (image_len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
         ops.crash("LIR shim received an invalid embedded LIR image");
-        return error.ImageUnavailable;
     }
 
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(image_base));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
     if (header.magic != lir.LirImage.MAGIC) {
         ops.crash("LIR shim received a non-LIR embedded image");
-        return error.ImageUnavailable;
     }
     return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, image_len, TargetUsize.native, allocator()) catch {
         ops.crash("LIR shim could not view the embedded LIR image");
-        return error.ImageUnavailable;
     };
 }
 
-fn requireEmbeddedRuntimeState(base: usize, image_len: usize, ops: *RocOps) ShimError!*RuntimeState {
+fn requireEmbeddedRuntimeState(base: usize, image_len: usize, ops: *RocOps) *RuntimeState {
     return switch (runtime_state.source) {
         .embedded => |embedded| if (embedded.base == base and embedded.len == image_len)
             &runtime_state
-        else mismatch: {
-            ops.crash("LIR shim received a different embedded image after initialization");
-            break :mismatch error.ImageUnavailable;
-        },
-        .coordination => {
-            ops.crash("LIR shim cannot install an embedded image after coordination");
-            return error.ImageUnavailable;
-        },
+        else
+            ops.crash("LIR shim received a different embedded image after initialization"),
+        .coordination => ops.crash("LIR shim cannot install an embedded image after coordination"),
     };
 }
 
-fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *RocOps) ShimError!*RuntimeState {
+fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *RocOps) *RuntimeState {
     const base = @intFromPtr(image_base);
     if (runtime_state_initialized.load(.acquire)) return requireEmbeddedRuntimeState(base, image_len, ops);
 
@@ -296,21 +273,15 @@ fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *Ro
 
     if (runtime_state_initialized.load(.monotonic)) return requireEmbeddedRuntimeState(base, image_len, ops);
 
-    var view = viewEmbeddedLirImage(image_base, image_len, ops) catch return error.ImageUnavailable;
-    errdefer view.deinit();
-    var static_data = eval.InterpreterStaticData.init(allocator(), view.static_data, view.static_data_value_count) catch {
+    const view = viewEmbeddedLirImage(image_base, image_len, ops);
+    const static_data = eval.InterpreterStaticData.init(allocator(), view.static_data, view.static_data_value_count) catch {
         ops.crash("LIR shim could not allocate the immutable value image");
-        return error.OutOfMemory;
     };
-    errdefer static_data.deinit();
-    var static_strings = eval.LirInterpreter.buildStaticStrings(allocator(), &view.store) catch {
+    const static_strings = eval.LirInterpreter.buildStaticStrings(allocator(), &view.store) catch {
         ops.crash("LIR shim could not allocate the string literal image");
-        return error.OutOfMemory;
     };
-    errdefer static_strings.deinit();
     const entrypoints = EntrypointTable.build(allocator(), &view) catch {
         ops.crash("LIR shim could not allocate the entrypoint table");
-        return error.OutOfMemory;
     };
     runtime_state = .{
         .source = .{ .embedded = .{ .base = base, .len = image_len } },
@@ -340,12 +311,7 @@ fn shimEntrypoint(
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) callconv(.c) void {
-    evaluateEntrypoint(entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
-        error.ImageUnavailable,
-        error.InvalidEntrypoint,
-        error.OutOfMemory,
-        => {},
-    };
+    evaluateEntrypoint(entry_idx, ops, ret_ptr, arg_ptr);
 }
 
 fn shimEntrypointFromImage(
@@ -358,20 +324,7 @@ fn shimEntrypointFromImage(
 ) callconv(.c) void {
     const base = image_base orelse {
         ops.crash("LIR shim received no embedded LIR image");
-        return;
     };
 
-    const state = ensureEmbeddedRuntimeState(base, image_len, ops) catch |err| switch (err) {
-        error.ImageUnavailable,
-        error.InvalidEntrypoint,
-        error.OutOfMemory,
-        => return,
-    };
-
-    evaluateEntrypointInState(state, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
-        error.ImageUnavailable,
-        error.InvalidEntrypoint,
-        error.OutOfMemory,
-        => {},
-    };
+    evaluateEntrypointInState(ensureEmbeddedRuntimeState(base, image_len, ops), entry_idx, ops, ret_ptr, arg_ptr);
 }

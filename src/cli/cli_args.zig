@@ -969,10 +969,16 @@ fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8)
 
 fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
+    errdefer paths.deinit();
+    var positional = false;
     var stdin = false;
     var check = false;
     for (args) |arg| {
-        if (isHelpFlag(arg)) {
+        if (positional) {
+            try paths.append(arg);
+        } else if (mem.eql(u8, arg, "--")) {
+            positional = true;
+        } else if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .format variant
             paths.deinit();
             return CliArgs{ .help =
@@ -987,6 +993,7 @@ fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
             \\      --check  Checks that specified files are formatted
             \\               (If formatting is needed, return a non-zero exit code.)
             \\      --stdin  Format code from stdin; output to stdout
+            \\      --       Treat all remaining arguments as paths
             \\  -h, --help   Print help
             \\
             \\If DIRECTORY_OR_FILES is omitted, the .roc files in the current working directory are formatted.
@@ -996,6 +1003,9 @@ fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
             stdin = true;
         } else if (mem.eql(u8, arg, "--check")) {
             check = true;
+        } else if (mem.startsWith(u8, arg, "-")) {
+            paths.deinit();
+            return .{ .problem = .{ .unexpected_argument = .{ .cmd = "fmt", .arg = arg } } };
         } else {
             try paths.append(arg);
         }
@@ -2116,7 +2126,7 @@ test "roc fmt" {
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "fmt", "--thisisactuallyafile" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "fmt", "--", "--thisisactuallyafile" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--thisisactuallyafile", result.fmt.paths[0]);
     }
@@ -2872,4 +2882,23 @@ test "--replace-dep rejects missing values, the = form, and non-resolving comman
         const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--replace-dep", url, "../pkg/main.roc", "--help" });
         try testing.expect(std.mem.find(u8, result.help, "--replace-dep OLD NEW") != null);
     }
+}
+
+test "issue 5181: misspelled formatter flags identify the offending argument" {
+    const gpa = testing.allocator;
+    // spellchecker:ignore-next-line
+    for ([_][]const u8{ "--chek", "-x", "--stdiin" }) |flag| {
+        const result = try parse(gpa, testing.io, &.{ "fmt", flag, "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("fmt", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings(flag, result.problem.unexpected_argument.arg);
+    }
+}
+
+test "formatter accepts flag-like filenames after the option terminator" {
+    const gpa = testing.allocator;
+    const result = try parse(gpa, testing.io, &.{ "fmt", "--", "-x.roc" });
+    defer result.deinit(gpa);
+    try testing.expectEqualStrings("-x.roc", result.fmt.paths[0]);
 }

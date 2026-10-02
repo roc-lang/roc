@@ -47,9 +47,11 @@ checked modules → post-check IRs → LIR → TRMC/TCE → ARC → Interpret
    execution engine, `execStmtChain` executes each frame's statement chain
    iteratively, dispatching per `CFStmt` variant; low-level ops go through
    `evalLowLevel`.
-5. **Crash handling**—Crash/expect expressions delegate to the host via
-   `RocOps.crash`. Hosts supply a `CrashContext` (see `crash_context.zig`) to
-   record messages.
+5. **Crash handling**—A Roc crash records its message in the interpreter and
+   unwinds as `error.Crash` (`getCrashMessage` returns the message). The
+   interpreter never calls the host's `roc_crashed`, which does not return;
+   the embedder delivers the crash to its host. Expect expressions delegate to
+   the host via `RocOps`.
 
 All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 `RocOps` pointer. This keeps host integrations consistent.

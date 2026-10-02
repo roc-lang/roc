@@ -1,7 +1,7 @@
 app [make_glue] { pf: platform glue }
 
-import pf.Types exposing [Types]
-import pf.File exposing [File]
+import pf.Types
+import pf.File
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |_types| Ok([])

@@ -2312,6 +2312,8 @@ const ExtractContext = struct {
     }
 };
 
+// Inferred types have no source request for expansion. Keep collections compact;
+// annotated types retain their explicit source layout in extractTypeAnno.
 fn extractDocType(
     gpa: Allocator,
     types: *const TypeStore,
@@ -2384,7 +2386,7 @@ fn extractDocType(
         return try allocDocType(gpa, .{ .where_clause = .{
             .type = base_type.?,
             .constraints = owned_constraints,
-            .layout = .multiline,
+            .layout = .compact,
         } });
     }
 
@@ -2577,7 +2579,7 @@ fn extractDocTypeInner(
                 return try allocDocType(gpa, .{ .apply = .{
                     .constructor = constructor,
                     .args = args_slice,
-                    .layout = .multiline,
+                    .layout = .compact,
                 } });
             } else {
                 // Simple type reference
@@ -2634,7 +2636,7 @@ fn extractFlatType(
                 .fields = try gpa.alloc(DocType.Field, 0),
                 .ext = null,
                 .is_open = false,
-                .layout = .multiline,
+                .layout = .compact,
             } });
         },
         .empty_tag_union => {
@@ -2642,7 +2644,7 @@ fn extractFlatType(
                 .tags = try gpa.alloc(DocType.Tag, 0),
                 .ext = null,
                 .is_open = false,
-                .layout = .multiline,
+                .layout = .compact,
             } });
         },
     }
@@ -2720,7 +2722,7 @@ fn extractNominalType(
         return try allocDocType(gpa, .{ .apply = .{
             .constructor = constructor,
             .args = args_slice,
-            .layout = .multiline,
+            .layout = .compact,
         } });
     } else {
         return try allocDocType(gpa, .{ .type_ref = .{
@@ -2880,7 +2882,7 @@ fn extractRecord(
         .fields = doc_fields,
         .ext = ext_doc_type,
         .is_open = is_open,
-        .layout = .multiline,
+        .layout = .compact,
     } });
 }
 
@@ -2897,7 +2899,7 @@ fn extractTuple(
     }
     return try allocDocType(gpa, .{ .tuple = .{
         .elems = elems,
-        .layout = .multiline,
+        .layout = .compact,
     } });
 }
 
@@ -2934,7 +2936,7 @@ fn extractTagUnion(
         try tags.append(gpa, .{
             .name = tag_name,
             .args = tag_args,
-            .layout = .multiline,
+            .layout = .compact,
         });
     }
 
@@ -3009,7 +3011,7 @@ fn extractTagUnion(
         .tags = tags_slice,
         .ext = ext_type,
         .is_open = is_open,
-        .layout = .multiline,
+        .layout = .compact,
     } });
 }
 
@@ -3251,4 +3253,36 @@ test "LineIndex: offset zero" {
     defer index.deinit(gpa);
 
     try std.testing.expectEqual(@as(u32, 1), index.lineOf(0));
+}
+
+test "issue 11592: inferred nested function tag payloads stay compact" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var store = try TypeStore.init(gpa);
+    defer store.deinit();
+    const a = try store.fresh();
+    const b = try store.fresh();
+    const c = try store.fresh();
+    const d = try store.fresh();
+    const tags = try store.appendTags(&.{
+        .{ .name = try env.getIdentStore().insert(gpa, Ident.for_text("Ok")), .args = try store.appendVars(&.{c}) },
+        .{ .name = try env.getIdentStore().insert(gpa, Ident.for_text("Err")), .args = try store.appendVars(&.{d}) },
+    });
+    const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const result = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = closed } } });
+    const inner = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{b}), .ret = result } } });
+    const outer = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{a}), .ret = inner } } });
+    const doc = (try extractDocType(gpa, &store, &env, "Test", .{ .current = null, .all = &.{}, .checked_artifact = null }, outer)).?;
+    defer {
+        doc.deinit(gpa);
+        gpa.destroy(doc);
+    }
+    const union_doc = doc.function.ret.function.ret.tag_union;
+    try std.testing.expectEqual(DocType.Layout.compact, union_doc.layout);
+    try std.testing.expectEqual(@as(usize, 2), union_doc.tags.len);
+    for (union_doc.tags) |tag| {
+        try std.testing.expectEqual(DocType.Layout.compact, tag.layout);
+        try std.testing.expectEqual(@as(usize, 1), tag.args.len);
+    }
 }

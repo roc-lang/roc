@@ -136,6 +136,7 @@ const StackEntry = struct {
 
 const RowContext = enum { none, record, tag };
 
+/// Sentinel for a path root with no preceding node.
 pub const no_path_node = std.math.maxInt(u32);
 
 /// One step of a path. Paths share their prefixes through `parent` (another

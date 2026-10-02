@@ -1289,8 +1289,10 @@ pub const tests = [_]TestCase{
         \\            crash "expected an item"
         \\        }
         \\    }
-        \\    expect Stream.collect!(Stream.custom(0, Known(0), count!)) == [0, 1, 2, 3]
-        \\    expect Stream.collect!(Stream.custom(0, Known(2), count!)) == [0, 1, 2, 3]
+        \\    actual0 = Stream.collect!(Stream.custom(0, Known(0), count!))
+        \\    expect actual0 == [0, 1, 2, 3]
+        \\    actual1 = Stream.collect!(Stream.custom(0, Known(2), count!))
+        \\    expect actual1 == [0, 1, 2, 3]
         \\    {}
         \\}
     ,
@@ -1387,7 +1389,8 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    expect first_above!(1) == 2
+        \\    actual2 = first_above!(1)
+        \\    expect actual2 == 2
         \\    {}
         \\}
     ,
@@ -1414,13 +1417,20 @@ pub const tests = [_]TestCase{
         \\main : () => {}
         \\main = || {
         \\    nums = [1.U64, 2, 3, 4, 5, 6].iter().stream()
-        \\    expect nums.keep_if(|n| n % 2 == 0).collect!() == [2, 4, 6]
-        \\    expect nums.drop_if(|n| n % 2 == 0).collect!() == [1, 3, 5]
-        \\    expect nums.keep_if(|n| n > 4).with_index().collect!() == [(0, 5), (1, 6)]
-        \\    expect nums.take_first(2).collect!() == [1, 2]
-        \\    expect nums.take_first(10).collect!() == [1, 2, 3, 4, 5, 6]
-        \\    expect nums.drop_first(4).collect!() == [5, 6]
-        \\    expect nums.drop_first(10).collect!() == []
+        \\    actual3 = nums.keep_if(|n| n % 2 == 0).collect!()
+        \\    expect actual3 == [2, 4, 6]
+        \\    actual4 = nums.drop_if(|n| n % 2 == 0).collect!()
+        \\    expect actual4 == [1, 3, 5]
+        \\    actual5 = nums.keep_if(|n| n > 4).with_index().collect!()
+        \\    expect actual5 == [(0, 5), (1, 6)]
+        \\    actual6 = nums.take_first(2).collect!()
+        \\    expect actual6 == [1, 2]
+        \\    actual7 = nums.take_first(10).collect!()
+        \\    expect actual7 == [1, 2, 3, 4, 5, 6]
+        \\    actual8 = nums.drop_first(4).collect!()
+        \\    expect actual8 == [5, 6]
+        \\    actual9 = nums.drop_first(10).collect!()
+        \\    expect actual9 == []
         \\    expect nums.take_first(3).size_hint() == Known(3)
         \\    expect nums.drop_first(4).size_hint() == Known(2)
         \\    {}
@@ -1440,7 +1450,8 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    expect Stream.custom(0, Unknown, counter!).take_first(2).collect!() == [0, 1]
+        \\    actual10 = Stream.custom(0, Unknown, counter!).take_first(2).collect!()
+        \\    expect actual10 == [0, 1]
         \\    {}
         \\}
     ,
@@ -1453,7 +1464,8 @@ pub const tests = [_]TestCase{
         \\main : () => {}
         \\main = || {
         \\    words = ["a", "b", "c"].iter().stream()
-        \\    expect words.fold!("", |acc, word| Str.concat(acc, word)) == "abc"
+        \\    actual11 = words.fold!("", |acc, word| Str.concat(acc, word))
+        \\    expect actual11 == "abc"
         \\    words.for_each!(|word| {
         \\        dbg word
         \\        {}
@@ -1474,7 +1486,8 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    expect [1.U64, 2, 3].iter().stream().keep_if(keep!).collect!() == [1, 3]
+        \\    actual12 = [1.U64, 2, 3].iter().stream().keep_if(keep!).collect!()
+        \\    expect actual12 == [1, 3]
         \\    {}
         \\}
     ,

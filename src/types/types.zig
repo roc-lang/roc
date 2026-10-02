@@ -32,7 +32,9 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(32, @sizeOf(Descriptor));
+    // A rank counts nested generalization scopes, which valid source can nest
+    // arbitrarily deep, so it takes a full word.
+    try std.testing.expectEqual(36, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(24, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
@@ -111,7 +113,12 @@ pub const DescriptorFlags = packed struct(u8) {
     /// Definition-site implicit annotation openness. Codec derivation may
     /// close this tail before generalization; fresh uses do not inherit it.
     annotation_tag_ext: bool = false,
-    _unused: u5 = 0,
+    /// An implicitly opened row of an annotated definition: the annotation
+    /// bounds the definition, so the class may close or stay open but never
+    /// gain a tag (design.md "Polarity"). Instantiation never copies it, so
+    /// uses of the definition widen freely.
+    bounded_row_ext: bool = false,
+    _unused: u4 = 0,
 };
 
 /// A type descriptor
@@ -141,7 +148,7 @@ pub const Descriptor = struct {
 ///
 /// Keeping track of ranks makes type inference faster.
 ///
-pub const Rank = enum(u8) {
+pub const Rank = enum(u32) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
     outermost = 1,
@@ -1077,7 +1084,7 @@ pub const StaticDispatchConstraint = struct {
     /// user's own expression without reconstructing var->expr maps after the
     /// fact. Copied verbatim by instantiation and cross-module import. This is
     /// METADATA: it is deliberately excluded from type identity—canonical type
-    /// keys (`writeConstraints`) and unification content-equality never read it,
+    /// keys (the checked artifact's type-key writer) and unification content-equality never read it,
     /// so two structurally identical constraints with different provenance stay
     /// equal.
     provenance: Provenance = .{},
