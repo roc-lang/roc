@@ -7890,11 +7890,12 @@ fn customBuildDefaultAppGlibcDev(
     timeout_ms: u64,
 ) ?TestResult {
     if (builtin.os.tag != .linux) return null;
-    const target: []const u8 = switch (builtin.cpu.arch) {
-        .x86_64 => "x64glibc",
-        .aarch64 => "arm64glibc",
-        else => return null,
-    };
+    const target: []const u8 = if (builtin.cpu.arch == .x86_64)
+        "x64glibc"
+    else if (builtin.cpu.arch == .aarch64)
+        "arm64glibc"
+    else
+        return null;
     return customBuildDefaultAppArgs(io, allocator, env, timer, timeout_ms, .dev, target);
 }
 
