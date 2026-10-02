@@ -19,7 +19,6 @@ const stack_bytes = 4 * 1024 * 1024;
 /// Shapes whose compilation still does work superlinear in their depth nest
 /// less deeply, on a stack still far smaller than that depth times any
 /// per-level recursion cost.
-const shallow_depth = 1000;
 const shallow_stack_bytes = 2 * 1024 * 1024;
 
 /// A curried lambda chain instantiates each level's whole remaining function
@@ -410,9 +409,9 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: lambdas nested as method arguments",
         .source_kind = .module,
-        .source = "main = " ++ repeat("[1.U64].map(|_| ", shallow_depth) ++ "1.U64" ++ repeat(").len()", shallow_depth) ++ "\n",
+        .source = "main = " ++ repeat("[1.U64].map(|_| ", depth) ++ "1.U64" ++ repeat(").len()", depth) ++ "\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: custom parsers nesting derived record parsers",
