@@ -223,13 +223,13 @@ pub const OpenRows = struct {
         }
     }
 
-    /// Whether the definition this annotation belongs to generalizes whatever
-    /// its annotation writes (`Check.checkDef` and the local statement check
-    /// warn on exactly these) and is not a host boundary
-    /// (`Check.collectHostBoundaryAnnotations`). Every top-level or associated
-    /// definition does: a value's implicitly opened rows generalize exactly
-    /// like written ones. A block's value binding does not: on a local value,
-    /// `..` is the opt-in to a quantified row.
+    /// Whether an anonymous `..` in an output position of this annotation
+    /// means exactly what its absence means (`Check.auditImplicitOpenExts`
+    /// warns on exactly these) and the annotation is not a host boundary
+    /// (`Check.collectHostBoundaryAnnotations`). Every annotated definition
+    /// qualifies: a top-level or associated one, a local function, and a local
+    /// value, whose implicitly opened rows generalize or stay shared exactly
+    /// as they would without the `..` (design.md "Polarity").
     fn annotationGeneralizesRegardless(self: *OpenRows, name_tok: Token.Idx, next: ?AST.Statement.Idx, scope: StatementScope) Allocator.Error!bool {
         const name = self.tokenName(name_tok);
         // A platform's provided definitions are host-boundary annotations.
@@ -240,16 +240,9 @@ pub const OpenRows = struct {
             if (next_stmt == .decl) {
                 const decl = next_stmt.decl;
                 const pattern = self.ast.store.getPattern(decl.pattern);
-                if (pattern == .ident and std.mem.eql(u8, self.tokenName(pattern.ident.ident_tok), name)) {
-                    return switch (scope) {
-                        // Every definition at these scopes generalizes.
-                        .file, .associated => true,
-                        // A local function definition. Every other local
-                        // body, including a lookup whose canonical form this
-                        // AST cannot tell, keeps its `..`.
-                        .block => self.ast.store.getExpr(decl.body) == .lambda,
-                    };
-                }
+                // Every definition at every scope: Can attaches a same-named
+                // annotation to the declaration, and the checker audits it.
+                if (pattern == .ident and std.mem.eql(u8, self.tokenName(pattern.ident.ident_tok), name)) return true;
                 // At the top level, Can attaches the annotation to the def a
                 // destructured literal splits off for that name: a top-level
                 // definition, which generalizes. Associated and block scopes

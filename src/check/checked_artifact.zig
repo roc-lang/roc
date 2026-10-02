@@ -1715,7 +1715,12 @@ fn verifyCompileTimeRequestsScheduled(
 /// variables are NOT concrete) or a nominal declaration's backing template
 /// (rigids there are the declaration's formals, standing for args the walk
 /// already checked at the application, so they count as concrete).
-const ConcreteRootWalk = enum { value_graph, decl_template };
+/// How a concreteness walk reads a type variable: a value graph's variable is
+/// never concrete, a declaration template's formals stand for already-checked
+/// arguments, and `sealed_rows` reads a variable that seals to a row default
+/// as that default (a generalized local value's quantified row, evaluated once
+/// at its annotated width; design.md "Polarity").
+const ConcreteRootWalk = enum { value_graph, decl_template, sealed_rows };
 
 fn checkedTypeIsConcreteCompileTimeRoot(
     allocator: Allocator,
@@ -1726,6 +1731,19 @@ fn checkedTypeIsConcreteCompileTimeRoot(
     defer active.deinit();
     var scan = ConcreteRootScan{ .checked_types = checked_types, .active = &active };
     return ConcreteRootScan.Eval.run(allocator, &scan, .{ .ty = .{ .walk = .value_graph, .id = root } });
+}
+
+/// Like `checkedTypeIsConcreteCompileTimeRoot`, reading every variable that
+/// seals to a row default as sealed.
+fn checkedTypeIsConcreteSealedCompileTimeRoot(
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+) Allocator.Error!bool {
+    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    var scan = ConcreteRootScan{ .checked_types = checked_types, .active = &active };
+    return ConcreteRootScan.Eval.run(allocator, &scan, .{ .ty = .{ .walk = .sealed_rows, .id = root } });
 }
 
 /// Whether a checked type is concrete enough to be a compile-time root. A
@@ -1759,10 +1777,11 @@ const ConcreteRootScan = struct {
         if (index >= checked_types.payloads.items.len) {
             checkedArtifactInvariant("compile-time root checked type id is out of range", .{});
         }
-        switch (checked_types.payload(@enumFromInt(index))) {
+        const payload = checked_types.payload(@enumFromInt(index));
+        switch (payload) {
             .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
             .err => return .{ .value = false },
-            .flex => return .{ .value = false },
+            .flex => return .{ .value = walk == .sealed_rows and payload.variableSealsToRowDefault() },
             .rigid => return .{ .value = walk == .decl_template },
             .empty_record,
             .empty_tag_union,
@@ -11062,7 +11081,8 @@ pub const CheckedExprData = union(enum) {
     /// A checker-stamped row coercion (design.md "Row Coercion Primitive"):
     /// `value` is a closed tag row whose every tag this expression's wider
     /// type lists. The two types are related, never unified, and lowering
-    /// re-tags the value. No checker site emits it yet.
+    /// re-tags the value. Emitted for every use of a generalized block-local
+    /// value (design.md "Polarity"; `ModuleEnv.RowCoercedLocalValue`).
     row_coerce: struct {
         value: CheckedExprId,
     },
@@ -11232,7 +11252,8 @@ pub const StoredCheckedExprData = union(enum) {
     /// A checker-stamped row coercion (design.md "Row Coercion Primitive"):
     /// `value` is a closed tag row whose every tag this expression's wider
     /// type lists. The two types are related, never unified, and lowering
-    /// re-tags the value. No checker site emits it yet.
+    /// re-tags the value. Emitted for every use of a generalized block-local
+    /// value (design.md "Polarity"; `ModuleEnv.RowCoercedLocalValue`).
     row_coerce: struct {
         value: CheckedExprId,
     },
@@ -12828,7 +12849,11 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             if (source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
-                exprs.items[@intFromEnum(id)].data = try copier.copyExprData(@enumFromInt(node_idx));
+                // Copying a use of a generalized local value appends its
+                // coercion's child to `exprs`, so take the slot only after
+                // the copy has grown the list.
+                const data = try copier.copyExprData(@enumFromInt(node_idx));
+                exprs.items[@intFromEnum(id)].data = data;
             } else if (source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
                 patterns.items[@intFromEnum(id)].data = try copier.copyPatternData(@enumFromInt(node_idx));
@@ -15385,10 +15410,29 @@ const CheckedBodyPayloadCopier = struct {
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| try self.copyStrExpr(expr_idx, str.span),
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
-            .e_lookup_local => |lookup| .{ .lookup_local = .{
-                .pattern = self.checkedPattern(lookup.pattern_idx),
-                .resolved = null,
-            } },
+            .e_lookup_local => |lookup| blk: {
+                const lookup_data: CheckedExprData = .{ .lookup_local = .{
+                    .pattern = self.checkedPattern(lookup.pattern_idx),
+                    .resolved = null,
+                } };
+                if (!self.module.moduleEnvConst().nodeIsRowCoercedLocalValue(ModuleEnv.nodeIdxFrom(lookup.pattern_idx))) break :blk lookup_data;
+                // A use of a row-coerced local value (checking records them:
+                // `ModuleEnv.RowCoercedLocalValue`) coerces the binder's one
+                // value—the lookup, at the binder's own type—to the row this
+                // use instantiated, which is this expression's checked type
+                // (design.md "Polarity", "Row Coercion Primitive").
+                const value_id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+                try self.exprs.append(self.allocator, .{
+                    .id = value_id,
+                    .ty = try self.checkedTypeForRequiredVar(
+                        self.module.patternType(lookup.pattern_idx),
+                        "row-coerced local value binder type root was not recorded",
+                    ),
+                    .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
+                    .data = lookup_data,
+                });
+                break :blk .{ .row_coerce = .{ .value = value_id } };
+            },
             .e_lookup_external, .e_lookup_associated_resolved => .{ .lookup_external = null },
             .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked body publication", .{}),
             .e_lookup_required => .{ .lookup_required = null },
@@ -17306,7 +17350,21 @@ pub const ResolvedValueRefTable = struct {
                 tag != .expr_required_lookup) continue;
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            const source_checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            // A use of a generalized local value is a row coercion of the
+            // binder's value: the lookup, and so the reference and its type,
+            // is the coercion's child (design.md "Polarity").
+            const coerced_lookup: ?CheckedExpr = switch (checked_bodies.expr(source_checked_expr).data) {
+                .row_coerce => |coerce| blk: {
+                    const value = checked_bodies.expr(coerce.value);
+                    if (value.data != .lookup_local) {
+                        checkedArtifactInvariant("row coercion of a local value did not wrap a local lookup", .{});
+                    }
+                    break :blk value;
+                },
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            };
+            const checked_expr = if (coerced_lookup) |value| value.id else source_checked_expr;
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
@@ -17324,7 +17382,7 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+            const checked_ty = if (coerced_lookup) |value| value.ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
@@ -17332,7 +17390,7 @@ pub const ResolvedValueRefTable = struct {
             };
             // Publication keys every source root by this same writer.
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .Debug and coerced_lookup == null) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
                 if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
                     std.debug.panic("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
@@ -18999,6 +19057,10 @@ const EvidencePass = struct {
     /// sweep resolves whatever no template reached (chain-free).
     plan_resolved: []bool = &.{},
     iterator_plan_resolved: []bool = &.{},
+    /// Per procedure template: an entry wrapper evaluating a sealed local
+    /// value (`compileTimeRootIsSealedLocalValue`), whose scheme it does not
+    /// carry (see `templateEvaluatesSealedLocalValue`).
+    sealed_value_templates: []bool = &.{},
     /// Explicit shared-var use records deferred during template walks because
     /// the current chain did not bind every obligation.
     deferred_use_sites: std.ArrayListUnmanaged(struct { record_idx: u32, site_key: u32 }) = .empty,
@@ -19084,6 +19146,7 @@ const EvidencePass = struct {
     fn deinit(self: *EvidencePass) void {
         self.allocator.free(self.plan_resolved);
         self.allocator.free(self.iterator_plan_resolved);
+        self.allocator.free(self.sealed_value_templates);
         self.deferred_use_sites.deinit(self.allocator);
         var schemas = self.schemas_by_root.valueIterator();
         while (schemas.next()) |schema| self.allocator.free(schema.identity_vars);
@@ -19127,6 +19190,10 @@ const EvidencePass = struct {
         @memset(self.plan_resolved, false);
         self.iterator_plan_resolved = try self.allocator.alloc(bool, self.plan_table.iterator_for_plans.len);
         @memset(self.iterator_plan_resolved, false);
+        self.sealed_value_templates = try self.allocator.alloc(bool, self.templates.templates.items.len);
+        for (self.templates.templates.items, self.sealed_value_templates) |template, *sealed| {
+            sealed.* = try self.templateEvaluatesSealedLocalValue(template);
+        }
 
         try self.buildIndexes();
         try self.linkGeneratedCodecCalls();
@@ -19402,15 +19469,36 @@ const EvidencePass = struct {
         };
     }
 
+    /// Whether `template` is the entry wrapper of a sealed local value root
+    /// (`compileTimeRootIsSealedLocalValue`). Such a root is evaluated once,
+    /// at its annotated width: every row its binder's scheme quantifies seals
+    /// to its row default there, and only the uses widen the evaluated value
+    /// (by a row coercion). The wrapper therefore carries no scheme—neither
+    /// quantified variables nor evidence parameters. Carrying the binder's
+    /// quantified rows would hand them to downstream stages as variables some
+    /// scheme binds, though nothing ever instantiates this wrapper: a body
+    /// reading the evaluated value at the binder's type would then need a
+    /// descriptor for a row no caller can supply instead of its row default.
+    fn templateEvaluatesSealedLocalValue(self: *EvidencePass, template: CheckedProcedureTemplate) Allocator.Error!bool {
+        const wrapper_id = switch (template.body) {
+            .entry_wrapper => |wrapper_id| wrapper_id,
+            .checked_body, .intrinsic_wrapper, .unimplemented => return false,
+        };
+        const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
+        return try compileTimeRootIsSealedLocalValue(self.allocator, self.module, &self.checked_types.store, root);
+    }
+
     /// The solver root of a template's scheme: its definition's type, or the
     /// scheme of the compile-time root an entry wrapper evaluates. Intrinsic
-    /// and hosted wrappers and expression roots have no scheme.
+    /// and hosted wrappers, expression roots and sealed local value wrappers
+    /// have no scheme.
     fn templateSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
         template_defs: *const std.AutoHashMap(u32, Var),
     ) ?Var {
         if (template_defs.get(@intFromEnum(template.template_id))) |scheme_var| return scheme_var;
+        if (self.sealed_value_templates[@intFromEnum(template.template_id)]) return null;
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| rootSchemeVar(self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root)),
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
@@ -19500,6 +19588,7 @@ const EvidencePass = struct {
         template_defs: *const std.AutoHashMap(u32, Var),
     ) ?Var {
         if (template_defs.get(@intFromEnum(template.template_id))) |scheme_var| return scheme_var;
+        if (self.sealed_value_templates[@intFromEnum(template.template_id)]) return null;
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
@@ -23835,7 +23924,14 @@ const NestedProcSiteBuilder = struct {
                 for (tag.args) |arg| try self.pushExpr(arg, owner);
             },
             .nominal => |nominal| try self.pushExpr(nominal.backing_expr, owner),
-            .row_coerce => |coerce| try self.pushExpr(coerce.value, owner),
+            .row_coerce => |coerce| {
+                // A generalized local value's use records its instantiation
+                // at the coercion, which took the lookup's source node.
+                if (self.static_dispatch_plans.siteSubstitution(expr_id)) |substitution| {
+                    for (substitution) |ty| try self.captureType(ty);
+                }
+                try self.pushExpr(coerce.value, owner);
+            },
             .binop => |binop| {
                 try self.pushExpr(binop.lhs, owner);
                 try self.pushExpr(binop.rhs, owner);
@@ -28301,16 +28397,32 @@ fn checkedTypeHasNoReachableCallableSlots(
             },
             .record => |record| {
                 for (record.fields) |field| try pending.append(allocator, field.ty);
-                try pending.append(allocator, record.ext);
+                // A tail that seals to its row default is a closed row at this
+                // point: checking is complete, so no use adds a field to it.
+                if (!checkedRowTailSealsToDefault(checked_types, record.ext)) try pending.append(allocator, record.ext);
             },
             .tuple => |items| try pending.appendSlice(allocator, items),
             .tag_union => |tag_union| {
                 for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(checked_types));
-                try pending.append(allocator, tag_union.ext);
+                // As for a record: a defaultable tail carries no further tag, so
+                // it holds no callable (a generalized local value's quantified
+                // row seals to this default when the value is evaluated once).
+                if (!checkedRowTailSealsToDefault(checked_types, tag_union.ext)) try pending.append(allocator, tag_union.ext);
             },
         }
     }
     return true;
+}
+
+/// Whether a row's extension is a variable that lowering seals to its row
+/// default (`CheckedTypePayload.variableSealsToRowDefault`); a structural
+/// extension (a further row, or the closed `[]`/`{}`) is not.
+fn checkedRowTailSealsToDefault(checked_types: *const CheckedTypeStore, ext: CheckedTypeId) bool {
+    const payload = checked_types.payload(ext);
+    return switch (payload) {
+        .flex, .rigid => payload.variableSealsToRowDefault(),
+        .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+    };
 }
 
 /// Public `ComptimeRootId` declaration.
@@ -28718,9 +28830,37 @@ fn publishCompileTimeRootRequestEligibility(
             .eligible
         else if (try compileTimeRootIsSpecializationOwnedValue(allocator, module, &checked_types.store, root.*))
             .per_specialization
+        else if (try compileTimeRootIsSealedLocalValue(allocator, module, &checked_types.store, root.*))
+            .eligible
         else
             .ineligible;
     }
+}
+
+/// A hoisted constant whose binder checking classified as a binding scheme is
+/// a generalized local value (design.md "Polarity"): it is evaluated ONCE at
+/// its annotated width, where every row its scheme quantifies seals to its
+/// row default, and each use widens the evaluated value by a row coercion. Its
+/// root is therefore context-free once those defaultable tails are read as
+/// sealed, and the module evaluates it like any other hoisted constant. A
+/// variable that does not seal—a shared `_` hole, a payload type variable—or
+/// a reachable callable slot keeps the root ineligible, as for every hoisted
+/// constant.
+fn compileTimeRootIsSealedLocalValue(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: *const CheckedTypeStore,
+    root: CompileTimeRoot,
+) Allocator.Error!bool {
+    if (root.kind != .hoisted_constant) return false;
+    const pattern = root.source_pattern orelse return false;
+    if (!module.moduleEnvConst().nodeIsRowCoercedLocalValue(ModuleEnv.nodeIdxFrom(pattern))) return false;
+    var scan = CheckedTypeErrorScan{ .checked_types = checked_types };
+    var errors = CheckedTypeErrorTraversal.init(allocator, &scan);
+    defer errors.deinit();
+    if (try errors.visit(root.checked_type)) return false;
+    if (!try checkedTypeIsConcreteSealedCompileTimeRoot(allocator, checked_types, root.checked_type)) return false;
+    return try checkedTypeHasNoReachableCallableSlots(allocator, checked_types, root.checked_type);
 }
 
 /// A top-level value binding whose type is not context-free is evaluated per
