@@ -154,8 +154,12 @@ pub fn exportRuntimeSymbols(comptime getOps: fn () *RocOps, comptime options: Ex
             ops.roc_expect_failed(ops, bytes, len);
         }
 
+        // `RocOps.crash` in a platform build calls the `roc_crashed` symbol,
+        // which is this function, so it calls the host's callback itself.
         fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
-            getOps().crash(bytes[0..len]);
+            const ops = getOps();
+            ops.roc_crashed(ops, bytes, len);
+            @trap();
         }
     };
 

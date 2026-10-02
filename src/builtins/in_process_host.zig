@@ -208,8 +208,12 @@ fn rocExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
     o.roc_expect_failed(o, bytes, len);
 }
 
+// `RocOps.crash` in a platform build calls the `roc_crashed` symbol, which is
+// this function, so it calls the entered host's callback itself.
 fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
-    requireOps().crash(bytes[0..len]);
+    const o = requireOps();
+    o.roc_crashed(o, bytes, len);
+    @trap();
 }
 
 fn rocExpectObserved(site: u32, passed: u8) callconv(.c) void {
