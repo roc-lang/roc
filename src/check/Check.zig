@@ -222,7 +222,7 @@ ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) 
 /// position whose instance is not ground. See `instantiateVarPolarized`.
 polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, []Instantiator.SharedSubtree) = .empty,
 /// A map from one var to another. Used in instantiation and var copying
-var_set: std.AutoHashMap(Var, void),
+var_set: collections.DenseMap(Var, void),
 /// Reusable visited set for validating the concrete content of values passed
 /// to `Str.inspect`. Each value is a bitset of occurrence positions because
 /// the same type variable can appear both as a row tail and as an ordinary
@@ -383,7 +383,7 @@ ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// have already run.
 checked_interpolation_part_constraints: std.AutoHashMap(InterpolationPartsIdx, void),
 /// Vars that originated as single-quote (.int_unbound) literals.
-int_unbound_vars: std.AutoHashMap(Var, void),
+int_unbound_vars: collections.DenseMap(Var, void),
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
@@ -1025,17 +1025,17 @@ pending_tuple_accesses: std.ArrayListUnmanaged(PendingTupleAccess),
 /// Scratch for the ambiguity judgment: the pinnable set (every resolved var
 /// some caller can still pin) of one judgment event. Init-allocated; cleared
 /// and rebuilt per event.
-pinnable_vars: std.AutoHashMap(Var, void),
+pinnable_vars: collections.DenseMap(Var, void),
 /// Scratch for the ambiguity verdict apply: dispatcher vars already reported,
 /// shared by the instantiation and creation applies to avoid double-reporting.
-reported_dispatch_vars: std.AutoHashMap(Var, void),
+reported_dispatch_vars: collections.DenseMap(Var, void),
 /// Scratch for the ambiguity verdict apply: the re-validated creation-verdict
 /// receiver vars the node walk flags expressions against.
-ambiguity_verdict_vars: std.AutoHashMap(Var, void),
+ambiguity_verdict_vars: collections.DenseMap(Var, void),
 /// Scratch for the ambiguity judgment: vars an outside caller can pin through
 /// the judged scheme's complete interface, including expected result types
 /// (rebuilt per judgment event).
-external_pinnable: std.AutoHashMap(Var, void),
+external_pinnable: collections.DenseMap(Var, void),
 /// Per-event traversal memo keyed by both reachable var and opaque receiver.
 /// Different receiver exclusions cannot share visitation state, while repeated
 /// requirements with the same receiver can reuse the completed walk.
@@ -1047,15 +1047,15 @@ scheme_relation_reachability: std.AutoHashMap(SchemeReachabilityVisit, void),
 /// of their closure, while the plain walks' membership early-return is only
 /// sound over sets whose every member carries its full closure. Consumers merge
 /// this overlay into their set once all plain walks into it have run.
-scheme_relation_reachable_vars: std.AutoHashMap(Var, void),
+scheme_relation_reachable_vars: collections.DenseMap(Var, void),
 /// Scratch for `defaultLiteralsAtGeneralizationBoundary`: reachable-var
 /// closure of the def root(s) being generalized (constraint-signature edges
 /// included).
-boundary_reachable_vars: std.AutoHashMap(Var, void),
+boundary_reachable_vars: collections.DenseMap(Var, void),
 /// Scratch for `boundaryDefaultLeaksIntoSignature`: closure of one boundary
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
-boundary_leak_vars: std.AutoHashMap(Var, void),
+boundary_leak_vars: collections.DenseMap(Var, void),
 /// Reusable per-call buffer of the module's `.eql` constraint edges, so the
 /// generalization-boundary fixpoint iterates just the edges instead of
 /// re-scanning the whole constraint list each round. Front-loaded; cleared and
@@ -1066,11 +1066,11 @@ boundary_eql_edges: std.ArrayListUnmanaged(@FieldType(Constraint, "eql")),
 // shared fields despite that function's cascade reentrancy: every buffer is cleared
 // at the start of its step and never read across the step-4 cascade.
 literal_defaulting_open_roots: std.ArrayListUnmanaged(Var),
-literal_defaulting_seen_roots: std.AutoHashMap(Var, void),
+literal_defaulting_seen_roots: collections.DenseMap(Var, void),
 literal_defaulting_component_parent: std.ArrayListUnmanaged(usize),
 literal_defaulting_is_driver: std.ArrayListUnmanaged(bool),
 literal_defaulting_footprint_owner: std.AutoHashMap(Var, usize),
-literal_defaulting_footprint: std.AutoHashMap(Var, void),
+literal_defaulting_footprint: collections.DenseMap(Var, void),
 literal_defaulting_group_drivers: std.ArrayListUnmanaged(Var),
 literal_defaulting_group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning),
 literal_defaulting_constraint_ranges: std.ArrayListUnmanaged(StaticDispatchConstraint.SafeList.Range),
@@ -3167,7 +3167,7 @@ fn initAssumePrepared(
         .return_value_exprs = .empty,
         .return_constraint_frames = .empty,
         .try_return_rows = TryReturnRows.init(gpa),
-        .var_set = std.AutoHashMap(Var, void).init(gpa),
+        .var_set = collections.DenseMap(Var, void).init(gpa),
         .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
         .type_visit_stack = .empty,
         .alias_row_frames = .empty,
@@ -3201,7 +3201,7 @@ fn initAssumePrepared(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .checked_interpolation_part_constraints = std.AutoHashMap(InterpolationPartsIdx, void).init(gpa),
         .scratch_generated_codec_calls = .empty,
-        .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
+        .int_unbound_vars = collections.DenseMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_effect_slots = .empty,
         .expect_dispatch_effect_watchers = .empty,
@@ -3271,21 +3271,21 @@ fn initAssumePrepared(
         .open_numeral_literals = .empty,
         .retired_literal_dispatch_plans = .empty,
         .pending_tuple_accesses = .empty,
-        .pinnable_vars = std.AutoHashMap(Var, void).init(gpa),
-        .reported_dispatch_vars = std.AutoHashMap(Var, void).init(gpa),
-        .ambiguity_verdict_vars = std.AutoHashMap(Var, void).init(gpa),
-        .external_pinnable = std.AutoHashMap(Var, void).init(gpa),
+        .pinnable_vars = collections.DenseMap(Var, void).init(gpa),
+        .reported_dispatch_vars = collections.DenseMap(Var, void).init(gpa),
+        .ambiguity_verdict_vars = collections.DenseMap(Var, void).init(gpa),
+        .external_pinnable = collections.DenseMap(Var, void).init(gpa),
         .scheme_relation_reachability = std.AutoHashMap(SchemeReachabilityVisit, void).init(gpa),
-        .scheme_relation_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
-        .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
-        .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
+        .scheme_relation_reachable_vars = collections.DenseMap(Var, void).init(gpa),
+        .boundary_reachable_vars = collections.DenseMap(Var, void).init(gpa),
+        .boundary_leak_vars = collections.DenseMap(Var, void).init(gpa),
         .boundary_eql_edges = .empty,
         .literal_defaulting_open_roots = .empty,
-        .literal_defaulting_seen_roots = std.AutoHashMap(Var, void).init(gpa),
+        .literal_defaulting_seen_roots = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_component_parent = .empty,
         .literal_defaulting_is_driver = .empty,
         .literal_defaulting_footprint_owner = std.AutoHashMap(Var, usize).init(gpa),
-        .literal_defaulting_footprint = std.AutoHashMap(Var, void).init(gpa),
+        .literal_defaulting_footprint = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_group_drivers = .empty,
         .literal_defaulting_group_warnings = .empty,
         .literal_defaulting_constraint_ranges = .empty,
@@ -6979,7 +6979,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     defer mentions.deinit(self.gpa);
     var walk_stack: std.ArrayListUnmanaged(Var) = .empty;
     defer walk_stack.deinit(self.gpa);
-    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    var visited = collections.DenseMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
     for (slots.items, 0..) |decl_idx, from_slot_usize| {
@@ -7221,7 +7221,7 @@ fn collectFormalOccurrences(
     formals: []const Var,
     found: []bool,
     walk_stack: *std.ArrayListUnmanaged(Var),
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     visited.clearRetainingCapacity();
     walk_stack.clearRetainingCapacity();
@@ -10978,7 +10978,7 @@ fn varIsConcreteHoistedConstTypeInternal(
     self: *Self,
     purpose: HoistedRootTypePurpose,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     var scan = HoistedConstTypeScan{ .check = self, .purpose = purpose, .visited = visited };
     return HoistedConstTypeScan.Eval.run(self.gpa, &scan, .{ .ty = .{ .walk = .value_graph, .var_ = var_ } });
@@ -10990,7 +10990,7 @@ fn varIsConcreteHoistedConstTypeInternal(
 const HoistedConstTypeScan = struct {
     check: *Self,
     purpose: HoistedRootTypePurpose,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 
     const Leaf = union(enum) {
         ty: struct { walk: HoistedConstWalk, var_: Var },
@@ -13129,7 +13129,7 @@ fn checkInstantiatedStaticDispatchConstraints(
     // settled compatibility invocation and its complete-to-quiescence loop.
     var default_materialization_roots = std.AutoHashMap(Var, literal_defaulting.DefaultTarget).init(self.gpa);
     defer default_materialization_roots.deinit();
-    var instantiated_fns = std.AutoHashMap(Var, void).init(self.gpa);
+    var instantiated_fns = collections.DenseMap(Var, void).init(self.gpa);
     defer instantiated_fns.deinit();
     var pending_creation_materializations: std.ArrayListUnmanaged(DefaultMaterialization) = .empty;
     defer pending_creation_materializations.deinit(self.gpa);
@@ -13415,7 +13415,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
 /// Collect, into `out`, `var_`'s resolved id and every resolved var id
 /// structurally reachable from it (tuples, records, tag payloads, function args
 /// and rets). Used to mark complete scheme interfaces and local pinning sources.
-fn collectReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectReachableVars(self: *Self, var_: Var, out: *collections.DenseMap(Var, void)) std.mem.Allocator.Error!void {
     return self.collectReachableVarsExcluding(var_, null, out);
 }
 
@@ -13423,7 +13423,7 @@ fn collectReachableVarsExcluding(
     self: *Self,
     root: Var,
     excluded_root: ?Var,
-    out: *std.AutoHashMap(Var, void),
+    out: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!void {
     var pending: std.ArrayList(Var) = .empty;
     defer pending.deinit(self.gpa);
@@ -13483,7 +13483,7 @@ fn collectReachableVarsExcluding(
     }
 }
 
-fn collectDataReachableVars(self: *Self, root: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectDataReachableVars(self: *Self, root: Var, out: *collections.DenseMap(Var, void)) std.mem.Allocator.Error!void {
     var pending: std.ArrayList(Var) = .empty;
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
@@ -13968,7 +13968,7 @@ const UnresolvedInspectScan = struct {
 fn varHasUnresolvedStaticDispatchConstraints(
     self: *Self,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     var scan = UnresolvedConstraintScan{ .check = self, .visited = visited, .constraints = .any };
     return UnresolvedConstraintScan.Eval.run(self.gpa, &scan, var_);
@@ -13977,7 +13977,7 @@ fn varHasUnresolvedStaticDispatchConstraints(
 fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
     self: *Self,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     var scan = UnresolvedConstraintScan{ .check = self, .visited = visited, .constraints = .non_literal };
     return UnresolvedConstraintScan.Eval.run(self.gpa, &scan, var_);
@@ -13988,7 +13988,7 @@ fn varHasUnresolvedNonLiteralStaticDispatchConstraints(
 /// Each var is visited once, in the order a left-to-right walk reaches it.
 const UnresolvedConstraintScan = struct {
     check: *Self,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
     constraints: enum { any, non_literal },
 
     const Eval = collections.AnyAll.Evaluation(Var, UnresolvedConstraintScan);
@@ -16877,7 +16877,7 @@ fn replayPredeclaredSchemeUse(
     // instantiation. No structural matching or second root unification is
     // involved.
     self.var_map.clearRetainingCapacity();
-    var seeded_body_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    var seeded_body_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer seeded_body_vars.deinit();
     self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.appendPredeclaredUsePairs(annotation_idx, pending.fresh.slice(self.predeclared_use_fresh_vars.items));
@@ -20262,7 +20262,7 @@ fn validateAliasRowsHelp(
     root_var: Var,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     // The whole walk—constructor spines and row payloads alike—runs on an
     // explicit heap stack, so a type of any depth can be validated without a
@@ -20321,7 +20321,7 @@ fn validateAliasRowsHelp(
 fn stepAliasRowNode(
     self: *Self,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (visited.contains(resolved.var_)) return;
@@ -27974,7 +27974,7 @@ fn tryErrorRowNeedsUseSiteWidening(self: *Self, actual_err: Var, expected_err: V
         return false;
     }
 
-    var visited_actual = std.AutoHashMap(Var, void).init(self.gpa);
+    var visited_actual = collections.DenseMap(Var, void).init(self.gpa);
     defer visited_actual.deinit();
     return try self.actualTagRowIsIncludedInExpected(actual_err, expected_err, &visited_actual);
 }
@@ -28023,7 +28023,7 @@ fn actualTagRowIsIncludedInExpected(
     self: *Self,
     actual_var: Var,
     expected_var: Var,
-    visited_actual: *std.AutoHashMap(Var, void),
+    visited_actual: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     // Follow the actual row through aliases and extensions.
     var current = actual_var;
@@ -28061,7 +28061,7 @@ fn expectedTagRowContainsTag(
     expected_var: Var,
     actual_tag: types_mod.Tag,
 ) std.mem.Allocator.Error!bool {
-    var visited_expected = std.AutoHashMap(Var, void).init(self.gpa);
+    var visited_expected = collections.DenseMap(Var, void).init(self.gpa);
     defer visited_expected.deinit();
 
     const expected_tag = try self.findVisibleTagInRow(expected_var, actual_tag.name, &visited_expected) orelse return false;
@@ -28072,7 +28072,7 @@ fn findVisibleTagInRow(
     self: *Self,
     row_var: Var,
     tag_name: Ident.Idx,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!?types_mod.Tag {
     // Follow the row through aliases and extensions.
     var current = row_var;
@@ -32629,7 +32629,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
 fn collectConstraintSignatureReachable(
     self: *Self,
     constraint_range: StaticDispatchConstraint.SafeList.Range,
-    out: *std.AutoHashMap(Var, void),
+    out: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!void {
     out.clearRetainingCapacity();
     for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
@@ -33253,7 +33253,7 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) void {
 fn requirementHasPublishedStructuralOrigin(
     self: *Self,
     requirement: SchemeDispatchRequirement,
-    published_vars: *const std.AutoHashMap(Var, void),
+    published_vars: *const collections.DenseMap(Var, void),
 ) bool {
     const receiver = self.types.resolveVar(requirement.receiver_var);
     const origin_receiver = self.types.resolveVar(requirement.structural_origin.receiver_var);
@@ -33293,7 +33293,7 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
     const boundary_rank = env.rank();
     if (self.type_schemes.items.len == 0) return;
 
-    var published_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    var published_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer published_vars.deinit();
     for (roots) |root| {
         try self.collectReachableVars(root.interface, &published_vars);
@@ -33631,12 +33631,12 @@ fn laterUseCanRefine(self: *Self, var_: Var) bool {
     };
 }
 
-fn refinableVarsIntersect(self: *Self, a: *const std.AutoHashMap(Var, void), b: *const std.AutoHashMap(Var, void)) bool {
+fn refinableVarsIntersect(self: *Self, a: *const collections.DenseMap(Var, void), b: *const collections.DenseMap(Var, void)) bool {
     const small = if (a.count() <= b.count()) a else b;
     const large = if (a.count() <= b.count()) b else a;
-    var iter = small.keyIterator();
+    var iter = small.constKeyIterator();
     while (iter.next()) |var_| {
-        if (large.contains(var_.*) and self.laterUseCanRefine(var_.*)) return true;
+        if (large.contains(var_) and self.laterUseCanRefine(var_)) return true;
     }
     return false;
 }
@@ -33647,8 +33647,8 @@ fn refinableVarsIntersect(self: *Self, a: *const std.AutoHashMap(Var, void), b: 
 fn codecInputsAreBoundaryLocal(
     self: *Self,
     constraint: StaticDispatchConstraint,
-    inputs: *std.AutoHashMap(Var, void),
-    interface: *const std.AutoHashMap(Var, void),
+    inputs: *collections.DenseMap(Var, void),
+    interface: *const collections.DenseMap(Var, void),
     rank: Rank,
 ) Allocator.Error!bool {
     const factory = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
@@ -33694,9 +33694,9 @@ fn captureSchemeDispatchRequirements(
     if (self.probe_depth != 0) {
         @panic("scheme requirements cannot be captured inside a solver probe");
     }
-    var codec_relation_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    var codec_relation_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer codec_relation_vars.deinit();
-    var interface_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    var interface_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer interface_vars.deinit();
     var interface_collected = false;
 
@@ -34099,7 +34099,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
     env: *Env,
     is_numeric_default_pass: bool,
 ) Allocator.Error!void {
-    var enqueued_fn_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    var enqueued_fn_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer enqueued_fn_vars.deinit();
     var discharged: usize = 0;
     var retained_relations_progressed = false;
@@ -34177,14 +34177,14 @@ fn deferredDispatchRelationIsQueued(
 /// would show the discharge as no change at all.
 fn dischargedDispatchRelationCount(
     self: *const Self,
-    fn_vars: *const std.AutoHashMap(Var, void),
+    fn_vars: *const collections.DenseMap(Var, void),
 ) usize {
     var count: usize = 0;
-    var fn_var_iter = fn_vars.keyIterator();
+    var fn_var_iter = fn_vars.constKeyIterator();
     while (fn_var_iter.next()) |fn_var| {
-        if (self.settled_static_dispatch_constraint_fns.contains(fn_var.*) or
-            self.types.varStaticDispatchRejected(fn_var.*) or
-            self.dispatchDerivationHasRejectedAncestor(fn_var.*))
+        if (self.settled_static_dispatch_constraint_fns.contains(fn_var) or
+            self.types.varStaticDispatchRejected(fn_var) or
+            self.dispatchDerivationHasRejectedAncestor(fn_var))
         {
             count += 1;
         }
@@ -34269,7 +34269,7 @@ fn varHasPendingOpenLiteralForDerived(
     self: *Self,
     direction: DerivedCodecDirection,
     root: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     const Item = union(enum) {
         var_: Var,
@@ -34367,7 +34367,7 @@ fn varHasPendingOpenLiteralForDerived(
 fn varHasPendingOpenLiteralForDerivedParse(
     self: *Self,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     return try self.varHasPendingOpenLiteralForDerived(.parse, var_, visited);
 }
@@ -34375,7 +34375,7 @@ fn varHasPendingOpenLiteralForDerivedParse(
 fn varHasPendingOpenLiteralForDerivedEncode(
     self: *Self,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     return try self.varHasPendingOpenLiteralForDerived(.encode, var_, visited);
 }
@@ -39845,7 +39845,7 @@ fn typeSupportsStructuralDeriveInternal(
     self: *Self,
     flat_type: types_mod.FlatType,
     derivation: EqHashDerivation,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     var pending: std.ArrayList(Var) = .empty;
     defer pending.deinit(self.gpa);
@@ -39905,7 +39905,7 @@ fn drainStructuralDerive(
     self: *Self,
     pending: *std.ArrayList(Var),
     derivation: EqHashDerivation,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     while (pending.pop()) |var_| {
         const resolved = self.types.resolveVar(var_);
@@ -39999,7 +39999,7 @@ const HostedUnboxedFormals = std.AutoHashMap(types_mod.NominalDecl.Idx, []bool);
 const HostedVariableWalk = struct {
     formals: []const Var,
     formal_marks: []bool,
-    visited: std.AutoHashMap(Var, void),
+    visited: collections.DenseMap(Var, void),
     /// Where this walk's items begin on the shared item stack.
     items_base: usize,
 };
@@ -40042,7 +40042,7 @@ fn varHasUnboxedTypeVariableInHostedSignature(self: *Self, var_: Var) std.mem.Al
     try walks.append(self.gpa, .{
         .formals = &.{},
         .formal_marks = &.{},
-        .visited = std.AutoHashMap(Var, void).init(self.gpa),
+        .visited = collections.DenseMap(Var, void).init(self.gpa),
         .items_base = 0,
     });
     try items.append(self.gpa, .{ .var_ = .{ .walk = 0, .var_ = var_ } });
@@ -40159,7 +40159,7 @@ fn hostedWalkVisit(
                     walks.appendAssumeCapacity(.{
                         .formals = formals,
                         .formal_marks = marks,
-                        .visited = std.AutoHashMap(Var, void).init(self.gpa),
+                        .visited = collections.DenseMap(Var, void).init(self.gpa),
                         .items_base = items.items.len + 1,
                     });
                     try items.append(self.gpa, .{ .var_ = .{ .walk = @intCast(walks.items.len - 1), .var_ = decl.backing } });
@@ -40193,7 +40193,7 @@ fn varContainsOptionalFieldInHostBoundary(self: *Self, var_: Var) std.mem.Alloca
 fn varViolatesHostBoundaryRuleInternal(
     self: *Self,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
     rule: HostBoundaryRule,
 ) std.mem.Allocator.Error!bool {
     var scan = HostBoundaryScan{ .check = self, .visited = visited, .rule = rule };
@@ -40205,7 +40205,7 @@ fn varViolatesHostBoundaryRuleInternal(
 /// every alias and row along the chain is checked on the way.
 const HostBoundaryScan = struct {
     check: *Self,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
     rule: HostBoundaryRule,
 
     const Leaf = union(enum) {
@@ -40353,7 +40353,7 @@ fn varContainsUnboxedFunctionInHostedSignatureInternal(
     self: *Self,
     var_: Var,
     allow_top_fn: bool,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     // The signature's own top-level function (through aliases) is allowed;
     // every function below it must be boxed. Vars are searched in the order a
@@ -40419,7 +40419,7 @@ fn varSupportsStructuralDeriveInternal(
     self: *Self,
     var_: Var,
     derivation: EqHashDerivation,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
     var pending: std.ArrayList(Var) = .empty;
     defer pending.deinit(self.gpa);
@@ -40480,7 +40480,7 @@ fn varDeriveComponentObligations(
     self: *Self,
     root: Var,
     derivation: EqHashDerivation,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
     env: *Env,
     parent_constraint: StaticDispatchConstraint,
     root_admits_rigids: bool,
@@ -40899,7 +40899,7 @@ fn closeTagRowsForDerivationHelp(
     self: *Self,
     root: Var,
     env: *Env,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
     mode: DerivationRowClosure,
     inferred_open: *bool,
 ) Allocator.Error!void {
@@ -41919,7 +41919,7 @@ fn validateResolvedOpenNumeralLiterals(
 fn literalTargetContainsIdentity(
     self: *Self,
     root: Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     // Search in the order a left-to-right walk reaches each var: each popped
     // var pushes its children last-first.
@@ -41968,7 +41968,7 @@ fn literalTargetIsBuiltinDirect(
     self: *Self,
     var_: Var,
     kind: can.NodeStore.LiteralDispatchPlan.Kind,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     var current = var_;
     while (true) {
@@ -42010,7 +42010,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     var failed_pattern_owners: std.ArrayListUnmanaged(CIR.Node.Idx) = .empty;
     defer failed_pattern_owners.deinit(self.gpa);
 
-    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    var visited = collections.DenseMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
     // Evidence is recorded under each discharged constraint's raw fn_var, but
@@ -42019,7 +42019,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     // one raw fn_var survives on the merged constraint. Solving is settled
     // here, so comparing resolved roots recovers every literal's share of that
     // one discharged edge.
-    var evidence_fn_roots = std.AutoHashMap(Var, void).init(self.gpa);
+    var evidence_fn_roots = collections.DenseMap(Var, void).init(self.gpa);
     defer evidence_fn_roots.deinit();
     try evidence_fn_roots.ensureTotalCapacity(self.dispatch_target_instantiation_by_fn_var.count());
     var evidence_key_it = self.dispatch_target_instantiation_by_fn_var.keyIterator();
@@ -43035,7 +43035,7 @@ test "finalization re-enqueue identifies relations by callable and measures only
     try std.testing.expect(!checker.deferredDispatchRelationIsQueued(queued, receiver_var, other_stored_fn_var));
     try std.testing.expect(!checker.deferredDispatchRelationIsQueued(queued, other_receiver_var, stored_fn_var));
 
-    var enqueued_fn_vars = std.AutoHashMap(Var, void).init(checker.gpa);
+    var enqueued_fn_vars = collections.DenseMap(Var, void).init(checker.gpa);
     defer enqueued_fn_vars.deinit();
     try enqueued_fn_vars.put(stored_fn_var, {});
     try enqueued_fn_vars.put(other_stored_fn_var, {});
@@ -43238,7 +43238,7 @@ fn collectDerivedMapTags(
     row_var: Var,
     tags: *std.ArrayList(types_mod.Tag),
     open_ext: *?Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!bool {
     // Follow the row through aliases and extensions.
     var current = row_var;
@@ -43294,7 +43294,7 @@ fn varIsDerivedMapZst(
     var_: Var,
     env: *Env,
     region: Region,
-    visited_vars: *std.AutoHashMap(Var, void),
+    visited_vars: *collections.DenseMap(Var, void),
     visited_nominals: *std.AutoHashMap(types_mod.NominalDecl.Idx, void),
 ) Allocator.Error!bool {
     // A type is zero-sized when every component is; a type already being
@@ -43343,7 +43343,7 @@ fn beginDerivedMapZst(
     var_: Var,
     env: *Env,
     region: Region,
-    visited_vars: *std.AutoHashMap(Var, void),
+    visited_vars: *collections.DenseMap(Var, void),
     visited_nominals: *std.AutoHashMap(types_mod.NominalDecl.Idx, void),
 ) Allocator.Error!?bool {
     const resolved = self.types.resolveVar(var_);
@@ -43366,7 +43366,7 @@ fn beginDerivedMapZst(
                 var tags = std.ArrayList(types_mod.Tag).empty;
                 defer tags.deinit(self.gpa);
                 var open_ext: ?Var = null;
-                var row_visited = std.AutoHashMap(Var, void).init(self.gpa);
+                var row_visited = collections.DenseMap(Var, void).init(self.gpa);
                 defer row_visited.deinit();
                 if (!try self.collectDerivedMapTags(resolved.var_, &tags, &open_ext, &row_visited)) return false;
                 if (open_ext != null) return false;
@@ -43401,7 +43401,7 @@ fn beginDerivedMapZst(
 }
 
 fn varIsDerivedMapZstRoot(self: *Self, var_: Var, env: *Env, region: Region) Allocator.Error!bool {
-    var visited_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    var visited_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer visited_vars.deinit();
     var visited_nominals = std.AutoHashMap(types_mod.NominalDecl.Idx, void).init(self.gpa);
     defer visited_nominals.deinit();
@@ -43411,8 +43411,8 @@ fn varIsDerivedMapZstRoot(self: *Self, var_: Var, env: *Env, region: Region) All
 fn collectDerivedMapTypeVars(
     self: *Self,
     root: Var,
-    found: *std.AutoHashMap(Var, void),
-    visited: *std.AutoHashMap(Var, void),
+    found: *collections.DenseMap(Var, void),
+    visited: *collections.DenseMap(Var, void),
 ) Allocator.Error!void {
     // Visited in the order a left-to-right walk reaches each var: each popped
     // var pushes its children last-first.
@@ -43504,12 +43504,12 @@ fn analyzeDerivedMap(
     }
 
     var open_ext: ?Var = null;
-    var row_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    var row_visited = collections.DenseMap(Var, void).init(self.gpa);
     defer row_visited.deinit();
     if (!try self.collectDerivedMapTags(backing_var, tags, &open_ext, &row_visited)) return null;
     if (tags.items.len == 0) return null;
 
-    var all_type_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    var all_type_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer all_type_vars.deinit();
     var type_var_payload = std.AutoHashMap(Var, u32).init(self.gpa);
     defer type_var_payload.deinit();
@@ -43526,9 +43526,9 @@ fn analyzeDerivedMap(
         defer self.gpa.free(args);
         for (args, 0..) |arg, arg_index| {
             total_payload_count += 1;
-            var payload_vars = std.AutoHashMap(Var, void).init(self.gpa);
+            var payload_vars = collections.DenseMap(Var, void).init(self.gpa);
             defer payload_vars.deinit();
-            var visited = std.AutoHashMap(Var, void).init(self.gpa);
+            var visited = collections.DenseMap(Var, void).init(self.gpa);
             defer visited.deinit();
             try self.collectDerivedMapTypeVars(arg, &payload_vars, &visited);
             var vars_it = payload_vars.keyIterator();
@@ -45913,7 +45913,7 @@ fn validateRenameFieldMethod(
 /// obligation belongs to that application and is discharged where the
 /// application is concrete.
 const DerivedCodecWalk = struct {
-    visited: std.AutoHashMap(Var, void),
+    visited: collections.DenseMap(Var, void),
     walked_apps: std.ArrayList(WalkedApp),
     walked_app_args: std.ArrayList(Var),
     nominal_backing_depth: u32,
@@ -45935,7 +45935,7 @@ const DerivedCodecWalk = struct {
 
     fn init(gpa: std.mem.Allocator, generated_calls_start: usize) DerivedCodecWalk {
         return .{
-            .visited = std.AutoHashMap(Var, void).init(gpa),
+            .visited = collections.DenseMap(Var, void).init(gpa),
             .walked_apps = .empty,
             .walked_app_args = .empty,
             .nominal_backing_depth = 0,
@@ -46126,7 +46126,7 @@ fn derivedCodecDeclGrowsItsFormals(self: *Self, decl_idx: types_mod.NominalDecl.
 
     var pending = std.ArrayList(Var).empty;
     defer pending.deinit(self.gpa);
-    var seen = std.AutoHashMap(Var, void).init(self.gpa);
+    var seen = collections.DenseMap(Var, void).init(self.gpa);
     defer seen.deinit();
     try pending.append(self.gpa, decl.backing);
 
@@ -46156,7 +46156,7 @@ fn derivedCodecArgGrowsAFormal(self: *Self, arg: Var, formals: []const Var) Allo
 
     var pending = std.ArrayList(Var).empty;
     defer pending.deinit(self.gpa);
-    var seen = std.AutoHashMap(Var, void).init(self.gpa);
+    var seen = collections.DenseMap(Var, void).init(self.gpa);
     defer seen.deinit();
     try self.pushDerivedCodecComponents(&pending, arg_root);
 
@@ -48185,7 +48185,7 @@ fn checkBranchBodyAgainstExpected(
 /// depth cannot exhaust the native stack. The answer is existential over the
 /// reachable graph—the visited set only prunes—so no particular visit order
 /// is required.
-fn varContainsError(self: *Self, root_var: Var, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
+fn varContainsError(self: *Self, root_var: Var, visited: *collections.DenseMap(Var, void)) std.mem.Allocator.Error!bool {
     // A store that has never held error content or an invalid declaration
     // has no error for any variable to reach.
     if (!self.types.mayContainErrorState()) return false;

@@ -188,6 +188,10 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             return .{ .inner = .{ .map = self } };
         }
 
+        pub fn constKeyIterator(self: *const Self) ConstKeyIterator {
+            return .{ .map = self };
+        }
+
         pub fn valueIterator(self: *Self) ValueIterator {
             return .{ .map = self };
         }
@@ -213,6 +217,19 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             pub fn next(self: *KeyIterator) ?*const K {
                 const entry = self.inner.next() orelse return null;
                 return entry.key_ptr;
+            }
+        };
+
+        /// Iterates the keys of a map it cannot change.
+        pub const ConstKeyIterator = struct {
+            map: *const Self,
+            position: usize = 0,
+
+            pub fn next(self: *ConstKeyIterator) ?K {
+                if (self.position >= self.map.active_indices.items.len) return null;
+                const index = self.map.active_indices.items[self.position];
+                self.position += 1;
+                return keyFromIndex(K, index);
             }
         };
 

@@ -8262,6 +8262,9 @@ const CheckedSourceTypeRoots = struct {
         local_nominal_declarations: LocalNominalDeclarationIds,
         /// The publisher's frame stack, empty between publications.
         publisher_frames: std.ArrayList(CheckedTypePublisher.Frame) = .empty,
+        /// The payloads the publisher's payload frames are building, in frame
+        /// order; empty between publications.
+        publisher_builds: std.ArrayList(CheckedTypePayloadBuild) = .empty,
     },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
@@ -8284,6 +8287,7 @@ const CheckedSourceTypeRoots = struct {
     fn releaseScratch(self: *CheckedSourceTypeRoots) void {
         if (self.scratch) |*scratch| {
             scratch.publisher_frames.deinit(scratch.graph_analysis.allocator);
+            scratch.publisher_builds.deinit(scratch.graph_analysis.allocator);
             scratch.local_nominal_declarations.deinit();
             scratch.key_writer.deinit();
             scratch.graph_analysis.deinit();
@@ -8376,14 +8380,15 @@ const CheckedTypePublisher = struct {
         constraints: ConstraintsTask,
     };
 
-    /// Owned slices and payloads pass to the receiving frame.
+    /// Owned slices pass to the receiving frame. A finished payload stays on
+    /// top of `publisher_builds`, and the receiving frame takes it from there.
     const Result = union(enum) {
         id: CheckedTypeId,
         ids: []const CheckedTypeId,
         fields: []const CheckedRecordField,
         tags: []const CheckedTagBuild,
         constraints: []const CheckedStaticDispatchConstraint,
-        payload: CheckedTypePayloadBuild,
+        payload,
 
         fn get(self: Result, comptime tag: std.meta.Tag(Result)) @FieldType(Result, @tagName(tag)) {
             if (std.meta.activeTag(self) != tag) checkedArtifactInvariant("checked type publication frame received the wrong result kind", .{});
@@ -8406,7 +8411,7 @@ const CheckedTypePublisher = struct {
         const scratch = &self.active.scratch.?;
         const frames = &scratch.publisher_frames;
         const frames_allocator = scratch.graph_analysis.allocator;
-        std.debug.assert(frames.items.len == 0);
+        std.debug.assert(frames.items.len == 0 and scratch.publisher_builds.items.len == 0);
         errdefer {
             defer frames.clearRetainingCapacity();
             // Reservations nest, so the innermost frame releases first.
@@ -8444,7 +8449,11 @@ const CheckedTypePublisher = struct {
                 _ = self.store.payloads.pop();
                 _ = self.store.roots.pop();
             },
-            .payload => |*task| deinitCheckedTypePayloadBuild(self.allocator, &task.build),
+            .payload => |*task| if (frame.cursor != 0) {
+                const builds = &self.active.scratch.?.publisher_builds;
+                deinitCheckedTypePayloadBuild(self.allocator, &builds.items[task.build]);
+                builds.items.len = task.build;
+            },
             .range => |*task| self.allocator.free(task.out),
             .fields => |*task| self.allocator.free(task.out),
             .tags => |*task| deinitCheckedTagsBuild(self.allocator, task.out),
@@ -8487,7 +8496,8 @@ const CheckedTypePublisher = struct {
         const store = self.store;
         const active = self.active;
         if (frame.cursor == 1) {
-            var build_payload = input.?.get(.payload);
+            input.?.get(.payload);
+            var build_payload = self.active.scratch.?.publisher_builds.pop().?;
             if (task.id) |id| {
                 errdefer deinitCheckedTypePayloadBuild(self.allocator, &build_payload);
                 const stored = try store.commitPayload(self.allocator, build_payload);
@@ -8642,8 +8652,9 @@ const CheckedTypePublisher = struct {
 
     const PayloadTask = struct {
         content: types.Content,
-        /// The payload built so far; owned by this frame.
-        build: CheckedTypePayloadBuild = .pending,
+        /// The index in `publisher_builds` of the payload built so far, owned
+        /// by this frame once its first step ran.
+        build: u32 = undefined,
     };
 
     fn stepPayload(self: *CheckedTypePublisher, frame: *Frame, task: *PayloadTask, input: ?Result) Allocator.Error!Step {
@@ -8651,17 +8662,23 @@ const CheckedTypePublisher = struct {
         const type_store = module.typeStoreConst();
         const names = self.names;
         const cursor = frame.cursor;
+        const builds = &self.active.scratch.?.publisher_builds;
+        if (cursor == 0) {
+            task.build = @intCast(builds.items.len);
+            try builds.append(self.active.scratch.?.graph_analysis.allocator, .pending);
+        }
         frame.cursor += 1;
+        const build = &builds.items[task.build];
         switch (task.content) {
-            .err => return .{ .ret = .{ .payload = .err } },
+            .err => return payloadResult(build, .err),
             // The checked artifact models required fields only, so a presence
             // variable never becomes a standalone checked type. Poison to err if one
             // is ever reached rather than inventing an unrepresentable payload.
-            .field_presence => return .{ .ret = .{ .payload = .err } },
+            .field_presence => return payloadResult(build, .err),
             .flex => |flex| switch (cursor) {
                 0 => {
                     const name = try copyOptionalIdentText(self.allocator, module, flex.name);
-                    task.build = .{ .flex = .{
+                    build.* = .{ .flex = .{
                         .name = name,
                         .constraints = &.{},
                         .numeric_default_phase = null,
@@ -8670,14 +8687,14 @@ const CheckedTypePublisher = struct {
                     return .{ .call = .{ .constraints = .{ .range = flex.constraints } } };
                 },
                 else => {
-                    task.build.flex.constraints = input.?.get(.constraints);
-                    task.build.flex.numeric_default_phase = numericDefaultPhaseForFlex(module, flex);
+                    build.flex.constraints = input.?.get(.constraints);
+                    build.flex.numeric_default_phase = numericDefaultPhaseForFlex(module, flex);
                 },
             },
             .rigid => |rigid| switch (cursor) {
                 0 => {
                     const name = try copyIdentText(self.allocator, module, rigid.name);
-                    task.build = .{ .rigid = .{
+                    build.* = .{ .rigid = .{
                         .name = name,
                         .constraints = &.{},
                         .numeric_default_phase = null,
@@ -8686,15 +8703,15 @@ const CheckedTypePublisher = struct {
                     return .{ .call = .{ .constraints = .{ .range = rigid.constraints } } };
                 },
                 else => {
-                    task.build.rigid.constraints = input.?.get(.constraints);
-                    task.build.rigid.numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints);
+                    build.rigid.constraints = input.?.get(.constraints);
+                    build.rigid.numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints);
                 },
             },
             .alias => |alias| switch (cursor) {
                 0 => {
                     const name = try names.internTypeIdent(module.identStoreConst(), alias.ident.ident_idx);
                     const origin_module = try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(alias.origin_module));
-                    task.build = .{ .alias = .{
+                    build.* = .{ .alias = .{
                         .name = name,
                         .origin_module = origin_module,
                         .owner_module = checkedNamedTypeOwnerForSource(module, self.imports, alias.origin_module),
@@ -8706,30 +8723,30 @@ const CheckedTypePublisher = struct {
                     return rootStep(type_store.getAliasBackingVar(alias), null);
                 },
                 1 => {
-                    task.build.alias.backing = input.?.get(.id);
+                    build.alias.backing = input.?.get(.id);
                     return rangeStep(type_store.sliceAliasArgs(alias));
                 },
-                else => task.build.alias.args = input.?.get(.ids),
+                else => build.alias.args = input.?.get(.ids),
             },
             .structure => |flat| switch (flat) {
-                .empty_record => return .{ .ret = .{ .payload = .empty_record } },
-                .empty_tag_union => return .{ .ret = .{ .payload = .empty_tag_union } },
+                .empty_record => return payloadResult(build, .empty_record),
+                .empty_tag_union => return payloadResult(build, .empty_tag_union),
                 .record => |record| switch (cursor) {
                     0 => {
                         if (record.fields.len() == 0 and checkedRecordExtIsEmpty(module, record.ext)) {
-                            return .{ .ret = .{ .payload = .empty_record } };
+                            return payloadResult(build, .empty_record);
                         }
                         return .{ .call = .{ .fields = .{ .range = record.fields } } };
                     },
                     1 => {
-                        task.build = .{ .record = .{ .fields = input.?.get(.fields), .ext = undefined } };
+                        build.* = .{ .record = .{ .fields = input.?.get(.fields), .ext = undefined } };
                         return rootStep(record.ext, .empty_record);
                     },
-                    else => task.build.record.ext = input.?.get(.id),
+                    else => build.record.ext = input.?.get(.id),
                 },
                 .tuple => |tuple| switch (cursor) {
                     0 => return rangeStep(type_store.sliceVars(tuple.elems)),
-                    else => task.build = .{ .tuple = input.?.get(.ids) },
+                    else => build.* = .{ .tuple = input.?.get(.ids) },
                 },
                 .nominal_type => |nominal| switch (cursor) {
                     0 => {
@@ -8738,7 +8755,7 @@ const CheckedTypePublisher = struct {
                         const origin_module = try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
                         const owner_module = checkedNamedTypeOwnerForSource(module, self.imports, nominal.origin_module);
                         const representation = try checkedNominalRepresentationForSourceNominal(module, names, self.imports, &self.active.scratch.?.local_nominal_declarations, nominal, builtin_nominal);
-                        task.build = .{
+                        build.* = .{
                             .nominal = .{
                                 .name = name,
                                 .origin_module = origin_module,
@@ -8757,33 +8774,37 @@ const CheckedTypePublisher = struct {
                         };
                         return rangeStep(type_store.sliceNominalArgs(nominal));
                     },
-                    else => task.build.nominal.args = input.?.get(.ids),
+                    else => build.nominal.args = input.?.get(.ids),
                 },
-                .fn_pure, .fn_unbound => |func| if (stepFunction(task, cursor, input, type_store, .pure, func)) |step| return step,
-                .fn_effectful => |func| if (stepFunction(task, cursor, input, type_store, .effectful, func)) |step| return step,
+                .fn_pure, .fn_unbound => |func| if (stepFunction(build, cursor, input, type_store, .pure, func)) |step| return step,
+                .fn_effectful => |func| if (stepFunction(build, cursor, input, type_store, .effectful, func)) |step| return step,
                 .tag_union => |tag_union| switch (cursor) {
                     0 => {
                         if (tag_union.tags.len() == 0 and checkedTagUnionExtIsEmpty(module, tag_union.ext)) {
-                            return .{ .ret = .{ .payload = .empty_tag_union } };
+                            return payloadResult(build, .empty_tag_union);
                         }
                         return .{ .call = .{ .tags = .{ .range = tag_union.tags } } };
                     },
                     1 => {
-                        task.build = .{ .tag_union = .{ .tags = input.?.get(.tags), .ext = undefined } };
+                        build.* = .{ .tag_union = .{ .tags = input.?.get(.tags), .ext = undefined } };
                         return rootStep(tag_union.ext, .empty_tag_union);
                     },
-                    else => task.build.tag_union.ext = input.?.get(.id),
+                    else => build.tag_union.ext = input.?.get(.id),
                 },
             },
         }
-        const built = task.build;
-        task.build = .pending;
-        return .{ .ret = .{ .payload = built } };
+        return .{ .ret = .payload };
+    }
+
+    /// Finish a payload frame whose payload is `payload`.
+    fn payloadResult(build: *CheckedTypePayloadBuild, payload: CheckedTypePayloadBuild) Step {
+        build.* = payload;
+        return .{ .ret = .payload };
     }
 
     /// A function payload's next step; null once it is complete.
     fn stepFunction(
-        task: *PayloadTask,
+        build: *CheckedTypePayloadBuild,
         cursor: u8,
         input: ?Result,
         type_store: anytype,
@@ -8793,7 +8814,7 @@ const CheckedTypePublisher = struct {
         switch (cursor) {
             0 => return rangeStep(type_store.sliceVars(func.args)),
             1 => {
-                task.build = .{ .function = .{
+                build.* = .{ .function = .{
                     .kind = finalizedFunctionKind(kind),
                     .args = input.?.get(.ids),
                     .ret = undefined,
@@ -8801,7 +8822,7 @@ const CheckedTypePublisher = struct {
                 return rootStep(func.ret, null);
             },
             else => {
-                task.build.function.ret = input.?.get(.id);
+                build.function.ret = input.?.get(.id);
                 return null;
             },
         }
