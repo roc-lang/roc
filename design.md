@@ -363,10 +363,10 @@ shared proof-fuel value per query and preserve exhaustion in their result
 types. Substitutability is not a query: every structured value records whether
 all of its leaves are substitutable reads, and how many nodes materializing it
 produces (counting a shared sub-value once per path to it, saturating), both
-computed once from its children's recorded facts when it is constructed. A
+computed once from its children's corresponding fields when it is constructed. A
 value is immutable and its children are complete when it is built, and the
 substitutability of a runtime anchor or static-data candidate depends only on
-its exact runtime expression, never on its symbolic structure, so both facts
+its exact runtime expression, never on its symbolic structure, so both fields
 are exact at any depth and reading them costs constant time. Substitution
 requires a substitutable value and admits it only when its expanded size is
 within an explicit code-growth limit; a larger value keeps its named binding.

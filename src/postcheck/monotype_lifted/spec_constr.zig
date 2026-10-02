@@ -582,7 +582,7 @@ fn proofAnd(lhs: ProofStatus, rhs: ProofStatus) ProofStatus {
     return .proven;
 }
 
-// Every structured value records two facts about the tree it expands to:
+// Every structured value records substitutability and expanded size:
 //
 // - `substitutable`: whether each of its leaves is a substitutable read (see
 //   `exprCanSubstitute`), so a use may duplicate the whole value without
@@ -591,8 +591,8 @@ fn proofAnd(lhs: ProofStatus, rhs: ProofStatus) ProofStatus {
 //   shared sub-value once per path to it, saturating at `maxInt(usize)`.
 //
 // Values are immutable and built from already-complete children, so both are
-// computed once, from the children's own facts, by the constructors below
-// (`tagValue`, `recordValue`, `tupleValue`, `nominalValue`, `callableValue`),
+// computed once from the children's corresponding fields by the constructors
+// below (`tagValue`, `recordValue`, `tupleValue`, `nominalValue`, `callableValue`),
 // and a query never walks the value.
 
 const TagValue = struct {
@@ -13010,7 +13010,7 @@ const Cloner = struct {
     /// iterator wrapped around itself through many map layers) is a compact
     /// graph reached by combinatorially many distinct paths. The walk returns
     /// every sub-value that can already substitute unchanged, which costs one
-    /// read of its recorded facts, and spends one shared budget per node
+    /// read of its recorded substitutability, and spends one shared budget per node
     /// visit. See design.md "Core Principles" on bounded post-check walks.
     ///
     /// When the budget is exhausted, the remaining sub-value is materialized
