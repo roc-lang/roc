@@ -260,6 +260,7 @@ pub fn appendSuccessorsWithAllocator(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -347,6 +348,7 @@ pub fn redirectSuccessors(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -509,6 +511,12 @@ pub fn forEachStmtRead(
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
             if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
         },
+        .assign_boxy_record_update => |s| {
+            note(ctx, s.base);
+            note(ctx, s.fields);
+            emitDesc(ctx, note, s.base_desc);
+            emitDesc(ctx, note, s.fields_desc);
+        },
         .assign_boxy_reuse_box => |s| {
             note(ctx, s.source);
             emitDesc(ctx, note, s.desc);
@@ -659,6 +667,7 @@ pub fn forEachStmtDef(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -884,6 +893,7 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -1459,7 +1469,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     },
                     .literal_rejection = s.literal_rejection,
                 } }, origin),
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
             };
         }
 
@@ -1542,6 +1552,15 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
                     .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
                     .payload_mode = s.payload_mode,
+                    .next = s.next,
+                } },
+                .assign_boxy_record_update => |s| .{ .assign_boxy_record_update = .{
+                    .target = try self.mapLocal(s.target),
+                    .base = try self.mapLocal(s.base),
+                    .base_desc = try self.mapBoxyDescRef(s.base_desc),
+                    .fields = try self.mapLocal(s.fields),
+                    .fields_layout = s.fields_layout,
+                    .fields_desc = try self.mapBoxyDescRef(s.fields_desc),
                     .next = s.next,
                 } },
                 .assign_boxy_reuse_box => |s| .{ .assign_boxy_reuse_box = .{
@@ -1819,7 +1838,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
                     },
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .loop_continue, .loop_break, .jump, .ret, .crash => {
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .loop_continue, .loop_break, .jump, .ret, .crash => {
                     if (step == 0) return .{ .clone = linearNext(frame.source) };
                     setLinearNext(&frame.built, returned.?);
                     return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
@@ -2169,6 +2188,7 @@ fn linearNext(stmt: LIR.CFStmt) CFStmtId {
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -2220,6 +2240,7 @@ fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,

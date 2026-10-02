@@ -1494,6 +1494,10 @@ const Pass = struct {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
+                .assign_boxy_record_update => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
                 .assign_boxy_reuse_box => |s| {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
@@ -1708,6 +1712,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -1842,6 +1847,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -2001,6 +2007,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -2073,6 +2080,7 @@ const Pass = struct {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -3484,6 +3492,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -3537,6 +3546,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -3638,6 +3648,7 @@ const Pass = struct {
                     .assign_boxy_desc_ref,
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
+                    .assign_boxy_record_update,
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
@@ -3931,6 +3942,11 @@ const Pass = struct {
                         current = s.next;
                     },
                     .assign_boxy_box => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_record_update => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.target);
                         current = s.next;
@@ -5548,6 +5564,7 @@ const RangeProveCertify = struct {
                 .assign_boxy_desc_ref => |t| try list.append(allocator, t.next),
                 .assign_boxy_dict_ref => |t| try list.append(allocator, t.next),
                 .assign_boxy_box => |t| try list.append(allocator, t.next),
+                .assign_boxy_record_update => |t| try list.append(allocator, t.next),
                 .assign_boxy_reuse_box => |t| try list.append(allocator, t.next),
                 .assign_boxy_unbox => |t| try list.append(allocator, t.next),
                 .assign_boxy_adapt => |t| try list.append(allocator, t.next),

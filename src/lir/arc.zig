@@ -2416,6 +2416,15 @@ const Inserter = struct {
                 .payload_mode = assign.payload_mode,
                 .next = next,
             } }, origin),
+            .assign_boxy_record_update => |assign| try self.store.addCFStmt(.{ .assign_boxy_record_update = .{
+                .target = assign.target,
+                .base = assign.base,
+                .base_desc = assign.base_desc,
+                .fields = assign.fields,
+                .fields_layout = assign.fields_layout,
+                .fields_desc = assign.fields_desc,
+                .next = next,
+            } }, origin),
             .assign_boxy_reuse_box => |assign| try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
                 .target = assign.target,
                 .source = assign.source,
@@ -2948,6 +2957,18 @@ const Inserter = struct {
                         try step.pre_retain.append(self.solve_allocator, .{ .local = assign.payload, .reason = .stored_payload });
                     }
                     const singles = [_]LIR.LocalId{ assign.payload, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_record_update => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = try self.transferForSingle(&segment.owned, assign.fields, assign.target, assign.next, segment.ctx.loop_keep);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (!transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, .{ .local = assign.fields, .reason = .stored_payload });
+                    }
+                    const singles = [_]LIR.LocalId{ assign.fields, assign.base, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
                     segment.cursor = assign.next;
                 },
@@ -5728,6 +5749,12 @@ const Inserter = struct {
                     if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
+                .assign_boxy_record_update => |assign| {
+                    if (self.localInOwnershipPlace(assign.base, place)) return true;
+                    if (self.localInOwnershipPlace(assign.fields, place)) return true;
+                    if (assign.target == root) continue;
+                    try stack.append(self.emission_allocator, assign.next);
+                },
                 .assign_boxy_reuse_box => |assign| {
                     if (self.localInOwnershipPlace(assign.source, place)) return true;
                     if (assign.target == root) continue;
@@ -6545,6 +6572,14 @@ const Inserter = struct {
                     try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.payload);
                     if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_record_update => |assign| {
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.base);
+                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.fields);
+                    if (assign.base_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.fields_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -8429,6 +8464,7 @@ const ArcTest = struct {
                 inline .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -8486,6 +8522,7 @@ const ArcTest = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -8609,6 +8646,7 @@ const ArcTest = struct {
                 inline .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
@@ -8700,7 +8738,7 @@ const ArcTest = struct {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -8755,6 +8793,7 @@ const ArcTest = struct {
                 .assign_boxy_desc_ref => |assign| cursor = assign.next,
                 .assign_boxy_dict_ref => |assign| cursor = assign.next,
                 .assign_boxy_box => |assign| cursor = assign.next,
+                .assign_boxy_record_update => |assign| cursor = assign.next,
                 .assign_boxy_reuse_box => |assign| cursor = assign.next,
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
@@ -8819,6 +8858,7 @@ const ArcTest = struct {
                 .assign_boxy_desc_ref => |assign| cursor = assign.next,
                 .assign_boxy_dict_ref => |assign| cursor = assign.next,
                 .assign_boxy_box => |assign| cursor = assign.next,
+                .assign_boxy_record_update => |assign| cursor = assign.next,
                 .assign_boxy_reuse_box => |assign| cursor = assign.next,
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
@@ -8873,6 +8913,7 @@ const ArcTest = struct {
                 .assign_boxy_desc_ref => |assign| cursor = assign.next,
                 .assign_boxy_dict_ref => |assign| cursor = assign.next,
                 .assign_boxy_box => |assign| cursor = assign.next,
+                .assign_boxy_record_update => |assign| cursor = assign.next,
                 .assign_boxy_reuse_box => |assign| cursor = assign.next,
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
@@ -9059,6 +9100,7 @@ test "ARC preserves erased callable repack reuse" {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -9212,6 +9254,7 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -9296,6 +9339,7 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -9410,6 +9454,7 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -9503,6 +9548,7 @@ test "ARC retains an erased callable whose repack input is used later" {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -13649,6 +13695,7 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .assign_boxy_desc_ref => |a| cursor = a.next,
             .assign_boxy_dict_ref => |a| cursor = a.next,
             .assign_boxy_box => |a| cursor = a.next,
+            .assign_boxy_record_update => |a| cursor = a.next,
             .assign_boxy_reuse_box => |a| cursor = a.next,
             .assign_boxy_unbox => |a| cursor = a.next,
             .assign_boxy_adapt => |a| cursor = a.next,
@@ -13993,6 +14040,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -14044,6 +14092,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -14438,6 +14487,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -14823,6 +14873,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -14869,6 +14920,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -15702,6 +15754,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
@@ -15882,6 +15935,7 @@ test "RC specialization: caller body survives variant proc append" {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,

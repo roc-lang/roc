@@ -1186,6 +1186,7 @@ fn outcomeBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -1478,6 +1479,15 @@ fn computeOutcomeRestitution(
                     .assign_boxy_dict_ref => |assign| try pushNext(&stack, allocator, next_state, assign.next),
                     .assign_boxy_box => |assign| {
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.payload, assign.payload_mode)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_record_update => |assign| {
+                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.base, .borrow) or
+                            !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.fields, .move))
+                        {
                             valid = false;
                             break;
                         }
@@ -2178,6 +2188,7 @@ fn liftProcStmtFacts(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
@@ -2877,6 +2888,16 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.payload_desc) |desc| try liftBoxyDescRead(solver, desc);
             try liftVisibilityLink(solver, assign.target, assign.payload);
         },
+        .assign_boxy_record_update => |assign| {
+            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+            try liftBoxyTransfer(solver, assign.base, .borrow, current);
+            try liftBoxyTransfer(solver, assign.fields, .move, current);
+            try liftBoxyDescRead(solver, assign.base_desc);
+            try liftBoxyDescRead(solver, assign.fields_desc);
+            try liftVisibilityLink(solver, assign.target, assign.base);
+            try liftVisibilityLink(solver, assign.target, assign.fields);
+        },
         .assign_boxy_reuse_box => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             try solver.binding_facts.append(allocator, .{ .demand = assign.source });
@@ -3527,7 +3548,7 @@ fn computeVisibilityFromLift(
                         try stack.append(allocator, stmt.body);
                         try stack.append(allocator, stmt.remainder);
                     },
-                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                         try stack.append(allocator, stmt.next);
                     },
                     .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -3630,6 +3651,10 @@ fn computeVisibilityFromLift(
             },
             .assign_boxy_box => |assign| {
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.payload));
+            },
+            .assign_boxy_record_update => |assign| {
+                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.base));
+                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.fields));
             },
             .assign_boxy_reuse_box => |assign| {
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
@@ -5930,6 +5955,12 @@ fn computeUniquenessDetailed(
                 marks.noteBirth(&born, assign.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.payload, assign.payload_mode, @intCast(stmt_index));
             },
+            .assign_boxy_record_update => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                marks.noteBirth(&born, assign.target);
+                try marks.transfer(allocator, &consumes, &destroyed, assign.base, .borrow, @intCast(stmt_index));
+                try marks.transfer(allocator, &consumes, &destroyed, assign.fields, .move, @intCast(stmt_index));
+            },
             .assign_boxy_reuse_box => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
@@ -6581,6 +6612,7 @@ fn computeUniquenessDetailed(
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,

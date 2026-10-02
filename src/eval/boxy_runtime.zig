@@ -5787,27 +5787,13 @@ pub const BoxyRuntime = struct {
         try out.appendSlice(self.eval_arena, text);
     }
 
+    /// Quotes a string exactly as the `str_escape_and_quote` builtin behind
+    /// `Str.inspect` does: only `"` and `\` are escaped.
     fn appendQuotedInspectBytes(self: *const BoxyRuntime, out: *std.ArrayList(u8), bytes: []const u8) Error!void {
         try out.append(self.eval_arena, '"');
         for (bytes) |byte| {
-            switch (byte) {
-                '"' => try out.appendSlice(self.eval_arena, "\\\""),
-                '\\' => try out.appendSlice(self.eval_arena, "\\\\"),
-                '\n' => try out.appendSlice(self.eval_arena, "\\n"),
-                '\r' => try out.appendSlice(self.eval_arena, "\\r"),
-                '\t' => try out.appendSlice(self.eval_arena, "\\t"),
-                else => if (byte < 0x20) {
-                    // Hand-written hex rather than `{x}`: see `appendScalarInspect`
-                    // for why this object links no `std.fmt` formatter.
-                    const hex_digits = "0123456789abcdef";
-                    try out.appendSlice(self.eval_arena, "\\u(");
-                    if (byte >= 0x10) try out.append(self.eval_arena, hex_digits[byte >> 4]);
-                    try out.append(self.eval_arena, hex_digits[byte & 0xf]);
-                    try out.append(self.eval_arena, ')');
-                } else {
-                    try out.append(self.eval_arena, byte);
-                },
-            }
+            if (byte == '"' or byte == '\\') try out.append(self.eval_arena, '\\');
+            try out.append(self.eval_arena, byte);
         }
         try out.append(self.eval_arena, '"');
     }
@@ -7208,6 +7194,80 @@ pub const BoxyRuntime = struct {
     /// Produce the value and target-local descriptor for reading a dynamic
     /// box's payload back out, honoring pure relabels of the source
     /// allocation.
+    /// `assign_boxy_record_update`: box a copy of the boxed record `base` in
+    /// which every field `fields_desc` names takes its value from the
+    /// `fields` record payload, written in the base field's representation.
+    /// A record update never changes a field's type, so the result has the
+    /// base's runtime representation and descriptor. The base is borrowed, so
+    /// each field copied from it is retained; the `fields` payload is consumed.
+    pub fn boxyRecordUpdate(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        base_value: Value,
+        base_layout: layout_mod.Idx,
+        base_desc: *const LirProgram.BoxyTypeDesc,
+        fields_value: Value,
+        fields_layout: layout_mod.Idx,
+        fields_desc: *const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+    ) Error!BoxyAssignedValue {
+        const record_desc = try self.boxyBoxAllocationPayloadDesc(hooks, base_layout, base_desc) orelse
+            return self.invariantFailedError("LIR/interpreter invariant violated: boxy record update base had no payload descriptor", .{});
+        const record_layout = record_desc.payload_layout;
+        const record_layout_val = self.layout_store.getLayout(record_layout);
+        const fields_layout_val = self.layout_store.getLayout(fields_layout);
+        if (record_layout_val.tag != .struct_ or fields_layout_val.tag != .struct_) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy record update expected record payloads, got base={s} fields={s}",
+                .{ @tagName(record_layout_val.tag), @tagName(fields_layout_val.tag) },
+            );
+        }
+        const record_struct = record_layout_val.getStruct().idx;
+        const fields_struct = fields_layout_val.getStruct().idx;
+        const record_count = self.layout_store.getStructData(record_struct).fields.count;
+        const fields_count = self.layout_store.getStructData(fields_struct).fields.count;
+
+        const updated = try hooks.allocValue(record_layout);
+        const record_size = self.helper.sizeOf(record_layout);
+        if (record_size != 0) {
+            const base_data = self.readBoxedDataPointer(base_value) orelse
+                return self.invariantFailedError("LIR/interpreter invariant violated: boxy record update base box had no payload", .{});
+            updated.copyFrom(.{ .ptr = base_data }, record_size);
+        }
+        var index: u32 = 0;
+        while (index < record_count) : (index += 1) {
+            const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_struct, index);
+            const field_value = updated.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_struct, index));
+            const field_desc = try self.boxyStructFieldDesc(hooks, record_desc, record_layout, index, "record update target");
+            const source_index = try self.sourceStructFieldIndexForTarget(
+                fields_desc,
+                fields_count,
+                record_desc,
+                record_count,
+                index,
+                hooks.traceProcId(),
+            ) orelse {
+                try self.performBoxyLayoutDrop(hooks, field_value, field_layout, field_desc, .incref, 1, .atomic);
+                continue;
+            };
+            const source_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(fields_struct, source_index);
+            const source_desc = try self.boxyStructFieldDesc(hooks, fields_desc, fields_layout, source_index, "record update source");
+            try self.writeBoxyPayloadToDestinationWithTargetDesc(
+                hooks,
+                field_value,
+                field_layout,
+                fields_value.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(fields_struct, source_index)),
+                source_layout,
+                source_desc,
+                field_desc,
+            );
+        }
+        return .{
+            .value = try self.allocBoxyDynamicPayload(hooks, updated, record_layout, record_desc, target_layout),
+            .desc = base_desc,
+        };
+    }
+
     pub fn boxyUnboxValue(
         self: *const BoxyRuntime,
         hooks: anytype,

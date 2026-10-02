@@ -8332,7 +8332,11 @@ commit-probe: success commits the unification and any method evidence; failure
 rolls the whole attempt back and reports the interpolation-part type mismatch.
 
 Builtin quote and interpolation literal constraints are discharged directly by
-`Str`. A numeral literal constraint is rejected because builtin `Str` does not
+`Str`. Discharging an interpolation constraint also makes its generated item
+type `Str`, because `Str.from_interpolation` receives `Iter((Str, Str))`: a
+generic body that keeps the dispatch calls that method through dictionary
+evidence whose callable type names the item. A numeral literal constraint is
+rejected because builtin `Str` does not
 materialize numerals, and every non-literal constraint uses the ordinary static
 dispatch method-acceptance rule. Rejecting a constrained part retires its copied
 static-dispatch constraints together with the erroneous interpolation so no
@@ -10238,6 +10242,13 @@ must not request descriptors for uninstantiated scheme parameters. Declarations
 whose binders are captured still provide the runtime value required by those
 explicit capture edges.
 
+A closure's captures are the values its captured binders hold at the closure's
+declaration. Constructing the callable at a later use reads the same values only
+for immutable binders. For every capture whose checked binder is `reassignable`,
+the declaring body reserves a snapshot local, assigns the binder's current value
+to it at the declaration, and every construction of that closure's callable in
+the body reads the snapshot instead of the binder's current local.
+
 Restoring a non-function `ConstStore` value in `.boxy` directly emits LIR for
 the requested checked type. The const node is read from the module that owns the
 stored value, while checked type interpretation uses the module named by the
@@ -10260,6 +10271,19 @@ explicit planned boundary into the checked use representation. Stored callable
 captures follow the same rule. Boxy planning and lowering do not scan the
 checked type graph, infer a producer from the requested layout, or treat the
 checked use type as evidence for the stored bytes.
+
+A stored function value fixes its worker's instantiation. Its worker is planned
+at the checked definition type of its source, which may name type variables of
+the generic procedure that created the closure. Every such variable occupies a
+position of the callable value's own concrete function type or of a stored
+capture's type, and the representation at that position is the concrete source
+of the worker descriptor for it. Planning records those descriptors as the
+stored value's hidden descriptor arguments. A use that restores a stored callable
+is therefore not a descriptor-propagating edge: the restoring frame never
+describes the stored worker's variables. A stored function nested in a stored
+aggregate is constructed directly at its exact stored representation; its
+representation's checked source labels the enclosing stored value, not a
+function type.
 
 `.boxy` represents an unknown type-variable value with the explicit
 pointer-sized `erased_box` layout. Its nullable or non-null Roc value points to
@@ -10321,6 +10345,8 @@ value. The payload starts with the erased-callable header and stores capture
 bytes after the fixed capture offset. Captures may include hidden descriptors
 or dictionaries because the host ABI for `Box(function)` already treats
 capture bytes as opaque. The value pointer and header layout do not change.
+Pure and effectful function types share this one representation; the function
+kind is checked typing information and is not part of a Boxy representation.
 Zero-capture functions may use a static or otherwise immutable erased callable
 payload, but their value shape is still the erased callable pointer.
 
@@ -10369,6 +10395,35 @@ whose fields are still row-polymorphic. Field access on such a value is a
 polymorphic operation and must be driven by explicit hidden row descriptor or
 dictionary data; it is not recovered from field names during lowering.
 
+An open-record representation (a `.dynamic` representation whose children are
+only the fields its row names) stores the complete record the value was built
+from. Its descriptor describes that complete record, so it is a descriptor leaf
+like a type variable: no template over the row's fields builds it, and no
+descriptor is read out of it by nested position, because the complete record's
+field positions differ from the row's whenever the row adds fields that sort
+before a named one. A template over the row's fields is only the static-field
+view a field read unboxes to and a record update's replacement fields are
+described by. Every boundary into an open record keeps the source's own
+descriptor (a concrete record is boxed whole), every boundary out of one
+selects fields by name through the runtime adapter, and a call result of open
+record type is described by the descriptor the callee returns. A field read's
+static-field view is an owned materialization: conversion may allocate field
+values, while fields shared with the source are retained by the copy transfer.
+ARC therefore receives an owned view. The subsequent field read borrows
+the exact stored layout; conversion to the worker representation is a separate
+LIR adapter that produces an owned result.
+
+Planning sources an open-record leaf like any other: from a worker's signature,
+from the frame that creates a nested callable, or, when the record is named only
+through a dictionary requirement's signature (a `map` callback's argument, say),
+from that dictionary. An open record belongs to a worker's own scheme when the
+worker quantifies its row variable. A dictionary method's evidence lists the
+open records inside the requirement's signature, function-typed positions
+included, each described by the evidence callable's representation at the same
+position; the runtime appends them to the method's requirement descriptors,
+and a worker that needs one reads it from its own dictionary on entry instead of
+receiving it as a hidden parameter.
+
 ### Boxy `TypeDesc`
 
 A boxy `TypeDesc` is primarily runtime data for representation. It describes
@@ -10397,6 +10452,15 @@ statements; they do not synthesize descriptors from type names, layout shapes,
 or object symbols. In particular, Boxy adapters wrap and unwrap generalized
 field-presence slots only from the explicit presence-slot discriminant; tag
 names and tag-union shapes are never used to recover that field-presence kind.
+
+A worker's descriptor slots are initialized in its prologue, before any body
+statement, and a body template may capture a slot. A slot that a body statement
+also writes is still initialized in the prologue when its representation's
+descriptor is static, because lowering visits statements in reverse execution
+order and a template recorded for an earlier statement can capture the slot
+before that write executes. Only an evidence bind, which is initialized before
+anything that observes it, lets the prologue skip a slot. Static initializers
+precede the ones with captures.
 
 Descriptors are never stored inside ordinary Roc values. A value of type
 variable `a` is a one-word box pointer, not `{ data, desc }`. A record field,
@@ -10479,13 +10543,20 @@ reconstructed from erased worker children. Wrappers and adapters consume the
 planned pair, including its exact tag payload types and descriptor provenance.
 Equal storage layouts alone do not permit aliasing boundary result locals.
 
-A compiler-backed low-level operation returning builtin `Try` requests an exact
-ABI representation of its checked result during planning. This opens nominal
-arguments and applies checked row defaults in the ABI context. The operation
-writes that complete concrete result, then an explicit descriptor-guided
-adapter converts it into the worker representation. Worker error-row boxes are
-not builtin result slots, and changing only the outer `Try` layout does not
-describe its nested payload storage.
+A compiler-backed low-level operation returning builtin `Try`, and the
+`compare` operation returning the closed `[Before, Same, After]` that Boxy keeps
+as an open output row, requests an exact ABI representation of its checked
+result during planning. This opens nominal arguments and applies checked row
+defaults in the ABI context. The operation writes that complete concrete result,
+then an explicit descriptor-guided adapter converts it into the worker
+representation. Worker error-row boxes are not builtin result slots, and
+changing only the outer `Try` layout does not describe its nested payload
+storage.
+
+The sort low-level calls its boxed comparator through a planned ABI
+representation: the comparator's arguments keep their worker representation and
+its ordering result is that closed union. Lowering wraps a callback whose result
+row is open in an adapter for that ABI before the call.
 
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
@@ -14559,6 +14630,13 @@ substitution of the call that passes the dictionary, which a method call reads
 from the evidence node its plan selected, exactly as an ordinary call reads it
 from its instantiated lookup.
 
+A dictionary method's requirement descriptor whose source is an argument is
+that argument's own descriptor. A requirement position nested inside an
+argument (an interpolation iterator's item, say) is described by the evidence
+callable's type at that position or supplied by the invocation, never by the
+argument's descriptor: a nominal argument's descriptor describes its backing,
+which need not expose the position at all.
+
 A static dictionary method selected from the dictionary's own type, with no
 checked evidence edge, is called at an explicit instantiation: the selected
 target's declared argument and result types, with the constrained variable's
@@ -14585,6 +14663,10 @@ by the derived frame, which is none when the derived type names no type
 variable (so every frame shares its static decisions) and otherwise the worker
 lowering it, and lowering reads them, never re-deciding. Every derived
 comparison and hash is compiled code; Boxy has no descriptor-guided equality.
+A structural equality that checking marked as a comparison against one
+payload-free tag (`CheckedTagDiscriminantEquality`) is not a derived root: Boxy
+lowers it as the same tag test a `match` arm for that tag performs, which an
+open tag row supports through its descriptor without any equality dictionary.
 
 Expanding a nominal enters its backing under an environment binding the
 backing's formals to the actuals of that use, resolved through the enclosing

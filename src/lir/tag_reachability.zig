@@ -254,7 +254,7 @@ const Pass = struct {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
-            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
@@ -435,6 +435,12 @@ const Pass = struct {
             .assign_boxy_box => |s| {
                 self.noteUse(s.payload);
                 if (s.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_record_update => |s| {
+                self.noteUse(s.base);
+                self.noteUse(s.fields);
+                if (s.base_desc.localOrNull()) |local| self.noteUse(local);
+                if (s.fields_desc.localOrNull()) |local| self.noteUse(local);
             },
             .assign_boxy_reuse_box => |s| {
                 self.noteUse(s.source);
@@ -627,6 +633,7 @@ const Pass = struct {
                 .assign_boxy_desc_ref => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_dict_ref => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_box => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_record_update => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_reuse_box => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_unbox => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_boxy_adapt => |*s| s.next = self.resolveRedirect(s.next),

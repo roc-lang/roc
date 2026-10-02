@@ -39171,7 +39171,12 @@ fn satisfyBuiltinStrInterpolation(
         try self.markErroneous(dispatcher_var);
         try self.markStaticDispatchRejected(constraint);
         try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
+        return true;
     }
+    // `Str.from_interpolation` receives `Iter((Str, Str))`, so the
+    // constraint's generated item type is Str. A generic body that keeps the
+    // dispatch calls that method with an iterator of this item type.
+    _ = try self.unify(metadata.item_var, expected_str_var, env);
     return true;
 }
 
