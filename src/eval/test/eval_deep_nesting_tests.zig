@@ -20,7 +20,6 @@ const stack_bytes = 4 * 1024 * 1024;
 /// less deeply, on a stack still far smaller than that depth times any
 /// per-level recursion cost.
 const shallow_depth = 1000;
-const shallow_depth_str = std.fmt.comptimePrint("{d}", .{shallow_depth});
 const shallow_stack_bytes = 2 * 1024 * 1024;
 
 /// A deep equality's canonical type keys, a curried lambda chain's
@@ -39,6 +38,34 @@ const codec_chain_depth = 100;
 
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
+}
+
+/// `format` printed with `args(i)` for each `i` below `n`, written into one
+/// buffer sized up front so building it stays linear in `n`.
+fn numberedLines(
+    comptime n: usize,
+    comptime format: []const u8,
+    comptime Args: type,
+    comptime args: fn (usize) Args,
+) []const u8 {
+    @setEvalBranchQuota(100_000_000);
+    comptime {
+        var len: usize = 0;
+        for (0..n) |i| len += std.fmt.count(format, args(i));
+        var buf: [len]u8 = undefined;
+        var at: usize = 0;
+        for (0..n) |i| at += (std.fmt.bufPrint(buf[at..], format, args(i)) catch unreachable).len;
+        const lines = buf;
+        return &lines;
+    }
+}
+
+fn callChainArgs(i: usize) struct { usize, usize, usize } {
+    return .{ i, i, i + 1 };
+}
+
+fn methodChainArgs(i: usize) struct { usize, usize, usize, usize, usize, usize } {
+    return .{ i, i, i, i, i + 1, i + 1 };
 }
 
 /// A custom parser whose where-clause asks for its argument's parser, applied
@@ -247,28 +274,19 @@ const cases = [_]TestCase{
         .source_kind = .module,
         // Running the chain would recurse once per function at runtime, which
         // is the program's own depth; the untaken branch still compiles every
-        // function in the chain. Building this source at comptime copies its
-        // whole prefix once per function, so the chain is shallower.
-        .source = blk: {
-            @setEvalBranchQuota(10_000_000);
-            var out: []const u8 = "";
-            for (0..shallow_depth) |i| out = out ++ std.fmt.comptimePrint("f{d} : U64 -> U64\nf{d} = |x| f{d}(x + 1)\n", .{ i, i, i + 1 });
-            break :blk out;
-        } ++ "f" ++ shallow_depth_str ++ " : U64 -> U64\nf" ++ shallow_depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
+        // function in the chain.
+        .source = numberedLines(depth, "f{d} : U64 -> U64\nf{d} = |x| f{d}(x + 1)\n", struct { usize, usize, usize }, callChainArgs) ++
+            "f" ++ depth_str ++ " : U64 -> U64\nf" ++ depth_str ++ " = |x| x\nrun = |n| if n == 0 { 1.U64 } else { f0(n) }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: method dispatch chain",
         .source_kind = .module,
         // Each method's body dispatches on the next type's value, whose
         // method checking resolves on demand.
-        .source = blk: {
-            @setEvalBranchQuota(10_000_000);
-            var out: []const u8 = "";
-            for (0..shallower_depth) |i| out = out ++ std.fmt.comptimePrint("T{d} := [V{d}(U64)].{{\n    step = |T{d}.V{d}(x)| T{d}.V{d}(x).step()\n}}\n", .{ i, i, i, i, i + 1, i + 1 });
-            break :blk out;
-        } ++ "T" ++ shallower_depth_str ++ " := [V" ++ shallower_depth_str ++ "(U64)].{\n    step = |T" ++ shallower_depth_str ++ ".V" ++ shallower_depth_str ++ "(x)| x\n}\nrun = |n| if n == 0 { 1.U64 } else { T0.V0(n).step() }\nmain = run(0.U64)\n",
+        .source = numberedLines(shallower_depth, "T{d} := [V{d}(U64)].{{\n    step = |T{d}.V{d}(x)| T{d}.V{d}(x).step()\n}}\n", struct { usize, usize, usize, usize, usize, usize }, methodChainArgs) ++
+            "T" ++ shallower_depth_str ++ " := [V" ++ shallower_depth_str ++ "(U64)].{\n    step = |T" ++ shallower_depth_str ++ ".V" ++ shallower_depth_str ++ "(x)| x\n}\nrun = |n| if n == 0 { 1.U64 } else { T0.V0(n).step() }\nmain = run(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
         .stack_bytes = shallow_stack_bytes,
     },
