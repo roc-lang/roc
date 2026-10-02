@@ -49644,71 +49644,89 @@ const BodyContext = struct {
     /// Resolve every symbolic callable-path entry whose dispatcher is already
     /// known in the live specialization graph. Entries left open here are
     /// retained by ConstStore and resolved when that stored function is used.
-    fn walkEvidencePathNode(
+    /// Applies one checked evidence path node to the graph node its parent
+    /// selects. A tag label selects its tag union; the payload index after it
+    /// selects the payload.
+    const EvidencePathNodeStepper = struct {
+        body: *BodyContext,
+        view: ModuleView,
+
+        pub fn apply(
+            self: EvidencePathNodeStepper,
+            node: NodeId,
+            path_nodes: []const static_dispatch.EvidencePathNode,
+            path_node: u32,
+        ) Allocator.Error!?NodeId {
+            return self.body.evidencePathNodeStep(self.view, node, path_nodes, path_node);
+        }
+    };
+
+    fn evidencePathNodeStep(
         self: *BodyContext,
         view: ModuleView,
-        start_node: NodeId,
-        path: []const static_dispatch.EvidencePathStep,
+        node: NodeId,
+        path_nodes: []const static_dispatch.EvidencePathNode,
+        path_node: u32,
     ) Allocator.Error!?NodeId {
-        var node = start_node;
-        var index: usize = 0;
-        while (index < path.len) : (index += 1) {
-            const step = path[index];
-            const content = self.graph.content(node);
-            switch (step.stepKind()) {
-                .fn_arg => switch (content) {
-                    .func => |function| {
-                        if (step.data >= function.args.len) return null;
-                        node = function.args[step.data];
-                    },
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+        const step = path_nodes[path_node].step;
+        const content = self.graph.content(node);
+        switch (step.stepKind()) {
+            .fn_arg => switch (content) {
+                .func => |function| {
+                    if (step.data >= function.args.len) return null;
+                    return function.args[step.data];
                 },
-                .fn_ret => switch (content) {
-                    .func => |function| node = function.ret,
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+            },
+            .fn_ret => switch (content) {
+                .func => |function| return function.ret,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+            },
+            .alias_arg, .nominal_arg => switch (content) {
+                .named => |named| {
+                    if (step.data >= named.args.len) return null;
+                    return named.args[step.data];
                 },
-                .alias_arg, .nominal_arg => switch (content) {
-                    .named => |named| {
-                        if (step.data >= named.args.len) return null;
-                        node = named.args[step.data];
-                    },
-                    .list, .box => |payload| {
-                        if (step.data != 0) return null;
-                        node = payload;
-                    },
-                    .redirect, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+                .list, .box => |payload| {
+                    if (step.data != 0) return null;
+                    return payload;
                 },
-                .alias_backing, .nominal_backing => switch (content) {
-                    .named => |named| node = (named.backing orelse return null).node,
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+                .redirect, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            },
+            .alias_backing, .nominal_backing => switch (content) {
+                .named => |named| return (named.backing orelse return null).node,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            },
+            .tuple_elem => switch (content) {
+                .tuple => |items| {
+                    if (step.data >= items.len) return null;
+                    return items[step.data];
                 },
-                .tuple_elem => switch (content) {
-                    .tuple => |items| {
-                        if (step.data >= items.len) return null;
-                        node = items[step.data];
-                    },
-                    .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-                },
-                .record_field => switch (content) {
-                    .record => node = try self.graph.recordFieldValueNode(node, try self.recordFieldName(view, @enumFromInt(step.data))),
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-                },
-                .tag_payload_tag => switch (content) {
-                    .tag_union => {
-                        index += 1;
-                        if (index >= path.len or path[index].stepKind() != .tag_payload_index) return null;
-                        node = try self.graph.tagPayloadNode(
-                            node,
-                            try self.tagName(view, @enumFromInt(step.data)),
-                            path[index].data,
-                        );
-                    },
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
-                },
-                .tag_payload_index => return null,
-            }
+                .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+            },
+            .record_field => switch (content) {
+                .record => return try self.graph.recordFieldValueNode(node, try self.recordFieldName(view, @enumFromInt(step.data))),
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+            },
+            .tag_payload_tag => switch (content) {
+                .tag_union => return node,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+            },
+            .tag_payload_index => {
+                const tag_node = path_nodes[path_node].parent;
+                if (tag_node == static_dispatch.no_evidence_path_node) return null;
+                const tag_step = path_nodes[tag_node].step;
+                if (tag_step.stepKind() != .tag_payload_tag) return null;
+                return switch (content) {
+                    .tag_union => try self.graph.tagPayloadNode(
+                        node,
+                        try self.tagName(view, @enumFromInt(tag_step.data)),
+                        step.data,
+                    ),
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+                };
+            },
         }
-        return node;
     }
 
     fn resolveCallableEvidenceAtNode(
@@ -49727,15 +49745,24 @@ const BodyContext = struct {
         var replacements = std.ArrayList(Replacement).empty;
         defer replacements.deinit(self.allocator);
         var has_symbolic = false;
+        var path_memo: static_dispatch.EvidencePathMemo(NodeId) = .{};
+        defer path_memo.deinit(self.allocator);
+        const path_stepper = EvidencePathNodeStepper{ .body = self, .view = view };
         for (evidence, 0..) |entry, index| switch (entry) {
             .from_callable => {
                 has_symbolic = true;
                 const param = params[index];
-                const path = view.templates.evidenceParamPath(param);
-                if (path.len == 0) {
+                if (param.path.len == 0) {
                     Common.invariant("callable-derived evidence named a pathless checked parameter");
                 }
-                const component_node = try self.walkEvidencePathNode(view, request_fn_node, path) orelse
+                const component_node = try path_memo.resolve(
+                    self.allocator,
+                    view.templates.evidence_path_nodes,
+                    param.path.last,
+                    0,
+                    request_fn_node,
+                    path_stepper,
+                ) orelse
                     Common.invariant("callable-derived evidence path did not match its function request");
                 const resolvable = self.methodOwnerFromNode(component_node) != null or
                     param.structural != null or
@@ -50974,10 +51001,7 @@ const BodyContext = struct {
             .local_proc => |local| self.scopeSchema(target.view, local.dispatch_scope).params,
             .structural => Common.invariant("structural evidence target reached callable nested-evidence classification"),
         };
-        return static_dispatch.procedureEvidenceSchema(
-            params,
-            target.view.templates.evidence_param_paths,
-        );
+        return static_dispatch.procedureEvidenceSchema(params);
     }
 
     const DependentCallableEvidenceError = error{RequiresRecordSynthesis};

@@ -274,7 +274,8 @@ pub const Constants = struct {
     ///      source regions; main-type exposures are errors.
     /// 125: Checked modules drop checked-error reachability templates, and
     ///      compile-time values and test results record checked-error crashes.
-    pub const CACHE_VERSION = 125;
+    /// 126: Evidence paths store shared prefixes instead of complete paths.
+    pub const CACHE_VERSION = 126;
 };
 
 /// Configuration for the Roc cache system.

@@ -12852,6 +12852,16 @@ sorts rows). Boxy dictionary planning projects dispatcher components over
 concrete callables through these paths, and the CheckedModule boundary
 validates them.
 
+Paths are stored as nodes, each one step linked to the node of the step
+before it, and a param names its path by its last node and length. The paths
+of one scheme share their common prefixes, both while the producer walks the
+scheme and in the evidence parameter pool, so a scheme nested n levels deep with a
+dispatcher at every level costs O(n) path storage rather than the O(n^2) its
+flat paths would total. Consumers that resolve every path of one scheme over
+one root (the boundary validator, Monotype's callable-derived evidence) resolve
+each node once per root from its parent's result rather than replaying each
+path from the root.
+
 Evidence paths describe the normalized logical type, never checked-store row
 topology. Record and tag extension chains, including transparent aliases along
 those chains, are traversed by the evidence-param producer but are not emitted
