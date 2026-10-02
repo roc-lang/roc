@@ -3358,11 +3358,14 @@ fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocator.
 }
 
 /// A top-level comma distinguishes a mistaken record separator from a block
-/// assignment. Delimited expressions and lambda parameters own their commas.
+/// assignment. Delimited expressions and lambda parameters own their commas,
+/// and so does a function type's argument list, which an arrow at this level
+/// follows: a record field's value has none.
 fn braceHasFieldComma(self: *const Parser) bool {
     var token = self.pos + 2;
     var depth: u32 = 0;
     var lambda_params = false;
+    var record_comma = false;
     const tags = self.tok_buf.tokens.items(.tag);
     while (token < tags.len) : (token += 1) {
         const tag = tags[token];
@@ -3373,17 +3376,23 @@ fn braceHasFieldComma(self: *const Parser) bool {
         } else if (tag == .CloseRound or tag == .CloseSquare or tag == .CloseCurly or
             tag == .CloseStringInterpolation or tag == .StringEnd)
         {
-            if (depth == 0) return false;
+            if (depth == 0) return record_comma;
             depth -= 1;
         } else if (depth == 0 and tag == .OpBar) {
             lambda_params = !lambda_params;
         } else if (depth == 0 and !lambda_params and tag == .Comma) {
+            record_comma = true;
+        } else if (depth == 0 and (tag == .OpArrow or tag == .OpFatArrow)) {
+            record_comma = false;
+        } else if (depth == 0 and record_comma and tag == .LowerIdent and
+            token + 1 < tags.len and tags[token + 1] == .OpAssign)
+        {
             return true;
         } else if (tag == .EndOfFile) {
-            return false;
+            return record_comma;
         }
     }
-    return false;
+    return record_comma;
 }
 
 fn runExprStatementKernel(

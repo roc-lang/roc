@@ -5163,8 +5163,8 @@ test "glue platform schema lock rejects field rename addition and type mutation"
         try tmp.dir.writeFile(io, .{ .sub_path = mutation_path, .data = mutation.source });
         try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
             \\app [make_glue] { pf: platform "platform/main.roc" }
-            \\import pf.Types exposing [Types]
-            \\import pf.File exposing [File]
+            \\import pf.Types
+            \\import pf.File
             \\make_glue : List(Types) -> Try(List(File), Str)
             \\make_glue = |input| {
             \\    dbg input

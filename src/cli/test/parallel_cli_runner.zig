@@ -10606,7 +10606,7 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
         return customInfraFailure(allocator, timer, "failed to create spec dir: {}", .{err});
     const spec_main = std.fs.path.join(allocator, &.{ spec_dir, "main.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate spec path: {}", .{err});
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = spec_main, .data = "app [make_glue] { pf: platform glue }\n\nimport pf.Types exposing [Types]\nimport pf.File exposing [File]\n\nmake_glue : List(Types) -> Try(List(File), Str)\nmake_glue = |_types| Ok([File.{ name: \"generated.txt\", content: \"installed glue ran\" }])\n" }) catch |err|
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = spec_main, .data = "app [make_glue] { pf: platform glue }\n\nimport pf.Types\nimport pf.File\n\nmake_glue : List(Types) -> Try(List(File), Str)\nmake_glue = |_types| Ok([File.{ name: \"generated.txt\", content: \"installed glue ran\" }])\n" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write glue spec: {}", .{err});
 
     const serve_dir = createWorkSubdir(io, allocator, env, "glue-serve") catch |err|
