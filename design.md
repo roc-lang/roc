@@ -388,7 +388,7 @@ type nesting (a list of lists, a record whose field is a record, a callable
 capturing a callable), and the depth of every structure derived from those:
 checked, solved, and Monotype types, layouts, constant values, match trees,
 statement chains, and procedure graphs. Every walk over such a structure, in
-parsing, canonicalization, checking, checked output, Monotype, lifting,
+parsing, formatting, canonicalization, checking, checked output, Monotype, lifting,
 SpecConstr, lambda solving and lowering, Boxy, Solved-to-LIR lowering, LIR
 passes, backends, compile-time evaluation, the interpreter, and the type and
 layout stores, keeps its pending work in heap-backed explicit storage: a frame
