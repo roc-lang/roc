@@ -17936,8 +17936,8 @@ test "value substitutability is exact at any depth" {
     } } });
 
     // A long string interpolation's iterator nests one level per part, so a
-    // value can be far deeper than any per-query work budget. Whether it is
-    // substitutable depends only on its leaves, never on its depth.
+    // value can be thousands of levels deep. Whether it is substitutable
+    // depends only on its leaves, never on its depth.
     const depth = 10_000;
     var reads: Value = .{ .expr = read };
     var works: Value = .{ .expr = work };
