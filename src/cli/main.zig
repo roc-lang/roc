@@ -58,6 +58,11 @@ comptime {
         _ = @import("test_shared_memory_system.zig");
     }
 }
+
+comptime {
+    // The compiler's `memset` on targets whose libc leaves it to compiler_rt.
+    _ = @import("fast_memset");
+}
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
