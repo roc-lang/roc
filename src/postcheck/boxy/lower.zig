@@ -260,6 +260,7 @@ fn checkedExprIsListMapCanReuseWrapper(
         .anno_only,
         .break_,
         .return_,
+        .row_coerce,
         .for_,
         .hosted_lambda,
         => false,
@@ -7732,7 +7733,7 @@ const ProcedureBuilder = struct {
                 try proc.lowerNumFromNumeralInto(result_value, numeral.plan, done)
             else
                 try proc.lowerPendingNumeralConversionInto(generic_value, site.source.expr, expr.ty, numeral.plan, adapted),
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => boxyLowerInvariant("literal initializer did not name a checked conversion"),
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => boxyLowerInvariant("literal initializer did not name a checked conversion"),
         };
         if (dictionary_initializer) |dictionary| body = try proc.prependHiddenDictionaryArgMaterialization(&.{dictionary}, body);
         body = try proc.prependStaticDescriptorMaterializationsForSlots(body);
@@ -17135,7 +17136,7 @@ const ProcBodyBuilder = struct {
                 break :blk switch (expr.data) {
                     .closure => |closure| closure.captures,
                     .lambda => &.{},
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable worker source did not point at a lambda or closure"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable worker source did not point at a lambda or closure"),
                 };
             },
             .procedure_template,
@@ -17805,6 +17806,11 @@ const ProcBodyBuilder = struct {
             .structural_hash => |hash| try self.beginStructuralHash(target, hash.value, hash.hasher, next),
             .record => |record| try self.beginRecordExpr(target, expr_id, expr.ty, record, next),
             .nominal => |nominal| try self.beginNominal(target, expr.ty, nominal.backing_expr, next),
+            // `beginExpr`'s target holds this expression's own representation;
+            // callers storing it elsewhere go through `beginExprExpected`,
+            // `beginExprExpectedTypeRef` or `beginExprIntoRep`, which supply
+            // theirs.
+            .row_coerce => |coerce| try self.beginRowCoerce(target, self.repForType(expr.ty), expr.ty, coerce.value, next),
             .call => |call| try self.beginDirectCall(target, expr_id, call, expr.ty, next),
             .dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
             .type_dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
@@ -17919,6 +17925,10 @@ const ProcBodyBuilder = struct {
         const source_rep = self.exprStorageRep(expr, self.repForType(expr.ty));
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const target_uses_expected_layout = target_layout == self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
+        // A row coercion's boundary goes straight into the caller's storage.
+        if (expr.data == .row_coerce and target_uses_expected_layout) {
+            return try self.beginRowCoerce(target, target_rep, expr.ty, expr.data.row_coerce.value, next);
+        }
         if (target_rep != source_rep and self.repHasTagDomain(target_rep)) {
             switch (expr.data) {
                 .tag => |tag| if (self.tagDomainHasLocalVariant(target_rep, tag.name)) {
@@ -17927,7 +17937,7 @@ const ProcBodyBuilder = struct {
                 .zero_argument_tag => |tag| if (self.tagDomainHasLocalVariant(target_rep, tag.name)) {
                     return try self.beginTagRep(target, expected_ty, self.repForType(expected_ty), tag.name, &.{}, next);
                 },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
         if (expected_ty != expr.ty) {
@@ -17946,7 +17956,7 @@ const ProcBodyBuilder = struct {
                 .lambda,
                 .closure,
                 => return try self.beginCallableExprTypeRef(target, .{ .module = self.module.key, .ty = expected_ty }, expr_id, next),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
@@ -17984,10 +17994,13 @@ const ProcBodyBuilder = struct {
             .lambda,
             .closure,
             => return try self.beginCallableExprTypeRef(target, expected_ty, expr_id, next),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
 
         const target_rep = self.repForTypeRef(expected_ty);
+        if (expr.data == .row_coerce and self.localUsesWorkerLayoutForRep(target, target_rep)) {
+            return try self.beginRowCoerce(target, target_rep, expr.ty, expr.data.row_coerce.value, next);
+        }
         const source_rep = self.exprStorageRep(expr, self.repForType(expr.ty));
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
@@ -18009,6 +18022,9 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        if (expr.data == .row_coerce and self.localUsesWorkerLayoutForRep(target, target_rep)) {
+            return try self.beginRowCoerce(target, target_rep, expr.ty, expr.data.row_coerce.value, next);
+        }
         const source_rep = self.repForType(expr.ty);
         try self.ensureBoundaryTargetDescriptorForSourceRep(target, source_rep);
         if (self.representationBoundaryIsDirect(target_rep, source_rep)) {
@@ -19456,6 +19472,171 @@ const ProcBodyBuilder = struct {
         const ret_stmt = try self.parent.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, self.origin);
         const assign_ret = try self.assignRepresentationBoundary(ret_local, expr_local, ret_rep, expr_rep, ret_stmt);
         return .{ .tail = .{ .expr = .{ .target = expr_local, .expr_id = expr_id, .next = assign_ret } } };
+    }
+
+    /// A checked row coercion (design.md "Row Coercion Primitive") crosses the
+    /// representation boundary exactly as an explicit return does: the value
+    /// is lowered at its own checked type into a fresh local, and the boundary
+    /// re-tags it into the target local. `target_rep` is the representation
+    /// the caller stores the target at; the coercion's own pair, the child's
+    /// type and `coerce_ty`, is what the reach check reads.
+    fn beginRowCoerce(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        coerce_ty: checked.CheckedTypeId,
+        value_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const value_expr = self.module.checked_bodies.expr(value_id);
+        const value_rep = self.repForType(value_expr.ty);
+        if (!self.localUsesWorkerLayoutForRep(target, target_rep)) {
+            boxyLowerInvariant("boxy row coercion target local layout disagreed with its caller's representation");
+        }
+        // A child that diverges produces no value to re-tag, and its own
+        // checked type need not be a row at all.
+        if (!self.module.checked_bodies.exprDiverges(value_id, .omit)) {
+            try self.assertRowCoerceReach(self.repForType(coerce_ty), value_rep);
+        }
+        try self.ensureBoundaryTargetDescriptorForSourceRep(target, value_rep);
+        const value_local = try self.addFrameBoundaryTargetLocalForRep(value_rep);
+        const boundary = if (self.rowCoerceAdaptsDescriptors(target, target_rep, value_rep))
+            try self.assignRuntimeAdapterBoundary(target, value_local, target_rep, value_rep, .move, next)
+        else
+            try self.assignRepresentationBoundary(target, value_local, target_rep, value_rep, next);
+        // The value lowers into its local first; its descriptor metadata then
+        // reaches the target.
+        const items = try self.parent.allocator.alloc(ExprChainItem, 2);
+        items[0] = .{ .lower = .{ .expr = .{ .target = value_local, .expr_id = value_id, .next = undefined } } };
+        items[1] = .{ .propagate_desc = .{ .target = target, .source = value_local } };
+        return exprChain(items, boundary);
+    }
+
+    /// Whether a row coercion changes only how its value is DESCRIBED: the two
+    /// representations have one storage layout and distinct descriptor
+    /// identities, as `Try(U8, [E2, E3])` into `Try(U8, [E1, E2, E3])`, whose
+    /// error rows live in erased payload boxes read through descriptors. The
+    /// shared representation boundary adapts descriptors only into a target
+    /// that already owns a writable descriptor local; a fresh target, such as
+    /// a call argument the callee reads through its static descriptor, would
+    /// be copied as it is and read at the wrong row. Such a coercion adapts
+    /// the value's descriptor to the target representation's own
+    /// (`assignRuntimeAdapterBoundary`). A closed tag row has no descriptor
+    /// and re-tags through the shared boundary; an open destination row and a
+    /// bare type parameter keep the dynamic-destination adapters there.
+    ///
+    /// No value holding a callable in its structure reaches this branch
+    /// (`assignRuntimeAdapterBoundary` asserts it): within the coercion's
+    /// reach the only descriptor-carrying closed root is `Try`, whose
+    /// arguments sit behind payload boxes of its shared backing template, so
+    /// a callable in either argument is not structure of the value
+    /// (`repHoldsCallableInStructure`).
+    fn rowCoerceAdaptsDescriptors(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        value_rep: Plan.TypeRepId,
+    ) bool {
+        const target_identity = self.descriptorStorageRep(target_rep);
+        const value_identity = self.descriptorStorageRep(value_rep);
+        if (target_identity == value_identity) return false;
+        if (self.repIsBareDynamic(target_identity)) return false;
+        const target_identity_rep = self.parent.plan.representations.items[@intFromEnum(target_identity)];
+        if (target_identity_rep.is_open_tag_row or target_identity_rep.descriptor == null) return false;
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        return target_layout == self.workerRuntimeLayoutForRep(value_rep).layoutIdx();
+    }
+
+    const RowCoerceReachPair = struct {
+        target: Plan.TypeRepId,
+        source: Plan.TypeRepId,
+        /// Inside the coercion's reach: the superset rule applies to a tag
+        /// row here. Outside it, rows must be identical.
+        reached: bool,
+    };
+
+    /// design.md "Row Coercion Primitive": inside the reach (the root row,
+    /// rows that are tag payloads of a reached row, and rows behind a named
+    /// backing, which `tagVariantRepForBoundary` steps through) every source
+    /// variant is in the target with the same payload arity; anywhere else
+    /// the two representations hold the same tag rows. The shared
+    /// representation boundary would otherwise re-tag records and other
+    /// aggregates structurally and accept a pure narrowing.
+    fn assertRowCoerceReach(
+        self: *ProcBodyBuilder,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+    ) Allocator.Error!void {
+        var work = std.ArrayList(RowCoerceReachPair).empty;
+        defer work.deinit(self.parent.allocator);
+        var visited = std.AutoHashMap(RowCoerceReachPair, void).init(self.parent.allocator);
+        defer visited.deinit();
+        try work.append(self.parent.allocator, .{ .target = target_rep, .source = source_rep, .reached = true });
+        while (work.pop()) |pair| {
+            if (pair.target == pair.source) continue;
+            const entry = try visited.getOrPut(pair);
+            if (entry.found_existing) continue;
+            if (pair.reached) {
+                if (self.tagVariantRepForBoundary(pair.source)) |source_tags| {
+                    const target_tags = self.tagVariantRepForBoundary(pair.target) orelse
+                        boxyLowerInvariant("boxy row coercion source tag row had a destination without tag variants");
+                    try self.appendRowCoerceVariantPairs(&work, target_tags, source_tags, .superset);
+                    continue;
+                }
+                // The empty row is uninhabited and satisfies the superset
+                // rule against any destination.
+                const source = self.parent.plan.representations.items[@intFromEnum(pair.source)];
+                if (source.kind == .empty_tag_union or (source.kind == .tag_union and source.tag_variants.len == 0)) continue;
+            }
+            const target = self.parent.plan.representations.items[@intFromEnum(pair.target)];
+            const source = self.parent.plan.representations.items[@intFromEnum(pair.source)];
+            if (std.meta.activeTag(target.kind) != std.meta.activeTag(source.kind)) continue;
+            if (source.tag_variants.len != 0 or target.tag_variants.len != 0) {
+                try self.appendRowCoerceVariantPairs(&work, pair.target, pair.source, .identical);
+                continue;
+            }
+            const target_children = self.parent.plan.childSlice(target.children);
+            const source_children = self.parent.plan.childSlice(source.children);
+            if (target_children.len != source_children.len) continue;
+            for (target_children, source_children) |target_child, source_child| {
+                try work.append(self.parent.allocator, .{ .target = target_child.rep, .source = source_child.rep, .reached = false });
+            }
+        }
+    }
+
+    fn appendRowCoerceVariantPairs(
+        self: *ProcBodyBuilder,
+        work: *std.ArrayList(RowCoerceReachPair),
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        comptime rule: enum { superset, identical },
+    ) Allocator.Error!void {
+        const target_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(target_rep)].tag_variants);
+        const source_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(source_rep)].tag_variants);
+        if (rule == .identical and target_variants.len != source_variants.len) {
+            boxyLowerInvariant("boxy row coercion reached differing tag rows outside tag payloads and named backings");
+        }
+        for (source_variants) |source_variant| {
+            const source_name = self.tagVariantNameText(source_variant);
+            const target_variant = for (target_variants) |candidate| {
+                if (std.mem.eql(u8, source_name, self.tagVariantNameText(candidate))) break candidate;
+            } else switch (rule) {
+                .superset => boxyLowerInvariant("boxy row coercion source tag was absent from its destination row"),
+                .identical => boxyLowerInvariant("boxy row coercion reached differing tag rows outside tag payloads and named backings"),
+            };
+            const target_payloads = self.parent.plan.childSlice(target_variant.payloads);
+            const source_payloads = self.parent.plan.childSlice(source_variant.payloads);
+            if (target_payloads.len != source_payloads.len) {
+                boxyLowerInvariant("boxy row coercion source tag payload arity differed from its destination tag");
+            }
+            for (target_payloads, source_payloads) |target_payload, source_payload| {
+                try work.append(self.parent.allocator, .{
+                    .target = target_payload.rep,
+                    .source = source_payload.rep,
+                    .reached = rule == .superset,
+                });
+            }
+        }
     }
 
     fn stepIf(self: *ProcBodyBuilder, task: anytype, stage: u32, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
@@ -21100,7 +21281,7 @@ const ProcBodyBuilder = struct {
                 }
                 break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
         return if (maybe_binder) |binder| self.binderStorageRep(binder) else default_rep;
     }
@@ -21127,7 +21308,7 @@ const ProcBodyBuilder = struct {
                 }
                 break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         } orelse boxyLowerInvariant("boxy expression had explicit storage representation without a binder source");
         const binder_rep = self.binderStorageRep(binder);
         if (storage_rep != binder_rep) {
@@ -23718,7 +23899,7 @@ const ProcBodyBuilder = struct {
             .lookup_local => |lookup| lookup.resolved,
             .lookup_external => |ref_id| ref_id,
             .lookup_required => |ref_id| ref_id,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const ref_id = maybe_ref orelse return null;
         return switch (self.resolvedValueRecord(ref_id).ref) {
@@ -24675,7 +24856,7 @@ const ProcBodyBuilder = struct {
         return switch (expr.data) {
             .closure => |closure| closure.captures,
             .lambda => &.{},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("callable expression capture lookup did not reference a lambda or closure"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("callable expression capture lookup did not reference a lambda or closure"),
         };
     }
 
@@ -24692,7 +24873,7 @@ const ProcBodyBuilder = struct {
                 break :blk switch (expr.data) {
                     .closure => |closure| closure.captures,
                     .lambda => &.{},
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable value source did not point at a lambda or closure"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable value source did not point at a lambda or closure"),
                 };
             },
             .procedure_template,
@@ -24709,7 +24890,7 @@ const ProcBodyBuilder = struct {
         const expr = self.module.checked_bodies.expr(expr_id);
         return switch (expr.data) {
             .lambda, .closure => .{ .nested_expr = .{ .module = self.module.key, .expr = expr_id } },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("non-callable checked expression reached callable worker source lookup"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("non-callable checked expression reached callable worker source lookup"),
         };
     }
 
@@ -25510,7 +25691,7 @@ const ProcBodyBuilder = struct {
                 }
                 break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         } orelse return planned_rep;
         const binder_index = @intFromEnum(binder);
         if (binder_index >= self.binder_reps.len) {
@@ -27737,6 +27918,7 @@ const ProcBodyBuilder = struct {
             .anno_only,
             .break_,
             .return_,
+            .row_coerce,
             .for_,
             .hosted_lambda,
             => null,
@@ -27750,7 +27932,7 @@ const ProcBodyBuilder = struct {
     ) Plan.TypeRepId {
         const call = switch (self.module.checked_bodies.expr(cond).data) {
             .call => |call| call,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return default_rep,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return default_rep,
         };
         if (call.direct_target == null) return default_rep;
         const direct_plan = self.parent.plan.directCallPlanForCall(.{
@@ -27775,7 +27957,7 @@ const ProcBodyBuilder = struct {
         const expr = self.module.checked_bodies.expr(cond);
         const call = switch (expr.data) {
             .call => |call| call,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return plain,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return plain,
         };
         if (call.direct_target == null) return plain;
         const direct_plan = self.parent.plan.directCallPlanForCall(.{
@@ -27804,7 +27986,7 @@ const ProcBodyBuilder = struct {
         if (self.tagVariantRepForBoundary(cond_rep) == null) return false;
         const call = switch (self.module.checked_bodies.expr(cond).data) {
             .call => |call| call,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return false,
         };
         if (call.direct_target == null) return false;
         const direct_plan = self.parent.plan.directCallPlanForCall(
@@ -34116,7 +34298,7 @@ const ProcBodyBuilder = struct {
         const plan_id = switch (checked_expr.data) {
             .str_from_quote => |quote| quote.plan,
             .numeral => |numeral| numeral.plan,
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => unreachable,
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => unreachable,
         };
         const dispatch = self.staticDispatchPlan(plan_id);
         const result_desc = try self.exactCallResultDescriptorRef(self.repForType(ty));
@@ -38924,6 +39106,10 @@ const ProcBodyBuilder = struct {
         /// The constructed concrete tag's descriptor, whose field
         /// initializers run before the payload reads.
         tag_desc: ?ConstructedAggregateDescriptor = null,
+        /// Tag-payload storage may differ from the payload's worker layout
+        /// (a nested open row is stored unboxed): such a payload is adapted
+        /// into a worker value first, then crosses into storage.
+        adapt_payload_storage: bool = false,
     };
 
     fn assignRepresentationBoundaryWithSourceMode(
@@ -39415,10 +39601,26 @@ const ProcBodyBuilder = struct {
                     state.remaining -= 1;
                     const index = state.remaining;
                     frame.awaiting = true;
+                    const field = state.target_locals[index];
+                    const field_rep = state.target_children[index].rep;
+                    if (state.adapt_payload_storage and !self.localUsesWorkerLayoutForRep(field, field_rep)) {
+                        // Adapt into a worker value first, then cross into
+                        // storage, as `lowerExprIntoTagPayloadStorage` does for
+                        // a constructed tag.
+                        const worker_value = try self.addFrameLocalForRepWithFreshDescriptor(field_rep);
+                        return .{ .request = .{
+                            .target = worker_value,
+                            .source = state.source_locals[index].local,
+                            .target_rep = field_rep,
+                            .source_rep = state.source_children[index].rep,
+                            .mode = .borrow,
+                            .next = try self.assignWorkerValueToTagPayloadStorage(field, worker_value, field_rep, state.current),
+                        } };
+                    }
                     return .{ .request = .{
-                        .target = state.target_locals[index],
+                        .target = field,
                         .source = state.source_locals[index].local,
-                        .target_rep = state.target_children[index].rep,
+                        .target_rep = field_rep,
                         .source_rep = state.source_children[index].rep,
                         .mode = .borrow,
                         .next = state.current,
@@ -40167,8 +40369,6 @@ const ProcBodyBuilder = struct {
         const source_tag_rep = state.source_tag_rep;
         const allocator = self.parent.allocator;
 
-        try self.bindConstructedTargetDescriptor(target, target_rep);
-        const target_desc = try self.constructedTargetDescForRep(target_rep);
         const tag_name = try self.lirTagNameForVariant(variant);
         const source_payloads = self.parent.plan.childSlice(variant.payloads);
         const target_payloads = try self.dynamicTagPayloadsForVariantName(target_rep, variant);
@@ -40176,6 +40376,8 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy concrete-to-dynamic tag adapter saw payload count mismatch between source and target variants");
         }
         if (target_payloads.len == 0) {
+            try self.bindConstructedTargetDescriptor(target, target_rep);
+            const target_desc = try self.constructedTargetDescForRep(target_rep);
             const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                 .target = target,
                 .target_desc = target_desc,
@@ -40185,19 +40387,12 @@ const ProcBodyBuilder = struct {
             return .{ .done = try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag) };
         }
 
+        // The adapted payload is a constructed value, so the target's
+        // descriptor is built from the payload's own descriptor exactly as
+        // `lowerDynamicTagInto` builds it. Reusing the target representation's
+        // standing descriptor would describe a nested open payload row by its
+        // formal rather than by the descriptor the payload was adapted under.
         const payload = try self.dynamicTagPayloadLocalForChildren(target_payloads);
-        const payload_desc = if (payload.desc_rep) |payload_rep| try self.descriptorRefForKnownRep(payload_rep) else null;
-        const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
-            .target = target,
-            .target_desc = target_desc,
-            .tag_name = tag_name,
-            .payload = payload.local,
-            .payload_layout = payload.layout_idx,
-            .payload_desc = payload_desc,
-            .payload_mode = .move,
-            .next = state.request.next,
-        } }, self.glueOrigin());
-        const continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag);
         const source_has_payload_desc = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)].descriptor != null or
             self.parent.result.store.getLocal(source).boxy_desc != null;
 
@@ -40211,31 +40406,52 @@ const ProcBodyBuilder = struct {
             .tag_name = variant.name,
             .variant_index = variant_index,
             .remaining = source_payloads.len,
-            .current = continuation,
+            .current = undefined,
+            .adapt_payload_storage = true,
         } } };
         errdefer self.releaseBoundaryFrame(&frame);
         const payloads = &frame.state.payloads;
         payloads.source_locals = try allocator.alloc(ExtractedTagPayloadLocal, source_payloads.len);
         payloads.target_locals = try allocator.alloc(LIR.LocalId, target_payloads.len);
-
-        if (target_payloads.len == 1) {
-            payloads.source_locals[0] = try self.addExtractedTagPayloadLocal(source_payloads[0].rep, source_has_payload_desc);
-            payloads.target_locals[0] = payload.local;
-            try frames.append(allocator, frame);
-            return .pushed;
-        }
-
+        const descriptor_fields = try allocator.alloc(AggregateDescriptorField, target_payloads.len);
+        defer allocator.free(descriptor_fields);
         for (source_payloads, payloads.source_locals) |source_payload, *field| {
             field.* = try self.addExtractedTagPayloadLocal(source_payload.rep, source_has_payload_desc);
         }
-        for (target_payloads, payloads.target_locals) |target_payload, *field| {
-            field.* = try self.addFrameLocalForRep(target_payload.rep);
+        for (target_payloads, source_payloads, payloads.target_locals, descriptor_fields) |target_payload, source_payload, *field, *descriptor_field| {
+            field.* = if (target_payloads.len == 1) payload.local else try self.addFrameLocalForRep(target_payload.rep);
+            descriptor_field.* = .{
+                .local = field.*,
+                .target_rep = target_payload.rep,
+                .source_rep = source_payload.rep,
+            };
         }
-        payloads.current = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
-            .target = payload.local,
-            .fields = try self.parent.result.store.addLocalSpan(payloads.target_locals),
-            .next = continuation,
+
+        payloads.tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, descriptor_fields);
+        const target_desc = payloads.tag_desc.?.desc orelse
+            boxyLowerInvariant("boxy concrete-to-dynamic tag adapter had no target descriptor");
+        const payload_desc = if (payload.desc_rep) |payload_rep|
+            try self.descriptorRefForLocalOrKnownRep(payload.local, payload_rep)
+        else
+            null;
+        const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
+            .target = target,
+            .target_desc = target_desc,
+            .tag_name = tag_name,
+            .payload = payload.local,
+            .payload_layout = payload.layout_idx,
+            .payload_desc = payload_desc,
+            .payload_mode = .move,
+            .next = state.request.next,
         } }, self.glueOrigin());
+        payloads.current = try self.prependOptionalDescriptorMaterialization(payloads.tag_desc.?.materialize, assign_tag);
+        if (target_payloads.len != 1) {
+            payloads.current = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+                .target = payload.local,
+                .fields = try self.parent.result.store.addLocalSpan(payloads.target_locals),
+                .next = payloads.current,
+            } }, self.glueOrigin());
+        }
         try frames.append(allocator, frame);
         return .pushed;
     }

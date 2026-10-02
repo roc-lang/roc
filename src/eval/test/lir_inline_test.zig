@@ -158,6 +158,10 @@ const LowerModuleOptions = struct {
     promote_loop_appends: bool = true,
     prove_ranges: bool = false,
     imports: []const helpers.ModuleSource = &.{},
+    /// TEMPORARY SCAFFOLDING: rewrites the root module's checked bodies after
+    /// checking and before lowering, for post-check forms no checker site emits
+    /// yet (design.md "Row Coercion Primitive"). Remove with its last user.
+    checked_body_edit: ?*const fn (*check.CheckedArtifact.CheckedBodyStore) void = null,
 };
 
 fn lowerModuleWithOptions(
@@ -168,6 +172,7 @@ fn lowerModuleWithOptions(
 ) TestError!LoweredSource {
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, options.imports, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
+    if (options.checked_body_edit) |edit| edit(&resources.checked_artifact.checked_bodies);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
     const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
@@ -8935,6 +8940,7 @@ test "literal conversion ownership includes nested codec evidence" {
                 .anno_only,
                 .break_,
                 .return_,
+                .row_coerce,
                 .for_,
                 .hosted_lambda,
                 .run_low_level,
@@ -9046,6 +9052,7 @@ test "custom literal field default gets an ordinary conversion root" {
         .anno_only,
         .break_,
         .return_,
+        .row_coerce,
         .for_,
         .hosted_lambda,
         .run_low_level,
@@ -12686,6 +12693,339 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
         }
         try runtime_env.checkForLeaks();
     }
+}
+
+/// TEMPORARY SCAFFOLDING for design.md "Row Coercion Primitive": no checker
+/// site emits `row_coerce` yet, so the row-coercion tests stamp one onto the
+/// checked body before lowering it. The source holds exactly one `match` whose
+/// every arm yields a tag (`B => B`, `Ok(v) => Ok(v)`); every other `match` in
+/// the source yields numbers. The stamp replaces that match with
+/// `row_coerce { value = cond }` and keeps the match's own, wider type, so the
+/// scrutinee's closed row is now used at the match's row. Delete this hook and
+/// drive the same cases from source once the local-value producer lands.
+///
+/// Derived per-expression data keyed on the replaced id stays consistent:
+/// divergence is stored on the expression itself, and the stamp requires the
+/// match's stored divergence to equal its scrutinee's (both columns), which is
+/// exactly what `row_coerce` divergence derives, so no ancestor's divergence
+/// changes either. The match's arms stay in the store unreferenced, and
+/// match-keyed exhaustiveness data stays behind on the replaced id; no
+/// `row_coerce` lowering reads either.
+fn stampRowCoerceOnIdentityMatch(bodies: *check.CheckedArtifact.CheckedBodyStore) void {
+    var stamped: usize = 0;
+    for (bodies.stored_exprs.items) |*expr| {
+        if (expr.data != .match_) continue;
+        const match = expr.data.match_;
+        if (match.branches.len == 0) continue;
+        const branches = bodies.match_branch_pool.items[match.branches.start..][0..match.branches.len];
+        const every_arm_yields_a_tag = for (branches) |branch| {
+            switch (bodies.stored_exprs.items[@intFromEnum(branch.value)].data) {
+                .tag, .zero_argument_tag, .nominal => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => break false,
+            }
+        } else true;
+        if (!every_arm_yields_a_tag) continue;
+        const child = bodies.stored_exprs.items[@intFromEnum(match.cond)];
+        if (expr.diverges != child.diverges or expr.diverges_without_inline_expects != child.diverges_without_inline_expects) {
+            @panic("row coercion stamp target's stored divergence differs from its scrutinee's");
+        }
+        expr.data = .{ .row_coerce = .{ .value = match.cond } };
+        stamped += 1;
+    }
+    if (stamped != 1) @panic("expected exactly one identity match to stamp as a row coercion");
+}
+
+/// Lowers `source` with the row coercion stamped in under `strategy`.
+fn lowerStampedRowCoercion(allocator: Allocator, source: []const u8, strategy: base.SpecializationStrategy) TestError!LoweredSource {
+    return try lowerModuleWithOptions(allocator, source, .none, .{
+        .specialization_strategy = strategy,
+        .checked_body_edit = stampRowCoerceOnIdentityMatch,
+    });
+}
+
+fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
+    const allocator = std.testing.allocator;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerStampedRowCoercion(allocator, source, strategy);
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
+        {
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
+                runtime_env.get_ops(),
+            );
+            defer interpreter.deinit();
+            for (expectations) |expectation| {
+                var argument: u64 = expectation[0];
+                const evaluated = try interpreter.eval(.{
+                    .proc_id = try rootProc(&lowered.lowered),
+                    .arg_layouts = &.{.u64},
+                    .arg_ptr = @ptrCast(&argument),
+                });
+                try std.testing.expectEqual(expectation[1], evaluated.value.read(u64));
+            }
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
+test "row coercion: a closed tag row re-tags into a wider row in both strategies" {
+    // `[B, C]` has two variants, so lowering emits the discriminant switch
+    // rather than the single-variant short cut, and every variant changes
+    // index: B is 0 in `[B, C]` and 1 in `[A, B, C]`. A lowering that copied
+    // the value through would read B as A (1) and C as B (2).
+    try expectStampedRowCoercionResults(
+        \\widen : [B, C] -> [A, B, C]
+        \\widen = |x| match x {
+        \\    B => B
+        \\    C => C
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(if mode == 0 { B } else { C }) {
+        \\    A => 1
+        \\    B => 2
+        \\    C => 3
+        \\}
+    , &.{ .{ 0, 2 }, .{ 1, 3 } });
+}
+
+test "row coercion: a Try error row re-tags inside the nominal in both strategies" {
+    // The coercion crosses the `Try` nominal into its `Err` payload: `[E2, E3]`
+    // widens to `[E1, E2, E3]` while the `Ok` payload is moved unchanged.
+    try expectStampedRowCoercionResults(
+        \\widen : Try(U8, [E2, E3]) -> Try(U8, [E1, E2, E3])
+        \\widen = |x| match x {
+        \\    Ok(v) => Ok(v)
+        \\    Err(E2) => Err(E2)
+        \\    Err(E3) => Err(E3)
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(if mode == 0 { Err(E2) } else if mode == 1 { Err(E3) } else { Ok(7) }) {
+        \\    Ok(_) => 0
+        \\    Err(E1) => 1
+        \\    Err(E2) => 2
+        \\    Err(E3) => 3
+        \\}
+    , &.{ .{ 0, 2 }, .{ 1, 3 }, .{ 2, 0 } });
+}
+
+/// Lowers `source` with the row coercion stamped in, under both specialization
+/// strategies, and checks that `main(0)` crashes with `expected_message`
+/// without leaking.
+fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u8) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
+    const allocator = std.testing.allocator;
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerStampedRowCoercion(allocator, source, strategy);
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
+        {
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
+                runtime_env.get_ops(),
+            );
+            defer interpreter.deinit();
+            var argument: u64 = 0;
+            if (interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&argument),
+            })) |_| {
+                return error.TestUnexpectedResult;
+            } else |err| {
+                try std.testing.expectEqual(error.Crash, err);
+                try std.testing.expectEqualStrings(expected_message, interpreter.getCrashMessage());
+            }
+        }
+        try runtime_env.checkForLeaks();
+    }
+}
+
+test "row coercion: a refcounted Str payload moves through the re-tag without leaking" {
+    // The Str is built at runtime and is long enough for heap storage, so ARC
+    // over the `tag_payload_struct` read and the `assign_tag` actually runs.
+    try expectStampedRowCoercionResults(
+        \\widen : [Ok(Str), Err(U64)] -> [Bad, Ok(Str), Err(U64)]
+        \\widen = |x| match x {
+        \\    Ok(s) => Ok(s)
+        \\    Err(n) => Err(n)
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(if mode == 0 { Ok("heap allocated string payload number ${mode.to_str()}") } else { Err(mode) }) {
+        \\    Bad => 0
+        \\    Ok(s) => s.count_utf8_bytes()
+        \\    Err(n) => n + 100
+        \\}
+    , &.{ .{ 0, 38 }, .{ 1, 101 } });
+}
+
+test "row coercion: a refcounted List payload moves through the re-tag without leaking" {
+    try expectStampedRowCoercionResults(
+        \\widen : [Some(List(U64)), Empty] -> [Bad, Some(List(U64)), Empty]
+        \\widen = |x| match x {
+        \\    Some(l) => Some(l)
+        \\    Empty => Empty
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(if mode == 0 { Some([mode, mode + 1, mode + 2]) } else { Empty }) {
+        \\    Bad => 0
+        \\    Some(l) => l.len()
+        \\    Empty => 7
+        \\}
+    , &.{ .{ 0, 3 }, .{ 1, 7 } });
+}
+
+test "row coercion: a row directly in a tag payload re-tags too" {
+    // Inside the declared reach: the inner `[B, C]` widens to `[A, B, C]`
+    // (every inner variant changes index) while the outer row gains `Bad`
+    // (every outer variant changes index).
+    try expectStampedRowCoercionResults(
+        \\widen : [Ok([B, C]), Err] -> [Bad, Ok([A, B, C]), Err]
+        \\widen = |x| match x {
+        \\    Ok(B) => Ok(B)
+        \\    Ok(C) => Ok(C)
+        \\    Err => Err
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(if mode == 0 { Ok(B) } else if mode == 1 { Ok(C) } else { Err }) {
+        \\    Bad => 0
+        \\    Ok(A) => 1
+        \\    Ok(B) => 2
+        \\    Ok(C) => 3
+        \\    Err => 4
+        \\}
+    , &.{ .{ 0, 2 }, .{ 1, 3 }, .{ 2, 4 } });
+}
+
+test "row coercion: a generic payload crosses the re-tag" {
+    // `widen` is generic in its `Ok` payload and is used at Str and U64, so
+    // `.boxy` lowers it once with a descriptor-carried payload.
+    try expectStampedRowCoercionResults(
+        \\widen : Try(a, [E2, E3]) -> Try(a, [E1, E2, E3])
+        \\widen = |x| match x {
+        \\    Ok(v) => Ok(v)
+        \\    Err(E2) => Err(E2)
+        \\    Err(E3) => Err(E3)
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| {
+        \\    text = match widen(if mode == 0 { Err(E2) } else if mode == 1 { Err(E3) } else { Ok("generic payload string long enough ${mode.to_str()}") }) {
+        \\        Ok(s) => s.count_utf8_bytes()
+        \\        Err(E1) => 1
+        \\        Err(E2) => 2
+        \\        Err(E3) => 3
+        \\    }
+        \\    number = match widen(Ok(mode)) {
+        \\        Ok(n) => n * 1000
+        \\        Err(_) => 0
+        \\    }
+        \\    text + number
+        \\}
+    , &.{ .{ 0, 2 }, .{ 1, 1003 }, .{ 2, 2036 } });
+}
+
+test "row coercion: a let-bound coercion inside a body" {
+    try expectStampedRowCoercionResults(
+        \\classify : [A, B, C] -> U64
+        \\classify = |v| match v {
+        \\    A => 1
+        \\    B => 2
+        \\    C => 3
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| {
+        \\    v : [B, C]
+        \\    v = if mode == 0 { B } else { C }
+        \\    y : [A, B, C]
+        \\    y = match v {
+        \\        B => B
+        \\        C => C
+        \\    }
+        \\    classify(y)
+        \\}
+    , &.{ .{ 0, 2 }, .{ 1, 3 } });
+}
+
+test "row coercion: a coercion in a call argument" {
+    try expectStampedRowCoercionResults(
+        \\classify : [A, B, C] -> U64
+        \\classify = |v| match v {
+        \\    A => 1
+        \\    B => 2
+        \\    C => 3
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| {
+        \\    v : [B, C]
+        \\    v = if mode == 0 { B } else { C }
+        \\    classify(match v {
+        \\        B => B
+        \\        C => C
+        \\    })
+        \\}
+    , &.{ .{ 0, 2 }, .{ 1, 3 } });
+}
+
+test "row coercion: a statically divergent child crashes" {
+    // The child is a `crash`, so the coercion diverges and is lowered by the
+    // divergent paths; the runtime result is the crash.
+    try expectStampedRowCoercionCrash(
+        \\widen : U64 -> [A, B, C]
+        \\widen = |_n| match (crash "row coercion child crashed") {
+        \\    B => B
+        \\    C => C
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(mode) {
+        \\    A => 1
+        \\    B => 2
+        \\    C => 3
+        \\}
+    , "row coercion child crashed");
+}
+
+test "row coercion: a child that crashes at runtime crashes" {
+    try expectStampedRowCoercionCrash(
+        \\fail : U64 -> [B, C]
+        \\fail = |_n| crash "row coercion callee crashed"
+        \\
+        \\widen : U64 -> [A, B, C]
+        \\widen = |n| match fail(n) {
+        \\    B => B
+        \\    C => C
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| match widen(mode) {
+        \\    A => 1
+        \\    B => 2
+        \\    C => 3
+        \\}
+    , "row coercion callee crashed");
 }
 
 /// Every statement reachable from `proc`'s body, in walk order.
