@@ -2885,6 +2885,18 @@ denotes the module and `Name` denotes one of its exposed types. The worklist
 entry carries both spellings and the drain answers from the import's
 declarations.
 
+`Q.U.v`, with `U` spelled as a tag and `v` as a value, names the associated
+value `v` of the type `Q.U` when there is one. Otherwise, when `Q` names a
+nominal type and `Q.U` names no type, `Q.U` is a qualified tag of `Q` and `v` is
+a member accessed on it: `Q.U.v(args)` is the method call `(Q.U).v(args)`
+(including as an arrow target), and an uncalled `Q.U.v` is the field access
+`(Q.U).v`. A nested type named `U` always takes precedence over a tag named `U`.
+Canonicalization answers this for local and builtin types. Through an import,
+the worklist entry carries `allows_tag_member`, the node that accesses the
+member, and where the tag ends in the source; when the drain finds no value at
+the path, it rewrites the reference into the imported nominal tag and the
+accessing node into the method call or field access.
+
 Diagnostics that only the imported module can settle—type or value not exposed,
 nested type not found under an exposed type, a use of a rejected or unresolvable
 import—are produced when the reference is drained. Source-local import
@@ -9374,7 +9386,12 @@ Restrictions:
   field-type mismatches, whose standard recovery leaves the var `.err`)
   by replacing the default expression and its omitting construction
   sites with runtime errors before the CheckedModule is built, so
-  postcheck materialization can never observe a rejected default.
+  postcheck materialization can never observe a rejected default. A
+  module that constructs an imported nominal while omitting one of its
+  defaults retires that construction site the same way when the declaring
+  module's check retired the default (its default expression is a runtime
+  error), reporting nothing further: the problem was reported once, at the
+  default, and the construction is never a compile-time crash of its own.
 
 The CheckedModule preserves the kind: a defaulted field serializes as a
 required field CARRYING its default identity (`CheckedFieldDefault`), with

@@ -1345,9 +1345,16 @@ pub const DeferredImportRef = extern struct {
     missing_module_failure: DeferredRefFailure,
     /// Diagnostic for an import that resolved to a module lacking this path.
     not_found_failure: DeferredRefFailure,
+    /// Keeps `flags` aligned without implicit padding.
+    _reserved: u8 = 0,
     /// See `Flags`.
-    flags: u8,
-    _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    flags: u16,
+    /// Keeps the following `u32` fields aligned without implicit padding.
+    _reserved_after_flags: u16 = 0,
+    /// For an entry with `Flags.allows_tag_member`, the node that accesses the
+    /// member: the call written `Q.U.v(...)`, or this entry's own node when the
+    /// member is not called.
+    tag_member_access_node: u32 = 0,
     /// For `receiver_method_owner`, the node whose type variable holds the
     /// method's checked type.
     method_binding_type_node: u32,
@@ -1363,40 +1370,48 @@ pub const DeferredImportRef = extern struct {
     /// whether these two hold one; otherwise the node's own region is used.
     diagnostic_region_start: u32,
     diagnostic_region_end: u32,
+    /// For an entry with `Flags.allows_tag_member`, where the qualified tag
+    /// `Alias.Path.U` ends in the source. It starts where the node does.
+    tag_receiver_end: u32 = 0,
 
     /// Bit flags recording source-local facts the drain needs.
     pub const Flags = struct {
         /// A resolved target that is a nominal declaration may also be reached
         /// through the imported module's main type as a tag constructor.
-        pub const allows_nominal_tag: u8 = 1 << 0;
+        pub const allows_nominal_tag: u16 = 1 << 0;
         /// The import was written package-qualified (`pf.Stdout`), which only
         /// the workspace resolver can judge, so a missing module is its
         /// diagnostic to report rather than this module's.
-        pub const is_package_qualified: u8 = 1 << 1;
+        pub const is_package_qualified: u16 = 1 << 1;
         /// The reference names the import's own selected declaration -- a type
         /// module's main type, or the declaration a package header makes
         /// public -- rather than a path inside it.
-        pub const names_import_main_type: u8 = 1 << 2;
+        pub const names_import_main_type: u16 = 1 << 2;
         /// An exposed-item check expects a type declaration rather than a
         /// value definition.
-        pub const selects_type: u8 = 1 << 3;
+        pub const selects_type: u16 = 1 << 3;
         /// A file import binds the file's raw bytes rather than its text.
-        pub const file_import_is_bytes: u8 = 1 << 4;
+        pub const file_import_is_bytes: u16 = 1 << 4;
         /// The entry carries its own diagnostic region.
-        pub const has_diagnostic_region: u8 = 1 << 5;
+        pub const has_diagnostic_region: u16 = 1 << 5;
         /// The reference is written `Alias.Name(...)` in tag position with an
         /// import's alias as the qualifier. Which declaration the qualifier
         /// denotes depends on the import: when the import selects a public
         /// declaration, that declaration owns the tag `Name`; when it selects
         /// none, the qualifier names the module and `Name` names one of its
         /// exposed types.
-        pub const tag_after_import_alias: u8 = 1 << 6;
+        pub const tag_after_import_alias: u16 = 1 << 6;
         /// An exposed-item check spells `Type.*`, which retains the import
         /// constructor lookup rules rather than binding a same-name member.
-        pub const exposes_constructors: u8 = 1 << 7;
+        pub const exposes_constructors: u16 = 1 << 7;
+        /// The reference is written `Alias.Path.U.v` with `U` spelled as a tag
+        /// and `v` as a value. When the import has no value at that path but
+        /// `Alias.Path` names a nominal type, `Alias.Path.U` is a qualified tag
+        /// and `v` is a member accessed on it.
+        pub const allows_tag_member: u16 = 1 << 8;
     };
 
-    pub fn has(self: @This(), flag: u8) bool {
+    pub fn has(self: @This(), flag: u16) bool {
         return (self.flags & flag) != 0;
     }
 

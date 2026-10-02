@@ -698,7 +698,7 @@ test "Monotype structural equality result probes remain graph-native" {
 
     const dispatch_hash = sourceSliceBetween(
         lower_source,
-        "fn lowerStructuralHashAtNode(",
+        "fn finishStructuralHashAtNode(",
         "fn deferStructuralSerializationAtNode(",
     );
     try expectContains(dispatch_hash, "self.structuralDerivationOperandFromNode(fn_nodes.args[0])");
@@ -706,8 +706,8 @@ test "Monotype structural equality result probes remain graph-native" {
 
     const direct_hash = sourceSliceBetween(
         lower_source,
-        "fn lowerDirectStructuralHashAtType(",
-        "fn hasherWriteU64(",
+        "fn stepDirectStructural(",
+        "fn directStructuralOperandCell(",
     );
     try expectContains(direct_hash, "self.structuralHashOperandType(h)");
     try expectContains(direct_hash, "deferStructuralDerivationOperandsAtNode");

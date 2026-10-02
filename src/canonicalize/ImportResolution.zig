@@ -744,7 +744,80 @@ const Resolver = struct {
             }
         }
 
+        if (entry.has(DeferredImportRef.Flags.allows_tag_member)) {
+            if (try self.resolveTagMember(entry, available, prefix, path_text)) return;
+        }
+
         try self.failEntry(entry, entry.not_found_failure);
+    }
+
+    /// `Alias.Path.U.v` where the import has no value at that path: when
+    /// `Alias.Path` names a nominal type of the import and `Alias.Path.U` names
+    /// no type, `Alias.Path.U` is a qualified tag and `v` is a member accessed
+    /// on it. Returns whether the entry resolved that way.
+    fn resolveTagMember(
+        self: *Resolver,
+        entry: DeferredImportRef,
+        available: ResolvedImport.Available,
+        prefix: Prefix,
+        path_text: []const u8,
+    ) std.mem.Allocator.Error!bool {
+        const member_dot = lastDot(path_text) orelse return false;
+        const tag_path = path_text[0..member_dot];
+        if ((try self.resolveTypePath(available.module_env, prefix, tag_path, max_alias_depth)) != null) return false;
+
+        const tag_dot = lastDot(tag_path);
+        const owner_node = if (tag_dot) |dot| owner: {
+            const decl = (try self.resolveTypePath(available.module_env, prefix, tag_path[0..dot], max_alias_depth)) orelse
+                return false;
+            // A nominal construction names its type through the import it
+            // was written with.
+            if (decl.env != available.module_env) return false;
+            break :owner decl.node_idx;
+        } else (try self.importMainTypeNode(available)) orelse return false;
+        if (available.module_env.store.getStatement(@enumFromInt(owner_node)) != .s_nominal_decl) return false;
+
+        const tag_text = if (tag_dot) |dot| tag_path[dot + 1 ..] else tag_path;
+        const tag_name = try self.env.insertIdent(Ident.for_text(tag_text));
+        const member = entry.itemName();
+        const node_expr: CIR.Expr.Idx = @enumFromInt(entry.node_idx);
+        const access_expr: CIR.Expr.Idx = @enumFromInt(entry.tag_member_access_node);
+        const node_region = self.env.store.getExprRegion(node_expr);
+        const receiver_region = Region{ .start = node_region.start, .end = .{ .offset = entry.tag_receiver_end } };
+        const member_len: u32 = @intCast(self.env.getIdent(member).len);
+        const member_region = Region{ .start = .{ .offset = node_region.end.offset - member_len }, .end = node_region.end };
+
+        const tag_expr = try self.env.addExpr(CIR.Expr{ .e_tag = .{
+            .name = tag_name,
+            .args = .{ .span = base.DataSpan.empty() },
+        } }, receiver_region);
+        const import_idx = entryImport(entry);
+
+        if (access_expr == node_expr) {
+            // `Alias.Path.U.v` is not called, so it reads the field `v`.
+            const receiver = try self.env.addExpr(CIR.Expr{ .e_nominal_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = owner_node,
+                .backing_expr = tag_expr,
+                .backing_type = .tag,
+            } }, receiver_region);
+            const path_builder = try self.env.startFieldAccessPath(1);
+            var path_finished = false;
+            errdefer if (!path_finished) self.env.rollbackFieldAccessPath(path_builder);
+            _ = self.env.appendFieldAccessPathSegmentAssumeCapacity(path_builder, .{
+                .name = member,
+                .mode = .required,
+            }, member_region);
+            const segments = self.env.finishFieldAccessPath(path_builder);
+            path_finished = true;
+            self.env.store.resolveDeferredExprToFieldAccess(node_expr, receiver, segments);
+        } else {
+            // The callee becomes the receiver of a method call.
+            try self.env.store.resolveDeferredExprToNominalExternal(node_expr, import_idx, owner_node, tag_expr, .tag);
+            self.env.store.setRegionAt(@enumFromInt(@intFromEnum(node_expr)), receiver_region);
+            try self.env.store.replaceCallWithMethodCall(access_expr, node_expr, member, member_region);
+        }
+        return true;
     }
 
     fn resolveTypeEntry(

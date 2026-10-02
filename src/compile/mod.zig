@@ -190,6 +190,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11670_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11666_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11465_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11922_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11943_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11217_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11236_test.zig"));
     std.testing.refAllDecls(@import("test/source_single_use_inline_test.zig"));

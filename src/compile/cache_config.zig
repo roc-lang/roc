@@ -272,9 +272,9 @@ pub const Constants = struct {
     /// 122: Builtin indices include the Encoding and Json declarations.
     /// 123: Exposed-item import checks carry local binding identities and exact
     ///      source regions; main-type exposures are errors.
-    /// 124: Checked modules drop checked-error reachability templates, and
+    /// 125: Checked modules drop checked-error reachability templates, and
     ///      compile-time values and test results record checked-error crashes.
-    pub const CACHE_VERSION = 124;
+    pub const CACHE_VERSION = 125;
 };
 
 /// Configuration for the Roc cache system.

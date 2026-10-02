@@ -671,6 +671,22 @@ fn scratchBytesFrom(self: *Self, top: u32) []const u8 {
     return self.scratch_bytes.sliceFromStart(top);
 }
 
+/// Bytes that stay readable across appends to the scratch byte buffer, which
+/// may move the buffer: bytes inside it are re-read from their offset.
+const ScratchBytesRef = struct {
+    offset: ?usize,
+    bytes: []const u8,
+};
+
+fn scratchBytesRef(self: *const Self, bytes: []const u8) ScratchBytesRef {
+    return .{ .offset = scratchSliceOffsetIn(&self.scratch_bytes, bytes), .bytes = bytes };
+}
+
+fn scratchBytesDeref(self: *const Self, ref: ScratchBytesRef) []const u8 {
+    const offset = ref.offset orelse return ref.bytes;
+    return self.scratch_bytes.items.items[offset..][0..ref.bytes.len];
+}
+
 fn scratchSliceOffsetIn(scratch: *const base.Scratch(u8), bytes: []const u8) ?usize {
     const items = scratch.items.items;
     if (items.len == 0 or bytes.len == 0) return null;
@@ -999,6 +1015,10 @@ const DeferredRef = struct {
     /// Whether a single upper-case leaf may instead name a tag of the
     /// imported module's main nominal type.
     allows_nominal_tag: bool = false,
+    /// See `DeferredImportRef.Flags.allows_tag_member`.
+    allows_tag_member: bool = false,
+    /// See `DeferredImportRef.tag_receiver_end`.
+    tag_receiver_end: u32 = 0,
     /// Whether the import was written package-qualified (`pf.Stdout`).
     is_package_qualified: bool = false,
     /// Whether the reference names the import's own selected declaration
@@ -1054,6 +1074,7 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
             (if (ref.is_package_qualified) ModuleEnv.DeferredImportRef.Flags.is_package_qualified else 0) |
             (if (ref.names_import_main_type) ModuleEnv.DeferredImportRef.Flags.names_import_main_type else 0) |
             (if (ref.tag_after_import_alias) ModuleEnv.DeferredImportRef.Flags.tag_after_import_alias else 0) |
+            (if (ref.allows_tag_member) ModuleEnv.DeferredImportRef.Flags.allows_tag_member else 0) |
             (if (ref.selects_type) ModuleEnv.DeferredImportRef.Flags.selects_type else 0) |
             (if (ref.exposes_constructors) ModuleEnv.DeferredImportRef.Flags.exposes_constructors else 0) |
             (if (ref.file_import_is_bytes) ModuleEnv.DeferredImportRef.Flags.file_import_is_bytes else 0) |
@@ -1069,6 +1090,7 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
         .file_dependency_idx = ref.file_dependency_idx,
         .diagnostic_region_start = if (ref.diagnostic_region) |r| r.start.offset else 0,
         .diagnostic_region_end = if (ref.diagnostic_region) |r| r.end.offset else 0,
+        .tag_receiver_end = ref.tag_receiver_end,
     });
     return @enumFromInt(idx);
 }
@@ -1076,6 +1098,10 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
 /// Name the node a worklist entry resolves.
 fn setDeferredRefNode(self: *Self, idx: ModuleEnv.DeferredImportRef.Idx, node_idx: u32) void {
     self.env.deferred_import_refs.items.items[@intFromEnum(idx)].node_idx = node_idx;
+}
+
+fn setDeferredTagMemberAccessNode(self: *Self, idx: ModuleEnv.DeferredImportRef.Idx, expr_idx: Expr.Idx) void {
+    self.env.deferred_import_refs.items.items[@intFromEnum(idx)].tag_member_access_node = @intFromEnum(expr_idx);
 }
 
 /// The deferred reference an external type binding names. Its path is the
@@ -8327,63 +8353,147 @@ fn canonicalizedExternalAssociatedLookup(
     return .{ .idx = expr_idx, .free_vars = DataSpan.empty() };
 }
 
-fn canonicalizeIdentExpr(
+/// What a value-position identifier denotes.
+const IdentExprResolution = union(enum) {
+    expr: CanonicalizedExpr,
+    /// `Q.U.v` where `Q` names a type and `Q.U` names none: `Q.U` is a
+    /// qualified tag, and `v` is a member accessed on it.
+    tag_member: TagMemberAccess,
+    /// `Q.U.v` through an import, which only the import can say is a value or a
+    /// member accessed on a qualified tag. `expr` is the deferred reference
+    /// node and `ref` its worklist entry; the node that accesses the member is
+    /// recorded on the entry once it exists.
+    deferred_tag_member: struct {
+        expr: CanonicalizedExpr,
+        ref: ModuleEnv.DeferredImportRef.Idx,
+    },
+};
+
+const TagMemberAccess = struct {
+    receiver: CanonicalizedExpr,
+    member: Ident.Idx,
+    member_region: Region,
+};
+
+fn resolveIdentExpr(
     self: *Self,
     e: @TypeOf(@as(AST.Expr, undefined).ident),
-) std.mem.Allocator.Error!CanonicalizedExpr {
+) std.mem.Allocator.Error!IdentExprResolution {
     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
     if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
         const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
         if (qualifier_tokens.len > 0) {
-            if (try self.canonicalizeQualifiedIdentExpr(ident, region, qualifier_tokens)) |expr| {
-                return expr;
+            if (try self.canonicalizeQualifiedIdentExpr(e, ident, region, qualifier_tokens)) |resolution| {
+                return resolution;
             }
         }
 
-        return try self.canonicalizeUnqualifiedIdentExpr(ident, region);
+        return .{ .expr = try self.canonicalizeUnqualifiedIdentExpr(ident, region) };
     } else {
         const feature = try self.env.insertString("report an error when unable to resolve identifier");
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .not_implemented = .{
+        return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .not_implemented = .{
             .feature = feature,
             .region = region,
-        } });
+        } }) };
     }
+}
+
+/// Whether `Q.U.v` may be a member `v` accessed on the qualified tag `Q.U`:
+/// at least two qualifiers, the last spelled as a tag, and a value-spelled
+/// member.
+fn spellsQualifiedTagMember(self: *const Self, qualifier_tokens: []const u32, member: Ident.Idx) bool {
+    if (qualifier_tokens.len < 2 or self.isSourceTagIdent(member)) return false;
+    const tag_tok: Token.Idx = @intCast(qualifier_tokens[qualifier_tokens.len - 1]);
+    const tag_ident = self.parse_ir.tokens.resolveIdentifier(tag_tok) orelse return false;
+    return self.isSourceTagIdent(tag_ident);
+}
+
+/// The source region of the member `v` in `Q.U.v`, which ends the path.
+fn qualifiedMemberRegion(self: *const Self, member: Ident.Idx, region: Region) Region {
+    const len: u32 = @intCast(self.env.getIdent(member).len);
+    return .{ .start = .{ .offset = region.end.offset - len }, .end = region.end };
+}
+
+/// `Q.U.v` read as the member `v` accessed on the qualified tag `Q.U`.
+fn qualifiedTagMember(
+    self: *Self,
+    e: @TypeOf(@as(AST.Expr, undefined).ident),
+    member: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!IdentExprResolution {
+    const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
+    const tag_tok: Token.Idx = @intCast(qualifier_tokens[qualifier_tokens.len - 1]);
+    const receiver_region = Region{ .start = region.start, .end = self.parse_ir.tokens.resolve(tag_tok).end };
+    const receiver = try self.finishTagExprWithArgs(.{
+        .token = tag_tok,
+        .qualifiers = .{ .span = .{ .start = e.qualifiers.span.start, .len = e.qualifiers.span.len - 1 } },
+        .region = .{ .start = e.region.start, .end = tag_tok + 1 },
+    }, .{ .span = DataSpan.empty() }, receiver_region, self.scratch_free_vars.top());
+    return .{ .tag_member = .{
+        .receiver = receiver,
+        .member = member,
+        .member_region = self.qualifiedMemberRegion(member, region),
+    } };
+}
+
+/// Builds the field access `receiver.member` for a tag member that is not called.
+fn addTagMemberFieldAccess(
+    self: *Self,
+    access: TagMemberAccess,
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const path_builder = try self.env.startFieldAccessPath(1);
+    var path_finished = false;
+    errdefer if (!path_finished) self.env.rollbackFieldAccessPath(path_builder);
+    _ = self.env.appendFieldAccessPathSegmentAssumeCapacity(path_builder, .{
+        .name = access.member,
+        .mode = .required,
+    }, access.member_region);
+    const segments = self.env.finishFieldAccessPath(path_builder);
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+        .receiver = access.receiver.idx,
+        .segments = segments,
+    } }, region);
+    path_finished = true;
+    return .{ .idx = expr_idx, .free_vars = access.receiver.free_vars };
 }
 
 fn canonicalizeQualifiedIdentExpr(
     self: *Self,
+    e: @TypeOf(@as(AST.Expr, undefined).ident),
     ident: Ident.Idx,
     region: Region,
     qualifier_tokens: []const u32,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!?IdentExprResolution {
     const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
 
     switch (self.scopeLookup(.ident, qualified_ident)) {
         .found => |found_pattern_idx| {
             if (self.isDefiningBoundVar(found_pattern_idx)) {
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
+                return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
                     .ident = qualified_ident,
                     .region = region,
-                } });
+                } }) };
             }
-            return try self.canonicalizedLocalLookup(found_pattern_idx, region);
+            return .{ .expr = try self.canonicalizedLocalLookup(found_pattern_idx, region) };
         },
         .not_found => {},
     }
 
-    if (try self.qualifierTypePath(qualifier_tokens)) |owner_path| {
-        if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, qualified_ident, region)) |pattern_idx| {
-            return try self.canonicalizedAssociatedLookup(owner_path, qualified_ident, pattern_idx, region);
+    const owner_path = try self.qualifierTypePath(qualifier_tokens);
+    if (owner_path) |path| {
+        if (try self.lookupOrCreateAssocValuePattern(path, ident, qualified_ident, region)) |pattern_idx| {
+            return .{ .expr = try self.canonicalizedAssociatedLookup(path, qualified_ident, pattern_idx, region) };
         }
-        if (self.typeStatementForPath(owner_path)) |type_stmt_idx| {
+        if (self.typeStatementForPath(path)) |type_stmt_idx| {
             if (self.env.store.getStatement(type_stmt_idx) == .s_alias_decl) {
                 const type_ident = try self.joinedQualifierIdent(qualifier_tokens);
-                return try self.canonicalizedLocalAssociatedLookup(
+                return .{ .expr = try self.canonicalizedLocalAssociatedLookup(
                     @intFromEnum(type_stmt_idx),
                     type_ident,
                     ident,
                     region,
-                );
+                ) };
             }
         }
     }
@@ -8393,7 +8503,7 @@ fn canonicalizeQualifiedIdentExpr(
 
     if (qualifier_tokens.len == 1) {
         if (try self.canonicalizeTypeDispatchOwner(module_alias, ident, region)) |expr| {
-            return expr;
+            return .{ .expr = expr };
         }
     }
 
@@ -8410,27 +8520,33 @@ fn canonicalizeQualifiedIdentExpr(
     const module_name = if (module_info) |info| info.module_name else {
         if (qualifier_tokens.len == 1) {
             if (try self.canonicalizeTypeAssociatedLookup(module_alias, ident, region)) |expr| {
-                return expr;
+                return .{ .expr = expr };
             }
         } else if ((try self.scopeLookupOrPrepareTypeBinding(module_alias)) != null) {
+            // `Q.U` names no type but `Q` does, so `Q.U` is a qualified tag.
+            if (owner_path == null and self.spellsQualifiedTagMember(qualifier_tokens, ident) and
+                (try self.qualifierTypePath(qualifier_tokens[0 .. qualifier_tokens.len - 1])) != null)
+            {
+                return try self.qualifiedTagMember(e, ident, region);
+            }
             // A multi-segment chain rooted at a type resolved no associated
             // item; the report names the full path rather than collapsing it
             // to its first segment.
             const parent_ident = try self.joinedQualifierIdent(qualifier_tokens);
-            return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
+            return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
                 .parent_name = parent_ident,
                 .nested_name = ident,
                 .region = region,
-            } });
+            } }) };
         }
 
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
+        return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
             .ident = qualified_ident,
             .region = region,
-        } });
+        } }) };
     };
 
-    return try self.canonicalizeModuleQualifiedIdent(module_name, ident, region, qualifier_tokens);
+    return try self.canonicalizeModuleQualifiedIdent(e, module_name, ident, region, qualifier_tokens);
 }
 
 fn canonicalizeTypeDispatchOwner(
@@ -8612,11 +8728,12 @@ fn canonicalizeTypeAssociatedLookup(
 
 fn canonicalizeModuleQualifiedIdent(
     self: *Self,
+    e: @TypeOf(@as(AST.Expr, undefined).ident),
     module_name: Ident.Idx,
     ident: Ident.Idx,
     region: Region,
     qualifier_tokens: []const u32,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!?IdentExprResolution {
     const auto_imported_type_info = self.lookupBuiltinAutoImportedType(module_name);
 
     const import_idx = if (auto_imported_type_info) |info|
@@ -8624,10 +8741,10 @@ fn canonicalizeModuleQualifiedIdent(
     else if (self.scopeLookupImportedModule(module_name)) |explicit_import_idx|
         explicit_import_idx
     else
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .module_not_imported = .{
+        return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .module_not_imported = .{
             .module_name = module_name,
             .region = region,
-        } });
+        } }) };
 
     const field_text = self.env.getIdent(ident);
     const lookup_scratch_top = self.scratchBytesTop();
@@ -8660,19 +8777,31 @@ fn canonicalizeModuleQualifiedIdent(
 
         if (module_env.common.findIdent(lookup_name)) |qname_ident| {
             if (module_env.getExposedValueNodeIndexById(qname_ident)) |target_node_idx| {
-                return try self.canonicalizedExternalLookup(import_idx, target_node_idx, ident, region);
+                return .{ .expr = try self.canonicalizedExternalLookup(import_idx, target_node_idx, ident, region) };
             }
         }
 
         if (try self.addAutoImportedNominalTagExpr(info, import_idx, ident, region)) |expr_idx| {
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            return .{ .expr = CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() } };
         }
 
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
-            .parent_name = module_name,
+        // `Q.U` names no builtin type but `Q` does (the auto-imported type
+        // itself when `Q` is one segment), so `Q.U` is a qualified tag.
+        if (self.spellsQualifiedTagMember(qualifier_tokens, ident) and
+            !try self.builtinNestedTypeExists(info, qualifier_tokens[1..]) and
+            (qualifier_tokens.len == 2 or try self.builtinNestedTypeExists(info, qualifier_tokens[1 .. qualifier_tokens.len - 1])))
+        {
+            return try self.qualifiedTagMember(e, ident, region);
+        }
+
+        return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
+            .parent_name = if (qualifier_tokens.len > 1)
+                try self.joinedQualifierIdent(qualifier_tokens)
+            else
+                module_name,
             .nested_name = ident,
             .region = region,
-        } });
+        } }) };
     }
 
     // What an imported module exposes under this path is not a source-local
@@ -8683,7 +8812,8 @@ fn canonicalizeModuleQualifiedIdent(
     else
         module_name;
     const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
-    return try self.deferredValueExpr(.{
+    const allows_tag_member = self.spellsQualifiedTagMember(qualifier_tokens, ident);
+    const ref = try self.pushDeferredRef(.{
         .import_idx = import_idx,
         .kind = .expr_value,
         .path = path_ident,
@@ -8696,7 +8826,34 @@ fn canonicalizeModuleQualifiedIdent(
         // Only a name spelled as a tag can name a constructor of the imported
         // module's main nominal type.
         .allows_nominal_tag = self.isSourceTagIdent(ident),
-    }, region);
+        .allows_tag_member = allows_tag_member,
+        .tag_receiver_end = if (allows_tag_member)
+            self.parse_ir.tokens.resolve(@intCast(qualifier_tokens[qualifier_tokens.len - 1])).end.offset
+        else
+            0,
+    });
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_deferred_import_ref = .{
+        .ref = ref,
+        .backing = null,
+    } }, region);
+    self.setDeferredRefNode(ref, @intFromEnum(expr_idx));
+    const expr = CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+    if (allows_tag_member) return .{ .deferred_tag_member = .{ .expr = expr, .ref = ref } };
+    return .{ .expr = expr };
+}
+
+/// Whether the qualifier tokens name a type nested inside the auto-imported
+/// builtin type `info`.
+fn builtinNestedTypeExists(self: *Self, info: AutoImportedType, segment_tokens: []const u32) std.mem.Allocator.Error!bool {
+    const top = self.qualified_ident_bytes.top();
+    defer self.qualified_ident_bytes.clearFrom(top);
+    var qualified: []const u8 = self.env.getIdent(info.qualified_type_ident);
+    for (segment_tokens) |raw_tok| {
+        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse return false;
+        qualified = try appendQualifiedText(&self.qualified_ident_bytes, qualified, self.env.getIdent(segment));
+    }
+    const type_ident = info.env.common.findIdent(qualified) orelse return false;
+    return info.env.getExposedTypeNodeIndexById(type_ident) != null;
 }
 
 fn canonicalizeUnqualifiedIdentExpr(
@@ -11574,7 +11731,15 @@ fn runExprKernel(
                     }
                 },
                 .ident => |e| {
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, try self.canonicalizeIdentExpr(e));
+                    const ident_expr = switch (try self.resolveIdentExpr(e)) {
+                        .expr => |resolved| resolved,
+                        .tag_member => |access| try self.addTagMemberFieldAccess(access, self.parse_ir.tokenizedRegionToRegion(e.region)),
+                        .deferred_tag_member => |deferred| blk: {
+                            self.setDeferredTagMemberAccessNode(deferred.ref, deferred.expr.idx);
+                            break :blk deferred.expr;
+                        },
+                    };
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, ident_expr);
                 },
                 .string_part => |sp| {
                     const region = self.parse_ir.tokenizedRegionToRegion(sp.region);
@@ -11809,7 +11974,8 @@ fn runExprKernel(
                     var field_work: std.ArrayList(ExprRecordBuilderFieldWork) = .empty;
                     defer field_work.deinit(frame_allocator);
                     var explicit_value_count: usize = 0;
-                    for (fields_slice) |field_idx| {
+                    var last_duplicate_diag: ?CIR.Diagnostic.Idx = null;
+                    for (fields_slice, 0..) |field_idx, field_index| {
                         const field = self.parse_ir.store.getRecordField(field_idx);
                         const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
                             const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
@@ -11818,6 +11984,25 @@ fn runExprKernel(
                             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
                             continue :expr_kernel_loop .dispatch;
                         };
+                        const is_duplicate = for (field_work.items) |seen| {
+                            if (field_name.eql(seen.name)) break true;
+                        } else false;
+                        if (is_duplicate) {
+                            // Duplicate fields are reported and dropped, as in plain
+                            // record literals. Every field in `field_work` resolved, so
+                            // the first field with this name is the one it duplicates.
+                            const original_region = for (fields_slice[0..field_index]) |earlier_idx| {
+                                const earlier = self.parse_ir.store.getRecordField(earlier_idx);
+                                const earlier_name = self.parse_ir.tokens.resolveIdentifier(earlier.name).?;
+                                if (field_name.eql(earlier_name)) break self.parse_ir.tokens.resolve(earlier.name);
+                            } else unreachable;
+                            last_duplicate_diag = try self.env.addDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                                .field_name = field_name,
+                                .duplicate_region = self.parse_ir.tokens.resolve(field.name),
+                                .original_region = original_region,
+                            } });
+                            continue;
+                        }
                         if (field.value == .unset) {
                             // A builder field's value is mapped through the
                             // builder function; there is nothing to map for an
@@ -11835,6 +12020,14 @@ fn runExprKernel(
                             .name = field_name,
                             .value_expr = field.value.asSupplied(),
                         });
+                    }
+
+                    if (field_work.items.len < 2) {
+                        // Only duplicates can bring a builder below two fields here,
+                        // and those were already reported.
+                        const expr_idx = try self.env.addMalformed(last_duplicate_diag.?, region);
+                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = ModuleEnv.castIdx(CIR.Node.Idx, Expr.Idx, expr_idx), .free_vars = DataSpan.empty() });
+                        continue :expr_kernel_loop .dispatch;
                     }
 
                     const fields = try field_work.toOwnedSlice(frame_allocator);
@@ -12215,6 +12408,14 @@ fn runExprKernel(
                                 try stacks.pushParse(frame_allocator, .{ .idx = additional_args[i], .target = .scratch });
                             }
                             try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
+                        } else if (ast_fn == .ident) {
+                            try stacks.pushArrowIdentCallee(frame_allocator, .{
+                                .region = region,
+                                .free_vars_start = free_vars_start,
+                                .callee = ast_fn.ident,
+                                .args = apply.args,
+                            });
+                            try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
                         } else {
                             try stacks.pushFinishArrowApply(frame_allocator, .{
                                 .region = region,
@@ -12302,9 +12503,51 @@ fn runExprKernel(
                     }
 
                     const args_slice = self.parse_ir.store.exprSlice(e.args);
+                    const free_vars_start = self.scratch_free_vars.top();
+                    if (ast_fn == .ident) {
+                        // The callee is canonicalized here rather than as a
+                        // child, because whether this is a call or a method
+                        // call on a qualified tag depends on what it names.
+                        switch (try self.resolveIdentExpr(ast_fn.ident)) {
+                            .tag_member => |access| {
+                                try stacks.pushFinishMethodCall(frame_allocator, .{
+                                    .region = region,
+                                    .free_vars_start = free_vars_start,
+                                    .method_name = access.member,
+                                    .method_name_region = access.member_region,
+                                    .arg_count = args_slice.len,
+                                });
+                                try child_slots.append(frame_allocator, .{ .expr = access.receiver });
+                            },
+                            .expr => |callee| {
+                                try stacks.pushFinishApply(frame_allocator, .{
+                                    .region = region,
+                                    .free_vars_start = free_vars_start,
+                                    .arg_count = args_slice.len,
+                                });
+                                try child_slots.append(frame_allocator, .{ .expr = callee });
+                            },
+                            .deferred_tag_member => |deferred| {
+                                try stacks.pushFinishApply(frame_allocator, .{
+                                    .region = region,
+                                    .free_vars_start = free_vars_start,
+                                    .arg_count = args_slice.len,
+                                    .tag_member_ref = deferred.ref,
+                                });
+                                try child_slots.append(frame_allocator, .{ .expr = deferred.expr });
+                            },
+                        }
+                        var i = args_slice.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
+                        }
+                        continue :expr_kernel_loop .dispatch;
+                    }
+
                     try stacks.pushFinishApply(frame_allocator, .{
                         .region = region,
-                        .free_vars_start = self.scratch_free_vars.top(),
+                        .free_vars_start = free_vars_start,
                         .arg_count = args_slice.len,
                     });
                     var i = args_slice.len;
@@ -13530,6 +13773,50 @@ fn runExprKernel(
 
             continue :expr_kernel_loop .dispatch;
         },
+        .arrow_ident_callee => {
+            // The piped argument is canonicalized; the callee comes next, as
+            // it would as a child, and selects a call or a method call.
+            const state = stacks.takeArrowIdentCallee();
+            const additional_args = self.parse_ir.store.exprSlice(state.args);
+            switch (try self.resolveIdentExpr(state.callee)) {
+                .tag_member => |access| {
+                    // A method call's receiver precedes its piped argument.
+                    const piped = child_slots.pop() orelse unreachable;
+                    try child_slots.append(frame_allocator, .{ .expr = access.receiver });
+                    try child_slots.append(frame_allocator, piped);
+                    try stacks.pushFinishMethodCall(frame_allocator, .{
+                        .region = state.region,
+                        .free_vars_start = state.free_vars_start,
+                        .method_name = access.member,
+                        .method_name_region = access.member_region,
+                        .arg_count = additional_args.len + 1,
+                    });
+                },
+                .expr => |callee| {
+                    try stacks.pushFinishArrowApply(frame_allocator, .{
+                        .region = state.region,
+                        .free_vars_start = state.free_vars_start,
+                        .arg_count = additional_args.len,
+                    });
+                    try child_slots.append(frame_allocator, .{ .expr = callee });
+                },
+                .deferred_tag_member => |deferred| {
+                    try stacks.pushFinishArrowApply(frame_allocator, .{
+                        .region = state.region,
+                        .free_vars_start = state.free_vars_start,
+                        .arg_count = additional_args.len,
+                        .tag_member_ref = deferred.ref,
+                    });
+                    try child_slots.append(frame_allocator, .{ .expr = deferred.expr });
+                },
+            }
+            var i = additional_args.len;
+            while (i > 0) {
+                i -= 1;
+                try stacks.pushParse(frame_allocator, .{ .idx = additional_args[i], .target = .scratch });
+            }
+            continue :expr_kernel_loop .dispatch;
+        },
         .finish_arrow_apply => {
             const state = stacks.takeFinishArrowApply();
             const child_count = state.arg_count + 2;
@@ -13553,6 +13840,7 @@ fn runExprKernel(
                     .called_via = CalledVia.apply,
                 },
             }, state.region);
+            if (state.tag_member_ref) |ref| self.setDeferredTagMemberAccessNode(ref, expr_idx);
 
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -13709,6 +13997,7 @@ fn runExprKernel(
                     .called_via = CalledVia.apply,
                 },
             }, state.region);
+            if (state.tag_member_ref) |ref| self.setDeferredTagMemberAccessNode(ref, expr_idx);
 
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -15054,6 +15343,7 @@ fn lookupImportedExposedTarget(
     const module_name_text = imported_env.module_name;
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
+    const item = self.scratchBytesRef(item_text);
     const module_qualified_text = try self.scratchQualifiedText(module_name_text, item_text);
     const module_qualified_target = lookupExposedTargetByText(imported_env, module_qualified_text);
 
@@ -15061,7 +15351,7 @@ fn lookupImportedExposedTarget(
         return target;
     }
 
-    return lookupExposedTargetByText(imported_env, item_text);
+    return lookupExposedTargetByText(imported_env, self.scratchBytesDeref(item));
 }
 
 fn lookupImportedExposedTypeNode(
@@ -15081,9 +15371,10 @@ fn lookupImportedTypeDeclNode(
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
 
+    const item = self.scratchBytesRef(item_text);
     const module_qualified_text = try self.scratchQualifiedText(imported_env.module_name, item_text);
     const qualified_ident = imported_env.common.findIdent(module_qualified_text) orelse
-        imported_env.common.findIdent(item_text) orelse
+        imported_env.common.findIdent(self.scratchBytesDeref(item)) orelse
         return null;
 
     for (imported_env.store.sliceStatements(imported_env.all_statements)) |stmt_idx| {
@@ -16630,6 +16921,7 @@ const ExprKernelLabel = enum {
     finish_bin_op,
     finish_single_question_binop,
     finish_method_call,
+    arrow_ident_callee,
     finish_arrow_apply,
     finish_arrow_tag_apply,
     finish_arrow_call,
@@ -16894,6 +17186,15 @@ const ExprFinishArrowApplyWork = struct {
     region: Region,
     free_vars_start: u32,
     arg_count: usize,
+    /// See `ExprFinishApplyWork.tag_member_ref`.
+    tag_member_ref: ?ModuleEnv.DeferredImportRef.Idx = null,
+};
+
+const ExprArrowIdentCalleeWork = struct {
+    region: Region,
+    free_vars_start: u32,
+    callee: @TypeOf(@as(AST.Expr, undefined).ident),
+    args: AST.Expr.Span,
 };
 
 const ExprFinishArrowTagApplyWork = struct {
@@ -16924,6 +17225,9 @@ const ExprFinishApplyWork = struct {
     region: Region,
     free_vars_start: u32,
     arg_count: usize,
+    /// The deferred reference whose callee may turn out to be a member
+    /// accessed on a qualified tag, which this call then accesses.
+    tag_member_ref: ?ModuleEnv.DeferredImportRef.Idx = null,
 };
 
 const ExprFinishTagWork = struct {
@@ -17104,6 +17408,7 @@ const ExprKernelWork = struct {
     finish_bin_op: std.ArrayList(ExprFinishBinOpWork) = .empty,
     finish_single_question_binop: std.ArrayList(ExprFinishSingleQuestionBinopWork) = .empty,
     finish_method_call: std.ArrayList(ExprFinishMethodCallWork) = .empty,
+    arrow_ident_callee: std.ArrayList(ExprArrowIdentCalleeWork) = .empty,
     finish_arrow_apply: std.ArrayList(ExprFinishArrowApplyWork) = .empty,
     finish_arrow_tag_apply: std.ArrayList(ExprFinishArrowTagApplyWork) = .empty,
     finish_arrow_call: std.ArrayList(ExprFinishArrowCallWork) = .empty,
@@ -17162,6 +17467,7 @@ const ExprKernelWork = struct {
             .finish_bin_op => _ = self.takeFinishBinOp(),
             .finish_single_question_binop => _ = self.takeFinishSingleQuestionBinop(),
             .finish_method_call => _ = self.takeFinishMethodCall(),
+            .arrow_ident_callee => _ = self.takeArrowIdentCallee(),
             .finish_arrow_apply => _ = self.takeFinishArrowApply(),
             .finish_arrow_tag_apply => _ = self.takeFinishArrowTagApply(),
             .finish_arrow_call => _ = self.takeFinishArrowCall(),
@@ -17240,6 +17546,7 @@ const ExprKernelWork = struct {
                 .finish_bin_op,
                 .finish_single_question_binop,
                 .finish_method_call,
+                .arrow_ident_callee,
                 .finish_arrow_apply,
                 .finish_arrow_tag_apply,
                 .finish_arrow_call,
@@ -17302,6 +17609,7 @@ const ExprKernelWork = struct {
         self.finish_bin_op.deinit(allocator);
         self.finish_single_question_binop.deinit(allocator);
         self.finish_method_call.deinit(allocator);
+        self.arrow_ident_callee.deinit(allocator);
         self.finish_arrow_apply.deinit(allocator);
         self.finish_arrow_tag_apply.deinit(allocator);
         self.finish_arrow_call.deinit(allocator);
@@ -17362,6 +17670,7 @@ const ExprKernelWork = struct {
         self.finish_bin_op.clearRetainingCapacity();
         self.finish_single_question_binop.clearRetainingCapacity();
         self.finish_method_call.clearRetainingCapacity();
+        self.arrow_ident_callee.clearRetainingCapacity();
         self.finish_arrow_apply.clearRetainingCapacity();
         self.finish_arrow_tag_apply.clearRetainingCapacity();
         self.finish_arrow_call.clearRetainingCapacity();
@@ -17587,6 +17896,12 @@ const ExprKernelWork = struct {
         try self.finish_method_call.append(allocator, item);
         errdefer _ = self.finish_method_call.pop();
         try self.pushLabel(allocator, .finish_method_call, self.current_target);
+    }
+
+    inline fn pushArrowIdentCallee(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprArrowIdentCalleeWork) std.mem.Allocator.Error!void {
+        try self.arrow_ident_callee.append(allocator, item);
+        errdefer _ = self.arrow_ident_callee.pop();
+        try self.pushLabel(allocator, .arrow_ident_callee, self.current_target);
     }
 
     inline fn pushFinishArrowApply(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishArrowApplyWork) std.mem.Allocator.Error!void {
@@ -17851,6 +18166,10 @@ const ExprKernelWork = struct {
 
     inline fn takeFinishMethodCall(self: *ExprKernelWork) ExprFinishMethodCallWork {
         return self.finish_method_call.pop() orelse unreachable;
+    }
+
+    inline fn takeArrowIdentCallee(self: *ExprKernelWork) ExprArrowIdentCalleeWork {
+        return self.arrow_ident_callee.pop() orelse unreachable;
     }
 
     inline fn takeFinishArrowApply(self: *ExprKernelWork) ExprFinishArrowApplyWork {

@@ -10302,5 +10302,5 @@ test "interpreter turns a compiler host allocation failure into a Roc crash" {
     host.bindInterpreter(&interpreter);
 
     try std.testing.expectError(error.Crash, interpreter.eval(.{ .proc_id = proc, .ret_layout = list_layout }));
-    try std.testing.expectEqualStrings("ran out of memory", interpreter.getCrashMessage().?);
+    try std.testing.expectEqualStrings("ran out of memory", interpreter.getCrashMessage());
 }

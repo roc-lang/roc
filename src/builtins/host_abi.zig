@@ -256,12 +256,14 @@ pub const RocOps = extern struct {
 
 /// A host that breaks the `roc_crashed` contract by returning.
 const ReturningCrashHost = struct {
-    fn rocAlloc(_: *RocOps, _: usize, _: usize) callconv(.c) ?*anyopaque {
-        return null;
+    // These crashes happen before any allocation, and a host that cannot
+    // allocate stops the program rather than returning.
+    fn rocAlloc(_: *RocOps, _: usize, _: usize) callconv(.c) *anyopaque {
+        @trap();
     }
     fn rocDealloc(_: *RocOps, _: *anyopaque, _: usize) callconv(.c) void {}
-    fn rocRealloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
-        return null;
+    fn rocRealloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
+        @trap();
     }
     fn rocMessage(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
 

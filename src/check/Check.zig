@@ -30950,6 +30950,7 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
 /// default at each site's monotype.)
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     try self.distributeRecordOmittedDefaults();
+    try self.retireOmissionsOfRejectedForeignDefaults();
     // Every judgment and retirement below is per pending default, so a
     // module with none has nothing to build or sweep: gating here keeps the
     // evidence indexes (and `dispatch_scheme_uses`' loud release-mode
@@ -31127,6 +31128,40 @@ fn retireRejectedDefault(
 
     try self.replaceExprWithRuntimeError(pending.default_expr, diagnostic_idx);
     try self.erroneous_value_exprs.put(self.gpa, pending.default_expr, {});
+}
+
+/// A construction that omits a default declared in another module would
+/// restore that default during postcheck or compile-time evaluation. The
+/// declaring module's check already retired each rejected default, reporting
+/// its problem there, by replacing the default expression with a runtime
+/// error, so a construction here that omits it is retired the same way,
+/// without reporting a second problem.
+fn retireOmissionsOfRejectedForeignDefaults(self: *Self) std.mem.Allocator.Error!void {
+    const self_identity = self.cir.selfModuleIdentity();
+    const has_foreign = for (self.cir.record_omitted_defaults.items.items) |omitted| {
+        if (omitted.origin_module != self_identity) break true;
+    } else false;
+    if (!has_foreign) return;
+
+    // Retiring a construction drops its omission entries (and those of any
+    // construction nested in it), so walk a copy of the list.
+    const omitted_defaults = try self.gpa.dupe(
+        ModuleEnv.RecordOmittedDefault,
+        self.cir.record_omitted_defaults.items.items,
+    );
+    defer self.gpa.free(omitted_defaults);
+
+    for (omitted_defaults) |omitted| {
+        if (omitted.origin_module == self_identity) continue;
+        const owner = self.moduleEnvForIdentity(self.cir, omitted.origin_module).env;
+        if (owner.store.getExpr(@enumFromInt(omitted.default_expr_node)) != .e_runtime_error) continue;
+        if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(omitted.expr),
+        } });
+        try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
+        try self.erroneous_value_exprs.put(self.gpa, omitted.expr, {});
+    }
 }
 
 /// The parameter-constraint judgment (design.md "Defaulted Fields"): a

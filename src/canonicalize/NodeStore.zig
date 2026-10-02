@@ -2393,6 +2393,47 @@ pub fn replaceExprWithMethodEq(
     store.nodes.set(node_idx, node);
 }
 
+/// Rewrites a call into a method call on `receiver`, keeping the call's
+/// arguments. Used when the deferred import drain finds that the callee of
+/// `Alias.Path.U.v(...)` is the member `v` accessed on the qualified tag
+/// `Alias.Path.U`.
+pub fn replaceCallWithMethodCall(
+    store: *NodeStore,
+    call_idx: CIR.Expr.Idx,
+    receiver: CIR.Expr.Idx,
+    method_name: base.Ident.Idx,
+    method_name_region: Region,
+) Allocator.Error!void {
+    const args = store.getExpr(call_idx).e_call.args;
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(call_idx));
+    const method_call_data_idx = try store.addMethodCallData(args, method_name_region, .method_call);
+    var node = Node.init(.expr_method_call);
+    node.setPayload(.{ .expr_method_call = .{
+        .receiver = @intFromEnum(receiver),
+        .method_name = @bitCast(method_name),
+        .method_call_data_idx = method_call_data_idx,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a deferred import reference into a field access on `receiver`.
+pub fn resolveDeferredExprToFieldAccess(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    receiver: CIR.Expr.Idx,
+    segments: CIR.Expr.FieldAccessSegment.Span,
+) void {
+    std.debug.assert(segments.len > 0);
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_field_access);
+    node.setPayload(.{ .expr_field_access = .{
+        .receiver = @intFromEnum(receiver),
+        .segments_start = @intFromEnum(segments.start),
+        .segments_len = segments.len,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
 /// Replaces an existing expression with unresolved receiver dispatch metadata.
 pub fn replaceExprWithDispatchCall(
     store: *NodeStore,
