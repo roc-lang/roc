@@ -4317,6 +4317,8 @@ const Pass = struct {
             },
             // A hint with no result to describe.
             .list_prefetch => try self.bindFresh(s.target),
+            // LIR lowering splits this into an alias and `list_prefetch`.
+            .list_prefetched => unreachable,
             .list_capacity => {
                 // A list's capacity is a non-negative count with no tighter
                 // statically known bound.

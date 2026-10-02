@@ -794,7 +794,7 @@ const Pass = struct {
                     const arg_count = GuardedList.borrowLen(args);
                     const list_arg0 = arg_count > 0 and self.isListLocal(GuardedList.at(args, 0));
                     const rebinds = assign.op == .list_reserve or assign.op == .list_reserve_for_append or assign.op == .list_append_unsafe or assign.op == .list_append_range_within or assign.op == .list_copy_range_within or assign.op == .list_append_sublist or assign.op == .list_append_le_bytes or assign.op == .list_set or assign.op == .list_clear;
-                    const read_ok = assign.op == .list_len or assign.op == .list_get_unsafe or assign.op == .list_slack_unique;
+                    const read_ok = assign.op == .list_len or assign.op == .list_get_unsafe or assign.op == .list_slack_unique or assign.op == .list_prefetch;
                     if (rebinds and list_arg0 and self.isListLocal(assign.target)) {
                         // Range-within appends promote to a slack-guarded
                         // diamond of their own; zero-sized elements have no
@@ -1145,7 +1145,7 @@ const Pass = struct {
                     occurrence.value_ptr.* += 1;
                     if (stmt == .assign_low_level) {
                         const op = stmt.assign_low_level.op;
-                        if (op == .list_len or op == .list_get_unsafe or
+                        if (op == .list_len or op == .list_get_unsafe or op == .list_prefetch or
                             op == .list_slack_unique or op == .list_owned_unique) continue;
                     }
                     try consumes.put(stmt_id, {});

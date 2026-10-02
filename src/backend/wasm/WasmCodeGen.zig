@@ -12104,6 +12104,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .simd_clmul_hi => return self.emitSimdLowLevel(.simd_clmul_hi, ll, args),
 
         .num_plus, .num_minus, .num_times => unreachable,
+        // LIR lowering splits this into an alias and `list_prefetch`.
+        .list_prefetched => unreachable,
         // Numeric operations (arithmetic, comparisons, shifts)
         .num_int_add_wrap,
         .num_int_add_crash_on_overflow,
@@ -15833,6 +15835,7 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_capacity,
         .list_get_unsafe,
         .list_prefetch,
+        .list_prefetched,
         .list_append_unsafe,
         .list_concat,
         .list_with_capacity,

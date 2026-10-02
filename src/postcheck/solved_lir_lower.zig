@@ -8014,6 +8014,26 @@ const Lowerer = struct {
                 .child = .{ .parent = where, .target = source, .expr = arg, .ty = null, .next = assign },
             } } };
         }
+        if (op == .list_prefetched) {
+            // The result is the list itself, so it is an alias of the
+            // argument; the hint is a separate statement that borrows it.
+            if (args.len != 2) Common.invariant("list_prefetched reached LIR lowering with the wrong arity");
+            const lowered = try self.lowerExprsToTemps(args);
+            defer lowered.deinit(self.allocator);
+            const alias = try self.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .local = lowered.ids[0] },
+                .next = next,
+            } }, where.source());
+            const hint = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = try self.addLocalForLayout(.zst),
+                .op = .list_prefetch,
+                .rc_effect = LIR.LowLevel.list_prefetch.rcEffect(),
+                .args = try self.result.store.addLocalSpan(lowered.ids),
+                .next = alias,
+            } }, where.source());
+            return .{ .tail = try self.operandChain(where, lowered, null, null, hint) };
+        }
         if (op == .list_map_can_reuse) {
             const interchangeable = try self.listMapLayoutsInterchangeable(args);
             if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {

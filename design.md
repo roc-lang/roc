@@ -15420,22 +15420,32 @@ Where lowering carries the variables and the construct's result together in
 one struct-typed join parameter, the unread variable is a struct field rather
 than a parameter, and this pass does not remove it.
 
-### List.prefetch
+### List.prefetched
 
-`List.prefetch : List(item), U64 -> {}` is a hint that the item at an index is
-about to be read or written. Its low-level, `list_prefetch`, reads nothing and
-writes nothing, so it has no bounds test and an index outside the list is
-valid. No optimization may assume the index is in range because of it.
+`List.prefetched : List(item), U64 -> List(item)` returns its list unchanged,
+hinting that the item at an index is about to be read or written. It is the
+identity on the list because a pure function returning the empty record is a
+call the compiler is free to drop.
 
-The operation exists only to reach the processor. The LLVM backend emits the
+Its checked low-level, `list_prefetched`, never reaches LIR. LIR lowering
+splits it into two statements: `list_prefetch`, which takes the list and the
+index and produces nothing, and an alias of the list as the result. No LIR
+stage therefore sees an operation that moves ownership: ARC, the range prover,
+and the loop promoter see a read and an alias, both of which they already
+model. The promoter counts `list_prefetch` among the reads that leave a
+loop's in-place writes in place.
+
+`list_prefetch` reads nothing and writes nothing, so it has no bounds test and
+an index outside the list is valid. No optimization may assume the index is in
+range because of it. ARC treats its list operand like `list_len`'s: it is read
+from its by-value descriptor only, so the hint neither retains the list nor
+extends the lifetime of its allocation. An address computed from a descriptor
+whose allocation has been released is harmless to prefetch.
+
+The hint exists only to reach the processor. The LLVM backend emits the
 prefetch intrinsic on the item's address, computed without an in-bounds claim.
 The interpreter, the dev backends, and the WebAssembly backend emit no code
-for it, and compile-time evaluation gives it the empty record.
-
-ARC treats the list operand like `list_len`'s: it is read from its by-value
-descriptor only, so a prefetch neither retains the list nor extends the
-lifetime of its allocation. An address computed from a descriptor whose
-allocation has been released is harmless to prefetch.
+for it, and compile-time evaluation of `list_prefetched` returns the list.
 
 ## Integer Arithmetic Operations
 

@@ -59,10 +59,15 @@ pub const LowLevel = enum(u16) {
     list_len,
     list_capacity,
     list_get_unsafe,
-    /// `List.prefetch`: a hint that the item at an index is about to be
-    /// read or written. It reads nothing and changes nothing; a backend
-    /// with no prefetch instruction emits no code for it, and an index
-    /// outside the list is harmless.
+    /// `List.prefetched`: the same list, with a hint that the item at an
+    /// index is about to be read or written. LIR lowering splits it into
+    /// `list_prefetch` on the list and an alias of the list, so no later
+    /// stage sees this operation.
+    list_prefetched,
+    /// The hint half of `list_prefetched`, created only by LIR lowering. It
+    /// reads nothing and changes nothing; a backend with no prefetch
+    /// instruction emits no code for it, and an index outside the list is
+    /// harmless.
     list_prefetch,
     list_append_unsafe,
     list_concat,
@@ -913,6 +918,7 @@ pub const LowLevel = enum(u16) {
             .box_unbox,
             => true,
 
+            .list_prefetched,
             .str_is_eq,
             .str_is_eq_static_small,
             .str_static_small_word_eq,
@@ -1535,6 +1541,10 @@ pub const LowLevel = enum(u16) {
             // reuse query, forcing ARC to preserve every later use first.
             // List.map, List.update, and loop promotion use this transfer.
             .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
+
+            // The same list; LIR lowering replaces it with an alias, so this
+            // describes the source-level operation only.
+            .list_prefetched => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
 
             // Reads the prepared list's refcount (and slice bit) without
             // changing it. List.map additionally gates this result on item
