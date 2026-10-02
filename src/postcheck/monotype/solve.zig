@@ -2165,6 +2165,7 @@ pub const InstGraph = struct {
         while (containment_entries.next()) |entry| entry.deinit(self.allocator);
         self.containment_cache.clearRetainingCapacity();
         self.resolved_roots.clearRetainingCapacity();
+        self.never_uninhabited.clearRetainingCapacity();
         self.resolved_epoch = 0;
         self.structure_epoch = 0;
         self.snapshot_free_types.clearRetainingCapacity();
@@ -10263,6 +10264,27 @@ test "reset starts an unrelated graph while retaining its stores" {
     try graph.freezeRelations();
     const sealed = try graph.sealNode(second);
     try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed));
+}
+
+test "reset discards inhabitance answers before reusing node ids" {
+    const gpa = std.testing.allocator;
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const inhabited_payload = try graph.newNode(.{ .primitive = .u64 });
+    const first = try graph.newNode(.{ .box = inhabited_payload });
+    try std.testing.expect(!try graph.mayFinalizeAsUninhabited(first));
+
+    graph.reset();
+
+    const empty_payload = try graph.newNode(.empty_tag_union);
+    const second = try graph.newNode(.{ .box = empty_payload });
+    try std.testing.expectEqual(first, second);
+    try std.testing.expect(try graph.mayFinalizeAsUninhabited(second));
 }
 
 test "reset discards nominal relationships and constructor evidence before reusing node ids" {
