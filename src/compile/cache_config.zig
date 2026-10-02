@@ -287,7 +287,9 @@ pub const Constants = struct {
     ///      observations carry an optional value site.
     /// 130: Top-level annotated values quantify their implicitly opened rows
     ///      instead of grounding them to `[]`.
-    pub const CACHE_VERSION = 130;
+    /// 131: Checked bodies gain the `row_coerce` expression form (design.md
+    ///      "Row Coercion Primitive"); no checker site emits it yet.
+    pub const CACHE_VERSION = 131;
 };
 
 /// Configuration for the Roc cache system.
