@@ -785,6 +785,12 @@ const Lowerer = struct {
     comptime_root_slots: std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
+    /// Each access-path expression's `lowerExprContextTy`, so a chain of
+    /// accesses walks each link once. A body worker keeps its own.
+    expr_context_tys: collections.DenseMap(Lifted.ExprId, Type.TypeId),
+    /// Each classified type's `erasedResultDemand`. A body worker keeps its
+    /// own.
+    erased_result_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
     packed_literals: std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral),
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
@@ -1039,6 +1045,8 @@ const Lowerer = struct {
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
             .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
+            .expr_context_tys = collections.DenseMap(Lifted.ExprId, Type.TypeId).init(allocator),
+            .erased_result_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
             .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
@@ -1156,6 +1164,8 @@ const Lowerer = struct {
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.representation_shapes.deinit();
+        self.expr_context_tys.deinit();
+        self.erased_result_demands.deinit();
         self.type_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -1221,6 +1231,8 @@ const Lowerer = struct {
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.representation_shapes.deinit();
+        self.expr_context_tys.deinit();
+        self.erased_result_demands.deinit();
         self.type_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -1572,6 +1584,8 @@ const Lowerer = struct {
         // which ordered commit relocates. A worker therefore derives its own
         // and never reads or grows the coordinator's cache.
         worker.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator);
+        worker.expr_context_tys = collections.DenseMap(Lifted.ExprId, Type.TypeId).init(allocator);
+        worker.erased_result_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator);
         worker.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator);
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
         worker.erased_owner_states = workspace.erased_owner_states;
@@ -1585,6 +1599,8 @@ const Lowerer = struct {
 
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
         self.deinitPackedPlans();
+        self.expr_context_tys.deinit();
+        self.erased_result_demands.deinit();
         self.result.boxy_erased_arg_layouts.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
@@ -3567,12 +3583,18 @@ const Lowerer = struct {
     }
 
     /// The type an expression is read at: an access path's type follows the
-    /// path from its root's type. The path is walked iteratively.
+    /// path from its root's type. The path is walked iteratively, from its
+    /// innermost link whose type is already known.
     fn lowerExprContextTy(self: *Lowerer, expr_id: Lifted.ExprId) Common.LowerError!Type.TypeId {
         var path: std.ArrayList(Lifted.ExprId) = .empty;
         defer path.deinit(self.allocator);
         var root = expr_id;
+        var known: ?Type.TypeId = null;
         while (true) {
+            if (self.expr_context_tys.get(root)) |ty| {
+                known = ty;
+                break;
+            }
             switch (self.solved.lifted.getExpr(root).data) {
                 .field_access => |field| {
                     try path.append(self.allocator, root);
@@ -3585,7 +3607,7 @@ const Lowerer = struct {
                 .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
             }
         }
-        var ty = try self.lowerExprTy(root);
+        var ty = known orelse try self.lowerExprTy(root);
         var index = path.items.len;
         while (index > 0) {
             index -= 1;
@@ -3605,6 +3627,7 @@ const Lowerer = struct {
                 },
                 .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .inline_expects_enabled, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             }
+            try self.expr_context_tys.put(path.items[index], ty);
         }
         return ty;
     }
@@ -9012,7 +9035,9 @@ const Lowerer = struct {
     /// slot. Lists and recursive paths decline reuse because their runtime
     /// multiplicity is not one statically named slot: a path longer than the
     /// store's type count must revisit a type. Types wait on an explicit
-    /// stack, so type nesting never becomes native call depth.
+    /// stack, so type nesting never becomes native call depth. A type's
+    /// demand is memoized when its walk never exhausted the budget, so it did
+    /// not depend on the path that reached the type.
     fn erasedResultDemand(self: *Lowerer, ty: Type.TypeId) Common.LowerError!ErasedResultDemand {
         const Frame = struct {
             ty: Type.TypeId,
@@ -9023,29 +9048,36 @@ const Lowerer = struct {
             /// The simultaneous demand of the children classified so far.
             sum: ErasedResultDemand = .none,
             any_single_variant: bool = false,
+            /// `exhaustions` when this type's walk began.
+            exhaustions_before: usize,
         };
         var frames: std.ArrayList(Frame) = .empty;
         defer frames.deinit(self.allocator);
         var child_ty = ty;
         var child_remaining = self.types.typeCount();
+        // How many paths have exhausted the budget so far.
+        var exhaustions: usize = 0;
         outer: while (true) {
-            var result: ErasedResultDemand = if (child_remaining == 0) .ambiguous else switch (self.types.get(child_ty)) {
+            var result: ErasedResultDemand = if (self.erased_result_demands.get(child_ty)) |known| known else if (child_remaining == 0) blk: {
+                exhaustions += 1;
+                break :blk .ambiguous;
+            } else switch (self.types.get(child_ty)) {
                 .erased_fn => .single_slot,
                 .primitive, .callable, .erased_capture_ptr, .zst => .none,
                 .named => |named| if (named.backing) |backing| {
-                    try frames.append(self.allocator, .{ .ty = child_ty, .remaining = child_remaining });
+                    try frames.append(self.allocator, .{ .ty = child_ty, .remaining = child_remaining, .exhaustions_before = exhaustions });
                     child_ty = backing.ty;
                     child_remaining -= 1;
                     continue :outer;
                 } else .none,
                 .box, .list => |elem| {
-                    try frames.append(self.allocator, .{ .ty = child_ty, .remaining = child_remaining });
+                    try frames.append(self.allocator, .{ .ty = child_ty, .remaining = child_remaining, .exhaustions_before = exhaustions });
                     child_ty = elem;
                     child_remaining -= 1;
                     continue :outer;
                 },
                 .record, .capture_record, .tuple, .tag_union => blk: {
-                    var frame = Frame{ .ty = child_ty, .remaining = child_remaining };
+                    var frame = Frame{ .ty = child_ty, .remaining = child_remaining, .exhaustions_before = exhaustions };
                     const first = self.erasedDemandChild(&frame.index, &frame.tag_index, &frame.sum, &frame.any_single_variant, child_ty);
                     switch (first) {
                         .child => |next_ty| {
@@ -9080,6 +9112,7 @@ const Lowerer = struct {
                     },
                     .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst => unreachable,
                 }
+                if (exhaustions == top.exhaustions_before) try self.erased_result_demands.put(top.ty, result);
                 _ = frames.pop();
             }
             return result;
