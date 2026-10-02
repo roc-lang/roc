@@ -35253,7 +35253,7 @@ fn closeConcreteRecursiveDispatch(
     defer params.deinit(self.gpa);
     try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, scheme_root, &scratch, &params);
     for (params.items) |param| {
-        if (param.source != .scheme_callable or param.path.len == 0) return null;
+        if (param.source != .scheme_callable or param.path_len == 0) return null;
     }
 
     const ancestor = self.dispatch_target_instantiations.items[ancestor_idx];

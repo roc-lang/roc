@@ -1637,6 +1637,24 @@ pub const SiteEvidenceEntry = extern struct {
 /// a `canonical.RecordFieldLabelId`, or a `canonical.TagNameId` per kind).
 pub const EvidencePathStep = dispatch_evidence.PathStep;
 
+/// Public `EvidencePathNode` declaration: one step of a published evidence
+/// path, linked to the node of the step before it. Paths of one published
+/// param vector share their common prefixes.
+pub const EvidencePathNode = dispatch_evidence.PathNode;
+
+pub const no_evidence_path_node = dispatch_evidence.no_path_node;
+
+/// Public `EvidencePathMemo` declaration: resolves published path nodes once
+/// each per root.
+pub const EvidencePathMemo = dispatch_evidence.PathMemo;
+
+/// Public `EvidencePath` declaration: a published path, named by its last node
+/// in the template table's `evidence_path_nodes`.
+pub const EvidencePath = struct {
+    last: u32 = no_evidence_path_node,
+    len: u32 = 0,
+};
+
 /// Public `EvidenceParamRecord` declaration.
 ///
 /// One published evidence param of a procedure template's scheme, in canonical
@@ -1671,7 +1689,7 @@ pub const EvidenceParamRecord = struct {
     /// dispatcher has no registered method target.
     structural: ?StructuralKind = null,
     source: EvidenceParamSource = .scheme_callable,
-    path: artifact_serialize.Span = .{},
+    path: EvidencePath = .{},
 };
 
 /// Exact producer-authored source of an evidence parameter's dispatcher.
@@ -1708,18 +1726,14 @@ pub const ProcedureEvidenceSchema = enum {
 /// callable root (an empty path). A vector consisting only of captured scheme
 /// requirements belongs to the selected target. Mixed vectors and every other
 /// source need the checked per-use record.
-pub fn procedureEvidenceSchema(
-    params: []const EvidenceParamRecord,
-    paths: []const EvidencePathStep,
-) ProcedureEvidenceSchema {
+pub fn procedureEvidenceSchema(params: []const EvidenceParamRecord) ProcedureEvidenceSchema {
     if (params.len == 0) return .none;
     var scheme_requirements: usize = 0;
     for (params) |param| {
-        const path = paths[param.path.start .. param.path.start + param.path.len];
         switch (param.source) {
             .scheme_callable => {},
-            .explicit_default => if (path.len != 0) return .requires_record,
-            .scheme_requirement => if (path.len == 0) {
+            .explicit_default => if (param.path.len != 0) return .requires_record,
+            .scheme_requirement => if (param.path.len == 0) {
                 scheme_requirements += 1;
             } else {
                 return .requires_record;

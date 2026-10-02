@@ -8667,7 +8667,35 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
+    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
+}
+
+// Depth pin for published evidence paths. Each level of this tuple literal
+// holds its own numeral, so the function's scheme has one evidence param per
+// level with paths of every length up to the nesting depth. Paths share their
+// prefixes, so the published pool grows with the depth; flat per-param paths
+// would total the sum of all the depths, and a literal tens of thousands of
+// levels deep exhausted memory publishing its scheme.
+test "deeply nested tuple literal publishes evidence paths linear in its depth" {
+    const allocator = std.testing.allocator;
+    const depth = 512;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "f = |_| ");
+    for (0..depth) |_| try source.appendSlice(allocator, "(1, ");
+    try source.appendSlice(allocator, "1");
+    for (0..depth) |_| try source.appendSlice(allocator, ")");
+    try source.appendSlice(allocator, "\n\nmain : Str\nmain = \"ok\"\n");
+
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source.items, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const templates = &resources.checked_artifact.checked_procedure_templates;
+    var deepest_path: u32 = 0;
+    for (templates.evidence_params_pool) |param| deepest_path = @max(deepest_path, param.path.len);
+    try std.testing.expect(deepest_path > depth);
+    try std.testing.expect(templates.evidence_path_nodes.len < 4 * depth);
+    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
 }
 
 test "literal conversion ownership includes nested codec evidence" {
@@ -8706,7 +8734,7 @@ test "literal conversion ownership includes nested codec evidence" {
         defer helpers.cleanupParseAndCanonical(allocator, resources);
         const artifact = &resources.checked_artifact;
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
-        try std.testing.expect(artifact.validateDispatchEvidence() == null);
+        try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
         var dependent_conversions: usize = 0;
         for (artifact.checked_bodies.stored_exprs.items) |expr| {
             const plan_id = switch (expr.data) {
@@ -8818,7 +8846,7 @@ test "custom literal field default gets an ordinary conversion root" {
     // A root link cannot outlive its proof of independence. Pin validation
     // here as well as checking that both kinds of closed literal retain roots.
     const artifact = &resources.checked_artifact;
-    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
     const expr_id = artifact.checked_bodies.default_exprs.items[0].checked_expr;
     const plan_id = switch (artifact.checked_bodies.expr(expr_id).data) {
         .numeral => |numeral| numeral.plan.?,
@@ -8873,7 +8901,7 @@ test "custom literal field default gets an ordinary conversion root" {
     const saved = plan.resolution;
     defer plan.resolution = saved;
     plan.resolution = .{ .direct_parametric = saved.direct_closed };
-    const failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    const failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.literal_conversion_root_invalid, failure.kind);
 }
 
@@ -8899,7 +8927,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
 
     const artifact = &resources.checked_artifact;
     const templates = &artifact.checked_procedure_templates;
-    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
     try std.testing.expect(templates.dispatch_scopes.len > 0);
     try std.testing.expect(templates.specialization_interface_relations.len > 0);
 
@@ -8914,25 +8942,25 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     const saved_template_span = templates.templates.items[raw_template].specialization_interface_relations;
     templates.templates.items[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
     templates.templates.items[raw_template].specialization_interface_relations.len = 1;
-    var failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    var failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.template_specialization_relations_out_of_bounds, failure.kind);
     templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
 
     const saved_parent = templates.dispatch_scopes[0].parent;
     templates.dispatch_scopes[0].parent = @enumFromInt(templates.dispatch_scopes.len);
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
     templates.dispatch_scopes[0].parent = saved_parent;
 
     const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
     templates.dispatch_scopes[0].scheme_root = @enumFromInt(artifact.checked_types.payloadCount());
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
     templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
 
     const saved_scope = templates.specialization_interface_relations[0].scope;
     templates.specialization_interface_relations[0].scope = .{ .generalized = @enumFromInt(templates.dispatch_scopes.len) };
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_scope_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[0].scope = saved_scope;
 
@@ -8941,7 +8969,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         .left = @enumFromInt(artifact.checked_types.payloadCount()),
         .right = templates.dispatch_scopes[0].scheme_root,
     } };
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_type_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[0].data = saved_relation_data;
 
@@ -8965,14 +8993,14 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         .start = @intCast(templates.specialization_interface_types.len),
         .len = 1,
     };
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_call_args_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[raw_call].data.call.args = saved_args;
 
     const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
     const saved_direct_target = templates.specialization_interface_relations[raw_direct_call].data.call.direct_target;
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = @enumFromInt(artifact.resolved_value_refs.records.len);
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
 
@@ -8992,14 +9020,14 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     }
     const invalid_procedure_ref = non_procedure_ref orelse return error.TestUnexpectedResult;
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = invalid_procedure_ref;
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_direct_target_invalid, failure.kind);
     templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
 
     const raw_local_use = local_use_index orelse return error.TestUnexpectedResult;
     const saved_local_ref = templates.specialization_interface_relations[raw_local_use].data.local_proc_use;
     templates.specialization_interface_relations[raw_local_use].data.local_proc_use = invalid_procedure_ref;
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.specialization_interface_relations[raw_local_use].data.local_proc_use = saved_local_ref;
 
@@ -9009,7 +9037,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
     const next_expr = (@intFromEnum(saved_scope_expr) + 1) % artifact.checked_bodies.exprCount();
     templates.dispatch_scopes[raw_local_scope].checked_expr = @enumFromInt(next_expr);
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
     templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
 
@@ -9026,11 +9054,11 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     }
     const saved_scope_params = templates.dispatch_scopes[raw_local_scope].evidence_params;
     templates.dispatch_scopes[raw_local_scope].evidence_params = path_param_span orelse return error.TestUnexpectedResult;
-    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
     templates.dispatch_scopes[raw_local_scope].evidence_params = saved_scope_params;
 
-    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
 }
 
 test "dispatch evidence boundary validator rejects non-normalized and malformed paths" {
@@ -9045,27 +9073,39 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
     var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    const paths = resources.checked_artifact.checked_procedure_templates.evidence_param_paths;
+    const templates = &resources.checked_artifact.checked_procedure_templates;
+    const paths = templates.evidence_path_nodes;
     try std.testing.expect(paths.len > 0);
+    const original_step = paths[0].step;
 
     // Raw discriminant 8 is the retired checked-store `record_ext` step.
-    paths[0].kind = 8;
-    var failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    paths[0].step.kind = 8;
+    var failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_kind, failure.kind);
 
     // A tag label must be immediately paired with a payload-index step.
-    paths[0].kind = 9;
-    failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    paths[0].step.kind = 9;
+    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_shape, failure.kind);
 
     // A well-formed selector must still resolve over the checked callable.
-    paths[0].kind = 0;
-    paths[0].data = std.math.maxInt(u32);
-    failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    paths[0].step.kind = 0;
+    paths[0].step.data = std.math.maxInt(u32);
+    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
+
+    // A param's length must match the depth of the node it names.
+    paths[0].step = original_step;
+    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
+    for (templates.evidence_params_pool) |*param| {
+        if (param.path.len != 0) param.path.len += 1;
+    }
+    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_out_of_bounds, failure.kind);
 }
 
 test "dispatch evidence boundary validator reports a removed dispatch plan by expression" {
@@ -9083,7 +9123,7 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
     }
     try std.testing.expect(removed != null);
 
-    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.dispatch_expr_missing_plan, failure.kind);
     try std.testing.expectEqual(removed.?, failure.expr.?);
@@ -9118,7 +9158,7 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
     }
     try std.testing.expect(corrupted_method != null);
 
-    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.plan_evidence_node_out_of_bounds, failure.kind);
     const named_method = resources.checked_artifact.canonical_names.methodNameText(failure.method orelse return error.TestUnexpectedResult);
@@ -9148,7 +9188,7 @@ test "dispatch evidence boundary validator reports a site-evidence key outside t
     try std.testing.expect(table.site_evidence.len > 0);
     table.site_evidence[0].key = @intCast(resources.checked_artifact.checked_bodies.exprCount());
 
-    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
         return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.site_evidence_key_out_of_bounds, failure.kind);
     try std.testing.expectEqual(@as(?u32, 0), failure.index);

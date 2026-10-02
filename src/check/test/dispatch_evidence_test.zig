@@ -51,6 +51,17 @@ fn enumerate(
     try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, out);
 }
 
+fn paramPath(
+    gpa: std.mem.Allocator,
+    scratch: *const dispatch_evidence.Scratch,
+    param: dispatch_evidence.EvidenceParam,
+    out: *std.ArrayListUnmanaged(dispatch_evidence.PathStep),
+) std.mem.Allocator.Error![]const dispatch_evidence.PathStep {
+    out.clearRetainingCapacity();
+    try dispatch_evidence.appendPathSteps(gpa, scratch.paramPathNodes(), param.path_node, param.path_len, out);
+    return out.items;
+}
+
 fn constrainedVar(env: *ModuleEnv, method_name: []const u8) std.mem.Allocator.Error!Var {
     const unit_var = try env.types.freshFromContent(.{ .structure = .empty_record });
     const fn_args = try env.types.appendVars(&.{unit_var});
@@ -188,11 +199,14 @@ test "record-tail evidence path is normalized to its logical row field" {
     var scratch = dispatch_evidence.Scratch{};
     defer scratch.deinit(gpa);
     try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, &params);
+    var path_steps = std.ArrayListUnmanaged(dispatch_evidence.PathStep).empty;
+    defer path_steps.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 1), params.items.len);
-    try std.testing.expectEqual(@as(usize, 1), params.items[0].path.len);
-    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.record_field), params.items[0].path[0].kind);
-    try std.testing.expectEqual(@as(u32, @bitCast(tail_name)), params.items[0].path[0].data);
+    const path = try paramPath(gpa, &scratch, params.items[0], &path_steps);
+    try std.testing.expectEqual(@as(usize, 1), path.len);
+    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.record_field), path[0].kind);
+    try std.testing.expectEqual(@as(u32, @bitCast(tail_name)), path[0].data);
 }
 
 test "tag-tail evidence path is normalized to its logical tag payload" {
@@ -218,22 +232,26 @@ test "tag-tail evidence path is normalized to its logical tag payload" {
     var scratch = dispatch_evidence.Scratch{};
     defer scratch.deinit(gpa);
     try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, &params);
+    var path_steps = std.ArrayListUnmanaged(dispatch_evidence.PathStep).empty;
+    defer path_steps.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 1), params.items.len);
-    try std.testing.expectEqual(@as(usize, 2), params.items[0].path.len);
-    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.tag_payload_tag), params.items[0].path[0].kind);
-    try std.testing.expectEqual(@as(u32, @bitCast(tail_name)), params.items[0].path[0].data);
-    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.tag_payload_index), params.items[0].path[1].kind);
-    try std.testing.expectEqual(@as(u32, 0), params.items[0].path[1].data);
+    const path = try paramPath(gpa, &scratch, params.items[0], &path_steps);
+    try std.testing.expectEqual(@as(usize, 2), path.len);
+    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.tag_payload_tag), path[0].kind);
+    try std.testing.expectEqual(@as(u32, @bitCast(tail_name)), path[0].data);
+    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.tag_payload_index), path[1].kind);
+    try std.testing.expectEqual(@as(u32, 0), path[1].data);
 }
 
-// Depth pin for the evidence walk's path bookkeeping. Every node of a nested
-// type gets a pending path, so paths must share their prefixes: storing each
-// pending path as its own flat copy costs the sum of all node depths, which is
-// quadratic in nesting depth (a source literal tens of thousands of levels deep
-// exhausted memory publishing its scheme). The scratch's flat pool holds only
-// the paths of emitted params.
-test "deeply nested evidence path costs scratch proportional to its depth" {
+// Depth pin for evidence paths. Every level of this record chain holds its own
+// constrained var, so the scheme has one param per level with paths of every
+// length up to the nesting depth (as a tuple literal nested one numeral per
+// level does). Paths share their prefixes, so the walk and its published
+// nodes cost one node per distinct prefix: flat per-param paths would total
+// the sum of all the depths, quadratic in nesting depth (a literal tens of
+// thousands of levels deep exhausted memory publishing its scheme).
+test "deeply nested evidence paths cost one node per distinct prefix" {
     var test_env = try TestEnv.init("Test", "");
     defer test_env.deinit();
 
@@ -245,7 +263,7 @@ test "deeply nested evidence path costs scratch proportional to its depth" {
 
     var root = try constrainedVar(env, "inspect_deep");
     for (0..depth) |_| {
-        const leaf = try env.types.freshFromContent(.{ .structure = .empty_record });
+        const leaf = try constrainedVar(env, "inspect_deep");
         const ext = try env.types.freshFromContent(.{ .structure = .empty_record });
         const fields = try env.types.appendRecordFields(&.{
             .{ .name = inner_name, .presence = .required(root) },
@@ -263,13 +281,27 @@ test "deeply nested evidence path costs scratch proportional to its depth" {
     defer scratch.deinit(gpa);
     try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, &params);
 
-    try std.testing.expectEqual(@as(usize, 1), params.items.len);
-    try std.testing.expectEqual(@as(usize, depth), params.items[0].path.len);
-    for (params.items[0].path) |path_step| {
+    // Fields are walked in store order, so each level's `inner` subtree (and
+    // the innermost var at its bottom) comes before that level's `leaf`.
+    try std.testing.expectEqual(@as(usize, depth + 1), params.items.len);
+    try std.testing.expectEqual(@as(usize, 2 * depth), scratch.paramPathNodes().len);
+
+    var path_steps = std.ArrayListUnmanaged(dispatch_evidence.PathStep).empty;
+    defer path_steps.deinit(gpa);
+    const innermost = try paramPath(gpa, &scratch, params.items[0], &path_steps);
+    try std.testing.expectEqual(@as(usize, depth), innermost.len);
+    for (innermost) |path_step| {
         try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.record_field), path_step.kind);
         try std.testing.expectEqual(@as(u32, @bitCast(inner_name)), path_step.data);
     }
-    try std.testing.expectEqual(@as(usize, depth), scratch.path_pool.items.len);
+    for (params.items[1..], 1..) |param, level| {
+        const path = try paramPath(gpa, &scratch, param, &path_steps);
+        try std.testing.expectEqual(depth - level + 1, path.len);
+        for (path[0 .. path.len - 1]) |path_step| {
+            try std.testing.expectEqual(@as(u32, @bitCast(inner_name)), path_step.data);
+        }
+        try std.testing.expectEqual(@as(u32, @bitCast(leaf_name)), path[path.len - 1].data);
+    }
 }
 
 test "imported scheme copy enumerates the same param list as the defining module" {
