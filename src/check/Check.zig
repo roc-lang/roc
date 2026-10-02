@@ -27974,12 +27974,15 @@ fn openNominalBackingForApp(
         try self.rigid_var_substitutions.put(self.gpa, formal_resolved.rigid.name, arg_var);
     }
 
-    return try self.instantiateVarWithSubs(
+    const minted_start: u32 = @intCast(self.types.len());
+    const opened = try self.instantiateVarWithSubs(
         decl.backing,
         &self.rigid_var_substitutions,
         env,
         .{ .explicit = region },
     );
+    try self.types.markNominalBackingStructure(opened, minted_start, @intCast(self.types.len()));
+    return opened;
 }
 
 const PreparedNominalTypeUsage = struct {

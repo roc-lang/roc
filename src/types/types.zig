@@ -111,7 +111,13 @@ pub const DescriptorFlags = packed struct(u8) {
     /// Definition-site implicit annotation openness. Codec derivation may
     /// close this tail before generalization; fresh uses do not inherit it.
     annotation_tag_ext: bool = false,
-    _unused: u5 = 0,
+    /// This class is structure written below the root of a nominal
+    /// declaration's backing, reached by opening that declaration rather than
+    /// by substituting one of its formals. The declaration fixes this
+    /// structure, so a nominal value never lifts into it. See design.md's
+    /// "Declared Backing Structure" section.
+    nominal_backing_structure: bool = false,
+    _unused: u4 = 0,
 };
 
 /// A type descriptor

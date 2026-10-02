@@ -106,7 +106,10 @@ pub fn instantiateNominalBacking(
         // silently flexing.
         .rigid_behavior = .{ .substitute_rigids_fresh = &rigid_subs },
     };
-    return try instantiator.instantiateVar(decl.backing);
+    const minted_start: u32 = @intCast(store.len());
+    const opened = try instantiator.instantiateVar(decl.backing);
+    try store.markNominalBackingStructure(opened, minted_start, @intCast(store.len()));
+    return opened;
 }
 
 /// Reusable heap buffers backing `Instantiator`'s explicit worklist. Owned by
@@ -903,6 +906,7 @@ pub const Instantiator = struct {
         const flags: types_mod.DescriptorFlags = .{
             .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
             .annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext,
+            .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
         };
         switch (resolved.desc.content) {
             .rigid => |rigid| {

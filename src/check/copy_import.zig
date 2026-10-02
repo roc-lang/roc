@@ -117,6 +117,7 @@ const CopyContext = struct {
 const Fill = struct {
     placeholder: Var,
     empty_tag_union_is_default: bool,
+    nominal_backing_structure: bool,
 };
 
 const IdentityResult = enum { flex, rigid };
@@ -371,6 +372,7 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
     const fill = Fill{
         .placeholder = placeholder_var,
         .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
+        .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
     };
 
     // NOTE: a copied var whose content is a flex carrying a literal-conversion
@@ -531,7 +533,10 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
     try ctx.dest_store.dangerousSetVarDesc(fill.placeholder, .{
         .content = content,
         .rank = types_mod.Rank.generalized,
-        .flags = .{ .empty_tag_union_is_default = fill.empty_tag_union_is_default },
+        .flags = .{
+            .empty_tag_union_is_default = fill.empty_tag_union_is_default,
+            .nominal_backing_structure = fill.nominal_backing_structure,
+        },
     });
     try ctx.scratch.values.append(ctx.allocator, fill.placeholder);
 }

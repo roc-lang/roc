@@ -1521,6 +1521,8 @@ const Unifier = struct {
         direction: NominalDirection,
         comptime opacity: OpacityGate,
     ) Error!void {
+        if (anonIsNominalBackingStructure(vars, direction)) return error.TypeMismatch;
+
         if (opacity == .enforce_opacity) {
             // If this nominal is opaque and we're not in the origin module, error
             if (!nominal_type.canLiftInner(self.self_module_identity)) {
@@ -1587,6 +1589,15 @@ const Unifier = struct {
             .a_is_nominal => try self.merge(vars, vars.a.desc.content),
             .b_is_nominal => try self.merge(vars, vars.b.desc.content),
         }
+    }
+
+    /// A nominal value never lifts into structure its declaration's backing
+    /// fixes: only the anonymous side of a lift may become the nominal.
+    fn anonIsNominalBackingStructure(vars: *const ResolvedVarDescs, direction: NominalDirection) bool {
+        return switch (direction) {
+            .a_is_nominal => vars.b.desc.flags.nominal_backing_structure,
+            .b_is_nominal => vars.a.desc.flags.nominal_backing_structure,
+        };
     }
 
     fn processSameAliasAfterArgs(self: *Self, post: SameAliasAfterArgs) Error!void {
@@ -1933,6 +1944,8 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        if (anonIsNominalBackingStructure(vars, direction)) return error.TypeMismatch;
+
         // If this nominal is opaque and we're not in the origin module, error
         if (!nominal_type.canLiftInner(self.self_module_identity)) {
             return error.TypeMismatch;
@@ -2033,6 +2046,8 @@ const Unifier = struct {
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        if (anonIsNominalBackingStructure(vars, direction)) return error.TypeMismatch;
 
         // If this nominal is opaque and we're not in the origin module, error
         if (!nominal_type.canLiftInner(self.self_module_identity)) {
