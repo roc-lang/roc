@@ -654,14 +654,42 @@ bounded_row_marks: std.ArrayListUnmanaged(BoundedRowMark) = .empty,
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
 annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange),
-/// Type-variable-free top-level annotations whose generation mints at least
-/// one implicitly opened extension, recorded by
-/// `predeclareAnnotatedDefSchemes` before any body is checked. An implicitly
-/// opened row counts as a type variable for value generalization (design.md
+/// Type-variable-free annotations of VALUE bindings whose generation mints an
+/// implicitly opened extension that counts for the binding, recorded before
+/// the binding's body is checked: every top-level annotation that mints one
+/// (`predeclareAnnotatedDefSchemes`; per-specialization evaluation lowers a
+/// top-level value at any shape), and a local annotation that mints one
+/// within the row coercion's reach (`recordLocalValueAnnotation`; a local
+/// value is evaluated once and widened at each use). An implicitly opened row
+/// counts as a type variable for value generalization (design.md
 /// "Polarity"), so a value binding with one of these annotations generalizes
 /// exactly as if the row were written `..` (`isGeneralizableValueBinding`).
-/// Local annotations are never recorded.
-implicit_open_top_level_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
+implicit_open_value_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
+/// Annotations of block-local VALUE bindings (a right-hand side that is not a
+/// function definition), recorded at the declaring statement. A generalized
+/// local value is evaluated once into one Monotype cell and widened at each
+/// use by a row coercion, so when its right-hand side frame generalizes,
+/// `shareLocalValueAnnotationVars` keeps every `_` hole and every implicitly
+/// opened extension outside the coercion's reach at the enclosing rank: they
+/// stay shared by every use, and exactly the rows the coercion can widen are
+/// quantified (design.md "Polarity").
+local_value_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
+/// The binder patterns of the block-local value bindings that are evaluated
+/// once and widened at each use by a row coercion (`recordRowCoercedLocalValue`),
+/// the one source both hoist selection and checked-body construction read
+/// (`ModuleEnv.RowCoercedLocalValue`, written by
+/// `finalizeRowCoercedLocalValues`).
+row_coerced_local_values: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Scratch for `markCoercionReach`: the worklist and the resolved vars it
+/// visited, reused across annotations.
+coercion_reach_stack: std.ArrayListUnmanaged(Var),
+coercion_reach_seen: std.AutoHashMapUnmanaged(Var, void),
+/// Scratch for `markCoercionReach`'s second walk: every position below one
+/// the reach ended at, whose extensions are outside the reach.
+coercion_outside_stack: std.ArrayListUnmanaged(Var),
+coercion_outside_seen: std.AutoHashMapUnmanaged(Var, void),
+/// Scratch for `shareLocalValueAnnotationVars`: the annotation's `_` hole vars.
+local_value_hole_vars: std.ArrayListUnmanaged(Var),
 /// Every implicitly opened extension the post-body audit
 /// (`auditImplicitOpenExts`) visited, in visit order, with the binding that
 /// owns it. A generated codec validated after that audit can
@@ -1013,6 +1041,9 @@ boundary_reachable_vars: std.AutoHashMap(Var, void),
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
 boundary_leak_vars: std.AutoHashMap(Var, void),
+/// Scratch for `settleBoundaryRanks`: the constraint-signature closure of one
+/// escaped boundary variable.
+boundary_escaped_relation_vars: std.AutoHashMap(Var, void),
 /// Reusable per-call buffer of the module's `.eql` constraint edges, so the
 /// generalization-boundary fixpoint iterates just the edges instead of
 /// re-scanning the whole constraint list each round. Front-loaded; cleared and
@@ -3162,7 +3193,14 @@ fn initAssumePrepared(
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
-        .implicit_open_top_level_annotations = .empty,
+        .implicit_open_value_annotations = .empty,
+        .local_value_annotations = .empty,
+        .row_coerced_local_values = .empty,
+        .coercion_reach_stack = .empty,
+        .coercion_reach_seen = .empty,
+        .coercion_outside_stack = .empty,
+        .coercion_outside_seen = .empty,
+        .local_value_hole_vars = .empty,
         .late_implicit_open_ext_audits = .empty,
         .erroneous_value_patterns = .empty,
         .rejected_default_exprs = .empty,
@@ -3211,6 +3249,7 @@ fn initAssumePrepared(
         .scheme_relation_reachability = std.AutoHashMap(SchemeReachabilityVisit, void).init(gpa),
         .scheme_relation_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
+        .boundary_escaped_relation_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_eql_edges = .empty,
         .literal_defaulting_open_roots = .empty,
@@ -3311,7 +3350,14 @@ pub fn deinit(self: *Self) void {
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.bounded_row_marks.deinit(self.gpa);
-    self.implicit_open_top_level_annotations.deinit(self.gpa);
+    self.implicit_open_value_annotations.deinit(self.gpa);
+    self.local_value_annotations.deinit(self.gpa);
+    self.row_coerced_local_values.deinit(self.gpa);
+    self.coercion_reach_stack.deinit(self.gpa);
+    self.coercion_reach_seen.deinit(self.gpa);
+    self.coercion_outside_stack.deinit(self.gpa);
+    self.coercion_outside_seen.deinit(self.gpa);
+    self.local_value_hole_vars.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.codec_row_demands.deinit(self.gpa);
     self.codec_row_demand_tags.deinit(self.gpa);
@@ -3462,6 +3508,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_relation_reachability.deinit();
     self.scheme_relation_reachable_vars.deinit();
     self.boundary_reachable_vars.deinit();
+    self.boundary_escaped_relation_vars.deinit();
     self.boundary_leak_vars.deinit();
     self.boundary_eql_edges.deinit(self.gpa);
     self.literal_defaulting_open_roots.deinit(self.gpa);
@@ -7446,6 +7493,16 @@ fn finalizeBindingSchemeNodes(self: *Self) Allocator.Error!void {
     }
 }
 
+/// Write the row-coerced local value binders into the sorted table stored in
+/// checked module output (`ModuleEnv.RowCoercedLocalValue`).
+fn finalizeRowCoercedLocalValues(self: *Self) Allocator.Error!void {
+    self.cir.row_coerced_local_values.items.clearRetainingCapacity();
+    var patterns = self.row_coerced_local_values.keyIterator();
+    while (patterns.next()) |pattern_idx| {
+        try self.cir.recordRowCoercedLocalValue(ModuleEnv.nodeIdxFrom(pattern_idx.*));
+    }
+}
+
 /// Every use of a predeclared scheme is recorded against its binding's own
 /// scheme (`PredeclaredSlots`), so once checking finishes no dispatch use may
 /// still be waiting for a body. Debug builds also confirm that no record names
@@ -10470,6 +10527,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.verifyPredeclaredSchemeUsesRecorded();
     try self.finalizeBindingSchemeNodes();
+    try self.finalizeRowCoercedLocalValues();
 
     try self.finalizePlatformRequirementSolutions();
 
@@ -10805,6 +10863,17 @@ fn hoistedRootIsIntrinsicallyKept(
     root.value_kind = .data_constant;
     if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
+    // A row-coerced local value's binder quantifies rows that seal to their
+    // defaults: the value is evaluated once at its binder's width and every
+    // use widens it by a row coercion (design.md "Polarity";
+    // `recordRowCoercedLocalValue`), so those rows do not keep it from being
+    // a compile-time root. Any other binding scheme's quantified variables
+    // keep it from being one, since its uses read the binder as it is.
+    if (root.pattern) |pattern| {
+        if (self.row_coerced_local_values.contains(pattern)) {
+            return try self.varIsConcreteSealedHoistedConstType(type_var);
+        }
+    }
     return try self.varIsConcreteHoistedConstType(type_var);
 }
 
@@ -10840,6 +10909,15 @@ fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
     return try self.varIsConcreteHoistedConstTypeInternal(.data_constant, var_, &self.var_set);
 }
 
+/// `varIsConcreteHoistedConstType` for the binder of a generalized local
+/// value, whose unconstrained row extensions seal to their row defaults when
+/// the value is evaluated once at its annotated width (design.md "Polarity").
+fn varIsConcreteSealedHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    var scan = HoistedConstTypeScan{ .check = self, .purpose = .data_constant, .visited = &self.var_set };
+    return HoistedConstTypeScan.Eval.run(self.gpa, &scan, .{ .ty = .{ .walk = .sealed_rows, .var_ = var_ } });
+}
+
 /// Whether the complete value type is fixed, permitting callable components.
 /// Used both for callable hoisting and to close concrete recursive dispatch.
 fn varHasConcreteType(self: *Self, var_: Var) Allocator.Error!bool {
@@ -10873,10 +10951,23 @@ fn nominalDeclBackingTemplate(self: *const Self, nominal: types_mod.NominalType)
 }
 
 /// Which graph a hoisted-const concreteness walk is inspecting: the value
-/// graph (rigids are NOT concrete) or a declaration backing template (rigids
+/// graph (rigids are NOT concrete), a declaration backing template (rigids
 /// are the declaration's formals, standing for args the caller has already
-/// checked, so they count as concrete).
-const HoistedConstWalk = enum { value_graph, decl_template };
+/// checked, so they count as concrete), or the value graph of a generalized
+/// local value's binder (`sealed_rows`: an unconstrained row extension is the
+/// row the binder's scheme quantifies, which seals to its row default when the
+/// value is evaluated once at its annotated width; design.md "Polarity").
+const HoistedConstWalk = enum { value_graph, decl_template, sealed_rows };
+
+/// Whether `var_` is an unconstrained flex extension of a row: the kind of
+/// variable a row default seals.
+fn varIsDefaultableRowTail(self: *const Self, var_: Var) bool {
+    const resolved = self.types.resolveVar(var_);
+    return switch (resolved.desc.content) {
+        .flex => |flex| flex.constraints.len() == 0,
+        .rigid, .err, .alias, .structure, .field_presence => false,
+    };
+}
 
 /// The representation whose complete checked type this walk is proving.
 /// Data archived in ConstStore must not contain a callable. A callable binding
@@ -10968,13 +11059,17 @@ const HoistedConstTypeScan = struct {
                 .record => |record| {
                     const fields = self.types.getRecordFieldsSlice(record.fields);
                     for (fields.items(.presence)) |presence| try items.add(.{ .ty = .{ .walk = walk, .var_ = presence.typeVar() } });
-                    try items.add(.{ .ty = .{ .walk = walk, .var_ = record.ext } });
+                    if (!(walk == .sealed_rows and self.varIsDefaultableRowTail(record.ext))) {
+                        try items.add(.{ .ty = .{ .walk = walk, .var_ = record.ext } });
+                    }
                 },
                 .tuple => |tuple| try addVars(items, walk, self.types.sliceVars(tuple.elems)),
                 .tag_union => |tag_union| {
                     const tags = self.types.getTagsSlice(tag_union.tags);
                     for (tags.items(.args)) |tag_args| try addVars(items, walk, self.types.sliceVars(tag_args));
-                    try items.add(.{ .ty = .{ .walk = walk, .var_ = tag_union.ext } });
+                    if (!(walk == .sealed_rows and self.varIsDefaultableRowTail(tag_union.ext))) {
+                        try items.add(.{ .ty = .{ .walk = walk, .var_ = tag_union.ext } });
+                    }
                 },
                 .nominal_type => |nominal| {
                     try addVars(items, walk, self.types.sliceNominalArgs(nominal));
@@ -14905,6 +15000,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     try self.verifyPredeclaredSchemeUsesRecorded();
     try self.finalizeBindingSchemeNodes();
+    try self.finalizeRowCoercedLocalValues();
 
     self.debugAssertNominalDeclTableComplete();
 }
@@ -15127,16 +15223,7 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
         self.isGeneralizableValueBinding(def.annotation, true);
     try self.endBoundedAnnotationRows(state.saved.?.bounding_annotation, def.annotation, annotation_generalizes);
     if (def.annotation) |annotation_idx| {
-        // Every top-level definition generalizes regardless of any written
-        // `..`: a function, a pure signature, and a value alias always do, and
-        // a value's implicitly opened row counts as a type variable exactly
-        // as a written `..` would (`implicit_open_top_level_annotations`), so
-        // a `..` in an output position is redundant on all of them.
-        try self.auditImplicitOpenExts(
-            annotation_idx,
-            true,
-            def.expr,
-        );
+        try self.auditImplicitOpenExts(annotation_idx, def.expr);
     }
     if (def.annotation) |annotation_idx| {
         if (platform_required) |required| {
@@ -15255,14 +15342,19 @@ fn setupCheckOrder(self: *Self) std.mem.Allocator.Error!void {
 /// in graph order like everything else.
 ///
 /// The same pass records which annotations mint an implicitly opened
-/// extension (`implicit_open_top_level_annotations`), since whether a value
+/// extension (`implicit_open_value_annotations`), since whether a value
 /// binding generalizes is decided before its body pass regenerates the
 /// annotation. A predeclared scheme and the def's own scheme therefore agree:
 /// both quantify those rows. An annotation that cannot be predeclared is
 /// generated speculatively for this alone (`recordAnnotationImplicitOpenExts`).
+/// Every minted extension counts here: a top-level value is evaluated per
+/// specialization, at whatever shape a use instantiates. Local value bindings
+/// make the same decision at their statement (`recordLocalValueAnnotation`).
 fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     std.debug.assert(env.rank() == .outermost);
-    self.implicit_open_top_level_annotations.clearRetainingCapacity();
+    self.implicit_open_value_annotations.clearRetainingCapacity();
+    self.local_value_annotations.clearRetainingCapacity();
+    self.row_coerced_local_values.clearRetainingCapacity();
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         const def = self.cir.store.getDef(def_idx);
@@ -15277,8 +15369,115 @@ fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error
         if (self.cir.store.getAnnotation(annotation_idx).mentions_type_var) continue;
         if (!predeclarable) try self.recordAnnotationImplicitOpenExts(annotation_idx, env);
         const range = self.annotation_implicit_open_exts.get(annotation_idx).?;
-        if (range.len > 0) try self.implicit_open_top_level_annotations.put(self.gpa, annotation_idx, {});
+        if (range.len > 0) try self.implicit_open_value_annotations.put(self.gpa, annotation_idx, {});
     }
+}
+
+/// Record a block-local VALUE binding's annotation at its declaring statement,
+/// before the body pass regenerates it, deciding whether the binding
+/// generalizes by its implicitly opened rows exactly as a top-level value
+/// does (design.md "Polarity"). The annotation is generated speculatively and
+/// rolled back whole (`recordAnnotationImplicitOpenExts`, the sequence the
+/// local-function predeclaration already runs at this statement), so the
+/// decision is made from the extensions that generation mints. Only an
+/// extension within the row coercion's reach counts: a generalized local value
+/// is evaluated once and each use widens it by a coercion, so a row the
+/// coercion cannot reach stays shared (`shareLocalValueAnnotationVars`). An
+/// annotation with a `_` hole is generated here too, as a top-level one that
+/// cannot be predeclared is: the hole only mints a fresh variable the rollback
+/// discards, and the body pass keeps it shared. An annotation that introduces
+/// a type variable of its own generalizes the binding over that variable,
+/// which no row coercion widens; it is not recorded, so such a binding is
+/// checked exactly as before local values generalized their opened rows (its
+/// holes and rows are not kept shared) and keeps the plain lookup. One that
+/// mentions only the enclosing definition's type variables already
+/// generalizes for its rows and is recorded for the sharing alone: it is not
+/// generated here, since its generation would merge this annotation's nodes
+/// into the enclosing generation's live rigid classes before the reset.
+fn recordLocalValueAnnotation(self: *Self, annotation_idx: CIR.Annotation.Idx, env: *Env) std.mem.Allocator.Error!void {
+    const annotation = self.cir.store.getAnnotation(annotation_idx);
+    if (annotation.introduces_type_var) return;
+    try self.local_value_annotations.put(self.gpa, annotation_idx, {});
+    if (annotation.mentions_type_var) return;
+    try self.recordAnnotationImplicitOpenExts(annotation_idx, env);
+    const range = self.annotation_implicit_open_exts.get(annotation_idx).?;
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        if (!entry.within_coercion_reach) continue;
+        try self.implicit_open_value_annotations.put(self.gpa, annotation_idx, {});
+        return;
+    }
+}
+
+/// Record a block-local value binding that is evaluated once into its binder
+/// and widened at each use by a row coercion (design.md "Polarity"), once its
+/// right-hand side frame has generalized and its pattern carries the binding
+/// scheme: an annotated binding whose annotation introduces no type variable
+/// of its own (`recordLocalValueAnnotation`), so that its scheme quantifies
+/// only implicitly opened rows within the coercion's reach
+/// (`shareLocalValueAnnotationVars` keeps every other variable shared), and
+/// that is not a callable alias, or an unannotated binding whose right-hand side is
+/// a lookup of such a binding (`y = e`, generalized as a value alias), whose
+/// scheme quantifies exactly the rows `e`'s does. Every other local binding
+/// scheme keeps the plain lookup. This set is the one source hoist selection
+/// (`hoistedRootIsIntrinsicallyKept`) and checked-body construction read.
+fn recordRowCoercedLocalValue(self: *Self, decl: @FieldType(CIR.Statement, "s_decl"), decl_is_fn: bool) Allocator.Error!void {
+    if (decl_is_fn) return;
+    if (self.cir.store.getPattern(decl.pattern) != .assign) return;
+    if (!self.isBindingSchemeVar(ModuleEnv.varFrom(decl.pattern))) return;
+    const expr = self.cir.store.getExpr(decl.expr);
+    const row_coerced = if (decl.anno) |annotation_idx|
+        self.local_value_annotations.contains(annotation_idx) and
+            !self.localAnnotatedBindingIsCallableAlias(expr, annotation_idx)
+    else
+        expr == .e_lookup_local and self.row_coerced_local_values.contains(expr.e_lookup_local.pattern_idx);
+    if (row_coerced) try self.row_coerced_local_values.put(self.gpa, decl.pattern, {});
+}
+
+/// Whether an annotated local binding's right-hand side is a lookup of a
+/// callable (`f = g` under a function annotation): such an alias owns an
+/// instantiation scope of its own and forwards the callable at each use
+/// (design.md "Procedure Aliases"), so it quantifies whatever its annotation
+/// opens and is not evaluated into one cell.
+fn localAnnotatedBindingIsCallableAlias(self: *Self, expr: CIR.Expr, annotation_idx: CIR.Annotation.Idx) bool {
+    const is_lookup = expr == .e_lookup_local or expr == .e_lookup_external or
+        expr == .e_lookup_required or expr == .e_lookup_associated_resolved;
+    return is_lookup and self.varIsFunctionType(ModuleEnv.varFrom(annotation_idx));
+}
+
+/// A generalized local value is evaluated once into one Monotype cell, and
+/// each use widens that value by a row coercion, so a use may differ from
+/// the binder only at rows the coercion re-tags (design.md "Polarity"). Keep
+/// every `_` hole—inferred from the body and shared by every use, never
+/// quantified—and every implicitly opened extension outside the coercion's
+/// reach at the enclosing rank, so the right-hand side frame that just
+/// generated this annotation quantifies exactly the rows the coercion
+/// widens. The generalizer re-pools an escaped variable by its descriptor
+/// rank, so no pool bookkeeping is needed. A kept-shared row's bound ends with
+/// the binding's body check, as a weak value's does
+/// (`endBoundedAnnotationRows`); a quantified row keeps its bound.
+fn shareLocalValueAnnotationVars(self: *Self, annotation_idx: CIR.Annotation.Idx, env: *Env) std.mem.Allocator.Error!void {
+    const shared_rank = env.rank().prev();
+    self.local_value_hole_vars.clearRetainingCapacity();
+    try self.collectUnderscoreAnnoVars(annotation_idx, &self.local_value_hole_vars);
+    for (self.local_value_hole_vars.items) |hole_var| {
+        try self.lowerVarRankTo(hole_var, shared_rank);
+    }
+    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        if (entry.within_coercion_reach) continue;
+        try self.lowerVarRankTo(entry.var_, shared_rank);
+        for (self.bounded_row_marks.items) |*mark| {
+            if (mark.owner == annotation_idx and mark.ext == entry.var_) mark.shared_by_uses = true;
+        }
+    }
+}
+
+/// Lower a variable's class to `rank` when it sits deeper; a class already at
+/// or above `rank` is left alone (rank adjustment never raises a rank).
+fn lowerVarRankTo(self: *Self, var_: Var, rank: Rank) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (@intFromEnum(resolved.desc.rank) <= @intFromEnum(rank)) return;
+    try self.types.setDescRank(resolved.desc_idx, rank);
 }
 
 /// Generate an annotation only to record the implicitly opened extensions its
@@ -15305,6 +15504,13 @@ fn recordAnnotationImplicitOpenExts(
         self.active_scheme_root = saved_active_scheme_root;
     }
     try self.generateAnnotationType(annotation_idx, env);
+    // This runs mid-body for a block-local value, as the local-function
+    // predeclaration does. The field-kind judges retain every pending entry
+    // ranked below the rank pushed here, so the enclosing body's entries stay
+    // pending. The persistent-opening memo is a cache of pure-structure
+    // nominal openings: forgetting it, as every local lambda's boundary
+    // already does mid-body, only makes a later unification mint an
+    // equivalent opening again.
     try self.judgeFieldKindsAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
@@ -17431,13 +17637,122 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         }
     }
 
-    try self.annotation_implicit_open_exts.put(self.gpa, annotation_idx, .{
+    const range: ImplicitOpenExtRange = .{
         .start = implicit_open_exts_start,
         .len = @intCast(self.implicit_open_exts.items.len - implicit_open_exts_start),
-    });
+    };
+    try self.annotation_implicit_open_exts.put(self.gpa, annotation_idx, range);
+    try self.markCoercionReach(annotation.anno, range);
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
+}
+
+/// Decide `ImplicitOpenExt.within_coercion_reach` for the extensions one
+/// annotation's generation minted, by walking the generated type from its
+/// root exactly as the row coercion reaches rows (design.md "Row Coercion
+/// Primitive"): a tag union's extension and its tags' payloads, an alias's
+/// backing (where an alias marker resolved open also lives), and both
+/// arguments of `Try`, whose backing `[Ok(a), Err(e)]` places each in a tag
+/// payload. The type store carries no other nominal's backing, so every other
+/// position—a record field, a tuple item, a function argument or result, an
+/// argument of `List` or of a user nominal—ends the walk, and an extension
+/// there is outside the reach (design.md "Polarity" declares this bound).
+///
+/// Reach is a property of POSITIONS, not of variables: one variable can sit
+/// at several positions of the generated type (an alias parameter is the same
+/// variable at every use in the alias's backing). An extension reachable from
+/// any position outside the reach is therefore outside it, even when the same
+/// variable is also reachable from a position inside: the coercion could
+/// widen it at the one position but must leave it unchanged at the other.
+fn markCoercionReach(self: *Self, root_anno: CIR.TypeAnno.Idx, range: ImplicitOpenExtRange) std.mem.Allocator.Error!void {
+    if (range.len == 0) return;
+    self.coercion_reach_stack.clearRetainingCapacity();
+    self.coercion_reach_seen.clearRetainingCapacity();
+    self.coercion_outside_stack.clearRetainingCapacity();
+    self.coercion_outside_seen.clearRetainingCapacity();
+    try self.coercion_reach_stack.append(self.gpa, ModuleEnv.varFrom(root_anno));
+    while (self.coercion_reach_stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const entry = try self.coercion_reach_seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| try self.coercion_reach_stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| {
+                    for (0..union_.tags.count) |index| {
+                        const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+                    }
+                    try self.coercion_reach_stack.append(self.gpa, union_.ext);
+                },
+                .nominal_type => |nominal| {
+                    const is_try = nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
+                    if (is_try) {
+                        try self.coercion_reach_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                    } else {
+                        try self.appendCoercionOutsideChildren(flat);
+                    }
+                },
+                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record => try self.appendCoercionOutsideChildren(flat),
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .err, .field_presence => {},
+        }
+    }
+    // Every position below one the reach ended at is outside the reach.
+    while (self.coercion_outside_stack.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        const entry = try self.coercion_outside_seen.getOrPut(self.gpa, resolved.var_);
+        if (entry.found_existing) continue;
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+                try self.coercion_outside_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| try self.appendCoercionOutsideChildren(flat),
+            .flex, .rigid, .err, .field_presence => {},
+        }
+    }
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |*entry| {
+        const ext_var = self.types.resolveVar(entry.var_).var_;
+        entry.within_coercion_reach = self.coercion_reach_seen.contains(ext_var) and
+            !self.coercion_outside_seen.contains(ext_var);
+    }
+}
+
+/// Push every child of one structure onto the outside-the-reach worklist of
+/// `markCoercionReach`: the reach walk calls it where the row coercion ends
+/// (a function, tuple, record, or non-`Try` nominal), and the outside walk
+/// for every structure below such a position.
+fn appendCoercionOutsideChildren(self: *Self, flat: FlatType) std.mem.Allocator.Error!void {
+    switch (flat) {
+        .tag_union => |union_| {
+            for (0..union_.tags.count) |index| {
+                const tag = self.types.getTagAt(union_.tags, @intCast(index));
+                try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(tag.args));
+            }
+            try self.coercion_outside_stack.append(self.gpa, union_.ext);
+        },
+        .nominal_type => |nominal| try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+            try self.coercion_outside_stack.append(self.gpa, func.ret);
+            try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+        },
+        .tuple => |tuple| try self.coercion_outside_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+        .record => |record| {
+            const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
+            for (presences) |presence| {
+                try self.coercion_outside_stack.append(self.gpa, presence.typeVar());
+                if (presence.presenceVar()) |presence_var| {
+                    try self.coercion_outside_stack.append(self.gpa, presence_var);
+                }
+            }
+            try self.coercion_outside_stack.append(self.gpa, record.ext);
+        },
+        .empty_record, .empty_tag_union => {},
+    }
 }
 
 /// One implicitly opened tag-union extension minted while generating an
@@ -17465,6 +17780,14 @@ const ImplicitOpenExt = struct {
     /// row that can still be found in a solved type. Null where the minting
     /// site did not see the union.
     union_var: ?Var = null,
+    /// Whether the row this extension opens lies within the row coercion's
+    /// reach from the annotation's root (design.md "Row Coercion Primitive"):
+    /// the root row, a tag payload of a reached row, an alias's backing, or an
+    /// argument of `Try`. Decided by `markCoercionReach` once the annotation
+    /// is generated. A generalized local value quantifies exactly such rows
+    /// and widens them at each use; a local value's other opened rows stay
+    /// shared (`shareLocalValueAnnotationVars`).
+    within_coercion_reach: bool = false,
 };
 
 /// The slice of `implicit_open_exts` one annotation's generation minted.
@@ -17510,12 +17833,11 @@ const CodecRowDemand = struct {
 /// list is absorbed into that flex by ordinary unification, so it is detected
 /// here rather than at the producing expression.
 ///
-/// `redundant_open_warns`: the binding generalizes regardless of any written
-/// `..` (every top-level definition, whose implicitly opened rows generalize
-/// exactly like written ones, and a local function), so an explicit
-/// anonymous `..` in an output position adds nothing and warns. On a local
-/// value binding `..` is the opt-in to a quantified row, so it never warns
-/// there.
+/// An explicit anonymous `..` in an output position is generated exactly as
+/// its absence is, on every annotated binding: a top-level definition and a
+/// local function quantify the row either way, and a local value's opened
+/// row either generalizes by this rule or stays shared, as its absence would
+/// (design.md "Polarity"). The `..` adds nothing and warns.
 ///
 /// This is a single READ of a mutable var, and it is not always the last word:
 /// a generated codec the definition's body introduced can be validated after
@@ -17539,6 +17861,9 @@ fn beginBoundedAnnotationRows(self: *Self, annotation: ?CIR.Annotation.Idx) ?CIR
 /// End a definition's body check. A definition whose type generalizes keeps
 /// its rows bounded: its uses instantiate fresh copies, which they may widen.
 /// A weak value binding's row is shared by every use, so its bound ends here.
+/// So does a generalized local value's row that its right-hand side frame
+/// kept shared (`shareLocalValueAnnotationVars`): every use reaches that one
+/// row, exactly as every use of a weak value reaches its row.
 fn endBoundedAnnotationRows(
     self: *Self,
     saved: ?CIR.Annotation.Idx,
@@ -17546,15 +17871,22 @@ fn endBoundedAnnotationRows(
     generalizes: bool,
 ) std.mem.Allocator.Error!void {
     self.bounding_annotation = saved;
-    if (generalizes) return;
-    try self.releaseBoundedAnnotationRows(annotation orelse return);
+    const owner = annotation orelse return;
+    try self.releaseBoundedRowMarks(owner, if (generalizes) .shared_by_uses else .all);
 }
 
 /// An extension one annotation's bound covers.
 const BoundedRowMark = struct {
     owner: CIR.Annotation.Idx,
     ext: Var,
+    /// The binding's right-hand side frame kept this row shared rather than
+    /// quantifying it (`shareLocalValueAnnotationVars`), so the bound ends
+    /// with the body check even though the binding generalizes.
+    shared_by_uses: bool = false,
 };
+
+/// Which of an owner's marks a release ends.
+const BoundedRowRelease = enum { all, shared_by_uses };
 
 fn boundAnnotationRows(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
@@ -17570,11 +17902,21 @@ fn boundAnnotationRows(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.
 /// definition still bounds, so after clearing, every remaining mark is applied
 /// again.
 fn releaseBoundedAnnotationRows(self: *Self, owner: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+    try self.releaseBoundedRowMarks(owner, .all);
+}
+
+/// End the bound of `owner`'s marks that `release` selects, then apply every
+/// remaining mark again (see `releaseBoundedAnnotationRows`).
+fn releaseBoundedRowMarks(self: *Self, owner: CIR.Annotation.Idx, release: BoundedRowRelease) std.mem.Allocator.Error!void {
     var released = false;
     var index: usize = 0;
     while (index < self.bounded_row_marks.items.len) {
         const mark = self.bounded_row_marks.items[index];
-        if (mark.owner != owner) {
+        const selected = mark.owner == owner and switch (release) {
+            .all => true,
+            .shared_by_uses => mark.shared_by_uses,
+        };
+        if (!selected) {
             index += 1;
             continue;
         }
@@ -17622,18 +17964,15 @@ fn boundedRowChainNext(self: *Self, current: Var) ?Var {
 fn auditImplicitOpenExts(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
-    redundant_open_warns: bool,
     owner_expr: CIR.Expr.Idx,
 ) std.mem.Allocator.Error!void {
     const owner_rhs = self.cir.store.getExprRegion(owner_expr);
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
-        if (redundant_open_warns) {
-            if (entry.explicit_ext_region) |open_region| {
-                _ = try self.problems.appendProblem(self.gpa, .{ .redundant_open_tag_union = .{
-                    .region = open_region,
-                } });
-            }
+        if (entry.explicit_ext_region) |open_region| {
+            _ = try self.problems.appendProblem(self.gpa, .{ .redundant_open_tag_union = .{
+                .region = open_region,
+            } });
         }
         // The body check bounded this row (`beginBoundedAnnotationRows`), so
         // the unifier refused every tag the annotation does not list at the
@@ -22230,6 +22569,15 @@ fn beginExprCheckFrame(
                 self.bounding_annotation = null;
                 try self.boundAnnotationRows(annotation_idx);
             }
+            // A generalized local value is evaluated once and widened at each
+            // use, so this frame quantifies exactly the rows the row coercion
+            // reaches; the annotation's holes and other opened rows stay
+            // shared (design.md "Polarity").
+            if (frame.rank_pushed and self.local_value_annotations.contains(annotation_idx) and
+                !self.localAnnotatedBindingIsCallableAlias(expr, annotation_idx))
+            {
+                try self.shareLocalValueAnnotationVars(annotation_idx, env);
+            }
             try self.recordPredeclaredBodySlots(annotation_idx);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
             const anno_backup = try self.expectedTypeBackup(anno_var, env);
@@ -24261,6 +24609,17 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 try self.predeclared_local_annotations.put(self.gpa, decl_stmt.pattern, decl_stmt.anno.?);
             }
 
+            // A local VALUE binding follows the top-level rule: an implicitly
+            // opened row its annotation mints counts as a type variable, so
+            // the binding generalizes (design.md "Polarity"). Decided here,
+            // before the body pass regenerates the annotation, like the
+            // predeclaration above. Canonicalization attaches a block
+            // annotation only to a same-named plain binding, so an annotated
+            // local is always bound to a name.
+            if (!decl_is_fn) {
+                if (decl_stmt.anno) |annotation_idx| try self.recordLocalValueAnnotation(annotation_idx, env);
+            }
+
             const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
             if (decl.decl_fn_frame) {
                 try env.var_pool.pushRank();
@@ -24487,11 +24846,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             try self.endBoundedAnnotationRows(decl.saved_bounding_annotation, decl_stmt.anno, decl_annotation_generalizes);
             // The annotation bounds the definition (see `DefActivity`).
             if (decl_stmt.anno) |annotation_idx| {
-                try self.auditImplicitOpenExts(
-                    annotation_idx,
-                    decl.decl_is_fn,
-                    decl_stmt.expr,
-                );
+                try self.auditImplicitOpenExts(annotation_idx, decl_stmt.expr);
             }
             try self.recordHoistBindingCandidate(decl_stmt.pattern, decl_stmt.expr, decl.expectation.hoist_position);
             if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
@@ -24525,6 +24880,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr, decl.expectation.hoist_position);
             }
             try self.bindTypeSchemeVar(decl_expr_var, decl_pattern_var);
+            try self.recordRowCoercedLocalValue(decl_stmt, decl.decl_is_fn);
             if (self.predeclared_local_annotations.get(decl_stmt.pattern)) |predeclared_annotation| {
                 try self.bindTypeSchemeVar(decl_expr_var, self.predeclaredSchemeVarForAnnotation(predeclared_annotation));
             }
@@ -27401,8 +27757,9 @@ fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
 ///     lookups in arbitrary subexpressions aren't generalized out from under their
 ///     surrounding context.
 ///   - **An annotated value binding** whose annotation introduces a free type var,
-///     or—at the top level—an implicitly opened row, which counts as one
-///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
+///     or an implicitly opened row, which counts as one: any such row of a
+///     top-level value, and one within the row coercion's reach of a
+///     block-local value (see `isGeneralizableValueBinding`). The rank push lets the generalizer
 ///     quantify exactly the generalizable vars—with none (e.g. a concrete
 ///     annotation) the generalize call is a no-op and the value stays monomorphic.
 fn shouldGeneralize(
@@ -27420,13 +27777,14 @@ fn shouldGeneralize(
 /// True when a value binding generalizes to its annotated scheme: it sits in
 /// binding-RHS position (only a binding's own right-hand side qualifies; a call
 /// argument never generalizes on its own) and has an annotation introducing a
-/// type variable. A top-level annotation's implicitly opened row counts as a
-/// type variable, exactly as the `..` it could have been written with does
-/// (design.md "Polarity"); `predeclareAnnotatedDefSchemes` recorded which
-/// annotations mint one before any body was checked. The polymorphic
-/// annotation is the opt-in, honored regardless of whether the RHS does work
-/// (an expansive definition pays per-specialization—the cost the author chose
-/// by writing the scheme).
+/// type variable. An annotation's implicitly opened row counts as a type
+/// variable, exactly as the `..` it could have been written with does
+/// (design.md "Polarity"); `predeclareAnnotatedDefSchemes` and
+/// `recordLocalValueAnnotation` recorded which annotations mint one that
+/// counts, before the body was checked. The polymorphic annotation is the
+/// opt-in, honored regardless of whether the RHS does work (an expansive
+/// top-level definition pays per-specialization—the cost the author chose by
+/// writing the scheme; a local value is evaluated once and widened per use).
 fn isGeneralizableValueBinding(
     self: *const Self,
     annotation: ?CIR.Annotation.Idx,
@@ -27435,7 +27793,7 @@ fn isGeneralizableValueBinding(
     if (!is_binding_rhs) return false;
     const annotation_idx = annotation orelse return false;
     return self.cir.store.getAnnotation(annotation_idx).mentions_type_var or
-        self.implicit_open_top_level_annotations.contains(annotation_idx);
+        self.implicit_open_value_annotations.contains(annotation_idx);
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
@@ -33982,6 +34340,65 @@ fn assertSchemeRequirementBoundaryDecided(self: *const Self, roots: []const Boun
     }
 }
 
+/// Settle the ranks of the var-pool entry a generalization boundary at `rank`
+/// is about to promote, before its literal defaults are decided. A literal
+/// escapes the boundary in two ways, and both lower it to the rank it escapes
+/// to, where it is decided with the variable it escapes through:
+///
+/// - structurally: unification lowers only the merged variable's own rank, so
+///   a literal reachable from an enclosing scope's variable (a list pattern's
+///   item literal matched against an enclosing lambda's parameter, say) still
+///   carries this boundary's rank until generalization's rank adjustment
+///   (`Generalizer.settleRanksOfPool`) lowers it;
+/// - through a dispatch constraint: rank adjustment does not descend into
+///   constraints, so a literal related to an escaped variable only by that
+///   variable's constraint (the `3` in `f({}).repeat(3)` when the receiver
+///   escapes) is lowered here to the escaped variable's rank. Deciding it at
+///   this boundary would guess it before the relation its receiver carries out
+///   of the boundary is discharged.
+///
+/// This is a defaulting rule, not a generalization rule (design.md "Open
+/// Literals Resolve With Their Owning Scope"): only an open literal, which
+/// this boundary would otherwise default, is lowered through constraints. Any
+/// other variable such a constraint reaches keeps the rank adjustment gave it
+/// and generalizes normally, the constraint becoming a scheme requirement.
+fn settleBoundaryRanks(self: *Self, env: *Env, rank: Rank) std.mem.Allocator.Error!void {
+    try self.generalizer.settleRanksOfPool(&env.var_pool, rank);
+    for (env.var_pool.getVarsForRank(rank)) |pool_var| {
+        const escaped = self.types.resolveVar(pool_var);
+        if (@intFromEnum(escaped.desc.rank) >= @intFromEnum(rank)) continue;
+        if (escaped.desc.content != .flex and escaped.desc.content != .rigid) continue;
+        const constraints_range = contentConstraintRange(escaped.desc.content) orelse continue;
+        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+        if (constraints.len == 0) continue;
+        self.boundary_escaped_relation_vars.clearRetainingCapacity();
+        for (constraints) |constraint| {
+            try self.collectReachableVars(constraint.fn_var, &self.boundary_escaped_relation_vars);
+        }
+        var reached = self.boundary_escaped_relation_vars.keyIterator();
+        while (reached.next()) |reached_var| {
+            const literal = self.types.resolveVar(reached_var.*);
+            if (literal.desc.content != .flex) continue;
+            if (@intFromEnum(literal.desc.rank) <= @intFromEnum(escaped.desc.rank)) continue;
+            if (self.varLiteralKind(literal.var_) == null) continue;
+            try self.types.setDescRank(literal.desc_idx, escaped.desc.rank);
+        }
+    }
+}
+
+/// Whether `pool_vars` holds a literal still flex at `rank` (a boundary
+/// defaulting candidate before the signature-reachability filter).
+fn boundaryHasOpenLiteral(self: *Self, pool_vars: []const Var, rank: Rank) bool {
+    for (pool_vars) |pool_var| {
+        const resolved = self.types.resolveVar(pool_var);
+        if (resolved.desc.content != .flex) continue;
+        if (resolved.desc.rank != rank) continue;
+        if (self.varLiteralKind(resolved.var_) == null) continue;
+        return true;
+    }
+    return false;
+}
+
 /// `defaultLiteralsAtGeneralizationBoundary` for a whole binding group: the
 /// reachable protection set is seeded from every member's root, so a literal
 /// reachable from any member's signature stays open across the shared
@@ -34008,16 +34425,12 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     const pool_vars = env.var_pool.getVarsForRank(rank);
 
     // Fast path: no open literal at this boundary, nothing to do.
-    var has_candidate = false;
-    for (pool_vars) |pool_var| {
-        const resolved = self.types.resolveVar(pool_var);
-        if (resolved.desc.content != .flex) continue;
-        if (resolved.desc.rank != rank) continue;
-        if (self.varLiteralKind(resolved.var_) == null) continue;
-        has_candidate = true;
-        break;
+    // Otherwise settle the pool's ranks first (`settleBoundaryRanks`), so a
+    // literal that escapes this boundary is decided where it escapes to.
+    if (self.boundaryHasOpenLiteral(pool_vars, rank)) {
+        try self.settleBoundaryRanks(env, rank);
     }
-    if (!has_candidate) {
+    if (!self.boundaryHasOpenLiteral(pool_vars, rank)) {
         // A boundary without literals still owns the instantiated relations
         // its definition created, so they settle here, in this definition's
         // context, exactly as the literal path's round zero settles them.

@@ -289,7 +289,11 @@ pub const Constants = struct {
     ///      instead of grounding them to `[]`.
     /// 131: Checked bodies gain the `row_coerce` expression form (design.md
     ///      "Row Coercion Primitive"); no checker site emits it yet.
-    pub const CACHE_VERSION = 131;
+    /// 132: Block-local annotated values quantify their implicitly opened
+    ///      rows within the row coercion's reach, and their uses are checked
+    ///      `row_coerce` expressions; checking records the row-coerced local
+    ///      value binders (`ModuleEnv.row_coerced_local_values`).
+    pub const CACHE_VERSION = 132;
 };
 
 /// Configuration for the Roc cache system.
