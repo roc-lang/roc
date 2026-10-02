@@ -19690,6 +19690,9 @@ const TypeInstantiationContext = struct {
     /// argument cells. Default materializations must not reuse a caller's or
     /// another materialization's request, even for the same checked expression.
     direct_call_requests: collections.DenseMap(checked.CheckedExprId, DirectCallRequest),
+    /// Result-type reads belong to this checked-type instantiation. Imported
+    /// defaults and other instantiations use independent expression-read maps.
+    expr_type_reads: collections.DenseMap(checked.CheckedExprId, NodeId),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*InstantiatingNodeMap) = .empty,
@@ -19707,6 +19710,7 @@ const TypeInstantiationContext = struct {
             .node_map = InstantiatingNodeMap.init(allocator),
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
             .direct_call_requests = collections.DenseMap(checked.CheckedExprId, DirectCallRequest).init(allocator),
+            .expr_type_reads = collections.DenseMap(checked.CheckedExprId, NodeId).init(allocator),
         };
     }
 
@@ -19716,6 +19720,7 @@ const TypeInstantiationContext = struct {
         self.node_map.deinit();
         self.field_kind_map.deinit();
         self.direct_call_requests.deinit();
+        self.expr_type_reads.deinit();
     }
 };
 
@@ -19800,9 +19805,6 @@ const BodyContext = struct {
     /// One shared request interface per direct call expression of this body;
     /// see `DirectCallRequest`.
     direct_call_requests: std.AutoHashMapUnmanaged(checked.CheckedExprId, DirectCallRequest) = .empty,
-    /// Result-type reads carrying no expected cell, shared by every later such
-    /// read of the same expression (see `sharedExprTypeRead`).
-    expr_type_reads: std.AutoHashMapUnmanaged(checked.CheckedExprId, NodeId) = .empty,
     /// Constructor expressions already related to a request node, keyed by
     /// the node's class root at the time. A constructor's relation only
     /// unifies its children with the node's component slots, so relating it
@@ -20859,7 +20861,6 @@ const BodyContext = struct {
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
         self.direct_call_requests.deinit(self.allocator);
-        self.expr_type_reads.deinit(self.allocator);
         self.related_constructors.deinit(self.allocator);
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
@@ -27491,19 +27492,19 @@ const BodyContext = struct {
         };
     }
 
-    /// An expression's result type is instantiated once per lowered body and
+    /// An expression's result type is read once per checked-type instantiation and
     /// shared by every later result-type read carrying no expected cell, as a
     /// direct call's request interface is. A result carrying generated-private
     /// evidence depends on the read and is never shared.
     fn sharedExprTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?NodeId {
-        const node = self.expr_type_reads.get(expr_id) orelse return null;
+        const node = self.instantiation.expr_type_reads.get(expr_id) orelse return null;
         if (try self.graph.containsGeneratedPrivate(node)) return null;
         return node;
     }
 
     fn recordExprTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId, node: NodeId) Allocator.Error!void {
         if (try self.graph.containsGeneratedPrivate(node)) return;
-        try self.expr_type_reads.put(self.allocator, expr_id, node);
+        try self.instantiation.expr_type_reads.put(expr_id, node);
     }
 
     fn isDispatchExpr(expr: checked.CheckedExpr) bool {
