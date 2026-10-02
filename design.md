@@ -9896,6 +9896,30 @@ whose fields are still row-polymorphic. Field access on such a value is a
 polymorphic operation and must be driven by explicit hidden row descriptor or
 dictionary data; it is not recovered from field names during lowering.
 
+An open-record representation (a `.dynamic` representation whose children are
+only the fields its row names) stores the complete record the value was built
+from. Its descriptor describes that complete record, so it is a descriptor leaf
+like a type variable: no template over the row's fields builds it, and no
+descriptor is read out of it by nested position, because the complete record's
+field positions differ from the row's whenever the row adds fields that sort
+before a named one. A template over the row's fields is only the static-field
+view a field read unboxes to and a record update's replacement fields are
+described by. Every boundary into an open record keeps the source's own
+descriptor (a concrete record is boxed whole), every boundary out of one
+selects fields by name through the runtime adapter, and a call result of open
+record type is described by the descriptor the callee returns.
+
+Planning sources an open-record leaf like any other: from a worker's signature,
+from the frame that creates a nested callable, or, when the record is named only
+through a dictionary requirement's signature (a `map` callback's argument, say),
+from that dictionary. An open record belongs to a worker's own scheme when the
+worker quantifies its row variable. A dictionary method's evidence lists the
+open records inside the requirement's signature, function-typed positions
+included, each described by the evidence callable's representation at the same
+position; the runtime appends them to the method's requirement descriptors,
+and a worker that needs one reads it from its own dictionary on entry instead of
+receiving it as a hidden parameter.
+
 ### Boxy `TypeDesc`
 
 A boxy `TypeDesc` is primarily runtime data for representation. It describes

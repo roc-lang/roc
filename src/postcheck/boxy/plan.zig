@@ -526,6 +526,12 @@ pub const DictionaryMethodEvidence = struct {
     worker_desc_args: Span = .{},
     requirement_desc_sources: Span = .{},
     requirement_desc_args: Span = .{},
+    /// One representation per open record inside the requirement's
+    /// signature, in `requirementOpenRecords` order: the value this method's
+    /// evidence callable has at that position. A frame holding this
+    /// dictionary reads each one as a requirement descriptor after the
+    /// requirement's own.
+    requirement_leaf_sources: Span = .{},
     hidden_desc_sources: Span = .{},
     /// The checked evidence edge that selected this method's target. Its
     /// recorded substitution names the type each variable of the target's
@@ -877,6 +883,14 @@ pub const StoredFnSource = struct {
 };
 
 /// Complete checked source and hidden-input plan for one worker.
+/// An open record's descriptor read from a worker's dictionary: requirement
+/// descriptor `hidden_index` of the requirement's method.
+pub const WorkerDictionaryDescriptor = struct {
+    rep: TypeRepId,
+    requirement: DictionaryRequirementId,
+    hidden_index: u32,
+};
+
 pub const WorkerPlan = struct {
     id: WorkerPlanId,
     root_request: ?checked.RootRequest = null,
@@ -897,6 +911,9 @@ pub const WorkerPlan = struct {
     hidden_dicts: Span = .{},
     body_hidden_dicts: Span = .{},
     erased_captures: Span = .{},
+    /// Open records the worker's body needs whose descriptor one of its own
+    /// dictionaries supplies, read from it on entry.
+    dictionary_descs: Span = .{},
     /// For a hosted worker, the host ABI signature of its extern boundary: the
     /// hosted declaration's type, with each of its type variable slots
     /// represented exactly as this worker represents it.
@@ -1184,6 +1201,8 @@ pub const ProgramPlan = struct {
     direct_call_hidden_dict_args: std.ArrayList(DirectCallHiddenDictionaryArg),
     dictionary_method_evidence: std.ArrayList(DictionaryMethodEvidence),
     dictionary_method_desc_sources: std.ArrayList(DictionaryMethodDescriptorSource),
+    requirement_leaf_reps: std.ArrayList(TypeRepId),
+    worker_dictionary_descs: std.ArrayList(WorkerDictionaryDescriptor),
     dictionary_method_hidden_desc_sources: std.ArrayList(DictionaryMethodHiddenDescriptorSource),
     scheme_rep_substitutions: std.ArrayList(SchemeRepSubstitution),
     call_type_substitutions: std.ArrayList(CallTypeSubstitution),
@@ -1247,6 +1266,8 @@ pub const ProgramPlan = struct {
             .direct_call_hidden_dict_args = .empty,
             .dictionary_method_evidence = .empty,
             .dictionary_method_desc_sources = .empty,
+            .requirement_leaf_reps = .empty,
+            .worker_dictionary_descs = .empty,
             .dictionary_method_hidden_desc_sources = .empty,
             .scheme_rep_substitutions = .empty,
             .call_type_substitutions = .empty,
@@ -1277,6 +1298,8 @@ pub const ProgramPlan = struct {
         self.dictionary_method_hidden_desc_sources.deinit(self.allocator);
         self.scheme_rep_substitutions.deinit(self.allocator);
         self.dictionary_method_desc_sources.deinit(self.allocator);
+        self.requirement_leaf_reps.deinit(self.allocator);
+        self.worker_dictionary_descs.deinit(self.allocator);
         self.dictionary_method_evidence.deinit(self.allocator);
         self.direct_call_hidden_dict_args.deinit(self.allocator);
         self.direct_call_hidden_desc_args.deinit(self.allocator);
@@ -1674,6 +1697,27 @@ pub const ProgramPlan = struct {
 
     pub fn dictionaryMethodDescriptorSourceSlice(self: *const ProgramPlan, span: Span) []const DictionaryMethodDescriptorSource {
         return self.dictionary_method_desc_sources.items[span.start .. span.start + span.len];
+    }
+
+    pub fn requirementLeafRepSlice(self: *const ProgramPlan, span: Span) []const TypeRepId {
+        return self.requirement_leaf_reps.items[span.start .. span.start + span.len];
+    }
+
+    pub fn workerDictionaryDescriptorSlice(self: *const ProgramPlan, span: Span) []const WorkerDictionaryDescriptor {
+        return self.worker_dictionary_descs.items[span.start .. span.start + span.len];
+    }
+
+    /// A record whose row is still open: a dynamic representation whose
+    /// children are only the fields its row names. Its value is the complete
+    /// record it was built from, which only that value's descriptor
+    /// describes; its fields are a view of that record.
+    pub fn repIsOpenRecord(self: *const ProgramPlan, rep_id: TypeRepId) bool {
+        const rep = self.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind != .dynamic or rep.children.len == 0) return false;
+        for (self.childSlice(rep.children)) |child| {
+            if (child.role != .record_field) return false;
+        }
+        return true;
     }
 
     pub fn dictionaryMethodHiddenDescriptorSourceSlice(
@@ -2567,6 +2611,7 @@ const LiteralPlanner = struct {
                     const descriptors = try self.builder.dictionaryMethodRequirementDescriptorSources(adapter.requirement_type, shape.arg_reps, shape.ret_rep);
                     adapter.requirement_desc_args = descriptors.args;
                     adapter.requirement_desc_sources = descriptors.sources;
+                    adapter.requirement_leaf_sources = descriptors.leaf_sources;
                     adapter.hidden_desc_sources = try self.builder.dictionaryMethodHiddenDescriptorSources(adapter.resolution.worker, adapter.worker_desc_args, adapter.requirement_desc_args);
                 }
                 const adapter_index: u32 = @intCast(self.builder.plan.dictionary_method_evidence.items.len);
@@ -2745,6 +2790,7 @@ const LiteralPlanner = struct {
             const requirement = try self.builder.dictionaryMethodRequirementDescriptorSources(method.requirement_type, shape.arg_reps, shape.ret_rep);
             method.requirement_desc_args = requirement.args;
             method.requirement_desc_sources = requirement.sources;
+            method.requirement_leaf_sources = requirement.leaf_sources;
             method.hidden_desc_sources = try self.builder.dictionaryMethodHiddenDescriptorSources(method.resolution.worker, method.worker_desc_args, method.requirement_desc_args);
         }
         self.builder.plan.dictionary_method_evidence.items[index] = method;
@@ -8330,8 +8376,148 @@ const Builder = struct {
     /// hidden descriptor.
     fn isDescriptorLeaf(self: *const Builder, rep_id: TypeRepId) bool {
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        return rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0 and
-            rep.descriptor != null and rep.sealed_default == null;
+        if (rep.descriptor == null or rep.sealed_default != null) return false;
+        return (rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0) or
+            self.plan.repIsOpenRecord(rep_id);
+    }
+
+    /// The row variable that leaves an open record's row open.
+    fn openRecordRowVariable(self: *Builder, rep_id: TypeRepId) ?CheckedTypeIdentity {
+        const source = self.plan.representations.items[@intFromEnum(rep_id)].source_type;
+        const view = self.moduleForId(source.module);
+        var current = source.ty;
+        while (true) {
+            switch (view.checked_types.payload(current)) {
+                .record => |record| {
+                    if (record.ext == current) return null;
+                    current = record.ext;
+                },
+                .alias => |alias| current = alias.backing,
+                .flex, .rigid => return typeRef(view, current),
+                .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union, .empty_record => return null,
+            }
+        }
+    }
+
+    /// Whether a worker's own scheme quantifies the row variable of an open
+    /// record, so the worker's own frame describes it.
+    fn openRecordOwnedByScheme(self: *Builder, worker_id: WorkerPlanId, rep_id: TypeRepId) bool {
+        if (!self.plan.repIsOpenRecord(rep_id)) return false;
+        const row = self.openRecordRowVariable(rep_id) orelse return false;
+        const scheme = self.workerSchemeVars(self.plan.workers.items[@intFromEnum(worker_id)].source) orelse return false;
+        for (scheme.vars) |variable| {
+            if (typeRefEql(typeRef(scheme.view, variable), row)) return true;
+        }
+        return false;
+    }
+
+    /// Open records inside a dictionary requirement's signature, including
+    /// its function-typed positions, in a fixed order: the positions a frame
+    /// holding the dictionary can read a descriptor for.
+    fn collectRequirementOpenRecords(
+        self: *Builder,
+        rep_id: TypeRepId,
+        out: *std.ArrayList(TypeRepId),
+        seen: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!void {
+        if ((try seen.getOrPut(rep_id)).found_existing) return;
+        if (self.plan.repIsOpenRecord(rep_id) and self.plan.representations.items[@intFromEnum(rep_id)].descriptor != null) {
+            const identity = self.repQuery().descriptorArgumentIdentityRep(rep_id);
+            for (out.items) |existing| {
+                if (self.repQuery().descriptorArgumentIdentityRep(existing) == identity) break;
+            } else try out.append(self.allocator, rep_id);
+        }
+        var index: usize = 0;
+        while (index < self.plan.representations.items[@intFromEnum(rep_id)].children.len) : (index += 1) {
+            const child = self.plan.children.items[self.plan.representations.items[@intFromEnum(rep_id)].children.start + index];
+            if (self.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
+            try self.collectRequirementOpenRecords(child.rep, out, seen);
+        }
+    }
+
+    /// The number of requirement descriptors a dictionary method's call
+    /// supplies for its requirement's runtime values.
+    fn requirementRuntimeDescriptorCount(self: *Builder, requirement_rep: TypeRepId) Allocator.Error!u32 {
+        const requirement_function = (self.repQuery().functionChildren(requirement_rep)) orelse
+            boxyPlanInvariant("dictionary method requirement was not callable");
+        var params = std.ArrayList(HiddenDescriptorParam).empty;
+        defer params.deinit(self.allocator);
+        var seen_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer seen_reps.deinit();
+        var seen_descs = collections.DenseMap(DescriptorRequirementId, void).init(self.allocator);
+        defer seen_descs.deinit();
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_function.rep)].children);
+        for (children[requirement_function.args_start..][0..requirement_function.arg_count]) |arg| {
+            try self.collectRuntimeHiddenDescriptorsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+        }
+        try self.collectRuntimeHiddenDescriptorsForRep(requirement_function.ret, &params, &seen_reps, &seen_descs);
+        return @intCast(params.items.len);
+    }
+
+    /// The requirement of one of a worker's own dictionaries whose signature
+    /// names an open record, and where the dictionary describes it.
+    fn workerDictionaryDescriptorForLeaf(
+        self: *Builder,
+        worker: WorkerPlan,
+        leaf: TypeRepId,
+    ) Allocator.Error!?WorkerDictionaryDescriptor {
+        if (!self.plan.repIsOpenRecord(leaf)) return null;
+        var roots = std.ArrayList(TypeRepId).empty;
+        defer roots.deinit(self.allocator);
+        try roots.append(self.allocator, worker.rep);
+        if (self.workerSchemeVars(worker.source)) |scheme| {
+            for (scheme.vars) |variable| {
+                const rep = self.plan.repForSourceType(typeRef(scheme.view, variable)) orelse continue;
+                try roots.append(self.allocator, rep);
+            }
+        }
+        var dispatchers = std.ArrayList(TypeRepId).empty;
+        defer dispatchers.deinit(self.allocator);
+        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer seen.deinit();
+        for (roots.items) |root| try self.collectRepsWithDictionaries(root, &dispatchers, &seen);
+
+        const leaf_identity = self.repQuery().descriptorArgumentIdentityRep(leaf);
+        for (dispatchers.items) |dispatcher| {
+            const dictionaries = self.plan.representations.items[@intFromEnum(dispatcher)].dictionaries;
+            var offset: u32 = 0;
+            while (offset < dictionaries.len) : (offset += 1) {
+                const requirement_id: DictionaryRequirementId = @enumFromInt(dictionaries.start + offset);
+                const requirement = self.plan.dictionaries.items[@intFromEnum(requirement_id)];
+                if (requirement.compile_time_only) continue;
+                const requirement_rep = self.plan.repForSourceType(requirement.fn_ty) orelse continue;
+                if (self.repQuery().functionChildren(requirement_rep) == null) continue;
+                var leaves = std.ArrayList(TypeRepId).empty;
+                defer leaves.deinit(self.allocator);
+                var leaf_seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+                defer leaf_seen.deinit();
+                try self.collectRequirementOpenRecords(requirement_rep, &leaves, &leaf_seen);
+                for (leaves.items, 0..) |candidate, index| {
+                    if (self.repQuery().descriptorArgumentIdentityRep(candidate) != leaf_identity) continue;
+                    return .{
+                        .rep = leaf,
+                        .requirement = requirement_id,
+                        .hidden_index = try self.requirementRuntimeDescriptorCount(requirement_rep) + @as(u32, @intCast(index)),
+                    };
+                }
+            }
+        }
+        return null;
+    }
+
+    fn collectRepsWithDictionaries(
+        self: *Builder,
+        rep_id: TypeRepId,
+        out: *std.ArrayList(TypeRepId),
+        seen: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!void {
+        if ((try seen.getOrPut(rep_id)).found_existing) return;
+        if (self.plan.representations.items[@intFromEnum(rep_id)].dictionaries.len != 0) try out.append(self.allocator, rep_id);
+        var index: usize = 0;
+        while (index < self.plan.representations.items[@intFromEnum(rep_id)].children.len) : (index += 1) {
+            const child = self.plan.children.items[self.plan.representations.items[@intFromEnum(rep_id)].children.start + index];
+            try self.collectRepsWithDictionaries(child.rep, out, seen);
+        }
     }
 
     fn collectDescriptorLeaves(
@@ -8503,7 +8689,7 @@ const Builder = struct {
                 const caller = &needs[@intFromEnum(edge.caller)];
                 for ([_][]const TypeRepId{ signature[callee].order.items, needs[callee].order.items }) |leaves| {
                     for (leaves) |leaf| {
-                        if (own_scheme[callee].contains(leaf)) {
+                        if (own_scheme[callee].contains(leaf) or self.openRecordOwnedByScheme(edge.callee, leaf)) {
                             // A scheme variable the callee's signature names
                             // is described by the use's own argument and
                             // result values.
@@ -8735,6 +8921,7 @@ const Builder = struct {
             }
 
             const enclosing_start: u32 = @intCast(pending.items.len);
+            const dictionary_descs_start: u32 = @intCast(self.plan.worker_dictionary_descs.items.len);
             {
                 var evidence_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
                 defer evidence_reps.deinit();
@@ -8746,9 +8933,19 @@ const Builder = struct {
                 }
                 for (worker_leaves[worker_index].order.items) |leaf| {
                     if (seen_reps.contains(leaf) or evidence_reps.contains(leaf)) continue;
+                    // A dictionary of the worker's own describes an open
+                    // record its requirement names, so no caller supplies it.
+                    if (try self.workerDictionaryDescriptorForLeaf(self.plan.workers.items[worker_index], leaf)) |entry| {
+                        try self.plan.worker_dictionary_descs.append(self.allocator, entry);
+                        continue;
+                    }
                     try self.collectHiddenDescriptorsForRep(leaf, &pending, &seen_reps, &seen_descs);
                 }
             }
+            self.plan.workers.items[worker_index].dictionary_descs = .{
+                .start = dictionary_descs_start,
+                .len = @intCast(self.plan.worker_dictionary_descs.items.len - dictionary_descs_start),
+            };
 
             const evidence_only_start: u32 = @intCast(pending.items.len);
             const evidence_start: u32 = @intCast(self.plan.worker_evidence_descriptor_params.items.len);
@@ -12811,6 +13008,7 @@ const Builder = struct {
     const DictionaryMethodRequirementDescriptorPlan = struct {
         args: Span = .{},
         sources: Span = .{},
+        leaf_sources: Span = .{},
     };
 
     const DictionaryMethodCallShape = struct {
@@ -12889,7 +13087,13 @@ const Builder = struct {
             &param_seen_reps,
             &param_seen_descs,
         );
-        if (params.items.len == 0) return .{};
+        const leaf_sources = try self.requirementLeafSources(
+            requirement_function,
+            requirement_children,
+            callable_arg_reps,
+            callable_ret_rep,
+        );
+        if (params.items.len == 0) return .{ .leaf_sources = leaf_sources };
 
         var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
         defer pending.deinit(self.allocator);
@@ -12962,7 +13166,37 @@ const Builder = struct {
         return .{
             .args = .{ .start = args_start, .len = @intCast(pending.items.len) },
             .sources = .{ .start = sources_start, .len = @intCast(pending.items.len) },
+            .leaf_sources = leaf_sources,
         };
+    }
+
+    /// The evidence callable's representation at each open record position of
+    /// the requirement's signature.
+    fn requirementLeafSources(
+        self: *Builder,
+        requirement_function: FunctionChildren,
+        requirement_children: []const RepChild,
+        callable_arg_reps: []const TypeRepId,
+        callable_ret_rep: TypeRepId,
+    ) Allocator.Error!Span {
+        var leaves = std.ArrayList(TypeRepId).empty;
+        defer leaves.deinit(self.allocator);
+        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer seen.deinit();
+        try self.collectRequirementOpenRecords(requirement_function.rep, &leaves, &seen);
+        const start: u32 = @intCast(self.plan.requirement_leaf_reps.items.len);
+        const requirement_args = requirement_children[requirement_function.args_start..][0..requirement_function.arg_count];
+        for (leaves.items) |leaf| {
+            const source = found: {
+                for (requirement_args, callable_arg_reps) |requirement_arg, callable_arg_rep| {
+                    if (try self.repAtTypePosition(requirement_arg.rep, leaf, callable_arg_rep)) |rep| break :found rep;
+                }
+                break :found try self.repAtTypePosition(requirement_function.ret, leaf, callable_ret_rep) orelse
+                    boxyPlanInvariant("dictionary method evidence callable had no value at a requirement open record position");
+            };
+            try self.plan.requirement_leaf_reps.append(self.allocator, source);
+        }
+        return .{ .start = start, .len = @intCast(leaves.items.len) };
     }
 
     fn dictionaryMethodWorkerDescriptorArgs(
@@ -13167,6 +13401,7 @@ const Builder = struct {
                 );
                 method.requirement_desc_args = requirement_plan.args;
                 method.requirement_desc_sources = requirement_plan.sources;
+                method.requirement_leaf_sources = requirement_plan.leaf_sources;
                 method.hidden_desc_sources = try self.dictionaryMethodHiddenDescriptorSources(
                     worker,
                     method.worker_desc_args,

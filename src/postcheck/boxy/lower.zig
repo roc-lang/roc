@@ -1586,6 +1586,9 @@ const ProcedureBuilder = struct {
                     .argument, .call => {},
                 }
             }
+            for (self.plan.requirementLeafRepSlice(method.requirement_leaf_sources)) |source_rep| {
+                if (try frame.repDescriptorNeedsFrame(source_rep)) return true;
+            }
             for (self.plan.directCallHiddenDictionaryArgSlice(method.nested_dict_args)) |arg| {
                 switch (arg.source) {
                     .bound_dictionaries => return true,
@@ -1882,6 +1885,7 @@ const ProcedureBuilder = struct {
                 if (exact_method) |method| method.worker_desc_args else null,
                 if (exact_method) |method| method.requirement_desc_args else null,
                 if (exact_method) |method| method.requirement_desc_sources else null,
+                if (exact_method) |method| method.requirement_leaf_sources else null,
                 if (exact_method) |method| method.hidden_desc_sources else null,
                 frame_requirement_descs.items,
             );
@@ -2264,6 +2268,7 @@ const ProcedureBuilder = struct {
         worker_desc_args: ?Plan.Span,
         requirement_desc_args: ?Plan.Span,
         requirement_desc_sources: ?Plan.Span,
+        requirement_leaf_sources: ?Plan.Span,
         hidden_desc_sources: ?Plan.Span,
         frame_requirement_descs: []const FrameRequirementDescriptor,
     ) Allocator.Error!LirProgram.BoxyMethodAdapter {
@@ -2339,6 +2344,7 @@ const ProcedureBuilder = struct {
                 requirement_desc_args orelse
                     boxyLowerInvariant("planned dictionary requirement descriptors had no argument plan"),
                 sources,
+                requirement_leaf_sources orelse .{},
                 desc_context,
             )
         else
@@ -2719,6 +2725,7 @@ const ProcedureBuilder = struct {
         requirement_fn_ty: Plan.CheckedTypeIdentity,
         args: Plan.Span,
         sources: Plan.Span,
+        leaf_sources: Plan.Span,
         desc_context: *StaticDescInstantiationContext,
     ) Allocator.Error!StaticMethodCallDescriptorPlan {
         const planned_args = self.plan.directCallHiddenDescriptorArgSlice(args);
@@ -2733,7 +2740,8 @@ const ProcedureBuilder = struct {
         if (indexes.entries.items.len != planned_args.len or planned_args.len != planned_sources.len) {
             boxyLowerInvariant("planned dictionary method descriptor sources disagreed with requirement descriptors");
         }
-        if (planned_sources.len == 0) return .{};
+        const planned_leaf_sources = self.plan.requirementLeafRepSlice(leaf_sources);
+        if (planned_sources.len == 0 and planned_leaf_sources.len == 0) return .{};
 
         var call_sources = StaticDescriptorSourceMap{};
         defer call_sources.deinit(self.allocator);
@@ -2776,6 +2784,18 @@ const ProcedureBuilder = struct {
                 },
             };
             runtime_sources.appendAssumeCapacity(runtime_source);
+        }
+        // An open record inside the requirement's signature is described by
+        // the evidence callable's value at its position, which a frame
+        // holding the dictionary reads after the requirement's own
+        // descriptors.
+        for (planned_leaf_sources) |source_rep| {
+            const slot: u32 = @intCast(call_descs.items.len);
+            try call_descs.append(
+                self.allocator,
+                try self.staticDescRefForWorkerRepWithSourceMap(source_rep, null, &call_sources, desc_context),
+            );
+            try runtime_sources.append(self.allocator, .{ .slot = slot });
         }
         const refs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
         try self.result.boxy_desc_refs.appendSlice(self.allocator, call_descs.items);
@@ -6182,6 +6202,7 @@ const ProcedureBuilder = struct {
         const body_source = try self.bodySourceForWorker(resolved, &proc);
         try proc.bindHiddenDescriptorArgs();
         try proc.bindHiddenDictionaryArgs();
+        try proc.bindWorkerDictionaryDescriptors();
         try proc.bindLambdaArgDescriptors();
         const ret_local = try proc.addWorkerReturnLocal(true);
         const ret_layout = proc.workerReturnLayout();
@@ -14488,7 +14509,12 @@ const ProcBodyBuilder = struct {
                 }
             }
 
-            if (root_param_index != null and overrides.items.len != 0) {
+            // An open record's descriptor describes the complete record its
+            // caller passed, which no template over the row's own fields can
+            // rebuild.
+            if (root_param_index != null and overrides.items.len != 0 and
+                !self.repIsOpenRecord(params.items[root_param_index.?].rep))
+            {
                 const root_param = params.items[root_param_index.?];
                 const rebuilt = try self.addFrameLocal(.opaque_ptr);
                 const materialization = try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items);
@@ -14958,7 +14984,9 @@ const ProcBodyBuilder = struct {
             }
 
             var body_root_local = governing_param_local;
-            if (root_param_index != null and overrides.items.len != 0) {
+            if (root_param_index != null and overrides.items.len != 0 and
+                !self.repIsOpenRecord(all_params.items[root_param_index.?].rep))
+            {
                 const root_param = all_params.items[root_param_index.?];
                 const rebuilt = try self.addFrameLocal(.opaque_ptr);
                 const materialization = try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items);
@@ -15185,6 +15213,31 @@ const ProcBodyBuilder = struct {
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = continuation,
         } }, self.scaffoldOrigin());
+    }
+
+    /// Read each open record descriptor the worker's own dictionaries supply
+    /// on entry, before any body statement observes it.
+    fn bindWorkerDictionaryDescriptors(self: *ProcBodyBuilder) Allocator.Error!void {
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        for (self.parent.plan.workerDictionaryDescriptorSlice(worker.dictionary_descs)) |entry| {
+            const dict_local = self.dictionaryLocalForRequirementOrNull(entry.requirement) orelse
+                boxyLowerInvariant("boxy worker dictionary descriptor had no bound dictionary");
+            const requirement = self.parent.plan.dictionaries.items[@intFromEnum(entry.requirement)];
+            const desc = self.parent.plan.representations.items[@intFromEnum(entry.rep)].descriptor orelse
+                boxyLowerInvariant("boxy worker dictionary descriptor representation had no descriptor");
+            const local = try self.addFrameLocal(.opaque_ptr);
+            try self.worker_argument_desc_initializers.append(self.parent.allocator, .{
+                .local = local,
+                .materialize = .{ .dict_method_hidden = .{
+                    .dict = dict_local,
+                    .method = requirement.fn_name,
+                    .method_slot = requirement.slot,
+                    .hidden_index = entry.hidden_index,
+                    .shape = .requirement,
+                } },
+            });
+            try self.bindDescriptorRequirementLocalForRep(desc, entry.rep, local, true);
+        }
     }
 
     fn prependWorkerArgumentDescriptorInitializers(
@@ -19643,7 +19696,7 @@ const ProcBodyBuilder = struct {
                 try self.addFrameLocalForRepWithFreshDescriptor(callee_ret_rep);
             if (self.parent.result.store.getLocal(raw_ret).boxy_desc) |desc| {
                 if (desc.localOrNull()) |local| {
-                    try self.recordDescriptorLocalTemplate(
+                    if (!self.repIsOpenRecord(callee_ret_rep)) try self.recordDescriptorLocalTemplate(
                         local,
                         try self.descriptorMaterializationForExactRep(callee_ret_rep),
                     );
@@ -19655,7 +19708,7 @@ const ProcBodyBuilder = struct {
 
         const out_desc = self.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| {
-            if (self.descriptorTemplateForLocal(local) == null) {
+            if (self.descriptorTemplateForLocal(local) == null and !self.repIsOpenRecord(callee_ret_rep)) {
                 try self.recordDescriptorLocalTemplate(
                     local,
                     try self.descriptorMaterializationForExactRep(callee_ret_rep),
@@ -19784,7 +19837,7 @@ const ProcBodyBuilder = struct {
 
         const out_desc = self.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| {
-            if (self.descriptorTemplateForLocal(local) == null) {
+            if (self.descriptorTemplateForLocal(local) == null and !self.repIsOpenRecord(callee_function.ret)) {
                 try self.recordDescriptorLocalTemplate(
                     local,
                     try self.descriptorMaterializationForExactRep(callee_function.ret),
@@ -19963,7 +20016,7 @@ const ProcBodyBuilder = struct {
 
             for (root_indices.items) |param_index| {
                 const param = params.items[param_index];
-                const materialization = if (overrides.items.len != 0)
+                const materialization = if (overrides.items.len != 0 and !self.repIsOpenRecord(param.rep))
                     try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items)
                 else if (self.parent.result.store.getLocal(source).boxy_desc) |desc|
                     DescriptorMaterialization{ .desc = desc }
@@ -21015,7 +21068,8 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("planned boxy call adapter had no source descriptor");
         var target_desc_prerequisites = std.ArrayList(DescriptorArgLocal).empty;
         defer target_desc_prerequisites.deinit(self.parent.allocator);
-        const planned_target_desc_info = if (self.repIsBareDynamic(self.descriptorStorageRep(target_rep)))
+        const planned_target_desc_info = if (self.repIsBareDynamic(self.descriptorStorageRep(target_rep)) or
+            self.repIsOpenRecord(target_rep))
             ResultDescriptorSource{ .desc = source_desc, .preserves_source_desc = true }
         else
             try self.adapterDescriptorForCallBoundary(
@@ -21567,6 +21621,9 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!?ResultDescriptorSource {
         const target_record_rep = self.recordRepForBoundary(target_rep) orelse return null;
         const source_record_rep = self.recordRepForBoundary(source_rep) orelse return null;
+        // An open record's runtime descriptor describes every field it
+        // carries, so the target's own descriptor selects them by name.
+        if (self.repIsOpenRecord(source_record_rep)) return null;
         const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
         const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
         if (!self.repHasRecordFieldChildrenForBoundary(target_record) or
@@ -22086,7 +22143,7 @@ const ProcBodyBuilder = struct {
         // allocation, so its descriptor must remain the exact source
         // descriptor. Structurally constrained dynamic boxes continue through
         // target descriptor specialization below.
-        const target_is_bare_dynamic = self.repIsBareDynamic(target_rep);
+        const target_is_bare_dynamic = self.repIsBareDynamic(target_rep) or self.repIsOpenRecord(target_rep);
         if (target_is_bare_dynamic and target_is_box and !source_is_box) {
             var result = source_desc_info;
             result.preserves_source_desc = true;
@@ -23764,7 +23821,10 @@ const ProcBodyBuilder = struct {
             null;
         const unboxed_receiver_desc_info: ResultDescriptorSource = switch (receiver_layout) {
             .concrete => .{},
-            .dynamic_box => try self.storageDescriptorForRepIfNeeded(receiver_rep),
+            .dynamic_box => if (self.repIsOpenRecord(access.record_rep))
+                try self.openRecordViewDescriptorSource(access.record_rep)
+            else
+                try self.storageDescriptorForRepIfNeeded(receiver_rep),
         };
         const record_desc = unboxed_receiver_desc_info.desc orelse receiver_desc;
         const read_source = switch (receiver_layout) {
@@ -24636,17 +24696,20 @@ const ProcBodyBuilder = struct {
         if (extension) |ext| {
             // The base of an update has fields its open row does not name,
             // which only its runtime descriptor knows. The update keeps them
-            // and replaces the fields this representation names.
+            // and replaces the fields this representation names, which the
+            // record's static-field view describes.
+            const fields_desc = try self.openRecordViewDescriptorSource(rep_id);
             const update = try self.parent.result.store.addCFStmt(.{ .assign_boxy_record_update = .{
                 .target = target,
                 .base = ext.local,
                 .base_desc = try self.descriptorRefForSourceLocalRep(ext.local, ext.rep),
                 .fields = payload,
                 .fields_layout = payload_layout,
-                .fields_desc = try self.descriptorRefForKnownRep(rep_id),
+                .fields_desc = fields_desc.desc.?,
                 .next = try self.prependSetLocalDescriptorTransfer(target, ext.local, .replace_existing, next),
             } }, self.origin);
-            return try self.lowerRecordPayloadInto(payload, record_expr, rep_id, rep, expr_fields, unset_fields, extension, update);
+            const with_fields_desc = try self.prependOptionalDescriptorMaterialization(fields_desc.materialize, update);
+            return try self.lowerRecordPayloadInto(payload, record_expr, rep_id, rep, expr_fields, unset_fields, extension, with_fields_desc);
         }
         const payload_desc_info = try self.descriptorForConstructedTarget(target, try self.descriptorRefForKnownRep(rep_id));
         const payload_desc = payload_desc_info.desc orelse
@@ -25169,7 +25232,10 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("dynamic record pattern source had no descriptor payload layout");
                 const payload = try self.addFrameLocal(payload_layout);
                 const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
-                const target_desc_info = try self.storageDescriptorForRepIfNeeded(record_rep);
+                const target_desc_info = if (self.repIsOpenRecord(record_rep))
+                    try self.openRecordViewDescriptorSource(record_rep)
+                else
+                    try self.storageDescriptorForRepIfNeeded(record_rep);
                 // A `.dynamic`-rep record reports no static storage descriptor, but
                 // when its unboxed payload carries an `erased_box` the value
                 // must be reference-counted through a descriptor. The unboxed payload
@@ -28435,6 +28501,9 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!bool {
         const current_rep_identity = self.descriptorStorageRep(current_rep_id);
         if (current_rep_identity == target_rep_id) return true;
+        // An open record's descriptor describes the complete record its value
+        // holds, whose nested positions its row's fields do not determine.
+        if (self.repIsOpenRecord(current_rep_identity)) return false;
 
         const active_entry = try active.getOrPut(current_rep_identity);
         if (active_entry.found_existing) return false;
@@ -28556,6 +28625,7 @@ const ProcBodyBuilder = struct {
         nested_rep_id: Plan.TypeRepId,
     ) Allocator.Error!?u32 {
         const target_rep = self.descriptorStorageRep(nested_rep_id);
+        if (self.repIsOpenRecord(parent_rep_id)) return null;
         var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
         defer slots.deinit(self.parent.allocator);
         try self.parent.appendNestedDescriptorSlots(
@@ -28684,6 +28754,9 @@ const ProcBodyBuilder = struct {
         result_rep: Plan.TypeRepId,
         out_desc: ?LIR.LocalId,
     ) Allocator.Error!ResultDescriptorSource {
+        // An open record result is described by the record the callee
+        // returns, which the caller's types do not determine.
+        if (self.repIsOpenRecord(result_rep)) return .{};
         if (out_desc) |local| {
             if (self.descriptorTemplateForLocal(local)) |template| {
                 return try self.adapterDescriptorFromMaterialization(template);
@@ -29001,7 +29074,8 @@ const ProcBodyBuilder = struct {
     ) bool {
         const identity_worker_rep = self.descriptorStorageRep(arg.worker_rep);
         const worker_rep = self.parent.plan.representations.items[@intFromEnum(identity_worker_rep)];
-        return worker_rep.kind == .dynamic and worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0;
+        return (worker_rep.kind == .dynamic and worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0) or
+            self.repIsOpenRecord(identity_worker_rep);
     }
 
     fn bindDirectCallHiddenDescriptorLocals(
@@ -29537,7 +29611,30 @@ const ProcBodyBuilder = struct {
         overrides: []const DescriptorTemplateOverride,
     ) Allocator.Error!DescriptorMaterialization {
         if (overrides.len == 0) return try self.descriptorMaterializationForKnownRep(rep_id);
+        return try self.descriptorTemplateMaterializationForRep(rep_id, overrides);
+    }
 
+    /// The static-field view of an open record: the record its row names,
+    /// which a field read or update projects the complete record onto.
+    fn openRecordViewDescriptorSource(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!ResultDescriptorSource {
+        const materialization = try self.descriptorTemplateMaterializationForRep(rep_id, &.{});
+        if (materialization.captures.len == 0) return .{ .desc = materialization.desc };
+        const local = try self.addFrameLocal(.opaque_ptr);
+        return .{
+            .desc = .{ .local = local },
+            .materialize = .{
+                .local = local,
+                .materialize = materialization.desc,
+                .captures = materialization.captures,
+            },
+        };
+    }
+
+    fn descriptorTemplateMaterializationForRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        overrides: []const DescriptorTemplateOverride,
+    ) Allocator.Error!DescriptorMaterialization {
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);
         var captures = std.ArrayList(LIR.LocalId).empty;
         defer captures.deinit(self.parent.allocator);
@@ -33919,7 +34016,12 @@ const ProcBodyBuilder = struct {
             call_args,
             &arg_desc_initializers,
         );
-        const expected_result_desc = try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
+        // An open record result is described by the record the callable
+        // returns, which the adapter's signature does not determine.
+        const expected_result_desc = if (adapter_proc.repIsOpenRecord(source_function.ret))
+            ResultDescriptorSource{}
+        else
+            try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
         try adapter_proc.appendResultDescriptorInitializers(&arg_desc_initializers, expected_result_desc);
         const call_stmt = try self.parent.result.store.addCFStmt(.{
             .assign_call_erased = .{
@@ -34504,6 +34606,9 @@ const ProcBodyBuilder = struct {
                 seen,
             );
         }
+        // An open record's descriptor describes the complete record, whose
+        // nested positions its row's fields do not determine.
+        if (self.repIsOpenRecord(identity_rep)) return;
 
         var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
         defer slots.deinit(self.parent.allocator);
@@ -34725,6 +34830,13 @@ const ProcBodyBuilder = struct {
     /// erased box holds the supplying payload as the source describes it.
     fn constructedFieldStorageRep(self: *const ProcBodyBuilder, field: AggregateDescriptorField) Plan.TypeRepId {
         return if (self.repIsBareDynamic(field.target_rep)) field.source_rep else field.target_rep;
+    }
+
+    /// A record whose row is still open. Its box holds the complete record
+    /// the value was built from, which only the value's own descriptor
+    /// describes; the representation's fields are a view of that record.
+    fn repIsOpenRecord(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        return self.parent.plan.repIsOpenRecord(self.descriptorStorageRep(rep_id));
     }
 
     /// A bare dynamic representation carries no structural payload shape of
@@ -35005,7 +35117,7 @@ const ProcBodyBuilder = struct {
                         try self.descriptorRefForRepIfNeeded(identity_target_rep)
                     else
                         null;
-                    const desc_for_payload = if (rep_payload_desc != null and !self.repIsBareDynamic(identity_target_rep))
+                    const desc_for_payload = if (rep_payload_desc != null and !self.repIsBareDynamic(identity_target_rep) and !self.repIsOpenRecord(identity_target_rep))
                         rep_payload_desc.?
                     else
                         source_desc;
@@ -35312,6 +35424,9 @@ const ProcBodyBuilder = struct {
         const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
         const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
         if (source_record.kind != .dynamic) return null;
+        // An open record's fields beyond its row are known only to its
+        // runtime descriptor, which the unboxing boundary reads them through.
+        if (self.repIsOpenRecord(source_record_rep)) return null;
         switch (target_record.kind) {
             .record => {},
             .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
@@ -37381,7 +37496,9 @@ const ProcBodyBuilder = struct {
             try self.addFrameLocalForRepWithFreshDescriptor(function.ret)
         else
             try self.addFrameLocalForRep(function.ret);
-        if (fresh_descriptor) {
+        // An open record result is described by the value the body returns,
+        // which no template over the row's own fields can describe.
+        if (fresh_descriptor and !self.repIsOpenRecord(function.ret)) {
             if (self.parent.result.store.getLocal(local).boxy_desc) |desc| {
                 if (desc.localOrNull()) |desc_local| {
                     const materialization = try self.descriptorMaterializationForExactResultRep(function.ret);
