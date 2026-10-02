@@ -128,7 +128,9 @@ const QueuedCallable = struct {
 
 const StackEntry = struct {
     var_: Var,
-    path_start: u32,
+    /// Last step of this entry's path in `Scratch.path_nodes`, or `no_path`
+    /// for the walk root.
+    path_node: u32,
     path_len: u32,
     /// A row continuation is checked-store traversal state, not a semantic
     /// path component. Its fields/tags extend the logical row at `path`.
@@ -136,6 +138,15 @@ const StackEntry = struct {
 };
 
 const RowContext = enum { none, record, tag };
+
+const no_path = std.math.maxInt(u32);
+
+/// One step of a pending path. Paths share their prefixes through `parent`, so
+/// extending a path by one step costs one node however deep the walk is.
+const PathNode = struct {
+    parent: u32,
+    step: PathStep,
+};
 
 /// Reusable scratch state for `enumerateEvidenceParams`.
 pub const Scratch = struct {
@@ -150,7 +161,9 @@ pub const Scratch = struct {
     contract_classes: std.AutoHashMapUnmanaged(struct { param: u32, callable: Var }, void) = .{},
     contract_entries: std.ArrayListUnmanaged(struct { param: u32, constraint: StaticDispatchConstraint }) = .empty,
     contract_pool: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty,
-    /// Flat pool backing every stack entry's (and emitted param's) path.
+    /// Prefix-shared paths of every stack entry, linked toward the walk root.
+    path_nodes: std.ArrayListUnmanaged(PathNode) = .empty,
+    /// Flat pool backing every emitted param's path.
     path_pool: std.ArrayListUnmanaged(PathStep) = .empty,
     /// Child collection buffer for one node's children, in declared order.
     children: std.ArrayListUnmanaged(Child) = .empty,
@@ -170,6 +183,7 @@ pub const Scratch = struct {
         self.contract_classes.deinit(gpa);
         self.contract_entries.deinit(gpa);
         self.contract_pool.deinit(gpa);
+        self.path_nodes.deinit(gpa);
         self.path_pool.deinit(gpa);
         self.children.deinit(gpa);
         self.* = .{};
@@ -183,12 +197,36 @@ pub const Scratch = struct {
         self.contract_classes.clearRetainingCapacity();
         self.contract_entries.clearRetainingCapacity();
         self.contract_pool.clearRetainingCapacity();
+        self.path_nodes.clearRetainingCapacity();
         self.path_pool.clearRetainingCapacity();
         self.children.clearRetainingCapacity();
     }
 
     fn pathSlice(self: *const Scratch, start: u32, len: u32) []const PathStep {
         return self.path_pool.items[start .. start + len];
+    }
+
+    fn appendPathNode(self: *Scratch, gpa: Allocator, parent: u32, path_step: PathStep) Allocator.Error!u32 {
+        const node: u32 = @intCast(self.path_nodes.items.len);
+        try self.path_nodes.append(gpa, .{ .parent = parent, .step = path_step });
+        return node;
+    }
+
+    /// Copy the path ending at `path_node` into the flat pool, returning its
+    /// start offset.
+    fn materializePath(self: *Scratch, gpa: Allocator, path_node: u32, path_len: u32) Allocator.Error!u32 {
+        const start: u32 = @intCast(self.path_pool.items.len);
+        const path = try self.path_pool.addManyAsSlice(gpa, path_len);
+        var node = path_node;
+        var i = path_len;
+        while (i > 0) {
+            i -= 1;
+            const path_node_entry = self.path_nodes.items[node];
+            path[i] = path_node_entry.step;
+            node = path_node_entry.parent;
+        }
+        std.debug.assert(node == no_path);
+        return start;
     }
 };
 
@@ -280,7 +318,7 @@ fn walk(
     out: *std.ArrayListUnmanaged(EvidenceParam),
 ) Allocator.Error!void {
     const stack_base = scratch.stack.items.len;
-    try scratch.stack.append(gpa, .{ .var_ = walk_root, .path_start = 0, .path_len = 0 });
+    try scratch.stack.append(gpa, .{ .var_ = walk_root, .path_node = no_path, .path_len = 0 });
 
     while (scratch.stack.items.len > stack_base) {
         const entry = scratch.stack.pop().?;
@@ -436,20 +474,19 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
         if (next_child.step_len == 0) {
             try scratch.stack.append(gpa, .{
                 .var_ = next_child.var_,
-                .path_start = entry.path_start,
+                .path_node = entry.path_node,
                 .path_len = entry.path_len,
                 .row_context = next_child.row_context,
             });
             continue;
         }
-        const path_start: u32 = @intCast(scratch.path_pool.items.len);
-        // Reserve before self-append: the source range aliases the pool.
-        try scratch.path_pool.ensureUnusedCapacity(gpa, entry.path_len + next_child.step_len);
-        scratch.path_pool.appendSliceAssumeCapacity(scratch.pathSlice(entry.path_start, entry.path_len));
-        scratch.path_pool.appendSliceAssumeCapacity(next_child.steps[0..next_child.step_len]);
+        var path_node = entry.path_node;
+        for (next_child.steps[0..next_child.step_len]) |path_step| {
+            path_node = try scratch.appendPathNode(gpa, path_node, path_step);
+        }
         try scratch.stack.append(gpa, .{
             .var_ = next_child.var_,
-            .path_start = path_start,
+            .path_node = path_node,
             .path_len = entry.path_len + next_child.step_len,
             .row_context = next_child.row_context,
         });
@@ -534,6 +571,7 @@ fn emitConstraints(
         const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name);
         if (!emitted.found_existing) {
             emitted.value_ptr.* = @intCast(out.items.len);
+            const path_start = try scratch.materializePath(gpa, entry.path_node, entry.path_len);
             try out.append(gpa, .{
                 .dispatcher_var = dispatcher_root,
                 .constraint = constraint,
@@ -541,7 +579,7 @@ fn emitConstraints(
                     .scheme_callable => .scheme_callable,
                     .constraint_callable => |constraint_callable| .{ .constraint_callable = constraint_callable },
                 },
-                .path_start = entry.path_start,
+                .path_start = path_start,
                 .path_len = entry.path_len,
             });
         } else {

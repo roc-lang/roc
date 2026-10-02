@@ -227,6 +227,51 @@ test "tag-tail evidence path is normalized to its logical tag payload" {
     try std.testing.expectEqual(@as(u32, 0), params.items[0].path[1].data);
 }
 
+// Depth pin for the evidence walk's path bookkeeping. Every node of a nested
+// type gets a pending path, so paths must share their prefixes: storing each
+// pending path as its own flat copy costs the sum of all node depths, which is
+// quadratic in nesting depth (a source literal tens of thousands of levels deep
+// exhausted memory publishing its scheme). The scratch's flat pool holds only
+// the paths of emitted params.
+test "deeply nested evidence path costs scratch proportional to its depth" {
+    var test_env = try TestEnv.init("Test", "");
+    defer test_env.deinit();
+
+    const gpa = std.testing.allocator;
+    const env = test_env.module_env;
+    const depth = 4096;
+    const inner_name = try env.insertIdent(@import("base").Ident.for_text("inner"));
+    const leaf_name = try env.insertIdent(@import("base").Ident.for_text("leaf"));
+
+    var root = try constrainedVar(env, "inspect_deep");
+    for (0..depth) |_| {
+        const leaf = try env.types.freshFromContent(.{ .structure = .empty_record });
+        const ext = try env.types.freshFromContent(.{ .structure = .empty_record });
+        const fields = try env.types.appendRecordFields(&.{
+            .{ .name = inner_name, .presence = .required(root) },
+            .{ .name = leaf_name, .presence = .required(leaf) },
+        });
+        root = try env.types.freshFromContent(.{ .structure = .{ .record = .{
+            .fields = fields,
+            .ext = ext,
+        } } });
+    }
+
+    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
+    defer params.deinit(gpa);
+    var scratch = dispatch_evidence.Scratch{};
+    defer scratch.deinit(gpa);
+    try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, &params);
+
+    try std.testing.expectEqual(@as(usize, 1), params.items.len);
+    try std.testing.expectEqual(@as(usize, depth), params.items[0].path.len);
+    for (params.items[0].path) |path_step| {
+        try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.record_field), path_step.kind);
+        try std.testing.expectEqual(@as(u32, @bitCast(inner_name)), path_step.data);
+    }
+    try std.testing.expectEqual(@as(usize, depth), scratch.path_pool.items.len);
+}
+
 test "imported scheme copy enumerates the same param list as the defining module" {
     // Module `Wrap` owns a generic associated method with a where clause;
     // module B dispatches it on a local nominal. Discharging that dispatch in
