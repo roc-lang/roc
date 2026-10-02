@@ -279,8 +279,13 @@ pub const TypeWriter = struct {
 
     pub fn fromVar(self: *TypeWriter, var_: Var) Allocator.Error!TypeKeyInfo {
         if (self.builder.retain_composed_keys and self.builder.sharesComposedKeys()) {
-            if (self.builder.composed_keys.get(self.builder.store.resolveVar(var_).var_)) |key| {
-                return .{ .key = key, .contains_identity_variables = false, .composable = true };
+            if (self.builder.composed_keys.get(self.builder.store.resolveVar(var_).var_)) |entry| {
+                if (entry.identity_count == 0) {
+                    return .{ .key = entry.key, .contains_identity_variables = false, .composable = true };
+                }
+                if (self.builder.composesIdentities()) {
+                    return .{ .key = entry.key, .contains_identity_variables = true, .composable = false };
+                }
             }
         }
         self.builder.resetDigest();
@@ -473,8 +478,27 @@ const NodeMark = struct {
     start: u32,
     identity_tokens: u32,
     cycle_tokens: u32,
+    context_tokens: u32,
     err_tokens: u32,
+    /// How many identity variables the walk had numbered when this node
+    /// began: the node's own identities are the ones numbered after.
+    identity_base: u32,
+    /// The lowest identity slot referenced inside this node's range. A node
+    /// that references no identity numbered before it is self-contained.
+    min_identity_ref: u32 = std.math.maxInt(u32),
     position: NodePosition,
+};
+
+/// A composed subtree's key and the identities it numbers, in order.
+const ComposedKey = struct {
+    key: canonical.CanonicalTypeKey,
+    identity_count: u32 = 0,
+    identities: union(enum) {
+        /// The walk that composed it numbers them from this slot onward.
+        walk_base: u32,
+        /// They start at this index of `composed_identity_vars`.
+        stored: u32,
+    } = .{ .stored = 0 },
 };
 
 /// One-byte node and field tags of the checked-type key encoding, shared by
@@ -509,6 +533,9 @@ pub const KeyTag = enum(u8) {
     child_key,
     named,
     padding,
+    /// A self-contained subtree referenced by its key, followed by how many
+    /// identities it numbers; they take the enclosing numbering's next slots.
+    child_key_fresh,
 };
 
 /// Append a key node's one-byte tag.
@@ -532,6 +559,64 @@ pub fn appendKeyVarint(buf: *std.ArrayList(u8), allocator: Allocator, value: u32
 pub fn writeChildKeyReference(buf: *std.ArrayList(u8), allocator: Allocator, key: canonical.CanonicalTypeKey) Allocator.Error!void {
     try appendKeyTag(buf, allocator, .child_key);
     try buf.appendSlice(allocator, &key.bytes);
+}
+
+/// Refer to a self-contained subtree that numbers `identity_count`
+/// identities, none seen earlier in the enclosing walk. Its key numbers them
+/// from zero; the reference gives them the enclosing numbering's next slots,
+/// so it holds no slot of its own. Both checked-type key encoders write
+/// exactly these bytes in place of such a subtree.
+pub fn writeFreshChildKeyReference(
+    buf: *std.ArrayList(u8),
+    allocator: Allocator,
+    key: canonical.CanonicalTypeKey,
+    identity_count: u32,
+) Allocator.Error!void {
+    try appendKeyTag(buf, allocator, .child_key_fresh);
+    try buf.appendSlice(allocator, &key.bytes);
+    try appendKeyVarint(buf, allocator, identity_count);
+}
+
+/// The key of `buf[start..]`, a node's encoding written inside a walk that
+/// had numbered `first_slot` identities before the node, with every identity
+/// slot in `slot_marks` (each at or after `start`) renumbered from zero.
+pub fn localNodeKey(buf: []const u8, start: usize, slot_marks: []const SlotMark, first_slot: u32) canonical.CanonicalTypeKey {
+    const bytes = buf;
+    if (first_slot == 0 or slot_marks.len == 0) return .{ .bytes = TypeDigestHasher.hash(bytes[start..]) };
+    var hasher = TypeDigestHasher.init();
+    var at: usize = start;
+    var varint: [5]u8 = undefined;
+    for (slot_marks) |mark| {
+        hasher.update(bytes[at..mark.pos]);
+        var len: usize = 0;
+        while (bytes[mark.pos + len] & 0x80 != 0) len += 1;
+        len += 1;
+        var rest = mark.value - first_slot;
+        var out: usize = 0;
+        while (rest >= 0x80) : (rest >>= 7) {
+            varint[out] = @as(u8, @truncate(rest)) | 0x80;
+            out += 1;
+        }
+        varint[out] = @truncate(rest);
+        out += 1;
+        hasher.update(varint[0..out]);
+        at = mark.pos + len;
+    }
+    hasher.update(bytes[at..]);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+/// An identity slot's varint at `pos` of a walk's buffer, and its value.
+pub const SlotMark = struct {
+    pos: usize,
+    value: u32,
+};
+
+/// The marks of `marks` (ordered by position) at or after `start`.
+pub fn slotMarksFrom(marks: []const SlotMark, start: usize) []const SlotMark {
+    var first = marks.len;
+    while (first > 0 and marks[first - 1].pos >= start) first -= 1;
+    return marks[first..];
 }
 
 /// The key of a function node whose arguments and return are all composed
@@ -578,10 +663,21 @@ fn Walk(comptime digest: bool) type {
         /// writes each erroneous root's identity, so a range containing one
         /// composes only in the plain encoding.
         err_tokens: u32 = 0,
+        /// Anchored-identity and opaque-root tokens written so far. They
+        /// name store vars, so a range containing one never composes.
+        context_tokens: u32 = 0,
+        /// Every identity slot written into `buf` that a composed range has
+        /// not replaced, in buffer order.
+        slot_marks: if (digest) std.ArrayList(SlotMark) else void,
         /// Keys of composable roots already digested. Entries depend only on
         /// the immutable store, so they survive requests exactly when
         /// `retain_composed_keys` promises the store no longer changes.
-        composed_keys: if (digest) collections.DenseMap(Var, canonical.CanonicalTypeKey) else void,
+        composed_keys: if (digest) collections.DenseMap(Var, ComposedKey) else void,
+        /// The identities of composed keys from finished walks, each key's
+        /// run contiguous.
+        composed_identity_vars: if (digest) std.ArrayList(Var) else void,
+        /// Roots this walk composed whose identities are still its own slots.
+        walk_composed_identities: if (digest) std.ArrayList(Var) else void,
         retain_composed_keys: bool = false,
         active: collections.IndexedStack(Var),
         visited: if (digest) void else collections.IndexedStack(Var),
@@ -643,7 +739,10 @@ fn Walk(comptime digest: bool) type {
                 .idents = env.getIdentStoreConst(),
                 .buf = if (digest) .empty else {},
                 .nodes = if (digest) .empty else {},
-                .composed_keys = if (digest) collections.DenseMap(Var, canonical.CanonicalTypeKey).init(allocator) else {},
+                .composed_keys = if (digest) collections.DenseMap(Var, ComposedKey).init(allocator) else {},
+                .slot_marks = if (digest) .empty else {},
+                .composed_identity_vars = if (digest) .empty else {},
+                .walk_composed_identities = if (digest) .empty else {},
                 .active = collections.IndexedStack(Var).init(allocator),
                 .visited = if (digest) {} else collections.IndexedStack(Var).init(allocator),
                 .rank_scratch = base.TextRankCache.init(allocator),
@@ -672,6 +771,9 @@ fn Walk(comptime digest: bool) type {
                 self.buf.deinit(self.allocator);
                 self.nodes.deinit(self.allocator);
                 self.composed_keys.deinit();
+                self.slot_marks.deinit(self.allocator);
+                self.composed_identity_vars.deinit(self.allocator);
+                self.walk_composed_identities.deinit(self.allocator);
             }
         }
 
@@ -679,11 +781,17 @@ fn Walk(comptime digest: bool) type {
             if (digest) {
                 self.buf.clearRetainingCapacity();
                 self.nodes.clearRetainingCapacity();
-                if (!self.retain_composed_keys) self.composed_keys.clearRetainingCapacity();
+                self.slot_marks.clearRetainingCapacity();
+                self.walk_composed_identities.clearRetainingCapacity();
+                if (!self.retain_composed_keys) {
+                    self.composed_keys.clearRetainingCapacity();
+                    self.composed_identity_vars.clearRetainingCapacity();
+                }
             }
             self.identity_tokens = 0;
             self.cycle_tokens = 0;
             self.err_tokens = 0;
+            self.context_tokens = 0;
             self.active.clearRetainingCapacity();
             if (!digest) self.visited.clearRetainingCapacity();
             self.identity_variables.clearRetainingCapacity();
@@ -742,6 +850,56 @@ fn Walk(comptime digest: bool) type {
             }
 
             std.debug.assert(self.active.entries.items.len == active_base);
+            if (digest) try self.storeWalkComposedIdentities();
+        }
+
+        /// Give the keys this walk composed their identities in durable
+        /// storage, so a later walk can number them.
+        fn storeWalkComposedIdentities(self: *Self) Allocator.Error!void {
+            if (self.walk_composed_identities.items.len == 0) return;
+            const offset: u32 = @intCast(self.composed_identity_vars.items.len);
+            try self.composed_identity_vars.appendSlice(self.allocator, self.identity_variables.entries.items);
+            for (self.walk_composed_identities.items) |root| {
+                const entry = self.composed_keys.getPtr(root) orelse continue;
+                switch (entry.identities) {
+                    .walk_base => |walk_base| entry.identities = .{ .stored = offset + walk_base },
+                    .stored => {},
+                }
+            }
+            self.walk_composed_identities.clearRetainingCapacity();
+        }
+
+        /// Whether a range with identities composes: its encoding then numbers
+        /// them by first occurrence alone, exactly as a durable key does.
+        fn composesIdentities(self: *const Self) bool {
+            return digest and self.write_identity_names and self.walk_identity_constraints and
+                self.identity_anchors == null and self.opaque_roots.len == 0 and !self.err_by_var;
+        }
+
+        fn composedIdentities(self: *const Self, entry: ComposedKey) []const Var {
+            return switch (entry.identities) {
+                .walk_base => |walk_base| self.identity_variables.entries.items[walk_base..][0..entry.identity_count],
+                .stored => |start| self.composed_identity_vars.items[start..][0..entry.identity_count],
+            };
+        }
+
+        /// Refer to a composed child by its key when none of its identities
+        /// has been numbered yet, numbering them next; false otherwise.
+        fn writeComposedChild(self: *Self, entry: ComposedKey) Allocator.Error!bool {
+            if (entry.identity_count == 0) {
+                try writeChildKeyReference(&self.buf, self.allocator, entry.key);
+                return true;
+            }
+            if (!self.composesIdentities()) return false;
+            const identities = self.composedIdentities(entry);
+            for (identities) |identity| {
+                if (self.identity_variables.get(identity) != null) return false;
+            }
+            for (identities) |identity| _ = try self.identity_variables.getOrPush(identity);
+            self.contains_identity_variables = true;
+            self.identity_tokens += 1;
+            try writeFreshChildKeyReference(&self.buf, self.allocator, entry.key, entry.identity_count);
+            return true;
         }
 
         /// Digest one var's head: write every byte that precedes its children and
@@ -766,15 +924,15 @@ fn Walk(comptime digest: bool) type {
                 if (try self.visited.getOrPush(root) != null) return true;
             }
             if (digest and position == .child and self.sharesComposedKeys()) {
-                if (self.composed_keys.get(root)) |key| {
-                    try writeChildKeyReference(&self.buf, self.allocator, key);
-                    return true;
+                if (self.composed_keys.get(root)) |entry| {
+                    if (try self.writeComposedChild(entry)) return true;
                 }
             }
 
             for (self.opaque_roots) |opaque_root| {
                 if (opaque_root == root) {
                     self.identity_tokens += 1;
+                    self.context_tokens += 1;
                     try self.writeTag(.opaque_root);
                     try self.writeU32(@intFromEnum(root));
                     return true;
@@ -833,7 +991,9 @@ fn Walk(comptime digest: bool) type {
                     .start = @intCast(self.buf.items.len),
                     .identity_tokens = self.identity_tokens,
                     .cycle_tokens = self.cycle_tokens,
+                    .context_tokens = self.context_tokens,
                     .err_tokens = self.err_tokens,
+                    .identity_base = @intCast(self.identity_variables.entries.items.len),
                     .position = position,
                 }) catch |err| {
                     self.popActive();
@@ -855,18 +1015,41 @@ fn Walk(comptime digest: bool) type {
             if (digest) try self.composeFinishedNode();
         }
 
+        /// A finished node composes into its own key when its range is the
+        /// same in every context: no cycle or store-var token, and every
+        /// identity it references first occurs inside it. Its key numbers
+        /// those identities from zero, and an enclosing range refers to it
+        /// by that key, giving them its own next slots.
         fn composeFinishedNode(self: *Self) Allocator.Error!void {
             const mark = self.nodes.pop().?;
-            if (mark.identity_tokens != self.identity_tokens or mark.cycle_tokens != self.cycle_tokens) return;
+            if (self.nodes.items.len != 0) {
+                const parent = &self.nodes.items[self.nodes.items.len - 1];
+                parent.min_identity_ref = @min(parent.min_identity_ref, mark.min_identity_ref);
+            }
+            if (mark.cycle_tokens != self.cycle_tokens or mark.context_tokens != self.context_tokens) return;
             const error_free = mark.err_tokens == self.err_tokens;
             if (self.err_by_var and !error_free) return;
-            const key: canonical.CanonicalTypeKey = .{ .bytes = TypeDigestHasher.hash(self.buf.items[mark.start..]) };
+            const closed = mark.identity_tokens == self.identity_tokens;
+            if (!closed and (!self.composesIdentities() or mark.min_identity_ref < mark.identity_base)) return;
+            const identity_count: u32 = @intCast(self.identity_variables.entries.items.len - mark.identity_base);
+            const marks = slotMarksFrom(self.slot_marks.items, mark.start);
+            const key = localNodeKey(self.buf.items, mark.start, marks, mark.identity_base);
             if (error_free and self.sharesComposedKeys() and (mark.position == .child or self.retain_composed_keys)) {
-                try self.composed_keys.put(mark.root, key);
+                try self.composed_keys.put(mark.root, .{
+                    .key = key,
+                    .identity_count = identity_count,
+                    .identities = .{ .walk_base = mark.identity_base },
+                });
+                if (identity_count != 0) try self.walk_composed_identities.append(self.allocator, mark.root);
             }
             if (mark.position == .walk_root) return;
+            self.slot_marks.items.len -= marks.len;
             self.buf.items.len = mark.start;
-            try writeChildKeyReference(&self.buf, self.allocator, key);
+            if (identity_count == 0) {
+                try writeChildKeyReference(&self.buf, self.allocator, key);
+            } else {
+                try writeFreshChildKeyReference(&self.buf, self.allocator, key, identity_count);
+            }
         }
 
         /// Whether everything written since the last reset is context-free.
@@ -892,6 +1075,7 @@ fn Walk(comptime digest: bool) type {
             self.identity_tokens += 1;
             if (self.identity_anchors) |anchors| {
                 if (anchors.contains(root)) {
+                    self.context_tokens += 1;
                     try self.writeTag(.identity_var_anchor);
                     try self.writeU32(@intFromEnum(root));
                     return true;
@@ -901,7 +1085,11 @@ fn Walk(comptime digest: bool) type {
             if (digest) {
                 if (try self.identity_variables.getOrPush(root)) |existing| {
                     try self.writeTag(.identity_var_ref);
-                    try self.writeU32(existing);
+                    try self.writeIdentitySlot(@intCast(existing));
+                    if (self.nodes.items.len != 0) {
+                        const node = &self.nodes.items[self.nodes.items.len - 1];
+                        node.min_identity_ref = @min(node.min_identity_ref, @as(u32, @intCast(existing)));
+                    }
                     return true;
                 }
             } else {
@@ -909,7 +1097,7 @@ fn Walk(comptime digest: bool) type {
                 try self.identity_variables.entries.append(self.allocator, root);
             }
             try self.writeTag(tag);
-            try self.writeU32(slot);
+            try self.writeIdentitySlot(slot);
             if (self.write_identity_names) {
                 try self.writeOptionalIdent(name);
             }
@@ -1528,6 +1716,14 @@ fn Walk(comptime digest: bool) type {
         fn writeU32(self: *Self, value: u32) Allocator.Error!void {
             if (!digest) return;
             try appendKeyVarint(&self.buf, self.allocator, value);
+        }
+
+        /// Write an identity slot, marking it so a composed range can
+        /// renumber it.
+        fn writeIdentitySlot(self: *Self, slot: u32) Allocator.Error!void {
+            if (!digest) return;
+            try self.slot_marks.append(self.allocator, .{ .pos = self.buf.items.len, .value = slot });
+            try appendKeyVarint(&self.buf, self.allocator, slot);
         }
     };
 }
@@ -2385,6 +2581,10 @@ const KeyEncodingReader = struct {
     fn node(self: *KeyEncodingReader) Error!void {
         switch (try self.tag()) {
             .child_key => try self.skip(32),
+            .child_key_fresh => {
+                try self.skip(32);
+                _ = try self.varint();
+            },
             .cycle, .identity_var_ref, .identity_var_anchor, .err_var, .opaque_root => _ = try self.varint(),
             .flex, .rigid, .defaulted_empty_tag_union => {
                 _ = try self.varint();
@@ -2446,6 +2646,7 @@ const KeyEncodingReader = struct {
                             .tag_union,
                             .canonical_type_scheme,
                             .child_key,
+                            .child_key_fresh,
                             .named,
                             .padding,
                             => return error.TestUnexpectedResult,
@@ -2516,10 +2717,43 @@ test "key encodings decode back into their tag sequence" {
     defer reader.tags.deinit(allocator);
     try reader.node();
     try std.testing.expectEqual(builder.buf.items.len, reader.pos);
-    for ([_]KeyTag{ .tuple, .nominal, .flex, .child_key, .fn_pure, .record, .identity_var_ref, .tag_union, .alias }) |expected| {
+    for ([_]KeyTag{ .tuple, .child_key_fresh, .child_key, .fn_pure, .record, .identity_var_ref, .tag_union, .alias }) |expected| {
         const found = for (reader.tags.items) |seen| {
             if (seen == expected) break true;
         } else false;
         try std.testing.expect(found);
     }
+}
+
+test "a self-contained subtree with identities keys the same inside an enclosing type" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    try env.setContentIdentity([_]u8{0x5B} ** 32);
+    const some_name = try env.insertIdent(Ident.for_text("Some"));
+
+    var store = try TypeStore.initCapacity(allocator, 32, 16);
+    defer store.deinit();
+    const outer_var = try store.fresh();
+    const inner_var = try store.fresh();
+    const inner = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{
+            .{ .name = some_name, .args = try store.appendVars(&.{inner_var}) },
+        }),
+        .ext = inner_var,
+    } } });
+    const root = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+        .elems = try store.appendVars(&.{ outer_var, inner, outer_var }),
+    } } });
+
+    var builder = Builder.init(allocator, &store, &env);
+    defer builder.deinit();
+    try builder.writeVar(root);
+    const composed = builder.composed_keys.get(store.resolveVar(inner).var_) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 1), composed.identity_count);
+
+    const alone = try fromVarInfo(allocator, &store, &env, inner);
+    try std.testing.expectEqualSlices(u8, &alone.key.bytes, &composed.key.bytes);
+    try std.testing.expect(alone.contains_identity_variables);
 }
