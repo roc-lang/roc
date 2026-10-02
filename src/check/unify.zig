@@ -1591,8 +1591,8 @@ const Unifier = struct {
         }
     }
 
-    /// A nominal value never lifts into structure its declaration's backing
-    /// fixes: only the anonymous side of a lift may become the nominal.
+    /// A nominal value never lifts into structure written in an opened nominal
+    /// backing (design.md "Declared Backing Structure").
     fn anonIsNominalBackingStructure(vars: *const ResolvedVarDescs, direction: NominalDirection) bool {
         return switch (direction) {
             .a_is_nominal => vars.b.desc.flags.nominal_backing_structure,
